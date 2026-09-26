@@ -355,9 +355,14 @@ export async function loadSshConfig(opts: LoadOptions): Promise<LoadResult> {
   const files: string[] = []
   const watch = new Set<string>()
   // Every path we try (found or not) can change the list when it appears or changes.
+  const dirs = new Map<string, Promise<string[] | null>>() // each dir listed once per load
   const fs: MiniFs = {
     readFile: (p) => (watch.add(p), opts.fs.readFile(p)),
-    readdir: (p) => (watch.add(p), opts.fs.readdir(p)),
+    readdir: (p) => {
+      watch.add(p)
+      if (!dirs.has(p)) dirs.set(p, opts.fs.readdir(p))
+      return dirs.get(p)!
+    },
   }
   const load = async (file: string) => {
     if (!parsed.has(file)) {

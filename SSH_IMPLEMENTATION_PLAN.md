@@ -261,11 +261,11 @@ mergeHosts(…, { all: true })` (hidden hosts included, so a restored pane keeps
   null → write an error into the pane, don't spawn.
 - Connection reuse (native unix), all async and cached per hostId until the host list or
   settings change:
-  1. `buildSshProbe(remote)` (`ssh -G`, 2 s timeout); `userManagesMux(out)` or a failed
-     probe → `muxConfig: null` (plain ssh).
+  1. `buildSshProbe(remote)` (`ssh -v -G`, 2 s timeout); `userManagesMux(stdout)` or a
+     failed probe → `muxConfig: null` (plain ssh).
   2. `dir = controlDir(home, uid)`; `mkdir 0700`; `lstat` → `isSafeControlDir`.
-  3. System config = first existing of `systemConfigCandidates(sshPath)`; `stat` →
-     `sshAcceptsInclude` (else plain ssh).
+  3. System config = `probedSystemConfig(stderr, ~/.ssh)` (the file ssh really reads);
+     `stat` → `sshAcceptsInclude`, and its text must not `hasRelativeInclude` (else plain ssh).
   4. Write `muxConfigText(dir, { system })` to `dir/ssh_config` atomically (temp + rename,
      0600), only when the content differs.
 - Then `{ file, args } = buildSshSpawn(remote, { platform, sshPath, muxConfig, reuse })`. Skip `buildInjection`,

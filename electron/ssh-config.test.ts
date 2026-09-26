@@ -659,6 +659,20 @@ describe("loadSshConfig", () => {
     expect(aliases(r.hosts)).toEqual(["work", "home"])
   })
 
+  it("lists each Include directory once, however many contexts reach it", async () => {
+    const f = fakeFs({
+      "/h/.ssh/config": Array.from(
+        { length: 10 },
+        (_, i) => `Host h${i}\n  Include conf.d/*\n`,
+      ).join(""),
+      "/h/.ssh/conf.d/a": "User u\n",
+    })
+    let listed = 0
+    const counting: MiniFs = { readFile: f.readFile, readdir: (p) => (listed++, f.readdir(p)) }
+    await loadSshConfig({ file: "/h/.ssh/config", home: "/h", fs: counting, path: path.posix })
+    expect(listed).toBe(1)
+  })
+
   it("reports every path to watch: missing includes, glob dirs, a missing config", async () => {
     const r = await load({ "/h/.ssh/config": "Include missing.conf config.d/*\nHost a\n" })
     expect(r.watch).toEqual(

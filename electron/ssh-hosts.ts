@@ -9,6 +9,7 @@ import path from "node:path"
 import type { RemoteRef, SshEnv, SshHost } from "../src/types"
 import type { SshSettings } from "../src/settings/schema"
 import { hasControlChar } from "../src/lib/control-chars"
+import { parseSshConfig } from "./ssh-config"
 import { isSshTarget, parseSshEnv, sshArgsSetMux, validateSshHosts } from "../src/lib/ssh-validate"
 import type { PlatformPath, SshConfigHost } from "./ssh-config"
 
@@ -92,7 +93,8 @@ export function controlPathFits(dir: string): boolean {
 
 // ssh pastes the -F path unquoted into the ProxyCommand it builds for ProxyJump (run by
 // /bin/sh), so the wrapper's dir must be shell-safe as well as short.
-const SHELL_SAFE_DIR = /^[A-Za-z0-9._/@+-]+$/
+const SHELL_SAFE_CHARS = "A-Za-z0-9._/@+-" // shared with the WSL script's `case`
+const SHELL_SAFE_DIR = new RegExp(`^[${SHELL_SAFE_CHARS}]+$`)
 
 /** Can `dir` hold the wrapper and sockets? Short enough, and shell-safe (see above). */
 export const isUsableDir = (dir: string) => controlPathFits(dir) && SHELL_SAFE_DIR.test(dir)
@@ -121,32 +123,27 @@ const WRAPPER_HEADER = [
   "# you set there wins; the Host * defaults below only fill in what it leaves unset.",
 ]
 
-/** The `-F` config smterm runs ssh with: user + system config first (ssh's own order), our
- *  ControlMaster defaults last — ssh keeps the first value, so the user's settings win. */
+// An Include path we can quote: no `"`, no control characters.
+const quotable = (p: string) => !p.includes('"') && !hasControlChar(p)
+
+/** The `-F` wrapper: user + system config first, our ControlMaster defaults last (first wins). */
 export function muxConfigText(
   dir: string,
-  includes: { user?: string; system: string },
+  includes: { user?: string; system: string | null },
 ): string | null {
-  if (!isUsableDir(dir)) return null
+  const user = includes.user ?? "~/.ssh/config"
+  if (!isUsableDir(dir) || !quotable(user)) return null
+  if (includes.system !== null && !quotable(includes.system)) return null
   return [
     ...WRAPPER_HEADER,
-    `Include ${includes.user ?? "~/.ssh/config"}`,
-    `Include ${includes.system}`,
+    `Include "${user}"`,
+    ...(includes.system !== null ? [`Include "${includes.system}"`] : []),
     "Host *",
     "  ControlMaster auto",
     `  ControlPath ${dir}/%C`,
     `  ControlPersist ${CONTROL_PERSIST}`,
     "",
   ].join("\n")
-}
-
-/** Where ssh looks for its system config: `<prefix>/etc/ssh/ssh_config` for a non-/usr
- *  build (Homebrew, /usr/local), then /etc/ssh/ssh_config. The caller picks the first that exists. */
-export function systemConfigCandidates(sshPath: string, p: PlatformPath = path.posix): string[] {
-  const prefix = p.dirname(p.dirname(sshPath))
-  const system = "/etc/ssh/ssh_config"
-  if (!p.isAbsolute(sshPath) || prefix === "/usr" || prefix === "/") return [system]
-  return [p.join(prefix, "etc", "ssh", "ssh_config"), system]
 }
 
 /** stat-like facts about a config file. */
@@ -162,18 +159,40 @@ export function sshAcceptsInclude(st: FileFacts | null, uid: number): boolean {
   return st.isFile && (st.uid === uid || st.uid === 0) && (st.mode & 0o022) === 0
 }
 
-/** Does `ssh -G` output show the user already manages multiplexing (a ControlPath, or an
- *  active ControlMaster)? Then smterm stays out entirely. */
-export function userManagesMux(g: string): boolean {
-  return /^controlpath\s/im.test(g) || /^controlmaster\s+(yes|auto|ask|autoask)\s*$/im.test(g)
+/** Does this config Include a relative path? (Under -F it would resolve against ~/.ssh.) */
+export function hasRelativeInclude(text: string): boolean {
+  return parseSshConfig(text).some(
+    (it) =>
+      it.type === "include" && it.patterns.some((p) => !p.startsWith("/") && !p.startsWith("~")),
+  )
 }
 
-/** Command that prints how ssh resolves a host (`ssh -G`, no connection is made). */
+// ControlMaster values ssh -G prints when multiplexing is on (`yes` prints as `true`).
+const MUX_ON = ["true", "yes", "auto", "ask", "autoask"]
+const MUX_MANAGED = [
+  /^controlpath\s/im,
+  new RegExp(`^controlmaster\\s+(${MUX_ON.join("|")})\\s*$`, "im"),
+]
+
+/** Does `ssh -G` output show the user already manages multiplexing? Then smterm stays out. */
+export const userManagesMux = (g: string) => MUX_MANAGED.some((re) => re.test(g))
+
+/** The system config ssh actually read, from `ssh -v -G` stderr; files in `userSshDir` skipped. */
+export function probedSystemConfig(debug: string, userSshDir: string): string | null {
+  const inUserDir = (f: string) => f.startsWith(userSshDir.replace(/\/?$/, "/"))
+  for (const m of debug.matchAll(/^debug1: Reading configuration data (.+?)\s*$/gm)) {
+    const file = m[1]!
+    if (!inUserDir(file) && file.endsWith("/ssh_config")) return file
+  }
+  return null
+}
+
+/** Command that shows how ssh resolves a host (`ssh -v -G`: config on stdout, files read on stderr). */
 export function buildSshProbe(
   remote: RemoteRef,
   ctx: { sshPath: string },
 ): { file: string; args: string[] } {
-  return { file: ctx.sshPath, args: [...(remote.extraArgs ?? []), "-G", "--", remote.target] }
+  return { file: ctx.sshPath, args: [...(remote.extraArgs ?? []), "-v", "-G", "--", remote.target] }
 }
 
 // The wrapper as printf arguments for the WSL script, from the same muxConfigText (so the
@@ -195,10 +214,12 @@ export const WSL_SSH_SCRIPT = [
   'd="$HOME/.config/smterm/cm"',
   // wc -c counts bytes (as sun_path does); ${#d} would count characters.
   `n=$(printf %s "$d" | wc -c); [ $((n + ${CONTROL_NAME_BYTES})) -le ${SOCKET_PATH_MAX} ] || d="/tmp/smterm-$(id -u)"`,
-  'case "$d" in *[!A-Za-z0-9._/@+-]*) d="/tmp/smterm-$(id -u)";; esac',
+  `case "$d" in *[!${SHELL_SAFE_CHARS}]*) d="/tmp/smterm-$(id -u)";; esac`,
   'g=$(ssh -G "$@" -- "$t" 2>/dev/null) || exec ssh "$@" -t -- "$t"',
-  `if printf '%s\\n' "$g" | grep -Eiq '^(controlpath[[:space:]]|controlmaster[[:space:]]+(yes|auto|ask|autoask)[[:space:]]*$)'; then exec ssh "$@" -t -- "$t"; fi`,
+  `if printf '%s\\n' "$g" | grep -Eiq '^(controlpath[[:space:]]|controlmaster[[:space:]]+(${MUX_ON.join("|")})[[:space:]]*$)'; then exec ssh "$@" -t -- "$t"; fi`,
   "s=/etc/ssh/ssh_config",
+  // A relative Include in the system file would resolve against ~/.ssh under -F.
+  `if [ -e "$s" ] && grep -Eiq '^[[:space:]]*include[[:space:]=]+[^/~[:space:]]' "$s"; then exec ssh "$@" -t -- "$t"; fi`,
   'if [ -e "$s" ] && [ -n "$(find -L "$s" -prune \\( -perm -020 -o -perm -002 -o ! \\( -user 0 -o -user "$(id -u)" \\) \\) 2>/dev/null)" ]; then exec ssh "$@" -t -- "$t"; fi',
   '[ -L "$d" ] || mkdir -p "$d" 2>/dev/null',
   'if [ -d "$d" ] && [ ! -L "$d" ] && [ -O "$d" ] && chmod 700 "$d" 2>/dev/null &&' +

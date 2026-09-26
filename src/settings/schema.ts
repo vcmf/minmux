@@ -80,7 +80,12 @@ export function mergeSshSettings(input: unknown): SshSettings {
   const o = asObject(input)
   const d = defaultSettings.ssh
   // A JSON round-trip copies the entries (and drops anything JSON can't hold).
-  const hosts = Array.isArray(o.hosts) ? (JSON.parse(JSON.stringify(o.hosts)) as unknown[]) : []
+  let hosts: unknown[] = []
+  try {
+    if (Array.isArray(o.hosts)) hosts = JSON.parse(JSON.stringify(o.hosts)) as unknown[]
+  } catch {
+    // cyclic / BigInt input can't be stored as JSON anyway
+  }
   const hidden = Array.isArray(o.hidden)
     ? [
         ...new Set(

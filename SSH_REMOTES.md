@@ -159,8 +159,9 @@ Host *                         # our defaults: only fill what's still unset
 - ssh checks permissions on files Included under `-F` like a user config. The user's own
   config gets the same check plain ssh gives it; the **system** config (not normally
   checked) is verified first — a group-writable one means plain ssh.
-- The system config path comes from the ssh binary's prefix (`<prefix>/etc/ssh/ssh_config`
-  for Homebrew, /usr/local, Nix; else `/etc/ssh/ssh_config`), first one that exists.
+- The system config path is the one ssh reports reading (`ssh -v -G` debug output), so
+  Homebrew/Nix builds get theirs. One with a relative `Include` (which would resolve against
+  `~/.ssh` under `-F`) means plain ssh.
 - The wrapper's dir must be **shell-safe** (`[A-Za-z0-9._/@+-]`): ssh pastes the `-F` path
   unquoted into the command it builds for `ProxyJump`. A home with spaces or other
   characters uses `/tmp/smterm-<uid>` (also the fallback for a long home). Created `0700`,

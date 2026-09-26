@@ -257,6 +257,16 @@ describe("ssh settings", () => {
     })
   })
 
+  it("never throws on hosts JSON can't hold (cycles, BigInt)", () => {
+    const cyclic: Record<string, unknown> = { name: "a", target: "a" }
+    cyclic.self = cyclic
+    expect(mergeSshSettings({ hosts: [cyclic] }).hosts).toEqual([])
+    expect(mergeSshSettings({ hosts: [{ name: "a", target: "a", n: BigInt(1) }] }).hosts).toEqual(
+      [],
+    )
+    expect(() => mergeSettings({ ssh: { hosts: [cyclic] } })).not.toThrow()
+  })
+
   it("copies the hosts it keeps (no aliasing of the parsed input)", () => {
     const raw = [{ name: "a", target: "a" }]
     const s = mergeSshSettings({ hosts: raw })

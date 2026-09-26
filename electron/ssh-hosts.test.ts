@@ -16,7 +16,8 @@ import {
   mergeHosts,
   muxConfigText,
   sshAcceptsInclude,
-  systemConfigCandidates,
+  hasRelativeInclude,
+  probedSystemConfig,
   userManagesMux,
   trustedRemote,
   WSL_SSH_SCRIPT,
@@ -277,32 +278,54 @@ describe("sshAcceptsInclude", () => {
   })
 })
 
-describe("systemConfigCandidates", () => {
-  it("uses /etc/ssh for the system ssh", () => {
-    expect(systemConfigCandidates("/usr/bin/ssh")).toEqual(["/etc/ssh/ssh_config"])
-    expect(systemConfigCandidates("/bin/ssh")).toEqual(["/etc/ssh/ssh_config"])
+describe("probedSystemConfig", () => {
+  const debug = (...files: string[]) =>
+    [
+      "OpenSSH_10.2p1",
+      ...files.map((f) => `debug1: Reading configuration data ${f}`),
+      "debug1: other",
+    ].join("\n")
+
+  it("picks the system file ssh read, skipping the user's own config and its includes", () => {
+    expect(
+      probedSystemConfig(debug("/Users/me/.ssh/config", "/etc/ssh/ssh_config"), "/Users/me/.ssh"),
+    ).toBe("/etc/ssh/ssh_config")
+    expect(
+      probedSystemConfig(
+        debug("/u/.ssh/config", "/u/.ssh/work/ssh_config", "/opt/homebrew/etc/ssh/ssh_config"),
+        "/u/.ssh",
+      ),
+    ).toBe("/opt/homebrew/etc/ssh/ssh_config")
   })
 
-  it("tries <prefix>/etc first for Homebrew, /usr/local or Nix builds", () => {
-    expect(systemConfigCandidates("/opt/homebrew/bin/ssh")).toEqual([
-      "/opt/homebrew/etc/ssh/ssh_config",
-      "/etc/ssh/ssh_config",
-    ])
-    expect(systemConfigCandidates("/usr/local/bin/ssh")[0]).toBe("/usr/local/etc/ssh/ssh_config")
-    expect(systemConfigCandidates("/nix/store/abc-openssh/bin/ssh")[0]).toBe(
-      "/nix/store/abc-openssh/etc/ssh/ssh_config",
-    )
+  it("returns null when ssh read no system config", () => {
+    expect(probedSystemConfig(debug("/u/.ssh/config"), "/u/.ssh")).toBeNull()
+    expect(probedSystemConfig("", "/u/.ssh")).toBeNull()
   })
 
-  it("falls back to /etc/ssh for a bare command name", () => {
-    expect(systemConfigCandidates("ssh")).toEqual(["/etc/ssh/ssh_config"])
+  it("ignores a system file's own includes (they don't end in /ssh_config)", () => {
+    expect(
+      probedSystemConfig(
+        debug("/etc/ssh/ssh_config", "/etc/ssh/ssh_config.d/50-redhat.conf"),
+        "/u/.ssh",
+      ),
+    ).toBe("/etc/ssh/ssh_config")
+  })
+})
+
+describe("hasRelativeInclude", () => {
+  it("spots Includes that aren't absolute or ~-relative", () => {
+    expect(hasRelativeInclude("Include ssh_config.d/*.conf\n")).toBe(true)
+    expect(hasRelativeInclude("Host *\n  Include a /abs\n")).toBe(true)
+    expect(hasRelativeInclude("Include /etc/ssh/ssh_config.d/*.conf\nInclude ~/x\n")).toBe(false)
+    expect(hasRelativeInclude("Host a\n")).toBe(false)
   })
 })
 
 describe("userManagesMux", () => {
   it("is true for a ControlPath or an active ControlMaster", () => {
     expect(userManagesMux("user me\ncontrolmaster false\ncontrolpath /x/cm-abc\n")).toBe(true)
-    for (const v of ["auto", "yes", "ask", "autoask", "AUTO"]) {
+    for (const v of ["auto", "true", "yes", "ask", "autoask", "AUTO"]) {
       expect(userManagesMux(`controlmaster ${v}\ncontrolpersist no\n`)).toBe(true)
     }
   })
@@ -325,7 +348,7 @@ describe("buildSshProbe", () => {
     }
     expect(buildSshProbe(r, { sshPath: "ssh" })).toEqual({
       file: "ssh",
-      args: ["-p", "1", "-G", "--", "web"],
+      args: ["-p", "1", "-v", "-G", "--", "web"],
     })
   })
 })
@@ -335,8 +358,8 @@ describe("muxConfigText", () => {
     const text = muxConfigText("/home/me/.config/smterm/cm", { system: "/etc/ssh/ssh_config" })!
     const lines = text.split("\n").filter((l) => l && !l.startsWith("#"))
     expect(lines).toEqual([
-      "Include ~/.ssh/config",
-      "Include /etc/ssh/ssh_config",
+      'Include "~/.ssh/config"',
+      'Include "/etc/ssh/ssh_config"',
       "Host *",
       "  ControlMaster auto",
       "  ControlPath /home/me/.config/smterm/cm/%C",
@@ -347,7 +370,18 @@ describe("muxConfigText", () => {
   it("uses the given system config path", () => {
     expect(
       muxConfigText("/tmp/smterm-1", { system: "/opt/homebrew/etc/ssh/ssh_config" }),
-    ).toContain("Include /opt/homebrew/etc/ssh/ssh_config")
+    ).toContain('Include "/opt/homebrew/etc/ssh/ssh_config"')
+  })
+
+  it("omits the system Include when ssh reads none, and quotes paths with spaces", () => {
+    const t = muxConfigText("/tmp/smterm-1", { user: "/Users/Jane Doe/.ssh/config", system: null })!
+    expect(t).toContain('Include "/Users/Jane Doe/.ssh/config"')
+    expect(t.match(/^Include/gm)).toHaveLength(1)
+  })
+
+  it("returns null for an Include path it can't quote", () => {
+    expect(muxConfigText("/tmp/smterm-1", { user: '/a"b', system: null })).toBeNull()
+    expect(muxConfigText("/tmp/smterm-1", { system: "/etc/x\ny" })).toBeNull()
   })
 
   it("returns null for a dir that isn't short and shell-safe", () => {
@@ -523,6 +557,22 @@ describe.runIf(sshBin && process.platform !== "win32")("muxConfigText with real 
     expect(userManagesMux(g("mine"))).toBe(true)
     expect(userManagesMux(g("plain"))).toBe(false)
     expect(userManagesMux(g("off"))).toBe(false) // explicit no: the wrapper's first-wins keeps it
+  })
+
+  it("detects every ControlMaster value that turns multiplexing on, as ssh prints it", () => {
+    for (const v of ["yes", "auto", "ask", "autoask"]) {
+      const cfg = path.join(dir, `cm-${v}`)
+      fs.writeFileSync(cfg, `Host h\n  ControlMaster ${v}\n`)
+      expect(
+        userManagesMux(execFileSync("ssh", ["-G", "-F", cfg, "--", "h"], { encoding: "utf8" })),
+      ).toBe(true)
+    }
+  })
+
+  it("finds the system config from a real ssh -v -G", () => {
+    const r = spawnSync("ssh", ["-v", "-G", "--", "example.invalid"], { encoding: "utf8" })
+    const sys = probedSystemConfig(r.stderr, path.join(os.homedir(), ".ssh"))
+    if (fs.existsSync("/etc/ssh/ssh_config")) expect(sys).toMatch(/\/ssh_config$/)
   })
 
   it("refuses a group-writable Include under -F (why the system config is checked first)", () => {
