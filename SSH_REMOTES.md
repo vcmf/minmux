@@ -123,7 +123,7 @@ A host becomes a `ShellOption`:
 
 ```
 command: "ssh"
-args:    [...reuseFlags, ...host.args, "-t", host.target, <remote command>]
+args:    [-F <wrapper> (reuse, §4b), ...host.args, "-t", "--", host.target, <remote command>]
 ```
 
 `<remote command>` is empty in phase 1 (the login shell) and becomes the tmux wrapper in
@@ -135,26 +135,40 @@ the distro's `ssh` (§5).
 
 ### 4b. Connection reuse
 
-For follow-up panes on the same host, add (unix `ssh` only, including inside WSL):
+For follow-up panes on the same host (unix `ssh` only, including inside WSL), smterm runs
+`ssh -F ~/.config/smterm/cm/ssh_config …` with a small wrapper config it writes:
 
 ```
--o ControlMaster=auto
--o ControlPath=~/.config/smterm/cm/%C
--o ControlPersist=10m
+Include ~/.ssh/config          # the user's config first
+Include /etc/ssh/ssh_config    # then the system's (ssh's own order)
+Host *                         # our defaults: only fill what's still unset
+  ControlMaster auto
+  ControlPath "~/.config/smterm/cm/%C"
+  ControlPersist 10m
 ```
 
 - First pane authenticates. Later panes to the same host multiplex over that connection:
   instant, no second passphrase or 2FA prompt.
+- **ssh keeps the first value it reads for each option**, so anything the user set — per
+  host, in `Host *`, in a `Match exec`, in an Include, in the system file, including an
+  explicit `ControlMaster no` — wins over ours. We never have to predict their config;
+  ssh applies its own rules (verified against OpenSSH 10.2 in the tests). This replaced an
+  earlier design that passed `-o` flags and tried to detect the user's settings.
+- ssh skips its permission check on a user config reached through `-F`, so we use the
+  wrapper only when `~/.ssh/config` is ours (or root's) and not group/world-writable;
+  otherwise plain `ssh` runs and reports the problem as usual.
+- A host whose own args set multiplexing or a config file (`-M`, `-S`, `-F`,
+  `-o Control*`) gets plain ssh with its args untouched.
 - `%C` is a 40-char hash of host/port/user. Unix sockets have a ~104 byte path limit on
   macOS, so the dir is short and space-free (`~/.config/smterm/cm`, not the macOS
-  `Application Support` userData path). Created `0700`. Resolved length is unit-tested.
+  `Application Support` userData path), falling back to `/tmp/smterm-<uid>` for a long
+  home. Created `0700`, never through a symlink. Resolved length is unit-tested.
 - `ControlPersist` keeps the master alive for 10 minutes after the last pane closes. It is a
   background process, so it also outlives an smterm quit (§6).
-- If the host's own ssh config sets `ControlMaster` or `ControlPath` (in its block or a
-  matching `Host *`), smterm adds nothing and the user's multiplexing applies. A settings
-  host's own `-o` args come before ours, so they win too. `reuseConnections: false` turns
-  ours off everywhere.
-- Windows `ssh.exe` does not support ControlMaster. We omit the flags there; each pane
+- Known edge: a host with `ControlMaster no` still gets our `ControlPath`, so it could join
+  a master another entry for the same user@host:port opened. Harmless and rare.
+- `reuseConnections: false` turns the wrapper off everywhere.
+- Windows `ssh.exe` does not support ControlMaster. No wrapper there; each pane
   authenticates separately. Documented, not worked around.
 
 ### 4c. Session identity
@@ -434,7 +448,7 @@ with the right command; closing a pane leaves no tmux session behind.
 | ---------------------------------------------------- | ---------------------------------------------------------------------------------- |
 | ControlPath too long (unix socket limit)             | `%C` hash + short `~/.config/smterm/cm` dir; length unit-tested                    |
 | Stale master after network change blocks new panes   | `ControlPersist` timeout; on connect failure retry once with `-o ControlMaster=no` |
-| User's own `ControlMaster` config conflicts          | We step aside for hosts whose config sets it; `reuseConnections: false` opts out   |
+| User's own `ControlMaster` config conflicts          | `-F` wrapper: ssh applies the user's settings first; `reuseConnections: false`     |
 | Restore triggers many auth prompts                   | Lazy connect (D3)                                                                  |
 | WSL spawn path appends shell-integration args        | `SpawnOpts.remote` skips it (1.7)                                                  |
 | tmux options missing on old tmux (< 3.3)             | Options are best-effort; passthrough only needed for phase 3                       |

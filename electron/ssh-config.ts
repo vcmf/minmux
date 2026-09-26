@@ -17,65 +17,69 @@ export interface SshConfigHost {
   hostName?: string
   user?: string
   port?: string
-  ownMux?: true // its config sets ControlMaster/ControlPath: smterm must not add its own
 }
 
-type Field = "hostName" | "user" | "port" | "controlMaster" | "controlPath"
-const DISPLAY: readonly Field[] = ["hostName", "user", "port"]
+type Field = "hostName" | "user" | "port"
+const FIELDS: readonly Field[] = ["hostName", "user", "port"]
 
-/** A config file in order: blocks (`maybe` = unevaluable Match) and Includes with context. */
+/** A config file in order: blocks, and Includes with their Host line (null = unevaluable Match). */
 export type SshConfigItem =
-  | { type: "block"; patterns: string[]; fields: Partial<Record<Field, string>>; maybe?: true }
+  | { type: "block"; patterns: string[]; fields: Partial<Record<Field, string>> }
   | { type: "include"; patterns: string[]; context: string[] | null }
 
 // ASCII whitespace only, as OpenSSH splits (an NBSP is part of a token there).
 const isSpace = (c: string | undefined) => c !== undefined && /[ \t\r\n\v\f]/.test(c)
 
+/** One token from `i` (quotes anywhere, `\` escapes); null on an unterminated quote. */
+function readToken(
+  line: string,
+  i: number,
+  stopAtEquals: boolean,
+): { tok: string; i: number } | null {
+  let tok = ""
+  let quote: string | null = null
+  while (i < line.length) {
+    const c = line[i]!
+    const next = line[i + 1]
+    if (c === "\\" && (next === '"' || next === "'" || next === "\\" || (!quote && next === " "))) {
+      tok += next
+      i += 2
+    } else if (quote) {
+      if (c === quote) quote = null
+      else tok += c
+      i++
+    } else if (isSpace(c) || (stopAtEquals && c === "=")) {
+      break
+    } else if (c === '"' || c === "'") {
+      quote = c
+      i++
+    } else {
+      tok += c
+      i++
+    }
+  }
+  return quote ? null : { tok, i }
+}
+
 /** One config line → tokens, like OpenSSH's argv_split; [] for a comment, blank or bad line. */
 export function tokenizeLine(line: string): string[] {
-  const n = line.length
   let i = 0
   while (isSpace(line[i])) i++
-  if (i >= n || line[i] === "#") return []
-  // Keyword: up to whitespace or `=`, then an optional `=` with spaces around it.
-  let key = ""
-  while (i < n && !isSpace(line[i]) && line[i] !== "=") key += line[i++]
-  if (!key) return []
+  if (i >= line.length || line[i] === "#") return []
+  // Keyword (quotes removed, like any token): up to whitespace or `=`, then an optional `=`.
+  const key = readToken(line, i, true)
+  if (!key || !key.tok) return []
+  i = key.i
   while (isSpace(line[i])) i++
   if (line[i] === "=") i++
-  const out = [key]
+  const out = [key.tok]
   for (;;) {
     while (isSpace(line[i])) i++
-    if (i >= n || line[i] === "#") break
-    // Quotes may open anywhere in a token; `\` escapes a quote, a backslash, or (outside
-    // quotes) a space. An unterminated quote makes the line invalid, as it does for ssh.
-    let tok = ""
-    let quote: string | null = null
-    while (i < n) {
-      const c = line[i]!
-      const next = line[i + 1]
-      if (
-        c === "\\" &&
-        (next === '"' || next === "'" || next === "\\" || (!quote && next === " "))
-      ) {
-        tok += next
-        i += 2
-      } else if (quote) {
-        if (c === quote) quote = null
-        else tok += c
-        i++
-      } else if (isSpace(c)) {
-        break
-      } else if (c === '"' || c === "'") {
-        quote = c
-        i++
-      } else {
-        tok += c
-        i++
-      }
-    }
-    if (quote) return []
-    out.push(tok)
+    if (i >= line.length || line[i] === "#") break
+    const t = readToken(line, i, false)
+    if (!t) return [] // an unterminated quote makes the line invalid, as it does for ssh
+    out.push(t.tok)
+    i = t.i
   }
   return out
 }
@@ -85,8 +89,6 @@ const KEYWORD_FIELDS = new Map<string, Field>([
   ["hostname", "hostName"],
   ["user", "user"],
   ["port", "port"],
-  ["controlmaster", "controlMaster"],
-  ["controlpath", "controlPath"],
 ])
 
 type Block = Extract<SshConfigItem, { type: "block" }>
@@ -117,16 +119,13 @@ export function parseSshConfig(text: string): SshConfigItem[] {
       block = { type: "block", patterns: args.filter((a) => a.length > 0), fields: {} }
       items.push(block)
     } else if (key === "match") {
-      // A Match we can't evaluate may still apply: keep it as `maybe` (never listed or
-      // displayed, but its ControlMaster/ControlPath make smterm step aside).
+      // A Match we can't evaluate never reaches the list (nor do Includes under it).
       const patterns = matchPatterns(args)
-      block = patterns
-        ? { type: "block", patterns, fields: {} }
-        : { type: "block", patterns: ["*"], fields: {}, maybe: true }
-      items.push(block)
+      block = patterns ? { type: "block", patterns, fields: {} } : null
+      if (block) items.push(block)
     } else if (key === "include") {
-      const context = block && !block.maybe ? block.patterns : null
-      if (args.length) items.push({ type: "include", patterns: args, context })
+      if (args.length)
+        items.push({ type: "include", patterns: args, context: block?.patterns ?? null })
       // The included file's options are read before the rest of this block's.
       if (block) {
         block = { ...block, fields: {} }
@@ -171,41 +170,34 @@ export function hostMatcher(patterns: string[]): (alias: string) => boolean {
 export interface GuardedBlock {
   patterns: string[]
   fields: Partial<Record<Field, string>>
-  maybe?: true
   guards?: (string[] | null)[]
 }
 
-type Compiled = { b: GuardedBlock; maybe: boolean; applies: (alias: string) => boolean }
-
-// A block applies when its own line and every evaluable guard match; `maybe` = some part
-// of it is an unevaluable Match, so it might.
-const compile = (blocks: GuardedBlock[]): Compiled[] =>
-  blocks.map((b) => {
-    const own = hostMatcher(b.patterns)
-    const guards = (b.guards ?? []).filter((g) => g !== null).map(hostMatcher)
-    const maybe = !!b.maybe || (b.guards ?? []).includes(null)
-    return { b, maybe, applies: (alias) => own(alias) && guards.every((g) => g(alias)) }
-  })
-
-const setsMux = (c: readonly Compiled[], name: string) =>
-  c.some(
-    ({ b, applies }) =>
-      (b.fields.controlMaster !== undefined || b.fields.controlPath !== undefined) && applies(name),
-  )
-
-/** A lookup (compiled once): might this config set multiplexing for `target` (`user@` stripped)? */
-export function makeMuxLookup(blocks: GuardedBlock[]): (target: string) => boolean {
-  const c = compile(blocks)
-  return (target) => setsMux(c, target.slice(target.lastIndexOf("@") + 1))
-}
-
-/** One-off form of makeMuxLookup. */
-export const muxSetFor = (blocks: GuardedBlock[], target: string) => makeMuxLookup(blocks)(target)
-
 /** Blocks in order (Includes inlined) → hosts, each with ssh's first-match-wins values. */
 export function hostsFromBlocks(blocks: GuardedBlock[]): SshConfigHost[] {
-  const all = compile(blocks)
-  const compiled = all.filter((c) => !c.maybe)
+  const compiled = blocks.map((b) => {
+    const guards = b.guards ?? []
+    // Under an unevaluable Match: never applies. Otherwise its line and every guard must match.
+    const dead = guards.includes(null)
+    const own = hostMatcher(b.patterns)
+    const g = guards.filter((x) => x !== null).map(hostMatcher)
+    return { b, applies: (alias: string) => !dead && own(alias) && g.every((m) => m(alias)) }
+  })
+  // Index: a block whose line is only literal names can match nothing else, so each alias
+  // checks its own literal blocks + the (usually few) wildcard ones, not every block.
+  const literal = new Map<string, number[]>()
+  const wildcard: number[] = []
+  compiled.forEach(({ b }, i) => {
+    const pos = b.patterns.filter((p) => !p.startsWith("!"))
+    if (pos.some((p) => /[*?]/.test(p))) wildcard.push(i)
+    else
+      for (const p of new Set(pos.map((x) => x.toLowerCase())))
+        literal.set(p, [...(literal.get(p) ?? []), i])
+  })
+  const candidates = (alias: string) => {
+    const own = literal.get(alias.toLowerCase()) ?? []
+    return [...own, ...wildcard].sort((a, b) => a - b) // keep file order: first value wins
+  }
   // List each alias (case-insensitively once, as ssh matches) whose block applies to it.
   const aliases: string[] = []
   const seen = new Set<string>()
@@ -218,9 +210,10 @@ export function hostsFromBlocks(blocks: GuardedBlock[]): SshConfigHost[] {
   }
   return aliases.map((alias) => {
     const v: Partial<Record<Field, string>> = {}
-    for (const { b, applies } of compiled) {
+    for (const i of candidates(alias)) {
+      const { b, applies } = compiled[i]!
       if (!applies(alias)) continue
-      for (const f of DISPLAY)
+      for (const f of FIELDS)
         if (v[f] === undefined && b.fields[f] !== undefined) v[f] = b.fields[f]
     }
     const host: SshConfigHost = { alias }
@@ -229,7 +222,6 @@ export function hostsFromBlocks(blocks: GuardedBlock[]): SshConfigHost[] {
       host.hostName = v.hostName.replace(/%(%|h)/g, (_m, c: string) => (c === "h" ? alias : "%"))
     if (v.user) host.user = v.user
     if (v.port) host.port = v.port
-    if (setsMux(all, alias)) host.ownMux = true
     return host
   })
 }
@@ -253,7 +245,7 @@ export interface LoadResult {
   hosts: SshConfigHost[]
   files: string[] // config files read, in order
   watch: string[] // paths whose change can alter the list: every file tried + glob dirs
-  blocks: GuardedBlock[] // for muxSetFor, and merging with the system ssh_config
+  blocks: GuardedBlock[] // to merge with the system ssh_config (appended after the user's)
 }
 
 const GLOB_CHARS = /[*?[]/
@@ -320,7 +312,8 @@ export async function expandGlob(pattern: string, fs: MiniFs, p: PlatformPath): 
     bases = next
     if (bases.length === 0) break
   }
-  return bases
+  // glob(3) sorts the full paths (strcmp): `a.b/cfg` before `a/cfg`, as ssh reads them.
+  return bases.sort((x, y) => (x < y ? -1 : x > y ? 1 : 0))
 }
 
 /** `~` → home; a relative Include path resolves against ~/.ssh (user config semantics). */
@@ -358,7 +351,7 @@ export async function loadSshConfig(opts: LoadOptions): Promise<LoadResult> {
   const base = opts.includeBase ?? opts.path.join(opts.home, ".ssh")
   const blocks: GuardedBlock[] = []
   const parsed = new Map<string, SshConfigItem[] | null>() // each file read + parsed once
-  const evaluated = new Set<string>()
+  const evaluated = new Map<string, number>() // evaluation key → shallowest depth seen
   const files: string[] = []
   const watch = new Set<string>()
   // Every path we try (found or not) can change the list when it appears or changes.
@@ -383,9 +376,11 @@ export async function loadSshConfig(opts: LoadOptions): Promise<LoadResult> {
     stack: string[],
   ) => {
     const key = `${file}\0${guardKey(guards)}`
-    if (depth > maxDepth || stack.includes(file) || evaluated.has(key)) return
+    // Re-evaluate only when reached shallower: the deeper visit may have hit maxDepth.
+    const prev = evaluated.get(key)
+    if (depth > maxDepth || stack.includes(file) || (prev !== undefined && prev <= depth)) return
     if (evaluated.size >= MAX_EVALUATIONS || blocks.length >= MAX_BLOCKS) return
-    evaluated.add(key)
+    evaluated.set(key, depth)
     const items = await load(file)
     if (items === null) return
     const inner = [...stack, file]
@@ -395,7 +390,6 @@ export async function loadSshConfig(opts: LoadOptions): Promise<LoadResult> {
           patterns: item.patterns,
           fields: item.fields,
           guards,
-          ...(item.maybe ? { maybe: true as const } : {}),
         })
         continue
       }

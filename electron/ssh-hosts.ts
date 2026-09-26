@@ -1,7 +1,8 @@
 // SSH remotes: the saved-host list and the exact argv a remote session spawns with
-// (SSH_REMOTES.md §3–§5). Pure — main supplies the platform, the ssh binary and the
-// ControlMaster dir. A RemoteRef from the renderer is untrusted: trustedRemote() rebuilds
-// it from main's own host list before anything is spawned.
+// (SSH_REMOTES.md §3–§5). Pure — main supplies the platform, the ssh binary and the -F
+// wrapper. Connection reuse is left to ssh's own precedence (muxConfigText), so we never
+// have to predict the user's multiplexing settings. A RemoteRef from the renderer is
+// untrusted: trustedRemote() rebuilds it from main's own host list before spawning.
 
 import path from "node:path"
 import type { RemoteRef, SshEnv, SshHost } from "../src/types"
@@ -28,14 +29,11 @@ export interface MergeInput {
   wsl: [distro: string, hosts: SshConfigHost[]][] // each distro's config, in distro order
   settings: SshSettings
   platform: NodeJS.Platform // WSL hosts only run on Windows
-  // Does the ssh config of `env` (blocks, incl. system ssh_config) set multiplexing for a
-  // settings host's target? Settings hosts point at config aliases too.
-  configMux?: (env: SshEnv, target: string) => boolean
 }
 
 /** Config + settings hosts, ids unique; `all` keeps hidden ones (main's trust list). */
 export function mergeHosts(
-  { native, wsl, settings, platform, configMux }: MergeInput,
+  { native, wsl, settings, platform }: MergeInput,
   { all = false }: { all?: boolean } = {},
 ): SshHost[] {
   // ssh matches aliases case-insensitively, so hiding does too.
@@ -58,7 +56,6 @@ export function mergeHosts(
       env,
       source: "config",
       ...(detail ? { detail } : {}),
-      ...(h.ownMux ? { ownMux: true as const } : {}),
     }
   }
   if (settings.fromSshConfig || all) {
@@ -80,7 +77,6 @@ export function mergeHosts(
       source: "settings",
       ...(s.args.length ? { extraArgs: [...s.args] } : {}),
       ...(s.target !== s.name ? { detail: s.target } : {}),
-      ...(configMux?.(s.env, s.target) ? { ownMux: true as const } : {}),
     })
   }
   return out
@@ -117,44 +113,74 @@ export function isSafeControlDir(st: DirFacts, uid: number): boolean {
   return st.isDirectory && !st.isSymbolicLink && st.uid === uid && (st.mode & 0o077) === 0
 }
 
-/** ControlMaster flags for sockets in `dir` (quoted, `%` → `%%`); [] if it can't be quoted. */
-export function reuseFlags(dir: string): string[] {
-  // Inside ssh's quotes `\` is an escape and `${VAR}` expands: either would change the path.
-  if (/["\\$]/.test(dir) || hasControlChar(dir)) return []
-  const controlPath = `${dir.replace(/%/g, "%%")}/%C`
+/** Can `dir` sit inside ssh's quoted ControlPath unchanged? (`\\` escapes, `${…}` expands.) */
+export const isQuotableDir = (dir: string) => !/["\\$]/.test(dir) && !hasControlChar(dir)
+
+/** The `-F` config smterm runs ssh with: the user's config first, then the system's (ssh's
+ *  own order), then our multiplexing defaults — ssh keeps the first value it reads, so any
+ *  ControlMaster/ControlPath the user set anywhere wins. null if `dir` can't be quoted. */
+export function muxConfigText(
+  dir: string,
+  includes: { user: string; system: string } = {
+    user: "~/.ssh/config",
+    system: "/etc/ssh/ssh_config",
+  },
+): string | null {
+  if (!isQuotableDir(dir)) return null
   return [
-    "-o",
-    "ControlMaster=auto",
-    "-o",
-    `ControlPath="${controlPath}"`,
-    "-o",
-    `ControlPersist=${CONTROL_PERSIST}`,
-  ]
+    "# Written by smterm for connection reuse. Your own config is read first, so anything",
+    "# you set there wins; the Host * defaults below only fill in what it leaves unset.",
+    `Include ${includes.user}`,
+    `Include ${includes.system}`,
+    "Host *",
+    "  ControlMaster auto",
+    `  ControlPath "${dir.replace(/%/g, "%%")}/%C"`,
+    `  ControlPersist ${CONTROL_PERSIST}`,
+    "",
+  ].join("\n")
 }
 
-// Runs INSIDE a WSL distro as `sh -c SCRIPT smterm-ssh <target> <extra args…>`: picks the
-// control dir there (short home → ~/.config/smterm/cm, else /tmp/smterm-<uid>), creates it
-// 0700 (never chmod-ing through a symlink), and adds the ControlMaster flags only for a real
-// dir we own — after the user's own args, so theirs win. Any doubt → plain ssh. One line
-// (`;`-joined) so it crosses wsl.exe's command line intact.
+/** stat-like facts about the user's ~/.ssh/config. */
+export interface FileFacts {
+  isFile: boolean
+  uid: number
+  mode: number
+}
+
+/** ssh refuses a user config others can write — but not through `-F`, so we check first. */
+export function isSafeUserConfig(st: FileFacts | null, uid: number): boolean {
+  if (st === null) return true // no config: nothing to check
+  return st.isFile && (st.uid === uid || st.uid === 0) && (st.mode & 0o022) === 0
+}
+
+// Runs INSIDE a WSL distro as `sh -c SCRIPT smterm-ssh <target> <extra args…>`. Mirrors the
+// native path there: picks the control dir (short home → ~/.config/smterm/cm, else
+// /tmp/smterm-<uid>), creates it 0700 (never through a symlink), refuses a user config
+// others can write, writes the same -F wrapper (muxConfigText) and runs ssh with it. Any
+// doubt → plain ssh. One line (`;`-joined) so it crosses wsl.exe's command line intact.
 export const WSL_SSH_SCRIPT = [
   't="$1"; shift',
   'd="$HOME/.config/smterm/cm"',
   // wc -c counts bytes (as sun_path does); ${#d} would count characters.
   `n=$(printf %s "$d" | wc -c); [ $((n + ${CONTROL_NAME_BYTES})) -le ${SOCKET_PATH_MAX} ] || d="/tmp/smterm-$(id -u)"`,
-  // Characters ssh would re-interpret inside the quoted ControlPath (see reuseFlags).
+  // Characters ssh would re-interpret inside the quoted ControlPath (see isQuotableDir).
   "case \"$d\" in *'%'*|*'\"'*|*'$'*|*'\\'*) exec ssh \"$@\" -t -- \"$t\";; esac",
+  'c="$HOME/.ssh/config"',
+  'if [ -e "$c" ] && { [ ! -O "$c" ] || [ -n "$(find "$c" -prune \\( -perm -020 -o -perm -002 \\) 2>/dev/null)" ]; }; then exec ssh "$@" -t -- "$t"; fi',
   '[ -L "$d" ] || mkdir -p "$d" 2>/dev/null',
-  'if [ -d "$d" ] && [ ! -L "$d" ] && [ -O "$d" ] && chmod 700 "$d" 2>/dev/null; then' +
-    ` exec ssh "$@" -o ControlMaster=auto -o "ControlPath=\\"$d/%C\\"" -o ControlPersist=${CONTROL_PERSIST} -t -- "$t"; fi`,
+  'if [ -d "$d" ] && [ ! -L "$d" ] && [ -O "$d" ] && chmod 700 "$d" 2>/dev/null &&' +
+    " printf '%s\\n' '# Written by smterm for connection reuse (see the native file).'" +
+    " 'Include ~/.ssh/config' 'Include /etc/ssh/ssh_config' 'Host *' '  ControlMaster auto'" +
+    ` "  ControlPath \\"$d/%C\\"" '  ControlPersist ${CONTROL_PERSIST}' > "$d/ssh_config" 2>/dev/null; then` +
+    ' exec ssh -F "$d/ssh_config" "$@" -t -- "$t"; fi',
   'exec ssh "$@" -t -- "$t"',
 ].join("; ")
 
 export interface SpawnContext {
   platform: NodeJS.Platform
   sshPath: string // native ssh binary (`ssh`, or the resolved ssh.exe on Windows)
-  controlDir: string | null // a verified-safe native control dir; null = no native reuse
-  reuse: boolean // settings.ssh.reuseConnections && wantOurMux(probe of this host)
+  muxConfig: string | null // path of a written, verified -F wrapper; null = no native reuse
+  reuse: boolean // settings.ssh.reuseConnections
 }
 
 /** node-pty file + args for a remote session; null if this platform can't run its env. */
@@ -165,16 +191,16 @@ export function buildSshSpawn(
   const env = parseSshEnv(remote.env)
   if (!env) return null
   const extra = remote.extraArgs ?? []
-  // A host whose own ssh config or args manage multiplexing keeps it: we add nothing (even a
-  // lone ControlPath of ours would let `-o ControlMaster=no` join a shared connection).
-  const reuse = ctx.reuse && !remote.ownMux && !sshArgsSetMux(extra)
+  // Args that set multiplexing or their own config file keep full control: no wrapper
+  // (even its lone ControlPath would let `-o ControlMaster=no` join a shared connection).
+  const reuse = ctx.reuse && !sshArgsSetMux(extra)
   // `--` ends ssh's options, so a destination starting with `-` can never become one.
   const dest = ["-t", "--", remote.target]
   if (env.kind === "native") {
     // Windows' ssh.exe has no ControlMaster support.
-    const canReuse = reuse && ctx.platform !== "win32" && ctx.controlDir !== null
-    const flags = canReuse ? reuseFlags(ctx.controlDir!) : []
-    return { file: ctx.sshPath, args: [...extra, ...flags, ...dest] }
+    const useConfig = reuse && ctx.platform !== "win32" && ctx.muxConfig !== null
+    const config = useConfig ? ["-F", ctx.muxConfig!] : []
+    return { file: ctx.sshPath, args: [...config, ...extra, ...dest] }
   }
   if (ctx.platform !== "win32") return null
   // `-e` execs directly (no default-shell re-parse of our args); `--cd ~` starts at home.
@@ -185,43 +211,6 @@ export function buildSshSpawn(
         args: [...base, "sh", "-c", WSL_SSH_SCRIPT, "smterm-ssh", remote.target, ...extra],
       }
     : { file: "wsl.exe", args: [...base, "ssh", ...extra, ...dest] }
-}
-
-/** Command that prints how ssh resolves a host's config (`ssh -G`, no connection made). */
-export function buildSshProbe(
-  remote: RemoteRef,
-  ctx: Pick<SpawnContext, "platform" | "sshPath">,
-): { file: string; args: string[] } | null {
-  const env = parseSshEnv(remote.env)
-  if (!env) return null
-  const tail = [...(remote.extraArgs ?? []), "-G", "--", remote.target]
-  if (env.kind === "native") return { file: ctx.sshPath, args: tail }
-  if (ctx.platform !== "win32") return null
-  // Same start dir as the real spawn, so relative paths in the args resolve the same way.
-  return { file: "wsl.exe", args: ["-d", env.distro, "--cd", "~", "-e", "ssh", ...tail] }
-}
-
-/** The multiplexing options in `ssh -G` output (absent keys mean ssh left them unset). */
-export function parseSshG(out: string): { controlMaster?: string; controlPath?: string } {
-  const r: { controlMaster?: string; controlPath?: string } = {}
-  for (const line of out.split(/\r?\n/)) {
-    const m = /^(controlmaster|controlpath)\s+(.+)$/i.exec(line.trim())
-    if (!m) continue
-    if (m[1]!.toLowerCase() === "controlmaster") r.controlMaster = m[2]!.trim().toLowerCase()
-    else r.controlPath = m[2]!.trim()
-  }
-  return r
-}
-
-/** Add our ControlMaster flags? Only if `ssh -G` (null = failed) and our parse both see none. */
-export function wantOurMux(
-  g: ReturnType<typeof parseSshG> | null,
-  remote: Pick<RemoteRef, "ownMux" | "extraArgs">,
-): boolean {
-  if (remote.ownMux || sshArgsSetMux(remote.extraArgs) || !g) return false
-  if (g.controlMaster && g.controlMaster !== "false" && g.controlMaster !== "no") return false
-  if (g.controlPath && g.controlPath.toLowerCase() !== "none") return false
-  return true
 }
 
 const MAX_LABEL = 200
@@ -240,7 +229,6 @@ export function trustedRemote(ref: unknown, hosts: readonly SshHost[]): RemoteRe
       target: known.target,
       env: known.env,
       ...(known.extraArgs?.length ? { extraArgs: [...known.extraArgs] } : {}),
-      ...(known.ownMux ? { ownMux: true as const } : {}),
     }
   }
   // A settings host that's gone can't be rebuilt safely (its args are unknown): don't guess.

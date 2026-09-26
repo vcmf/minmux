@@ -58,7 +58,7 @@ would become a link to the _local_ file. Disable the link provider when `session
 (1a), a WSL-hosted SSH pane is never misread as a WSL shell by `getActiveWsl`, the git panel or
 the file preview. Covered by a test.
 
-**1f. ControlPath: `~/.config/smterm/cm/%C`.**
+**1f. ControlPath: `~/.config/smterm/cm/%C`, via an `-F` wrapper.**
 Kept short because ssh appends a ~17-char temp suffix while
 creating the master socket, and macOS caps socket paths at 104 bytes. The builder computes the
 worst-case length; if the home path is too long it falls back to `/tmp/smterm-<uid>/%C`.
@@ -188,13 +188,8 @@ export function mergeHosts(input: {
   settings: Settings["ssh"]
 }): SshHost[]
 
-/** The ControlMaster flags for a host, or [] (Windows ssh.exe / reuse off). */
-export function reuseFlags(opts: {
-  platform: NodeJS.Platform
-  env: RemoteRef["env"]
-  reuse: boolean
-  controlDir: string
-}): string[]
+/** The -F wrapper config: user + system config first, our ControlMaster defaults last. */
+export function muxConfigText(dir: string): string | null
 
 /** Worst-case ControlPath length incl. ssh's temp suffix; picks the fallback dir if needed. */
 export function controlDir(home: string, uid: number): string
@@ -250,14 +245,12 @@ Main-process wiring. Still no UI.
 
 **Host list service** (in main, off the hot path)
 
-- Native: `loadSshConfig(~/.ssh/config)`, then the system config (`/etc/ssh/ssh_config`, loaded with `includeBase: /etc/ssh`;
-  Windows `%ProgramData%\ssh\ssh_config`) appended after it: its `blocks` join the user's
-  for `muxSetFor` / `configMux` (settings hosts), and its `watch` paths join the watcher.
+- Native: `loadSshConfig(~/.ssh/config)`; its `watch` paths feed the watcher.
 - WSL (Windows only): for each distro from `listShells()`'s WSL entries, resolve the distro
   home once (`wsl.exe -d <d> -e sh -c 'printf %s "$HOME"'`, 5 s timeout, cached), then read
   `<home>/.ssh/config` through `wslUncCandidates(distro, path)`. A distro that fails is
   skipped silently.
-- Merge with `mergeHosts` (pass `configMux` from each env's blocks); cache; recompute on
+- Merge with `mergeHosts`; cache; recompute on
   chokidar changes to any path in `watch` (files tried, glob dirs — so new files show up) and on `settings-changed`; emit `ssh-hosts-changed` (debounced 200 ms).
 - First call is lazy (on `ssh:list-hosts`), so startup cost is zero until the sidebar asks.
 
@@ -266,10 +259,11 @@ Main-process wiring. Still no UI.
 - If `opts.remote`: `remote = trustedRemote(opts.remote, trustList)` where `trustList =
 mergeHosts(…, { all: true })` (hidden hosts included, so a restored pane keeps its args).
   null → write an error into the pane, don't spawn.
-- Connection reuse: run `buildSshProbe(remote)` (`ssh -G`, async, 2 s timeout, cached per
-  hostId until the host list changes); `reuse = settings.reuseConnections &&
-wantOurMux(parseSshG(out) | null, remote)`. A failed probe means no reuse (safe side).
-- Then `{ file, args } = buildSshSpawn(remote, { …ctx, reuse })`. Skip `buildInjection`,
+- Connection reuse (native unix): `dir = controlDir(home, uid)`; `mkdir 0700`, `lstat` →
+  `isSafeControlDir`; `stat ~/.ssh/config` → `isSafeUserConfig`; write `muxConfigText(dir)`
+  to `dir/ssh_config` (0600). Any failure → `muxConfig: null` (plain ssh). Rewrite the file
+  only when its content differs.
+- Then `{ file, args } = buildSshSpawn(remote, { platform, sshPath, muxConfig, reuse })`. Skip `buildInjection`,
   `buildWslInjection`, `wslCdArgs`; start cwd = `os.homedir()`; keep the env as today
   (COLORFGBG etc. don't cross ssh, which is fine).
 - Record `remote` on the `PtySession` (for diagnostics and phase 2's kill-session).

@@ -20,14 +20,41 @@ describe("hasControlChar", () => {
 })
 
 describe("isSshTarget", () => {
-  it("accepts aliases, user@host and IPv6", () => {
-    for (const t of ["web", "me@web.example", "[::1]", "root@10.0.0.1", "host_1.example"]) {
+  it("accepts aliases, user@host, IPv6 and zone ids", () => {
+    for (const t of [
+      "web",
+      "me@web.example",
+      "[::1]",
+      "root@10.0.0.1",
+      "host_1.example",
+      "fe80::1%en0",
+      "a+b@h",
+    ]) {
       expect(isSshTarget(t)).toBe(true)
     }
   })
 
   it("rejects options, whitespace, control characters, oversize and non-strings", () => {
-    for (const t of ["-v", "a b", "a\u0000b", "a\u007fb", "", "x".repeat(256), null, {}, 3]) {
+    for (const t of [
+      "-v",
+      "a b",
+      "a\u0000b",
+      "a\u007fb",
+      "",
+      "x".repeat(256),
+      null,
+      {},
+      3,
+      "$(touch${IFS}/tmp/pwn)@host",
+      "`id`@h",
+      "a;b",
+      "a|b",
+      "a'b",
+      'a"b',
+      "a\\b",
+      "ssh://me@web:2222",
+      "web\u00a0prod",
+    ]) {
       expect(isSshTarget(t)).toBe(false)
     }
   })
@@ -125,6 +152,9 @@ describe("isSshOptionList: -o keywords", () => {
       ["-o", "StdinNull yes"],
       ["-o", "RequestTTY=no"],
       ["-A", "-o", " SESSIONTYPE = none"],
+      ["-o", "=RemoteCommand echo hi"],
+      ["-o", '"RemoteCommand" echo hi'],
+      ["-o", '"Remote"Command=x'],
     ]) {
       expect(isSshOptionList(args)).toBe(false)
     }
@@ -146,6 +176,10 @@ describe("sshArgsSetMux", () => {
       ["-oControlPath=/x/%C"],
       ["-o", "controlpersist 5m"],
       ["-p", "22", "-o", "ControlMaster no"],
+      ["-o", "=ControlMaster yes"],
+      ["-o", '"ControlPath" /x'],
+      ["-F", "/my/config"],
+      ["-F/my/config"],
     ]) {
       expect(sshArgsSetMux(args)).toBe(true)
     }

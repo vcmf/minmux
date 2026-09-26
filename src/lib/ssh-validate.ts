@@ -6,16 +6,13 @@ import { hasControlChar } from "./control-chars"
 
 export { hasControlChar }
 
-/** An ssh destination safe as argv: no leading `-`, no whitespace or control chars. */
+// Hostname / user characters only (IPv6 brackets, `%` zone ids): no shell metacharacters,
+// which older ssh could pass to a ProxyCommand/Match exec via %h/%r (CVE-2023-51385).
+const SSH_TARGET_RE = /^[A-Za-z0-9._@:%+[\]-]+$/
+
+/** An ssh destination safe as argv: host/user characters only, no leading `-`. */
 export function isSshTarget(v: unknown): v is string {
-  return (
-    typeof v === "string" &&
-    v.length > 0 &&
-    v.length <= 255 &&
-    !v.startsWith("-") &&
-    !/\s/.test(v) &&
-    !hasControlChar(v)
-  )
+  return typeof v === "string" && v.length <= 255 && !v.startsWith("-") && SSH_TARGET_RE.test(v)
 }
 
 // A distro name as `wsl.exe -l -q` prints it (letters, digits, `.`, `-`, `_`).
@@ -47,8 +44,20 @@ const BLOCKED_O = new Set([
   "requesttty",
 ])
 
-/** The keyword of an `-o` value (`Key=value` or `Key value`), lower-cased. */
-const oKeyword = (v: string) => v.trim().split(/[\s=]/, 1)[0]!.toLowerCase()
+/** The keyword of an `-o` value as ssh reads it: leading blanks/`=` skipped, quotes removed. */
+function oKeyword(v: string): string {
+  let i = 0
+  while (i < v.length && /[ \t=]/.test(v[i]!)) i++
+  let kw = ""
+  let quote = false
+  for (; i < v.length; i++) {
+    const c = v[i]!
+    if (c === '"') quote = !quote
+    else if (!quote && /[ \t=]/.test(c)) break
+    else kw += c
+  }
+  return kw.toLowerCase()
+}
 
 /** Walk ssh options, calling `visit(flag, value)`; false if the list isn't valid options. */
 function walkSshOptions(
@@ -92,11 +101,11 @@ export function isSshOptionList(args: readonly unknown[]): boolean {
   return valid && ok
 }
 
-/** Do these args configure multiplexing themselves (-M, -S, -o ControlMaster/ControlPath)? */
+/** Do these args set multiplexing (-M, -S, -o Control*) or their own config file (-F)? */
 export function sshArgsSetMux(args: readonly string[] | undefined): boolean {
   let mux = false
   walkSshOptions(args ?? [], (flag, value) => {
-    if (flag === "M" || flag === "S") mux = true
+    if (flag === "M" || flag === "S" || flag === "F") mux = true
     const kw = flag === "o" ? oKeyword(value!) : ""
     if (kw === "controlmaster" || kw === "controlpath" || kw === "controlpersist") mux = true
   })

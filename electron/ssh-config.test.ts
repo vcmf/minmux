@@ -8,8 +8,6 @@ import {
   hostMatcher,
   hostsFromBlocks,
   matchPatterns,
-  makeMuxLookup,
-  muxSetFor,
   loadSshConfig,
   nodeMiniFs,
   parseSshConfig,
@@ -82,6 +80,15 @@ describe("tokenizeLine", () => {
   it("splits only on ASCII whitespace (an NBSP is part of the token, as in ssh)", () => {
     expect(tokenizeLine("Host web\u00a0prod other")).toEqual(["Host", "web\u00a0prod", "other"])
     expect(tokenizeLine("Host\u00a0a")).toEqual(["Host\u00a0a"])
+  })
+
+  it("removes quotes from the keyword too, as ssh does", () => {
+    expect(tokenizeLine('"Host" foo')).toEqual(["Host", "foo"])
+    expect(tokenizeLine("'HostName'=bar")).toEqual(["HostName", "bar"])
+    expect(hostsOf('Host a\n"Host" foo\n  HostName bar\n')).toEqual([
+      { alias: "a" },
+      { alias: "foo", hostName: "bar" },
+    ])
   })
 
   it("handles backslash escapes like argv_split", () => {
@@ -196,35 +203,6 @@ describe("parseSshConfig", () => {
     ])
   })
 
-  it("steps aside for every host when an unevaluable Match sets multiplexing", () => {
-    for (const m of [
-      "Match host *.corp",
-      "Match exec true",
-      "Match canonical all",
-      "Match user x",
-    ]) {
-      expect(hostsOf(`Host a\n${m}\n  ControlMaster no\n`)).toEqual([{ alias: "a", ownMux: true }])
-    }
-    // …but an unevaluable Match setting other options changes nothing.
-    expect(hostsOf("Host a\nMatch exec true\n  User x\n")).toEqual([{ alias: "a" }])
-  })
-
-  it("keeps an unevaluable Match's own fields and hosts out of the list", () => {
-    const items = parseSshConfig("Match host x\n  HostName h\n")
-    expect(items[1]).toEqual({
-      type: "block",
-      patterns: ["*"],
-      fields: { hostName: "h" },
-      maybe: true,
-    })
-  })
-
-  it("marks hosts whose multiplexing is set in an evaluable Match block", () => {
-    expect(hostsOf("Host a\nMatch all\n  ControlPath ~/.ssh/cm-%C\n")).toEqual([
-      { alias: "a", ownMux: true },
-    ])
-  })
-
   it("ignores Match blocks and their fields, then resumes at the next Host", () => {
     const hs = hostsOf(
       "Host a\nMatch host foo exec true\n  User fromMatch\nHost b\n  User b-user\n",
@@ -274,17 +252,6 @@ describe("parseSshConfig", () => {
     expect(items.map((i) => i.type)).toEqual(["block", "block", "include", "block"]) // lead `*` first
     expect(items[1]).toMatchObject({ patterns: ["foo"], fields: { user: "a" } })
     expect(items[3]).toMatchObject({ patterns: ["foo"], fields: { hostName: "b" } })
-  })
-
-  it("marks hosts whose config sets ControlMaster or ControlPath", () => {
-    expect(hostsOf("Host a\n  ControlMaster no\nHost b\n")).toEqual([
-      { alias: "a", ownMux: true },
-      { alias: "b" },
-    ])
-    expect(hostsOf("Host *\n  ControlPath ~/.ssh/cm-%C\nHost a\n")).toEqual([
-      { alias: "a", ownMux: true },
-    ])
-    expect(hostsOf("Host a\n  ControlPersist 5m\n")).toEqual([{ alias: "a" }])
   })
 
   it("lists an alias once when spelled in different cases", () => {
@@ -437,6 +404,15 @@ describe("expandGlob", () => {
 
   it("returns [] when a directory in the pattern is missing", async () => {
     expect(await expandGlob("/nope/*/config", fakeFs(files), path.posix)).toEqual([])
+  })
+
+  it("sorts multi-level matches by full path, like glob(3)", async () => {
+    const f = fakeFs({ "/h/a/cfg": "", "/h/a.b/cfg": "", "/h/b/cfg": "" })
+    expect(await expandGlob("/h/*/cfg", f, path.posix)).toEqual([
+      "/h/a.b/cfg",
+      "/h/a/cfg",
+      "/h/b/cfg",
+    ])
   })
 
   it("keeps a backslash-escaped wildcard literal on POSIX (not a path separator)", async () => {
@@ -630,12 +606,17 @@ describe("loadSshConfig", () => {
     expect(r.files).toEqual(["/h/.ssh/config", "/h/.ssh/common.conf"])
   })
 
-  it("steps aside when an Include under an unevaluable Match sets multiplexing", async () => {
-    const r = await load({
-      "/h/.ssh/config": "Host a\nMatch exec 'test -f /x'\n  Include mux.conf\n",
-      "/h/.ssh/mux.conf": "Host *\n  ControlPath ~/.ssh/cm-%C\n",
-    })
-    expect(r.hosts).toEqual([{ alias: "a", ownMux: true }])
+  it("re-evaluates a file reached shallower after a deep visit hit the depth cap", async () => {
+    const files: Record<string, string> = {
+      "/h/.ssh/config": "Include c1\nInclude x\n",
+      "/h/.ssh/x": "Include y\n",
+      "/h/.ssh/y": "Host deep-y\n",
+    }
+    // c1 → c2 → … → c4 → x: x's own Include (y) is past the cap on this path.
+    for (let i = 1; i <= 4; i++)
+      files[`/h/.ssh/c${i}`] = i < 4 ? `Include c${i + 1}\n` : "Include x\n"
+    const r = await load(files, 5)
+    expect(aliases(r.hosts)).toEqual(["deep-y"])
   })
 
   it("stays small when many Host blocks each include the config itself", async () => {
@@ -729,6 +710,19 @@ describe("loadSshConfig", () => {
     for (let i = 1; i <= 5; i++) files[`/h/.ssh/d${i}`] = `Include d${i + 1}\nHost d${i}\n`
     const r = await load(files, 2)
     expect(aliases(r.hosts)).toEqual(["d2", "d1", "d0"])
+  })
+
+  it("resolves thousands of literal Host blocks quickly (indexed, not aliases × blocks)", async () => {
+    const big =
+      Array.from(
+        { length: 5000 },
+        (_, i) => `Host h${i}\n  HostName 10.0.${i % 255}.${i % 250}\n`,
+      ).join("") + "Host *.corp\n  User corp\nHost *\n  User everyone\n"
+    const t0 = performance.now()
+    const r = await load({ "/h/.ssh/config": big })
+    expect(r.hosts).toHaveLength(5000)
+    expect(r.hosts[42]).toEqual({ alias: "h42", hostName: "10.0.42.42", user: "everyone" })
+    expect(performance.now() - t0).toBeLessThan(1000)
   })
 
   it("parses a large config quickly", async () => {
@@ -859,33 +853,5 @@ describe("matchPatterns", () => {
     ]) {
       expect(matchPatterns(args)).toBeNull()
     }
-  })
-})
-
-describe("muxSetFor", () => {
-  const blocks = (text: string) =>
-    parseSshConfig(text).flatMap((i) => (i.type === "block" ? [i] : []))
-
-  it("checks the host part of a target against the config", () => {
-    const b = blocks("Host prod\n  ControlMaster no\nHost *.corp\n  ControlPath /x/%C\n")
-    expect(muxSetFor(b, "prod")).toBe(true)
-    expect(muxSetFor(b, "deploy@prod")).toBe(true)
-    expect(muxSetFor(b, "a@b@db.corp")).toBe(true)
-    expect(muxSetFor(b, "other")).toBe(false)
-    expect(muxSetFor(b, "prod@other")).toBe(false)
-  })
-
-  it("counts unevaluable Match blocks as possibly applying", () => {
-    expect(muxSetFor(blocks("Match exec true\n  ControlMaster auto\n"), "anything")).toBe(true)
-  })
-})
-
-describe("makeMuxLookup", () => {
-  it("compiles once and answers per target", () => {
-    const blocks = parseSshConfig("Host prod\n  ControlPath /x/%C\n").flatMap((i) =>
-      i.type === "block" ? [i] : [],
-    )
-    const lookup = makeMuxLookup(blocks)
-    expect([lookup("prod"), lookup("u@prod"), lookup("dev")]).toEqual([true, true, false])
   })
 })
