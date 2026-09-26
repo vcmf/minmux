@@ -1,5 +1,6 @@
 import { DEFAULT_THEME_FAMILY, themeFamilyName, variantOf, type Appearance } from "./themes"
 import type { SshEnv } from "../types"
+import { hasControlChar, isSshEnv, isSshTarget } from "../lib/ssh-validate"
 
 /** A host defined in settings.json (in addition to ~/.ssh/config). */
 export interface SshHostSetting {
@@ -79,30 +80,9 @@ const asObject = (v: unknown): Record<string, unknown> =>
 
 const MAX_SSH_HOSTS = 500
 const MAX_SSH_ARGS = 32
-// A distro name as `wsl.exe -l -q` prints it (letters, digits, `.`, `-`, `_`).
-const SSH_ENV_RE = /^wsl:[A-Za-z0-9._-]+$/
+const MAX_SSH_HIDDEN = 1000
 
-/** An ssh destination we'll pass as argv: no leading `-` (would parse as an option), no
- *  whitespace or control characters. */
-/** Any C0 control character or DEL (would corrupt an argv or an ssh -o value). */
-export const hasControlChar = (s: string): boolean => {
-  for (let i = 0; i < s.length; i++) {
-    const c = s.charCodeAt(i)
-    if (c < 0x20 || c === 0x7f) return true
-  }
-  return false
-}
-
-export const isSshTarget = (v: unknown): v is string =>
-  typeof v === "string" &&
-  v.length > 0 &&
-  v.length <= 255 &&
-  !v.startsWith("-") &&
-  !/\s/.test(v) &&
-  !hasControlChar(v)
-
-/** One settings host, or null if any part is invalid (a bad entry is dropped whole, so a
- *  half-kept `args` can never change what the host does). */
+/** One settings host, or null if any part is invalid (dropped whole, never half-kept). */
 function sshHostSetting(v: unknown): SshHostSetting | null {
   const o = asObject(v)
   const name = typeof o.name === "string" ? o.name.trim() : ""
@@ -116,8 +96,8 @@ function sshHostSetting(v: unknown): SshHostSetting | null {
   }
   let env: SshEnv = "native"
   if (o.env !== undefined && o.env !== "native") {
-    if (typeof o.env !== "string" || !SSH_ENV_RE.test(o.env)) return null
-    env = o.env as SshEnv
+    if (!isSshEnv(o.env)) return null
+    env = o.env
   }
   return { name, target: o.target, args, env }
 }
@@ -135,7 +115,14 @@ export function mergeSshSettings(input: unknown): SshSettings {
     hosts.push(h)
   }
   const hidden = Array.isArray(o.hidden)
-    ? [...new Set(o.hidden.filter((x): x is string => typeof x === "string" && x.trim() !== ""))]
+    ? [
+        ...new Set(
+          o.hidden
+            .filter((x): x is string => typeof x === "string")
+            .map((x) => x.trim())
+            .filter((x) => x !== "" && x.length <= 255),
+        ),
+      ].slice(0, MAX_SSH_HIDDEN)
     : []
   return {
     fromSshConfig: bool(o.fromSshConfig, d.fromSshConfig),

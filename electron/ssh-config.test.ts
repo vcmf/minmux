@@ -5,11 +5,14 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest"
 import {
   expandGlob,
   globSegmentToRegExp,
+  hostMatcher,
+  hostsFromBlocks,
   loadSshConfig,
   nodeMiniFs,
   parseSshConfig,
   resolveIncludePath,
   tokenizeLine,
+  wslMiniFs,
   type MiniFs,
   type SshConfigHost,
 } from "./ssh-config"
@@ -35,7 +38,7 @@ function fakeFs(files: Record<string, string>, p = path.posix): MiniFs & { reads
 }
 
 const hostsOf = (text: string) =>
-  parseSshConfig(text).flatMap((i) => (i.type === "host" ? [i.host] : []))
+  hostsFromBlocks(parseSshConfig(text).flatMap((i) => (i.type === "block" ? [i] : [])))
 const aliases = (hs: SshConfigHost[]) => hs.map((h) => h.alias)
 
 describe("tokenizeLine", () => {
@@ -103,9 +106,37 @@ describe("parseSshConfig", () => {
     expect(hs[0]!.user).toBe("x")
   })
 
-  it("ignores fields of a pattern-only block (they don't leak into the previous host)", () => {
-    const hs = hostsOf("Host a\n  User first\nHost *\n  User wild\n  HostName nope\n")
-    expect(hs).toEqual([{ alias: "a", user: "first" }])
+  it("applies a later `Host *` block's values the host doesn't set itself", () => {
+    const hs = hostsOf("Host a\n  User first\nHost *\n  User wild\n  HostName fallback\n")
+    expect(hs).toEqual([{ alias: "a", user: "first", hostName: "fallback" }])
+  })
+
+  it("lets an earlier `Host *` win over the host's own block (first match wins)", () => {
+    expect(hostsOf("Host *\n  User bob\nHost foo\n  User alice\n")).toEqual([
+      { alias: "foo", user: "bob" },
+    ])
+  })
+
+  it("merges values from every block that names the alias", () => {
+    const hs = hostsOf("Host foo\n  User a\nHost foo bar\n  HostName x\n")
+    expect(hs).toEqual([
+      { alias: "foo", user: "a", hostName: "x" },
+      { alias: "bar", hostName: "x" },
+    ])
+  })
+
+  it("applies wildcard blocks by pattern and honours negations", () => {
+    const hs = hostsOf(
+      "Host web-1 web-2 db\nHost web-* !web-2\n  User webuser\nHost *.corp\n  User corp\n",
+    )
+    expect(hs).toEqual([{ alias: "web-1", user: "webuser" }, { alias: "web-2" }, { alias: "db" }])
+  })
+
+  it("expands %h and %% in HostName", () => {
+    expect(hostsOf("Host box\nHost *\n  HostName %h.corp.example\n")[0]!.hostName).toBe(
+      "box.corp.example",
+    )
+    expect(hostsOf("Host a\n  HostName 100%%.x\n")[0]!.hostName).toBe("100%.x")
   })
 
   it("keeps the first value of a field within a block (OpenSSH semantics)", () => {
@@ -118,9 +149,12 @@ describe("parseSshConfig", () => {
     expect(hs).toEqual([{ alias: "a", hostName: "h", user: "u", port: "1" }])
   })
 
-  it("ignores global fields before the first Host", () => {
-    const hs = hostsOf("User global\nHostName g\nHost a\n")
-    expect(hs).toEqual([{ alias: "a" }])
+  it("applies options before the first Host to every host (an implicit Host *)", () => {
+    const hs = hostsOf("User global\nHost a\n  User own\nHost b\n")
+    expect(hs).toEqual([
+      { alias: "a", user: "global" },
+      { alias: "b", user: "global" },
+    ])
   })
 
   it("ignores Match blocks and their fields, then resumes at the next Host", () => {
@@ -140,15 +174,32 @@ describe("parseSshConfig", () => {
     expect(hs).toEqual([{ alias: "my box", hostName: "h" }])
   })
 
-  it("treats a bare `Host` as a block with no aliases", () => {
+  it("treats a bare `Host` as a block with no patterns", () => {
     const hs = hostsOf("Host a\nHost\n  User orphan\n")
     expect(hs).toEqual([{ alias: "a" }])
   })
 
-  it("returns Include directives in order with all their patterns", () => {
-    const items = parseSshConfig("Host a\nInclude one two/*\nHost b\nInclude\n")
-    expect(items.map((i) => i.type)).toEqual(["host", "include", "host"])
-    expect(items[1]).toEqual({ type: "include", patterns: ["one", "two/*"] })
+  it("returns Include directives in order, with the Host patterns in effect", () => {
+    const items = parseSshConfig("Host a\nInclude one two/*\nHost b c\nInclude three\nInclude\n")
+    const incs = items.filter((i) => i.type === "include")
+    expect(incs).toEqual([
+      { type: "include", patterns: ["one", "two/*"], context: ["a"] },
+      { type: "include", patterns: ["three"], context: ["b", "c"] },
+    ])
+  })
+
+  it("gives an Include inside a Match block an empty context", () => {
+    const items = parseSshConfig("Match all\nInclude x\n")
+    expect(items.find((i) => i.type === "include")).toMatchObject({ context: [] })
+  })
+
+  it("starts with a block for the lead patterns (top level: *)", () => {
+    expect(parseSshConfig("User u\n")[0]).toEqual({
+      type: "block",
+      patterns: ["*"],
+      fields: { user: "u" },
+    })
+    expect(parseSshConfig("User u\n", ["box"])[0]).toMatchObject({ patterns: ["box"] })
   })
 
   it("is not confused by keywords that are Object.prototype names", () => {
@@ -156,13 +207,36 @@ describe("parseSshConfig", () => {
     expect(hs).toEqual([{ alias: "a" }])
   })
 
-  it("returns [] for empty text and comment-only files", () => {
-    expect(parseSshConfig("")).toEqual([])
-    expect(parseSshConfig("# nothing\n\n   # here\n")).toEqual([])
+  it("lists no hosts for empty text and comment-only files", () => {
+    expect(hostsOf("")).toEqual([])
+    expect(hostsOf("# nothing\n\n   # here\n")).toEqual([])
   })
 
   it("accepts `Host=alias` syntax", () => {
     expect(aliases(hostsOf("Host=a\nHost = b c\n"))).toEqual(["a", "b", "c"])
+  })
+})
+
+describe("hostMatcher", () => {
+  it("matches exact names case-insensitively", () => {
+    expect(hostMatcher(["Web"])("web")).toBe(true)
+    expect(hostMatcher(["web"])("WEB")).toBe(true)
+    expect(hostMatcher(["web"])("web2")).toBe(false)
+  })
+
+  it("supports * and ? and treats regex specials literally", () => {
+    expect(hostMatcher(["*.corp"])("a.corp")).toBe(true)
+    expect(hostMatcher(["*.corp"])("acorp")).toBe(false)
+    expect(hostMatcher(["h?"])("h1")).toBe(true)
+    expect(hostMatcher(["a+b"])("a+b")).toBe(true)
+    expect(hostMatcher(["a+b"])("aab")).toBe(false)
+  })
+
+  it("vetoes on any negated match and needs a positive one", () => {
+    expect(hostMatcher(["*", "!secret"])("secret")).toBe(false)
+    expect(hostMatcher(["*", "!secret"])("other")).toBe(true)
+    expect(hostMatcher(["!secret"])("other")).toBe(false)
+    expect(hostMatcher([])("x")).toBe(false)
   })
 })
 
@@ -183,6 +257,27 @@ describe("globSegmentToRegExp", () => {
     expect(m("[!a]x", "bx")).toBe(true)
     expect(m("[!a]x", "ax")).toBe(false)
     expect(m("[^a]x", "ax")).toBe(false)
+  })
+
+  it("treats `]` right after `[` or `[!` as a class member", () => {
+    expect(m("[]a]*", "a.conf")).toBe(true)
+    expect(m("[]a]*", "].conf")).toBe(true)
+    expect(m("[]a]*", "b.conf")).toBe(false)
+    expect(m("[!]a]x", "bx")).toBe(true)
+    expect(m("[!]a]x", "]x")).toBe(false)
+  })
+
+  it("treats `[!]` with no closing bracket as literal text, never as match-anything", () => {
+    expect(m("[!]", "[!]")).toBe(true)
+    expect(m("[!]", "x")).toBe(false)
+    expect(m("[]", "[]")).toBe(true)
+  })
+
+  it("escapes regex specials inside a class", () => {
+    expect(m("[\\]", "\\")).toBe(true)
+    expect(m("[.^]", "^")).toBe(true)
+    expect(m("[.^]", "a")).toBe(false)
+    expect(m("[a-]", "-")).toBe(true)
   })
 
   it("escapes regex metacharacters and treats an unterminated [ literally", () => {
@@ -346,14 +441,45 @@ describe("loadSshConfig", () => {
     expect(aliases(r.hosts)).toEqual(["a", "b"])
   })
 
-  it("re-reads a file included twice from different parents (not a cycle)", async () => {
-    const r = await load({
-      "/h/.ssh/config": "Include x\nInclude y\n",
+  it("reads a file included from two parents only once", async () => {
+    const files = {
+      "/h/.ssh/config": "Include x y\n",
       "/h/.ssh/x": "Include shared\n",
       "/h/.ssh/y": "Include shared\n",
       "/h/.ssh/shared": "Host s\n",
-    })
+    }
+    const f = fakeFs(files)
+    const r = await loadSshConfig({ file: "/h/.ssh/config", home: "/h", fs: f, path: path.posix })
     expect(aliases(r.hosts)).toEqual(["s"])
+    expect(r.files).toEqual(["/h/.ssh/config", "/h/.ssh/x", "/h/.ssh/shared", "/h/.ssh/y"])
+    expect(f.reads.filter((x) => x === "/h/.ssh/shared")).toHaveLength(1)
+  })
+
+  it("stays linear on a chain where every file includes the next twice", async () => {
+    const files: Record<string, string> = {}
+    for (let i = 0; i < 16; i++)
+      files[i === 0 ? "/h/.ssh/config" : `/h/.ssh/f${i}`] =
+        `Host h${i}\nInclude f${i + 1} f${i + 1}\n`
+    const f = fakeFs(files)
+    const r = await loadSshConfig({ file: "/h/.ssh/config", home: "/h", fs: f, path: path.posix })
+    expect(r.hosts).toHaveLength(16)
+    expect(f.reads.length).toBeLessThanOrEqual(17)
+  })
+
+  it("scopes an included file's leading lines to the including Host block", async () => {
+    const r = await load({
+      "/h/.ssh/config": "Host a b\nHost a\n  Include a-extra\n",
+      "/h/.ssh/a-extra": "User only-a\n",
+    })
+    expect(r.hosts).toEqual([{ alias: "a", user: "only-a" }, { alias: "b" }])
+  })
+
+  it("applies a global Host * from an included file", async () => {
+    const r = await load({
+      "/h/.ssh/config": "Include defaults\nHost a\n",
+      "/h/.ssh/defaults": "Host *\n  User everyone\n",
+    })
+    expect(r.hosts).toEqual([{ alias: "a", user: "everyone" }])
   })
 
   it("stops at the depth cap", async () => {
@@ -372,6 +498,46 @@ describe("loadSshConfig", () => {
     const r = await load({ "/h/.ssh/config": big })
     expect(r.hosts).toHaveLength(1000)
     expect(performance.now() - t0).toBeLessThan(250)
+  })
+})
+
+describe("wslMiniFs", () => {
+  const unc = (p: string) => "\\\\wsl.localhost\\Ubuntu" + p.replace(/\//g, "\\")
+  const legacy = (p: string) => "\\\\wsl$\\Ubuntu" + p.replace(/\//g, "\\")
+
+  it("maps Linux paths onto the distro's UNC share", async () => {
+    const base = fakeFs({ [unc("/home/u/.ssh/config")]: "Host a\n" }, path.win32)
+    const w = wslMiniFs("Ubuntu", base)
+    expect(await w.readFile("/home/u/.ssh/config")).toBe("Host a\n")
+    expect(await w.readdir("/home/u/.ssh")).toEqual(["config"])
+  })
+
+  it("falls back to the legacy \\\\wsl$ share", async () => {
+    const base = fakeFs({ [legacy("/etc/ssh/extra")]: "Host e\n" }, path.win32)
+    expect(await wslMiniFs("Ubuntu", base).readFile("/etc/ssh/extra")).toBe("Host e\n")
+  })
+
+  it("returns null for relative paths and missing files", async () => {
+    const w = wslMiniFs("Ubuntu", fakeFs({}, path.win32))
+    expect(await w.readFile("relative")).toBeNull()
+    expect(await w.readFile("/missing")).toBeNull()
+  })
+
+  it("lets the loader resolve absolute Includes inside the distro", async () => {
+    const base = fakeFs(
+      {
+        [unc("/home/u/.ssh/config")]: "Include /etc/ssh/ssh_config.d/*.conf\nHost a\n",
+        [unc("/etc/ssh/ssh_config.d/10-corp.conf")]: "Host corp\n",
+      },
+      path.win32,
+    )
+    const r = await loadSshConfig({
+      file: "/home/u/.ssh/config",
+      home: "/home/u",
+      fs: wslMiniFs("Ubuntu", base),
+      path: path.posix,
+    })
+    expect(aliases(r.hosts)).toEqual(["corp", "a"])
   })
 })
 

@@ -1,7 +1,6 @@
 import { describe, it, expect } from "vitest"
 import {
   defaultSettings,
-  isSshTarget,
   mergeSettings,
   mergeSshSettings,
   parseSettings,
@@ -219,18 +218,5 @@ describe("ssh settings", () => {
       ssh: { reuseConnections: false, hidden: ["x"], hosts: [{ ...host, args: ["-A"] }] },
     })
     expect(parseSettings(serializeSettings(s)).ssh).toEqual(s.ssh)
-  })
-})
-
-describe("isSshTarget", () => {
-  it("accepts aliases, user@host and IPv6", () => {
-    for (const t of ["web", "me@web.example", "[::1]", "root@10.0.0.1", "host_1.example"]) {
-      expect(isSshTarget(t)).toBe(true)
-    }
-  })
-
-  it("rejects options, whitespace, control characters and non-strings", () => {
-    for (const t of ["-v", "a b", "a\u0000b", "a\u007fb", "", null, {}])
-      expect(isSshTarget(t)).toBe(false)
   })
 })
