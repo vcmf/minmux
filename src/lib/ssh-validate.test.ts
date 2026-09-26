@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { hasControlChar, isSshEnv, isSshTarget, parseSshEnv } from "./ssh-validate"
+import { hasControlChar, isSshEnv, isSshOptionList, isSshTarget, parseSshEnv } from "./ssh-validate"
 
 describe("hasControlChar", () => {
   it("flags C0 controls and DEL only", () => {
@@ -46,5 +46,49 @@ describe("parseSshEnv / isSshEnv", () => {
       expect(parseSshEnv(e)).toBeNull()
       expect(isSshEnv(e)).toBe(false)
     }
+  })
+})
+
+describe("isSshOptionList", () => {
+  it("accepts flags, clusters, and options with attached or separate values", () => {
+    for (const args of [
+      [],
+      ["-A"],
+      ["-p", "2222"],
+      ["-p2222"],
+      ["-AXv"],
+      ["-Ai", "~/.ssh/k"],
+      ["-o", "SetEnv=A=b c", "-J", "bastion"],
+      ["-i", "-weird-but-a-value"],
+      ["-4", "-C", "-L", "8080:localhost:80"],
+    ]) {
+      expect(isSshOptionList(args)).toBe(true)
+    }
+  })
+
+  it("rejects bare words (they'd become the destination) and missing values", () => {
+    for (const args of [
+      ["extra"],
+      ["-i", "~/.ssh/k", "extra"],
+      [""],
+      ["-p"],
+      ["-Ap"],
+      ["-"],
+      ["--"],
+      ["host", "-v"],
+    ]) {
+      expect(isSshOptionList(args)).toBe(false)
+    }
+  })
+
+  it("rejects options that don't start a session and unknown letters", () => {
+    for (const args of [["-G"], ["-V"], ["-O", "exit"], ["-Q", "cipher"], ["-Z"], ["-vG"]]) {
+      expect(isSshOptionList(args)).toBe(false)
+    }
+  })
+
+  it("rejects non-strings and control characters", () => {
+    for (const args of [[1], [null], ["-o", "a\nb"], ["-A\u0000"]])
+      expect(isSshOptionList(args)).toBe(false)
   })
 })

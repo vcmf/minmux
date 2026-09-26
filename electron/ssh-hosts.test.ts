@@ -11,8 +11,12 @@ import {
   controlPathFits,
   hostDetail,
   isSafeControlDir,
+  buildSshProbe,
   mergeHosts,
+  parseSshG,
   reuseFlags,
+  wantOurMux,
+  type MergeInput,
   trustedRemote,
   WSL_SSH_SCRIPT,
   type SpawnContext,
@@ -20,6 +24,11 @@ import {
 import type { SshHost } from "../src/types"
 
 const ssh = (over: Partial<SshSettings> = {}): SshSettings => ({ ...defaultSettings.ssh, ...over })
+// Windows by default, so WSL hosts are listed; tests override platform where it matters.
+const merge = (
+  i: Omit<MergeInput, "platform"> & { platform?: NodeJS.Platform },
+  o?: { all?: boolean },
+) => mergeHosts({ platform: "win32", ...i }, o)
 
 describe("hostDetail", () => {
   it("formats user@hostname:port from the parts that are set", () => {
@@ -42,7 +51,7 @@ describe("hostDetail", () => {
 
 describe("mergeHosts", () => {
   it("builds config hosts with stable ids, env and detail", () => {
-    const hosts = mergeHosts({
+    const hosts = merge({
       native: [{ alias: "web", hostName: "10.0.0.1", user: "me" }, { alias: "db" }],
       wsl: [],
       settings: ssh(),
@@ -61,7 +70,7 @@ describe("mergeHosts", () => {
   })
 
   it("keeps the same alias separately per environment", () => {
-    const hosts = mergeHosts({
+    const hosts = merge({
       native: [{ alias: "gpu" }],
       wsl: [
         ["Ubuntu", [{ alias: "gpu" }]],
@@ -77,7 +86,7 @@ describe("mergeHosts", () => {
   })
 
   it("appends settings hosts with their args and env", () => {
-    const hosts = mergeHosts({
+    const hosts = merge({
       native: [{ alias: "web" }],
       wsl: [],
       settings: ssh({
@@ -110,13 +119,13 @@ describe("mergeHosts", () => {
   it("copies settings args (the host list never aliases the settings object)", () => {
     const args = ["-p", "2222"]
     const settings = ssh({ hosts: [{ name: "x", target: "x", args, env: "native" }] })
-    const [h] = mergeHosts({ native: [], wsl: [], settings })
+    const [h] = merge({ native: [], wsl: [], settings })
     expect(h!.extraArgs).toEqual(args)
     expect(h!.extraArgs).not.toBe(args)
   })
 
   it("filters hidden aliases and names in every source", () => {
-    const hosts = mergeHosts({
+    const hosts = merge({
       native: [{ alias: "github.com" }, { alias: "keep" }],
       wsl: [["Ubuntu", [{ alias: "github.com" }]]],
       settings: ssh({
@@ -128,7 +137,7 @@ describe("mergeHosts", () => {
   })
 
   it("lists only settings hosts when fromSshConfig is off", () => {
-    const hosts = mergeHosts({
+    const hosts = merge({
       native: [{ alias: "web" }],
       wsl: [["Ubuntu", [{ alias: "w" }]]],
       settings: ssh({
@@ -140,7 +149,7 @@ describe("mergeHosts", () => {
   })
 
   it("carries ownMux for config hosts that manage their own multiplexing", () => {
-    const hosts = mergeHosts({
+    const hosts = merge({
       native: [{ alias: "a", ownMux: true }, { alias: "b" }],
       wsl: [],
       settings: ssh(),
@@ -150,7 +159,7 @@ describe("mergeHosts", () => {
   })
 
   it("skips config aliases that aren't safe ssh destinations", () => {
-    const hosts = mergeHosts({
+    const hosts = merge({
       native: [{ alias: "my box" }, { alias: "-oProxyCommand=x" }, { alias: "ok" }],
       wsl: [],
       settings: ssh(),
@@ -159,17 +168,40 @@ describe("mergeHosts", () => {
   })
 
   it("skips a WSL distro whose name isn't a valid env", () => {
-    const hosts = mergeHosts({ native: [], wsl: [["bad name", [{ alias: "a" }]]], settings: ssh() })
+    const hosts = merge({ native: [], wsl: [["bad name", [{ alias: "a" }]]], settings: ssh() })
     expect(hosts).toEqual([])
   })
 
+  it("hides WSL hosts (config and settings) off Windows", () => {
+    const input = {
+      native: [{ alias: "web" }],
+      wsl: [["Ubuntu", [{ alias: "w" }]]] as MergeInput["wsl"],
+      settings: ssh({ hosts: [{ name: "s", target: "s", args: [], env: "wsl:Ubuntu" }] }),
+    }
+    expect(merge({ ...input, platform: "darwin" }).map((h) => h.hostId)).toEqual(["native:web"])
+    expect(merge({ ...input, platform: "linux" }).map((h) => h.hostId)).toEqual(["native:web"])
+    expect(merge(input).map((h) => h.hostId)).toEqual(["native:web", "wsl:Ubuntu:w", "settings:s"])
+  })
+
+  it("keeps hidden hosts and config hosts with `all` (the trust list)", () => {
+    const settings = ssh({
+      fromSshConfig: false,
+      hidden: ["web", "s"],
+      hosts: [{ name: "s", target: "s", args: ["-p", "2222"], env: "native" }],
+    })
+    expect(merge({ native: [{ alias: "web" }], wsl: [], settings })).toEqual([])
+    expect(
+      merge({ native: [{ alias: "web" }], wsl: [], settings }, { all: true }).map((h) => h.hostId),
+    ).toEqual(["native:web", "settings:s"])
+  })
+
   it("never returns duplicate ids", () => {
-    const hosts = mergeHosts({ native: [{ alias: "a" }, { alias: "a" }], wsl: [], settings: ssh() })
+    const hosts = merge({ native: [{ alias: "a" }, { alias: "a" }], wsl: [], settings: ssh() })
     expect(hosts.map((h) => h.hostId)).toEqual(["native:a"])
   })
 
   it("returns [] for nothing", () => {
-    expect(mergeHosts({ native: [], wsl: [], settings: ssh() })).toEqual([])
+    expect(merge({ native: [], wsl: [], settings: ssh() })).toEqual([])
   })
 })
 
@@ -451,6 +483,23 @@ describe.runIf(hasSh && process.platform !== "win32")("WSL_SSH_SCRIPT (real sh)"
     }
   })
 
+  it("counts the home path in bytes, not characters", () => {
+    // 43 characters but 53 bytes: fits if counted in characters, too long in bytes.
+    const home = path.join(tmp, "é".repeat(10))
+    fs.mkdirSync(home)
+    const uid = os.userInfo().uid
+    const fallback = `/tmp/smterm-${uid}`
+    const existed = fs.existsSync(fallback)
+    try {
+      const out = run(home, "web")
+      expect(out.find((l) => l.includes(home))).toBeUndefined()
+      const cp = out.find((l) => l.startsWith("ControlPath="))
+      if (cp) expect(cp).toBe(`ControlPath="${fallback}/%C"`)
+    } finally {
+      if (!existed) fs.rmSync(fallback, { recursive: true, force: true })
+    }
+  })
+
   it("falls back to plain ssh when the dir can't be created", () => {
     const home = path.join(tmp, "ro")
     fs.mkdirSync(home)
@@ -592,5 +641,88 @@ describe("trustedRemote", () => {
     expect(
       trustedRemote({ hostId: "x", target: "t", env: "native", label: "y".repeat(500) }, [])!.label,
     ).toHaveLength(200)
+  })
+})
+
+describe("buildSshProbe", () => {
+  const remote: RemoteRef = { hostId: "native:web", label: "web", target: "web", env: "native" }
+
+  it("runs ssh -G with the host's own args, target after --", () => {
+    expect(
+      buildSshProbe(
+        { ...remote, extraArgs: ["-p", "2222"] },
+        { platform: "darwin", sshPath: "ssh" },
+      ),
+    ).toEqual({
+      file: "ssh",
+      args: ["-p", "2222", "-G", "--", "web"],
+    })
+  })
+
+  it("probes inside the distro for a WSL host, and not at all off Windows", () => {
+    const r: RemoteRef = { ...remote, env: "wsl:Ubuntu" }
+    expect(buildSshProbe(r, { platform: "win32", sshPath: "ssh.exe" })).toEqual({
+      file: "wsl.exe",
+      args: ["-d", "Ubuntu", "-e", "ssh", "-G", "--", "web"],
+    })
+    expect(buildSshProbe(r, { platform: "darwin", sshPath: "ssh" })).toBeNull()
+    expect(
+      buildSshProbe(
+        { ...remote, env: "x" as RemoteRef["env"] },
+        { platform: "darwin", sshPath: "ssh" },
+      ),
+    ).toBeNull()
+  })
+})
+
+describe("parseSshG / wantOurMux", () => {
+  it("reads controlmaster and controlpath, case-insensitively", () => {
+    expect(
+      parseSshG(
+        "user me\ncontrolmaster auto\ncontrolpath /home/me/.ssh/cm-abc\ncontrolpersist no\n",
+      ),
+    ).toEqual({
+      controlMaster: "auto",
+      controlPath: "/home/me/.ssh/cm-abc",
+    })
+    expect(parseSshG("ControlMaster FALSE\r\n")).toEqual({ controlMaster: "false" })
+    expect(parseSshG("")).toEqual({})
+  })
+
+  it("adds ours only when ssh left multiplexing unset", () => {
+    expect(wantOurMux({ controlMaster: "false" }, {})).toBe(true)
+    expect(wantOurMux({}, {})).toBe(true)
+    expect(wantOurMux({ controlMaster: "false", controlPath: "none" }, {})).toBe(true)
+  })
+
+  it("steps aside when the user's config sets either option", () => {
+    for (const cm of ["auto", "yes", "ask", "autoask"])
+      expect(wantOurMux({ controlMaster: cm }, {})).toBe(false)
+    expect(wantOurMux({ controlMaster: "false", controlPath: "/x/%C" }, {})).toBe(false)
+  })
+
+  it("steps aside for an explicit value we parsed, and when the probe failed", () => {
+    expect(wantOurMux({ controlMaster: "false" }, { ownMux: true })).toBe(false) // e.g. `ControlMaster no`
+    expect(wantOurMux(null, {})).toBe(false)
+  })
+})
+
+// The real OpenSSH resolves Match blocks we don't evaluate: the probe must see them.
+describe.runIf(sshBin && process.platform !== "win32")("parseSshG with real ssh -G", () => {
+  it("detects multiplexing set through a Match block", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "smterm-sshg-"))
+    try {
+      const cfg = path.join(dir, "config")
+      fs.writeFileSync(
+        cfg,
+        "Match originalhost *.corp\n  ControlMaster auto\n  ControlPath ~/.ssh/cm-%C\n",
+      )
+      const g = (host: string) =>
+        parseSshG(execFileSync("ssh", ["-G", "-F", cfg, "--", host], { encoding: "utf8" }))
+      expect(wantOurMux(g("db.corp"), {})).toBe(false)
+      expect(wantOurMux(g("home.lan"), {})).toBe(true)
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
   })
 })

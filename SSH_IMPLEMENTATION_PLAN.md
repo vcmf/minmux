@@ -261,7 +261,13 @@ Main-process wiring. Still no UI.
 
 **`pty:spawn` remote branch**
 
-- If `opts.remote`: `{ file, args } = buildSshSpawn(opts.remote, ctx)`. Skip `buildInjection`,
+- If `opts.remote`: `remote = trustedRemote(opts.remote, trustList)` where `trustList =
+mergeHosts(…, { all: true })` (hidden hosts included, so a restored pane keeps its args).
+  null → write an error into the pane, don't spawn.
+- Connection reuse: run `buildSshProbe(remote)` (`ssh -G`, async, 2 s timeout, cached per
+  hostId until the host list changes); `reuse = settings.reuseConnections &&
+wantOurMux(parseSshG(out) | null, remote)`. A failed probe means no reuse (safe side).
+- Then `{ file, args } = buildSshSpawn(remote, { …ctx, reuse })`. Skip `buildInjection`,
   `buildWslInjection`, `wslCdArgs`; start cwd = `os.homedir()`; keep the env as today
   (COLORFGBG etc. don't cross ssh, which is fine).
 - Record `remote` on the `PtySession` (for diagnostics and phase 2's kill-session).

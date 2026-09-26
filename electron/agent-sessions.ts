@@ -16,6 +16,7 @@
 //   - Closing the pane / the shell exiting drops it (unless frozen).
 
 import { cwdMatchesTranscript } from "../src/lib/claude-project"
+import { hasControlChar } from "../src/lib/control-chars"
 import fs from "node:fs"
 import path from "node:path"
 import type { AgentEvent } from "../src/lib/agent-graph"
@@ -36,10 +37,6 @@ export interface LedgerEntry {
 // reaches a command line we type into a shell.
 const SAFE_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const SAFE_MODE = /^[A-Za-z]{1,32}$/
-
-/** C0 control characters or DEL — keys a line editor would act on if typed. */
-const hasControlChars = (s: string): boolean =>
-  [...s].some((c) => c.charCodeAt(0) < 0x20 || c.charCodeAt(0) === 0x7f)
 
 /** The resume command for an entry (null if its id can't be trusted). */
 export function resumeCommand(e: LedgerEntry, allowBypass: boolean): string | null {
@@ -242,7 +239,7 @@ export class SessionLedger {
         }
         // The cwd may be TYPED into a line editor (`cd -- '…'`): control characters there act
         // as editing keys (^C aborts, CR submits) and could break out of the quoting.
-        if (hasControlChars(e.cwd)) {
+        if (hasControlChar(e.cwd)) {
           out[id] = { ...base, status: "skip", reason: "its folder name can't be typed safely" }
           return
         }

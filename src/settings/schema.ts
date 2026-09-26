@@ -1,6 +1,6 @@
 import { DEFAULT_THEME_FAMILY, themeFamilyName, variantOf, type Appearance } from "./themes"
 import type { SshEnv } from "../types"
-import { hasControlChar, isSshEnv, isSshTarget } from "../lib/ssh-validate"
+import { isSshEnv, isSshOptionList, isSshTarget } from "../lib/ssh-validate"
 
 /** A host defined in settings.json (in addition to ~/.ssh/config). */
 export interface SshHostSetting {
@@ -91,7 +91,7 @@ function sshHostSetting(v: unknown): SshHostSetting | null {
   let args: string[] = []
   if (o.args !== undefined) {
     if (!Array.isArray(o.args) || o.args.length > MAX_SSH_ARGS) return null
-    if (!o.args.every((a) => typeof a === "string" && !hasControlChar(a))) return null
+    if (!isSshOptionList(o.args)) return null
     args = o.args as string[]
   }
   let env: SshEnv = "native"

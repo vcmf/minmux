@@ -7,6 +7,7 @@ import {
   globSegmentToRegExp,
   hostMatcher,
   hostsFromBlocks,
+  matchPatterns,
   loadSshConfig,
   nodeMiniFs,
   parseSshConfig,
@@ -175,6 +176,27 @@ describe("parseSshConfig", () => {
     ])
   })
 
+  it("treats `Match all` and a lone `Match originalhost` like Host lines", () => {
+    expect(hostsOf("Host a\nMatch all\n  User everyone\n")).toEqual([
+      { alias: "a", user: "everyone" },
+    ])
+    expect(hostsOf("Host a b\nMatch canonical all\n  User c\n")[1]).toEqual({
+      alias: "b",
+      user: "c",
+    })
+    expect(hostsOf("Host a b c\nMatch originalhost a,!c,b\n  User ab\n")).toEqual([
+      { alias: "a", user: "ab" },
+      { alias: "b", user: "ab" },
+      { alias: "c" },
+    ])
+  })
+
+  it("marks hosts whose multiplexing is set in an evaluable Match block", () => {
+    expect(hostsOf("Host a\nMatch all\n  ControlPath ~/.ssh/cm-%C\n")).toEqual([
+      { alias: "a", ownMux: true },
+    ])
+  })
+
   it("ignores Match blocks and their fields, then resumes at the next Host", () => {
     const hs = hostsOf(
       "Host a\nMatch host foo exec true\n  User fromMatch\nHost b\n  User b-user\n",
@@ -206,8 +228,8 @@ describe("parseSshConfig", () => {
     ])
   })
 
-  it("gives an Include inside a Match block an empty context", () => {
-    const items = parseSshConfig("Match all\nInclude x\n")
+  it("gives an Include inside an unevaluable Match block an empty context", () => {
+    const items = parseSshConfig("Match exec true\nInclude x\n")
     expect(items.find((i) => i.type === "include")).toMatchObject({ context: [] })
   })
 
@@ -325,6 +347,13 @@ describe("globSegmentToRegExp", () => {
     expect(m("[a-]", "-")).toBe(true)
   })
 
+  it("treats a backslash as an escape for the next character", () => {
+    expect(m("\\*.conf", "*.conf")).toBe(true)
+    expect(m("\\*.conf", "a.conf")).toBe(false)
+    expect(m("a\\?", "a?")).toBe(true)
+    expect(m("a\\?", "ab")).toBe(false)
+  })
+
   it("escapes regex metacharacters and treats an unterminated [ literally", () => {
     expect(m("a.b", "axb")).toBe(false)
     expect(m("a.b", "a.b")).toBe(true)
@@ -380,6 +409,13 @@ describe("expandGlob", () => {
 
   it("returns [] when a directory in the pattern is missing", async () => {
     expect(await expandGlob("/nope/*/config", fakeFs(files), path.posix)).toEqual([])
+  })
+
+  it("keeps a backslash-escaped wildcard literal on POSIX (not a path separator)", async () => {
+    const f = fakeFs({ "/h/.ssh/conf.d/*.conf": "", "/h/.ssh/conf.d/a.conf": "" })
+    expect(await expandGlob("/h/.ssh/conf.d/\\*.conf", f, path.posix)).toEqual([
+      "/h/.ssh/conf.d/*.conf",
+    ])
   })
 
   it("works with win32 paths", async () => {
@@ -529,6 +565,26 @@ describe("loadSshConfig", () => {
     expect(r.hosts).toEqual([{ alias: "work-db", user: "dba" }, { alias: "home" }])
   })
 
+  it("lists hosts from an Include under `Match all` (the usual way to un-nest an Include)", async () => {
+    const r = await load({
+      "/h/.ssh/config": "Host a\nMatch all\n  Include work.conf\n",
+      "/h/.ssh/work.conf": "Host w1\n  User u\n",
+    })
+    expect(r.hosts).toEqual([{ alias: "a" }, { alias: "w1", user: "u" }])
+  })
+
+  it("evaluates a file included under two Host contexts under each", async () => {
+    const r = await load({
+      "/h/.ssh/config": "Host a\n  Include common.conf\nHost b\n  Include common.conf\n",
+      "/h/.ssh/common.conf": "Host *\n  User deploy\n",
+    })
+    expect(r.hosts).toEqual([
+      { alias: "a", user: "deploy" },
+      { alias: "b", user: "deploy" },
+    ])
+    expect(r.files).toEqual(["/h/.ssh/config", "/h/.ssh/common.conf"])
+  })
+
   it("doesn't list hosts from an Include under Match", async () => {
     const r = await load({
       "/h/.ssh/config": "Match exec true\n  Include extra\nHost a\n",
@@ -672,5 +728,29 @@ describe("nodeMiniFs", () => {
     })
     expect(r.hosts).toEqual([{ alias: "b", hostName: "b.example" }, { alias: "a" }])
     expect(r.files).toHaveLength(2)
+  })
+})
+
+describe("matchPatterns", () => {
+  it("maps the criteria we can evaluate on an alias", () => {
+    expect(matchPatterns(["all"])).toEqual(["*"])
+    expect(matchPatterns(["canonical", "all"])).toEqual(["*"])
+    expect(matchPatterns(["final", "ALL"])).toEqual(["*"])
+    expect(matchPatterns(["originalhost", "a,b,!c"])).toEqual(["a", "b", "!c"])
+    expect(matchPatterns(["OriginalHost", "x"])).toEqual(["x"])
+  })
+
+  it("returns null for anything else", () => {
+    for (const args of [
+      [],
+      ["host", "a"],
+      ["exec", "true"],
+      ["all", "user", "x"],
+      ["originalhost"],
+      ["originalhost", ","],
+      ["originalhost", "a", "user", "b"],
+    ]) {
+      expect(matchPatterns(args)).toBeNull()
+    }
   })
 })

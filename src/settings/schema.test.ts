@@ -178,7 +178,16 @@ describe("ssh settings", () => {
   })
 
   it("drops a host whose args aren't all strings, rather than keeping part of them", () => {
-    for (const args of ["-p 22", ["-p", 22], [null], ["a\nb"], Array(33).fill("-v")]) {
+    for (const args of [
+      "-p 22",
+      ["-p", 22],
+      [null],
+      ["a\nb"],
+      Array(33).fill("-v"),
+      ["extra"],
+      ["-i", "k", "word"],
+      ["-G"],
+    ]) {
       expect(mergeSshSettings({ hosts: [{ ...host, args }] }).hosts).toEqual([])
     }
   })

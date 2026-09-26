@@ -91,6 +91,19 @@ const KEYWORD_FIELDS = new Map<string, Field>([
 
 type Block = Extract<SshConfigItem, { type: "block" }>
 
+/** Host-style patterns for a Match line we can evaluate on an alias: `all` (optionally with
+ *  canonical/final) → `*`; a lone `originalhost a,b,!c` → its list. null otherwise. */
+export function matchPatterns(args: string[]): string[] | null {
+  const crit = args.map((a) => a.toLowerCase())
+  const rest = crit.filter((c) => c !== "canonical" && c !== "final")
+  if (rest.length === 1 && rest[0] === "all") return ["*"]
+  if (crit.length === 2 && crit[0] === "originalhost" && args[1]) {
+    const list = args[1].split(",").filter(Boolean)
+    return list.length ? list : null
+  }
+  return null
+}
+
 /** Parse one config file's text into ordered items. Pure; never throws. */
 export function parseSshConfig(text: string): SshConfigItem[] {
   const items: SshConfigItem[] = []
@@ -105,7 +118,10 @@ export function parseSshConfig(text: string): SshConfigItem[] {
       block = { type: "block", patterns: args.filter((a) => a.length > 0), fields: {} }
       items.push(block)
     } else if (key === "match") {
-      block = null // can't evaluate Match criteria here: its options never reach the list
+      // Only criteria we can evaluate on an alias; any other Match never reaches the list.
+      const patterns = matchPatterns(args)
+      block = patterns ? { type: "block", patterns, fields: {} } : null
+      if (block) items.push(block)
     } else if (key === "include") {
       if (args.length)
         items.push({ type: "include", patterns: args, context: block?.patterns ?? [] })
@@ -214,13 +230,15 @@ export interface LoadResult {
 
 const GLOB_CHARS = /[*?[]/
 
-/** Glob segment → RegExp: `*`, `?`, `[abc]`, `[!abc]`/`[^abc]`, `]` first in a class. */
+/** Glob segment → RegExp: `*`, `?`, `[abc]`, `[!abc]`/`[^abc]`, `]` first, `\x` escapes. */
 export function globSegmentToRegExp(seg: string): RegExp {
   const escape = (c: string) => c.replace(/[.*+?^${}()|[\]\\/-]/g, "\\$&")
   let re = ""
   for (let i = 0; i < seg.length; i++) {
     const c = seg[i]!
-    if (c === "*") re += ".*"
+    if (c === "\\" && i + 1 < seg.length)
+      re += escape(seg[++i]!) // `\*` is a literal `*`
+    else if (c === "*") re += ".*"
     else if (c === "?") re += "."
     else if (c === "[") {
       let j = i + 1
@@ -252,15 +270,15 @@ export function globSegmentToRegExp(seg: string): RegExp {
 export async function expandGlob(pattern: string, fs: MiniFs, p: PlatformPath): Promise<string[]> {
   if (!GLOB_CHARS.test(pattern)) return [pattern]
   const root = p.parse(pattern).root
-  const segs = pattern
-    .slice(root.length)
-    .split(/[\\/]+/)
-    .filter(Boolean)
+  // POSIX splits on `/` only: a `\` there is a glob escape (or a filename character).
+  const sep = p.sep === "/" ? /\/+/ : /[\\/]+/
+  const segs = pattern.slice(root.length).split(sep).filter(Boolean)
   let bases = [root]
   for (const seg of segs) {
     const next: string[] = []
     if (!GLOB_CHARS.test(seg)) {
-      for (const b of bases) next.push(p.join(b, seg))
+      const literal = p.sep === "/" ? seg.replace(/\\(.)/g, "$1") : seg
+      for (const b of bases) next.push(p.join(b, literal))
     } else {
       const re = globSegmentToRegExp(seg)
       for (const b of bases) {
@@ -285,20 +303,34 @@ export function resolveIncludePath(pattern: string, home: string, p: PlatformPat
   return p.join(home, ".ssh", pattern)
 }
 
-/** Load a config and its Includes into the host list. Each file is read once (cycles and
- *  diamonds included), nesting is capped, and unreadable files are skipped, never thrown. */
+// A `*` context (top level, `Host *`, `Match all`) always matches: it adds no guard, so
+// the same file reached under it again counts as the same evaluation.
+const withGuard = (guards: string[][], ctx: string[]) =>
+  ctx.length === 1 && ctx[0] === "*" ? guards : [...guards, ctx]
+
+/** Load a config and its Includes into the host list. Files are read once, evaluated once
+ *  per Include context; nesting is capped; unreadable files are skipped, never thrown. */
 export async function loadSshConfig(opts: LoadOptions): Promise<LoadResult> {
   const maxDepth = opts.maxDepth ?? 16
   const blocks: GuardedBlock[] = []
-  const visited = new Set<string>()
+  const texts = new Map<string, string | null>() // each file is read once
+  const evaluated = new Set<string>() // …and evaluated once per Include context
   const files: string[] = []
+  const read = async (file: string) => {
+    if (!texts.has(file)) {
+      const text = await opts.fs.readFile(file)
+      texts.set(file, text)
+      if (text !== null) files.push(file)
+    }
+    return texts.get(file)!
+  }
 
   const visit = async (file: string, depth: number, guards: string[][]): Promise<void> => {
-    if (depth > maxDepth || visited.has(file)) return
-    visited.add(file)
-    const text = await opts.fs.readFile(file)
+    const key = `${file}\0${JSON.stringify(guards)}`
+    if (depth > maxDepth || evaluated.has(key)) return
+    evaluated.add(key)
+    const text = await read(file)
     if (text === null) return
-    files.push(file)
     for (const item of parseSshConfig(text)) {
       if (item.type === "block") {
         blocks.push({ patterns: item.patterns, fields: item.fields, guards })
@@ -307,7 +339,7 @@ export async function loadSshConfig(opts: LoadOptions): Promise<LoadResult> {
       for (const pat of item.patterns) {
         const resolved = resolveIncludePath(pat, opts.home, opts.path)
         for (const f of await expandGlob(resolved, opts.fs, opts.path)) {
-          await visit(f, depth + 1, [...guards, item.context])
+          await visit(f, depth + 1, withGuard(guards, item.context))
         }
       }
     }

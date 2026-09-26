@@ -2,15 +2,9 @@
 // dependency-free so main can import it without pulling in the settings/theme tables.
 
 import type { SshEnv } from "../types"
+import { hasControlChar } from "./control-chars"
 
-/** Any C0 control character or DEL (would corrupt an argv or an ssh -o value). */
-export function hasControlChar(s: string): boolean {
-  for (let i = 0; i < s.length; i++) {
-    const c = s.charCodeAt(i)
-    if (c < 0x20 || c === 0x7f) return true
-  }
-  return false
-}
+export { hasControlChar }
 
 /** An ssh destination safe as argv: no leading `-`, no whitespace or control chars. */
 export function isSshTarget(v: unknown): v is string {
@@ -38,3 +32,35 @@ export function parseSshEnv(env: unknown): ParsedSshEnv | null {
 
 /** Type guard over parseSshEnv. */
 export const isSshEnv = (v: unknown): v is SshEnv => parseSshEnv(v) !== null
+
+// ssh(1) options that take a value (OpenSSH's getopt string), and ones that start a normal
+// session without one. -G/-V/-O/-Q print or control instead of connecting, so they're out.
+const SSH_OPTS_WITH_VALUE = new Set("bceilmopBDEFIJLPRSwW")
+const SSH_FLAGS = new Set("1246afgknqstvxACKMNTXYy")
+
+/** Are these valid ssh options (each value present)? A stray word would become the host. */
+export function isSshOptionList(args: readonly unknown[]): boolean {
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i]
+    if (
+      typeof a !== "string" ||
+      hasControlChar(a) ||
+      a.length < 2 ||
+      !a.startsWith("-") ||
+      a === "--"
+    )
+      return false
+    for (let k = 1; k < a.length; k++) {
+      const ch = a[k]!
+      if (SSH_OPTS_WITH_VALUE.has(ch)) {
+        if (k + 1 < a.length) break // value attached: -p2222
+        const v = args[i + 1]
+        if (typeof v !== "string" || hasControlChar(v)) return false
+        i++ // value is the next arg: -p 2222
+        break
+      }
+      if (!SSH_FLAGS.has(ch)) return false
+    }
+  }
+  return true
+}

@@ -21,11 +21,17 @@ export interface MergeInput {
   native: SshConfigHost[] // ~/.ssh/config (+ Includes) on this machine
   wsl: [distro: string, hosts: SshConfigHost[]][] // each distro's config, in distro order
   settings: SshSettings
+  platform: NodeJS.Platform // WSL hosts only run on Windows
 }
 
-/** Config hosts (native, then per WSL distro) + settings hosts; hidden filtered, ids unique. */
-export function mergeHosts({ native, wsl, settings }: MergeInput): SshHost[] {
-  const hidden = new Set(settings.hidden)
+/** Config hosts (native, then per WSL distro) + settings hosts; ids unique. The sidebar list
+ *  drops hidden hosts; `all` keeps them (main's trust list for restoring saved panes). */
+export function mergeHosts(
+  { native, wsl, settings, platform }: MergeInput,
+  { all = false }: { all?: boolean } = {},
+): SshHost[] {
+  const hidden = new Set(all ? [] : settings.hidden)
+  const runnable = (env: SshEnv) => env === "native" || platform === "win32"
   const out: SshHost[] = []
   const ids = new Set<string>()
   const add = (h: SshHost) => {
@@ -45,17 +51,17 @@ export function mergeHosts({ native, wsl, settings }: MergeInput): SshHost[] {
       ...(h.ownMux ? { ownMux: true as const } : {}),
     }
   }
-  if (settings.fromSshConfig) {
+  if (settings.fromSshConfig || all) {
     // A config alias is only listed if it's safe as an ssh argv destination.
     const listable = (h: SshConfigHost) => !hidden.has(h.alias) && isSshTarget(h.alias)
     for (const h of native) if (listable(h)) add(fromConfig(h, "native", "native"))
     for (const [distro, hosts] of wsl) {
-      if (!parseSshEnv(`wsl:${distro}`)) continue
+      if (!parseSshEnv(`wsl:${distro}`) || !runnable(`wsl:${distro}`)) continue
       for (const h of hosts) if (listable(h)) add(fromConfig(h, `wsl:${distro}`, `wsl:${distro}`))
     }
   }
   for (const s of settings.hosts) {
-    if (hidden.has(s.name)) continue
+    if (hidden.has(s.name) || !runnable(s.env)) continue
     add({
       hostId: `settings:${s.name}`,
       label: s.name,
@@ -123,7 +129,8 @@ export function reuseFlags(dir: string): string[] {
 export const WSL_SSH_SCRIPT = [
   't="$1"; shift',
   'd="$HOME/.config/smterm/cm"',
-  `[ $((\${#d} + ${CONTROL_NAME_BYTES})) -le ${SOCKET_PATH_MAX} ] || d="/tmp/smterm-$(id -u)"`,
+  // wc -c counts bytes (as sun_path does); ${#d} would count characters.
+  `n=$(printf %s "$d" | wc -c); [ $((n + ${CONTROL_NAME_BYTES})) -le ${SOCKET_PATH_MAX} ] || d="/tmp/smterm-$(id -u)"`,
   // Characters ssh would re-interpret inside the quoted ControlPath (see reuseFlags).
   "case \"$d\" in *'%'*|*'\"'*|*'$'*|*'\\'*) exec ssh \"$@\" -t -- \"$t\";; esac",
   '[ -L "$d" ] || mkdir -p "$d" 2>/dev/null',
@@ -136,7 +143,7 @@ export interface SpawnContext {
   platform: NodeJS.Platform
   sshPath: string // native ssh binary (`ssh`, or the resolved ssh.exe on Windows)
   controlDir: string | null // a verified-safe native control dir; null = no native reuse
-  reuse: boolean // settings.ssh.reuseConnections
+  reuse: boolean // settings.ssh.reuseConnections && wantOurMux(probe of this host)
 }
 
 /** node-pty file + args for a remote session; null if this platform can't run its env. */
@@ -167,6 +174,43 @@ export function buildSshSpawn(
         args: [...base, "sh", "-c", WSL_SSH_SCRIPT, "smterm-ssh", remote.target, ...extra],
       }
     : { file: "wsl.exe", args: [...base, "ssh", ...extra, ...dest] }
+}
+
+/** Command that prints how ssh resolves a host's config (`ssh -G`, no connection made). */
+export function buildSshProbe(
+  remote: RemoteRef,
+  ctx: Pick<SpawnContext, "platform" | "sshPath">,
+): { file: string; args: string[] } | null {
+  const env = parseSshEnv(remote.env)
+  if (!env) return null
+  const tail = [...(remote.extraArgs ?? []), "-G", "--", remote.target]
+  if (env.kind === "native") return { file: ctx.sshPath, args: tail }
+  if (ctx.platform !== "win32") return null
+  return { file: "wsl.exe", args: ["-d", env.distro, "-e", "ssh", ...tail] }
+}
+
+/** The multiplexing options in `ssh -G` output (absent keys mean ssh left them unset). */
+export function parseSshG(out: string): { controlMaster?: string; controlPath?: string } {
+  const r: { controlMaster?: string; controlPath?: string } = {}
+  for (const line of out.split(/\r?\n/)) {
+    const m = /^(controlmaster|controlpath)\s+(.+)$/i.exec(line.trim())
+    if (!m) continue
+    if (m[1]!.toLowerCase() === "controlmaster") r.controlMaster = m[2]!.trim().toLowerCase()
+    else r.controlPath = m[2]!.trim()
+  }
+  return r
+}
+
+/** Should smterm add its ControlMaster flags? Only when ssh's resolved config (`g`; null =
+ *  the probe failed) leaves multiplexing unset and the config has no explicit value we saw. */
+export function wantOurMux(
+  g: ReturnType<typeof parseSshG> | null,
+  remote: Pick<RemoteRef, "ownMux">,
+): boolean {
+  if (remote.ownMux || !g) return false
+  if (g.controlMaster && g.controlMaster !== "false" && g.controlMaster !== "no") return false
+  if (g.controlPath && g.controlPath.toLowerCase() !== "none") return false
+  return true
 }
 
 const MAX_LABEL = 200
