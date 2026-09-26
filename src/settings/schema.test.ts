@@ -1,5 +1,12 @@
 import { describe, it, expect } from "vitest"
-import { defaultSettings, mergeSettings, parseSettings, serializeSettings } from "./schema"
+import {
+  defaultSettings,
+  isSshTarget,
+  mergeSettings,
+  mergeSshSettings,
+  parseSettings,
+  serializeSettings,
+} from "./schema"
 
 describe("mergeSettings", () => {
   it("returns defaults for empty/garbage input", () => {
@@ -102,5 +109,128 @@ describe("parseSettings", () => {
     expect(defaultSettings.resumeBypassPermissions).toBe(false)
     expect(mergeSettings({ resumeAgents: "ask" }).resumeAgents).toBe("ask")
     expect(mergeSettings({ resumeAgents: "sometimes" }).resumeAgents).toBe("auto")
+  })
+})
+
+describe("ssh settings", () => {
+  const host = { name: "gpu", target: "ubuntu@10.0.0.12" }
+
+  it("defaults to listing ssh config hosts with connection reuse on", () => {
+    expect(defaultSettings.ssh).toEqual({
+      fromSshConfig: true,
+      reuseConnections: true,
+      hidden: [],
+      hosts: [],
+    })
+    expect(mergeSettings({}).ssh).toEqual(defaultSettings.ssh)
+    expect(mergeSettings({ ssh: "nope" }).ssh).toEqual(defaultSettings.ssh)
+  })
+
+  it("never shares arrays with the defaults", () => {
+    const a = mergeSettings({})
+    a.ssh.hidden.push("x")
+    a.ssh.hosts.push({ name: "x", target: "x", args: [], env: "native" })
+    expect(defaultSettings.ssh.hidden).toEqual([])
+    expect(defaultSettings.ssh.hosts).toEqual([])
+  })
+
+  it("reads the booleans, falling back on wrong types", () => {
+    expect(mergeSshSettings({ fromSshConfig: false, reuseConnections: false })).toMatchObject({
+      fromSshConfig: false,
+      reuseConnections: false,
+    })
+    expect(mergeSshSettings({ fromSshConfig: "no", reuseConnections: 0 })).toMatchObject({
+      fromSshConfig: true,
+      reuseConnections: true,
+    })
+  })
+
+  it("normalizes a valid host (trimmed name, default args and env)", () => {
+    expect(mergeSshSettings({ hosts: [{ ...host, name: "  gpu  " }] }).hosts).toEqual([
+      { name: "gpu", target: "ubuntu@10.0.0.12", args: [], env: "native" },
+    ])
+  })
+
+  it("keeps args and a wsl env", () => {
+    const h = { ...host, args: ["-p", "2222"], env: "wsl:Ubuntu-22.04" }
+    expect(mergeSshSettings({ hosts: [h] }).hosts[0]).toEqual({ ...h, name: "gpu" })
+    expect(mergeSshSettings({ hosts: [{ ...host, env: "native" }] }).hosts[0]!.env).toBe("native")
+  })
+
+  it("drops hosts with a bad name", () => {
+    for (const name of [undefined, "", "   ", 3, "x".repeat(81)]) {
+      expect(mergeSshSettings({ hosts: [{ ...host, name }] }).hosts).toEqual([])
+    }
+  })
+
+  it("drops hosts with a bad target", () => {
+    for (const target of [
+      undefined,
+      "",
+      "-oProxyCommand=x",
+      "a b",
+      "a\tb",
+      "a\nb",
+      7,
+      "x".repeat(256),
+    ]) {
+      expect(mergeSshSettings({ hosts: [{ ...host, target }] }).hosts).toEqual([])
+    }
+  })
+
+  it("drops a host whose args aren't all strings, rather than keeping part of them", () => {
+    for (const args of ["-p 22", ["-p", 22], [null], ["a\nb"], Array(33).fill("-v")]) {
+      expect(mergeSshSettings({ hosts: [{ ...host, args }] }).hosts).toEqual([])
+    }
+  })
+
+  it("drops hosts with a malformed env", () => {
+    for (const env of ["wsl:", "wsl:Ubuntu 22", "docker:x", 1, "WSL:Ubuntu", "wsl:a;b"]) {
+      expect(mergeSshSettings({ hosts: [{ ...host, env }] }).hosts).toEqual([])
+    }
+  })
+
+  it("keeps the first of duplicate names and skips non-objects", () => {
+    const hosts = mergeSshSettings({
+      hosts: [null, "x", { ...host }, { ...host, target: "other" }, { name: "b", target: "b" }],
+    }).hosts
+    expect(hosts.map((h) => [h.name, h.target])).toEqual([
+      ["gpu", "ubuntu@10.0.0.12"],
+      ["b", "b"],
+    ])
+  })
+
+  it("ignores a non-array hosts list and caps its length", () => {
+    expect(mergeSshSettings({ hosts: { a: host } }).hosts).toEqual([])
+    const many = Array.from({ length: 600 }, (_, i) => ({ name: `h${i}`, target: `h${i}` }))
+    expect(mergeSshSettings({ hosts: many }).hosts).toHaveLength(500)
+  })
+
+  it("keeps hidden as unique non-empty strings", () => {
+    expect(mergeSshSettings({ hidden: ["a", "a", "", " ", 3, null, "b"] }).hidden).toEqual([
+      "a",
+      "b",
+    ])
+    expect(mergeSshSettings({ hidden: "a" }).hidden).toEqual([])
+  })
+
+  it("round-trips through serialize/parse", () => {
+    const s = mergeSettings({
+      ssh: { reuseConnections: false, hidden: ["x"], hosts: [{ ...host, args: ["-A"] }] },
+    })
+    expect(parseSettings(serializeSettings(s)).ssh).toEqual(s.ssh)
+  })
+})
+
+describe("isSshTarget", () => {
+  it("accepts aliases, user@host and IPv6", () => {
+    for (const t of ["web", "me@web.example", "[::1]", "root@10.0.0.1", "host_1.example"]) {
+      expect(isSshTarget(t)).toBe(true)
+    }
+  })
+
+  it("rejects options, whitespace, control characters and non-strings", () => {
+    for (const t of ["-v", "a b", "a\u0000b", "a\u007fb", "", null, {}])
+      expect(isSshTarget(t)).toBe(false)
   })
 })

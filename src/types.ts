@@ -5,6 +5,24 @@ export interface ShellOption {
   args: string[]
 }
 
+/** Which `ssh` runs a remote session: the host's own, or one inside a WSL distro. */
+export type SshEnv = "native" | `wsl:${string}`
+
+/** Which SSH host a session runs on; main builds the ssh argv from this at spawn. */
+export interface RemoteRef {
+  hostId: string // "native:<alias>" | "wsl:<distro>:<alias>" | "settings:<name>"
+  label: string // display name
+  target: string // the destination `ssh` gets (an alias or user@host)
+  env: SshEnv
+  extraArgs?: string[] // extra ssh flags (settings-defined hosts only)
+}
+
+/** A saved host as the sidebar lists it. */
+export interface SshHost extends RemoteRef {
+  source: "config" | "settings"
+  detail?: string // "user@hostname:port" subline
+}
+
 import type { SessionStatus } from "./lib/session-status"
 
 export interface Session {

@@ -1,4 +1,20 @@
 import { DEFAULT_THEME_FAMILY, themeFamilyName, variantOf, type Appearance } from "./themes"
+import type { SshEnv } from "../types"
+
+/** A host defined in settings.json (in addition to ~/.ssh/config). */
+export interface SshHostSetting {
+  name: string // label + stable id
+  target: string // ssh destination (alias or user@host)
+  args: string[] // extra ssh flags, e.g. ["-p", "2222"]
+  env: SshEnv // which ssh runs it ("native", or "wsl:<distro>" on Windows)
+}
+
+export interface SshSettings {
+  fromSshConfig: boolean // list ~/.ssh/config hosts
+  reuseConnections: boolean // OpenSSH ControlMaster so later panes skip auth
+  hidden: string[] // aliases / names hidden from the list
+  hosts: SshHostSetting[]
+}
 
 export interface Settings {
   font: {
@@ -23,6 +39,7 @@ export interface Settings {
   openPath: string // editor command for clicked paths; "" = OS default. {file}/{line}/{col}
   resumeAgents: "auto" | "ask" | "off" // on relaunch, resume the Claude session each pane was in
   resumeBypassPermissions: boolean // also restore --permission-mode bypassPermissions (else default)
+  ssh: SshSettings
 }
 
 export const defaultSettings: Settings = {
@@ -46,6 +63,7 @@ export const defaultSettings: Settings = {
   openPath: "code -g {file}:{line}:{col}",
   resumeAgents: "auto",
   resumeBypassPermissions: false,
+  ssh: { fromSshConfig: true, reuseConnections: true, hidden: [], hosts: [] },
 }
 
 const num = (v: unknown, fallback: number, min: number, max: number): number =>
@@ -58,6 +76,74 @@ const str = (v: unknown, fallback: string): string =>
 
 const asObject = (v: unknown): Record<string, unknown> =>
   v && typeof v === "object" ? (v as Record<string, unknown>) : {}
+
+const MAX_SSH_HOSTS = 500
+const MAX_SSH_ARGS = 32
+// A distro name as `wsl.exe -l -q` prints it (letters, digits, `.`, `-`, `_`).
+const SSH_ENV_RE = /^wsl:[A-Za-z0-9._-]+$/
+
+/** An ssh destination we'll pass as argv: no leading `-` (would parse as an option), no
+ *  whitespace or control characters. */
+/** Any C0 control character or DEL (would corrupt an argv or an ssh -o value). */
+export const hasControlChar = (s: string): boolean => {
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i)
+    if (c < 0x20 || c === 0x7f) return true
+  }
+  return false
+}
+
+export const isSshTarget = (v: unknown): v is string =>
+  typeof v === "string" &&
+  v.length > 0 &&
+  v.length <= 255 &&
+  !v.startsWith("-") &&
+  !/\s/.test(v) &&
+  !hasControlChar(v)
+
+/** One settings host, or null if any part is invalid (a bad entry is dropped whole, so a
+ *  half-kept `args` can never change what the host does). */
+function sshHostSetting(v: unknown): SshHostSetting | null {
+  const o = asObject(v)
+  const name = typeof o.name === "string" ? o.name.trim() : ""
+  if (!name || name.length > 80) return null
+  if (!isSshTarget(o.target)) return null
+  let args: string[] = []
+  if (o.args !== undefined) {
+    if (!Array.isArray(o.args) || o.args.length > MAX_SSH_ARGS) return null
+    if (!o.args.every((a) => typeof a === "string" && !hasControlChar(a))) return null
+    args = o.args as string[]
+  }
+  let env: SshEnv = "native"
+  if (o.env !== undefined && o.env !== "native") {
+    if (typeof o.env !== "string" || !SSH_ENV_RE.test(o.env)) return null
+    env = o.env as SshEnv
+  }
+  return { name, target: o.target, args, env }
+}
+
+/** Validate the `ssh` block: bad hosts dropped, duplicate names keep the first. */
+export function mergeSshSettings(input: unknown): SshSettings {
+  const o = asObject(input)
+  const d = defaultSettings.ssh
+  const hosts: SshHostSetting[] = []
+  const names = new Set<string>()
+  for (const raw of Array.isArray(o.hosts) ? o.hosts.slice(0, MAX_SSH_HOSTS) : []) {
+    const h = sshHostSetting(raw)
+    if (!h || names.has(h.name)) continue
+    names.add(h.name)
+    hosts.push(h)
+  }
+  const hidden = Array.isArray(o.hidden)
+    ? [...new Set(o.hidden.filter((x): x is string => typeof x === "string" && x.trim() !== ""))]
+    : []
+  return {
+    fromSshConfig: bool(o.fromSshConfig, d.fromSshConfig),
+    reuseConnections: bool(o.reuseConnections, d.reuseConnections),
+    hidden,
+    hosts,
+  }
+}
 
 /** Deep-merge arbitrary input over defaults, validating + clamping. Unknown keys ignored. */
 export function mergeSettings(input: unknown): Settings {
@@ -93,6 +179,7 @@ export function mergeSettings(input: unknown): Settings {
         ? o.resumeAgents
         : d.resumeAgents,
     resumeBypassPermissions: bool(o.resumeBypassPermissions, d.resumeBypassPermissions),
+    ssh: mergeSshSettings(o.ssh),
   }
 }
 
