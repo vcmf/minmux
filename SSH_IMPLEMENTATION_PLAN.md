@@ -108,7 +108,7 @@ export interface SpawnOpts { …; remote?: RemoteRef }
 
 | PR    | Steps | Title                                                                       | Status |
 | ----- | ----- | --------------------------------------------------------------------------- | ------ |
-| **A** | 1 + 2 | `✨ feat(ssh): parse ssh config and build ssh spawn commands`               | ⬜     |
+| **A** | 1 + 2 | `✨ feat(ssh): parse ssh config and build ssh spawn commands`               | 🚧     |
 | **B** | 3 + 4 | `✨ feat(ssh): spawn remote sessions and keep them in the layout`           | ⬜     |
 | **C** | 5     | `✨ feat(ssh): connect to saved hosts from the sidebar, picker and palette` | ⬜     |
 | **D** | 6 + 7 | `✨ feat(ssh): lazy reconnect on restore and after exit` (+ docs)           | ⬜     |
