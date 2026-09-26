@@ -259,10 +259,15 @@ Main-process wiring. Still no UI.
 - If `opts.remote`: `remote = trustedRemote(opts.remote, trustList)` where `trustList =
 mergeHosts(…, { all: true })` (hidden hosts included, so a restored pane keeps its args).
   null → write an error into the pane, don't spawn.
-- Connection reuse (native unix): `dir = controlDir(home, uid)`; `mkdir 0700`, `lstat` →
-  `isSafeControlDir`; `stat ~/.ssh/config` → `isSafeUserConfig`; write `muxConfigText(dir)`
-  to `dir/ssh_config` (0600). Any failure → `muxConfig: null` (plain ssh). Rewrite the file
-  only when its content differs.
+- Connection reuse (native unix), all async and cached per hostId until the host list or
+  settings change:
+  1. `buildSshProbe(remote)` (`ssh -G`, 2 s timeout); `userManagesMux(out)` or a failed
+     probe → `muxConfig: null` (plain ssh).
+  2. `dir = controlDir(home, uid)`; `mkdir 0700`; `lstat` → `isSafeControlDir`.
+  3. System config = first existing of `systemConfigCandidates(sshPath)`; `stat` →
+     `sshAcceptsInclude` (else plain ssh).
+  4. Write `muxConfigText(dir, { system })` to `dir/ssh_config` atomically (temp + rename,
+     0600), only when the content differs.
 - Then `{ file, args } = buildSshSpawn(remote, { platform, sshPath, muxConfig, reuse })`. Skip `buildInjection`,
   `buildWslInjection`, `wslCdArgs`; start cwd = `os.homedir()`; keep the env as today
   (COLORFGBG etc. don't cross ssh, which is fine).

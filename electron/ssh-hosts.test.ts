@@ -10,11 +10,14 @@ import {
   controlDir,
   controlPathFits,
   hostDetail,
-  isQuotableDir,
+  buildSshProbe,
   isSafeControlDir,
-  isSafeUserConfig,
+  isUsableDir,
   mergeHosts,
   muxConfigText,
+  sshAcceptsInclude,
+  systemConfigCandidates,
+  userManagesMux,
   trustedRemote,
   WSL_SSH_SCRIPT,
   type MergeInput,
@@ -219,6 +222,13 @@ describe("control dir", () => {
     expect(controlPathFits("/tmp/smterm-501")).toBe(true)
   })
 
+  it("falls back for a home with spaces or shell characters (ProxyJump pastes -F unquoted)", () => {
+    for (const home of ["/Users/Jane Doe", "/home/a$b", "/home/100%", "/home/a'b", "/home/é"]) {
+      expect(controlDir(home, 501)).toBe("/tmp/smterm-501")
+    }
+    expect(isUsableDir("/Users/jane.doe+x@corp/.config/smterm/cm")).toBe(true)
+  })
+
   it("counts bytes, not characters", () => {
     // 45 characters but 93 bytes: fits if counted in chars, not in bytes
     const home = "/" + "é".repeat(4) + "文".repeat(22)
@@ -250,46 +260,106 @@ describe("isSafeControlDir", () => {
   })
 })
 
-describe("isSafeUserConfig", () => {
-  const ok = { isFile: true, uid: 501, mode: 0o100600 }
+describe("sshAcceptsInclude", () => {
+  const ok = { isFile: true, uid: 0, mode: 0o100644 }
 
-  it("accepts a missing config, one we own, and a root-owned one", () => {
-    expect(isSafeUserConfig(null, 501)).toBe(true)
-    expect(isSafeUserConfig(ok, 501)).toBe(true)
-    expect(isSafeUserConfig({ ...ok, mode: 0o100644 }, 501)).toBe(true)
-    expect(isSafeUserConfig({ ...ok, uid: 0 }, 501)).toBe(true)
+  it("accepts a missing file, a root-owned one, and one we own", () => {
+    expect(sshAcceptsInclude(null, 501)).toBe(true)
+    expect(sshAcceptsInclude(ok, 501)).toBe(true)
+    expect(sshAcceptsInclude({ ...ok, uid: 501, mode: 0o100600 }, 501)).toBe(true)
   })
 
-  it("rejects what ssh would refuse: others' files, group/world-writable, non-files", () => {
-    expect(isSafeUserConfig({ ...ok, uid: 1000 }, 501)).toBe(false)
-    expect(isSafeUserConfig({ ...ok, mode: 0o100664 }, 501)).toBe(false)
-    expect(isSafeUserConfig({ ...ok, mode: 0o100602 }, 501)).toBe(false)
-    expect(isSafeUserConfig({ ...ok, isFile: false }, 501)).toBe(false)
+  it("rejects what ssh refuses under -F: others' files, group/world-writable, non-files", () => {
+    expect(sshAcceptsInclude({ ...ok, uid: 1000 }, 501)).toBe(false)
+    expect(sshAcceptsInclude({ ...ok, mode: 0o100664 }, 501)).toBe(false)
+    expect(sshAcceptsInclude({ ...ok, mode: 0o100646 }, 501)).toBe(false)
+    expect(sshAcceptsInclude({ ...ok, isFile: false }, 501)).toBe(false)
+  })
+})
+
+describe("systemConfigCandidates", () => {
+  it("uses /etc/ssh for the system ssh", () => {
+    expect(systemConfigCandidates("/usr/bin/ssh")).toEqual(["/etc/ssh/ssh_config"])
+    expect(systemConfigCandidates("/bin/ssh")).toEqual(["/etc/ssh/ssh_config"])
+  })
+
+  it("tries <prefix>/etc first for Homebrew, /usr/local or Nix builds", () => {
+    expect(systemConfigCandidates("/opt/homebrew/bin/ssh")).toEqual([
+      "/opt/homebrew/etc/ssh/ssh_config",
+      "/etc/ssh/ssh_config",
+    ])
+    expect(systemConfigCandidates("/usr/local/bin/ssh")[0]).toBe("/usr/local/etc/ssh/ssh_config")
+    expect(systemConfigCandidates("/nix/store/abc-openssh/bin/ssh")[0]).toBe(
+      "/nix/store/abc-openssh/etc/ssh/ssh_config",
+    )
+  })
+
+  it("falls back to /etc/ssh for a bare command name", () => {
+    expect(systemConfigCandidates("ssh")).toEqual(["/etc/ssh/ssh_config"])
+  })
+})
+
+describe("userManagesMux", () => {
+  it("is true for a ControlPath or an active ControlMaster", () => {
+    expect(userManagesMux("user me\ncontrolmaster false\ncontrolpath /x/cm-abc\n")).toBe(true)
+    for (const v of ["auto", "yes", "ask", "autoask", "AUTO"]) {
+      expect(userManagesMux(`controlmaster ${v}\ncontrolpersist no\n`)).toBe(true)
+    }
+  })
+
+  it("is false when ssh left multiplexing unset (or explicitly off)", () => {
+    expect(userManagesMux("user me\ncontrolmaster false\ncontrolpersist no\n")).toBe(false)
+    expect(userManagesMux("")).toBe(false)
+    expect(userManagesMux("controlmasterx auto\n")).toBe(false)
+  })
+})
+
+describe("buildSshProbe", () => {
+  it("runs ssh -G with the host's own args, target after --", () => {
+    const r: RemoteRef = {
+      hostId: "x",
+      label: "x",
+      target: "web",
+      env: "native",
+      extraArgs: ["-p", "1"],
+    }
+    expect(buildSshProbe(r, { sshPath: "ssh" })).toEqual({
+      file: "ssh",
+      args: ["-p", "1", "-G", "--", "web"],
+    })
   })
 })
 
 describe("muxConfigText", () => {
   it("includes the user's then the system's config before our Host * defaults", () => {
-    const text = muxConfigText("/home/me/.config/smterm/cm")!
+    const text = muxConfigText("/home/me/.config/smterm/cm", { system: "/etc/ssh/ssh_config" })!
     const lines = text.split("\n").filter((l) => l && !l.startsWith("#"))
     expect(lines).toEqual([
       "Include ~/.ssh/config",
       "Include /etc/ssh/ssh_config",
       "Host *",
       "  ControlMaster auto",
-      '  ControlPath "/home/me/.config/smterm/cm/%C"',
+      "  ControlPath /home/me/.config/smterm/cm/%C",
       "  ControlPersist 10m",
     ])
   })
 
-  it("quotes spaces and escapes %", () => {
-    expect(muxConfigText("/Users/Jo Doe/100%")).toContain('ControlPath "/Users/Jo Doe/100%%/%C"')
+  it("uses the given system config path", () => {
+    expect(
+      muxConfigText("/tmp/smterm-1", { system: "/opt/homebrew/etc/ssh/ssh_config" }),
+    ).toContain("Include /opt/homebrew/etc/ssh/ssh_config")
   })
 
-  it("returns null for a dir ssh would re-interpret", () => {
-    for (const d of ['/home/"q"', "/home/a\\b", "/home/${X}", "/home/$HOME", "/home/a\nb"]) {
-      expect(muxConfigText(d)).toBeNull()
-      expect(isQuotableDir(d)).toBe(false)
+  it("returns null for a dir that isn't short and shell-safe", () => {
+    for (const d of [
+      "/Users/Jane Doe/cm",
+      '/home/"q"',
+      "/home/a\\b",
+      "/home/${X}",
+      "/home/100%",
+      "/" + "x".repeat(60),
+    ]) {
+      expect(muxConfigText(d, { system: "/etc/ssh/ssh_config" })).toBeNull()
     }
   })
 })
@@ -441,10 +511,35 @@ describe.runIf(sshBin && process.platform !== "win32")("muxConfigText with real 
     // An included file ending inside a Host block doesn't swallow our Host *.
     expect(g("trailing")).toMatchObject({ master: "auto", user: "tb" })
   })
+
+  it("probing without the wrapper tells a user-managed host from an unset one", () => {
+    const user = path.join(dir, "user")
+    fs.writeFileSync(
+      user,
+      "Host mine\n  ControlMaster auto\n  ControlPath /tmp/mine/%C\nHost off\n  ControlMaster no\n",
+    )
+    const g = (host: string) =>
+      execFileSync("ssh", ["-G", "-F", user, "--", host], { encoding: "utf8" })
+    expect(userManagesMux(g("mine"))).toBe(true)
+    expect(userManagesMux(g("plain"))).toBe(false)
+    expect(userManagesMux(g("off"))).toBe(false) // explicit no: the wrapper's first-wins keeps it
+  })
+
+  it("refuses a group-writable Include under -F (why the system config is checked first)", () => {
+    const inc = path.join(dir, "inc")
+    fs.writeFileSync(inc, "Host x\n")
+    fs.chmodSync(inc, 0o664)
+    const top = path.join(dir, "top")
+    fs.writeFileSync(top, `Include ${inc}\n`)
+    const r = spawnSync("ssh", ["-G", "-F", top, "--", "x"], { encoding: "utf8" })
+    expect(r.status).not.toBe(0)
+    expect(r.stderr).toMatch(/permissions/i)
+  })
 })
 
-// Runs the WSL script with a real POSIX sh and a stub `ssh` that prints its argv, one per
-// line, so we test the actual shell logic (dir choice, 0700, ownership, config, args).
+// Runs the WSL script with a real POSIX sh and a stub `ssh`: `-G` prints $G_OUT (ssh's
+// resolved config), anything else prints its argv one per line — so we test the actual
+// shell logic (dir choice, probe gate, 0700, atomic wrapper, args).
 describe.runIf(hasSh && process.platform !== "win32")("WSL_SSH_SCRIPT (real sh)", () => {
   let tmp: string
   let bin: string
@@ -456,16 +551,26 @@ describe.runIf(hasSh && process.platform !== "win32")("WSL_SSH_SCRIPT (real sh)"
     fs.mkdirSync(bin)
     fs.writeFileSync(
       path.join(bin, "ssh"),
-      '#!/bin/sh\nfor a in "$@"; do printf "%s\\n" "$a"; done\n',
+      [
+        "#!/bin/sh",
+        'for a in "$@"; do [ "$a" = "-G" ] && { printf "%s" "${G_OUT-controlmaster false}"; exit ${G_EXIT-0}; }; done',
+        'for a in "$@"; do printf "%s\\n" "$a"; done',
+        "",
+      ].join("\n"),
       { mode: 0o755 },
     )
   })
   afterEach(() => fs.rmSync(tmp, { recursive: true, force: true }))
 
   // Same argv shape buildSshSpawn produces: target first, then the user's extra args.
-  const run = (home: string, target: string, extra: string[] = []) =>
+  const run = (
+    home: string,
+    target: string,
+    extra: string[] = [],
+    env: Record<string, string> = {},
+  ) =>
     execFileSync("sh", ["-c", WSL_SSH_SCRIPT, "smterm-ssh", target, ...extra], {
-      env: { PATH: `${bin}:/usr/bin:/bin`, HOME: home },
+      env: { PATH: `${bin}:/usr/bin:/bin`, HOME: home, ...env },
       encoding: "utf8",
     })
       .split("\n")
@@ -476,6 +581,7 @@ describe.runIf(hasSh && process.platform !== "win32")("WSL_SSH_SCRIPT (real sh)"
     fs.mkdirSync(home)
     return home
   }
+  const plain = (...extra: string[]) => [...extra, "-t", "--", "web"]
 
   it("writes the same wrapper as the native path (0700 dir) and runs ssh -F with it", () => {
     const home = mkHome()
@@ -483,19 +589,29 @@ describe.runIf(hasSh && process.platform !== "win32")("WSL_SSH_SCRIPT (real sh)"
     const dir = path.join(home, ".config/smterm/cm")
     expect(out).toEqual(["-F", `${dir}/ssh_config`, "-A", "-t", "--", "web"])
     expect(fs.statSync(dir).mode & 0o777).toBe(0o700)
-    const written = fs
-      .readFileSync(`${dir}/ssh_config`, "utf8")
-      .split("\n")
-      .filter((l) => l && !l.startsWith("#"))
-    const native = muxConfigText(dir)!
-      .split("\n")
-      .filter((l) => l && !l.startsWith("#"))
-    expect(written).toEqual(native)
+    expect(fs.readFileSync(`${dir}/ssh_config`, "utf8")).toBe(
+      muxConfigText(dir, { system: "/etc/ssh/ssh_config" }),
+    )
+    expect(fs.readdirSync(dir)).toEqual(["ssh_config"]) // no temp file left behind
+  })
+
+  it("stays out when ssh -G shows the user's own multiplexing", () => {
+    const outputs = [
+      "controlmaster auto\ncontrolpath /x/%C\n",
+      "controlpath /x/%C\n",
+      "controlmaster yes\n",
+    ]
+    outputs.forEach((g, i) => {
+      expect(run(mkHome(`h${i}`), "web", ["-A"], { G_OUT: g })).toEqual(plain("-A"))
+    })
+  })
+
+  it("runs plain ssh when the probe fails", () => {
+    expect(run(mkHome(), "web", [], { G_EXIT: "255" })).toEqual(plain())
   })
 
   it("passes arguments with spaces and quotes through intact", () => {
-    const home = mkHome()
-    const out = run(home, 'we"b', ["-o", "SetEnv=A=b c"])
+    const out = run(mkHome(), 'we"b', ["-o", "SetEnv=A=b c"])
     expect(out.slice(2)).toEqual(["-o", "SetEnv=A=b c", "-t", "--", 'we"b'])
   })
 
@@ -503,53 +619,47 @@ describe.runIf(hasSh && process.platform !== "win32")("WSL_SSH_SCRIPT (real sh)"
     expect(run(mkHome(), "-oProxyCommand=x").slice(-2)).toEqual(["--", "-oProxyCommand=x"])
   })
 
-  it("falls back to plain ssh when the user's config is writable by others", () => {
+  it("accepts a symlinked ~/.ssh/config (dotfile managers) — ssh checks the target itself", () => {
     const home = mkHome()
     fs.mkdirSync(path.join(home, ".ssh"))
-    fs.writeFileSync(path.join(home, ".ssh/config"), "Host a\n")
-    fs.chmodSync(path.join(home, ".ssh/config"), 0o664)
-    expect(run(home, "web")).toEqual(["-t", "--", "web"])
-    fs.chmodSync(path.join(home, ".ssh/config"), 0o600)
+    fs.writeFileSync(path.join(tmp, "real-config"), "Host a\n", { mode: 0o600 })
+    fs.symlinkSync(path.join(tmp, "real-config"), path.join(home, ".ssh/config"))
     expect(run(home, "web")[0]).toBe("-F")
   })
 
-  it("falls back to plain ssh when the dir is a symlink, and never chmods through it", () => {
+  it("falls back to plain ssh when the dir is a symlink, and never writes through it", () => {
     const home = mkHome()
     fs.mkdirSync(path.join(home, ".config/smterm"), { recursive: true })
     const victim = path.join(tmp, "victim")
     fs.mkdirSync(victim)
     fs.chmodSync(victim, 0o755)
     fs.symlinkSync(victim, path.join(home, ".config/smterm/cm"))
-    expect(run(home, "web")).toEqual(["-t", "--", "web"])
+    expect(run(home, "web")).toEqual(plain())
     expect(fs.statSync(victim).mode & 0o777).toBe(0o755)
-    expect(fs.existsSync(path.join(victim, "ssh_config"))).toBe(false)
+    expect(fs.readdirSync(victim)).toEqual([])
   })
 
-  it("falls back to plain ssh when the home path contains a character ssh re-interprets", () => {
-    for (const name of ["100%", 'a"b', "a$b", "a\\b", "x${Y}"]) {
-      expect(run(mkHome(name), "web", ["-A"])).toEqual(["-A", "-t", "--", "web"])
+  it("moves a home with spaces or shell characters to /tmp/smterm-<uid>", () => {
+    const uid = os.userInfo().uid
+    const fallback = `/tmp/smterm-${uid}`
+    const existed = fs.existsSync(fallback)
+    try {
+      for (const name of ["Jane Doe", "100%", 'a"b', "a$b", "a\\b", "x${Y}", "é".repeat(10)]) {
+        const out = run(mkHome(name), "web")
+        if (out[0] === "-F") expect(out[1]).toBe(`${fallback}/ssh_config`)
+        else expect(out).toEqual(plain()) // exists but isn't ours/private
+      }
+      const out = run("/" + "x".repeat(60), "web")
+      if (out[0] === "-F") expect(out[1]).toBe(`${fallback}/ssh_config`)
+    } finally {
+      if (!existed) fs.rmSync(fallback, { recursive: true, force: true })
     }
   })
 
   it("falls back to plain ssh when the dir can't be created", () => {
     const home = mkHome("ro")
     fs.writeFileSync(path.join(home, ".config"), "a file, not a dir")
-    expect(run(home, "web")).toEqual(["-t", "--", "web"])
-  })
-
-  it("uses /tmp/smterm-<uid> for a long home, counting bytes", () => {
-    const uid = os.userInfo().uid
-    const fallback = `/tmp/smterm-${uid}`
-    const existed = fs.existsSync(fallback)
-    try {
-      for (const home of ["/" + "x".repeat(60), path.join(tmp, "é".repeat(10))]) {
-        const out = run(home, "web")
-        if (out[0] === "-F") expect(out[1]).toBe(`${fallback}/ssh_config`)
-        else expect(out).toEqual(["-t", "--", "web"]) // exists but isn't ours/private
-      }
-    } finally {
-      if (!existed) fs.rmSync(fallback, { recursive: true, force: true })
-    }
+    expect(run(home, "web")).toEqual(plain())
   })
 })
 

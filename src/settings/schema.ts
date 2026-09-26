@@ -1,5 +1,5 @@
 import { DEFAULT_THEME_FAMILY, themeFamilyName, variantOf, type Appearance } from "./themes"
-import { hasControlChar } from "../lib/ssh-validate"
+import { hasControlChar } from "../lib/control-chars"
 
 export { validateSshHosts, type SshHostSetting } from "../lib/ssh-validate"
 

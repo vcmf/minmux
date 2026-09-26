@@ -135,39 +135,45 @@ the distro's `ssh` (§5).
 
 ### 4b. Connection reuse
 
-For follow-up panes on the same host (unix `ssh` only, including inside WSL), smterm runs
-`ssh -F ~/.config/smterm/cm/ssh_config …` with a small wrapper config it writes:
+For follow-up panes on the same host (unix `ssh` only, including inside WSL):
+
+1. **Probe** — `ssh -G <host>` (no connection). If it shows the user already manages
+   multiplexing (a `ControlPath`, or `ControlMaster` yes/auto/ask), smterm runs plain `ssh`
+   and changes nothing.
+2. Otherwise run `ssh -F ~/.config/smterm/cm/ssh_config …` with a wrapper smterm writes:
 
 ```
 Include ~/.ssh/config          # the user's config first
 Include /etc/ssh/ssh_config    # then the system's (ssh's own order)
 Host *                         # our defaults: only fill what's still unset
   ControlMaster auto
-  ControlPath "~/.config/smterm/cm/%C"
+  ControlPath ~/.config/smterm/cm/%C
   ControlPersist 10m
 ```
 
 - First pane authenticates. Later panes to the same host multiplex over that connection:
   instant, no second passphrase or 2FA prompt.
-- **ssh keeps the first value it reads for each option**, so anything the user set — per
-  host, in `Host *`, in a `Match exec`, in an Include, in the system file, including an
-  explicit `ControlMaster no` — wins over ours. We never have to predict their config;
-  ssh applies its own rules (verified against OpenSSH 10.2 in the tests). This replaced an
-  earlier design that passed `-o` flags and tried to detect the user's settings.
-- ssh skips its permission check on a user config reached through `-F`, so we use the
-  wrapper only when `~/.ssh/config` is ours (or root's) and not group/world-writable;
-  otherwise plain `ssh` runs and reports the problem as usual.
+- **ssh keeps the first value it reads for each option**, so an explicit `ControlMaster no`
+  (which `-G` can't tell from "unset") still wins over our `auto`, wherever it is: per host,
+  in a `Match exec`, an Include, or the system file. Verified against OpenSSH 10.2 in tests.
+- ssh checks permissions on files Included under `-F` like a user config. The user's own
+  config gets the same check plain ssh gives it; the **system** config (not normally
+  checked) is verified first — a group-writable one means plain ssh.
+- The system config path comes from the ssh binary's prefix (`<prefix>/etc/ssh/ssh_config`
+  for Homebrew, /usr/local, Nix; else `/etc/ssh/ssh_config`), first one that exists.
+- The wrapper's dir must be **shell-safe** (`[A-Za-z0-9._/@+-]`): ssh pastes the `-F` path
+  unquoted into the command it builds for `ProxyJump`. A home with spaces or other
+  characters uses `/tmp/smterm-<uid>` (also the fallback for a long home). Created `0700`,
+  never through a symlink; the wrapper is written atomically (temp file + rename).
 - A host whose own args set multiplexing or a config file (`-M`, `-S`, `-F`,
   `-o Control*`) gets plain ssh with its args untouched.
-- `%C` is a 40-char hash of host/port/user. Unix sockets have a ~104 byte path limit on
-  macOS, so the dir is short and space-free (`~/.config/smterm/cm`, not the macOS
-  `Application Support` userData path), falling back to `/tmp/smterm-<uid>` for a long
-  home. Created `0700`, never through a symlink. Resolved length is unit-tested.
+- `%C` is a 40-char hash of host/port/user; unix sockets have a ~104 byte path limit on
+  macOS, which the dir choice respects (length unit-tested).
 - `ControlPersist` keeps the master alive for 10 minutes after the last pane closes. It is a
   background process, so it also outlives an smterm quit (§6).
 - Known edge: a host with `ControlMaster no` still gets our `ControlPath`, so it could join
   a master another entry for the same user@host:port opened. Harmless and rare.
-- `reuseConnections: false` turns the wrapper off everywhere.
+- `reuseConnections: false` turns all of this off.
 - Windows `ssh.exe` does not support ControlMaster. No wrapper there; each pane
   authenticates separately. Documented, not worked around.
 

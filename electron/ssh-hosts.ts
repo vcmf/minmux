@@ -1,19 +1,15 @@
 // SSH remotes: the saved-host list and the exact argv a remote session spawns with
 // (SSH_REMOTES.md §3–§5). Pure — main supplies the platform, the ssh binary and the -F
-// wrapper. Connection reuse is left to ssh's own precedence (muxConfigText), so we never
-// have to predict the user's multiplexing settings. A RemoteRef from the renderer is
+// wrapper. Connection reuse: stay out if `ssh -G` shows the user's own multiplexing, else
+// an -F wrapper whose defaults come last, so ssh's own precedence keeps any explicit
+// setting (e.g. `ControlMaster no`) the probe can't see. A RemoteRef from the renderer is
 // untrusted: trustedRemote() rebuilds it from main's own host list before spawning.
 
 import path from "node:path"
 import type { RemoteRef, SshEnv, SshHost } from "../src/types"
 import type { SshSettings } from "../src/settings/schema"
-import {
-  hasControlChar,
-  isSshTarget,
-  parseSshEnv,
-  sshArgsSetMux,
-  validateSshHosts,
-} from "../src/lib/ssh-validate"
+import { hasControlChar } from "../src/lib/control-chars"
+import { isSshTarget, parseSshEnv, sshArgsSetMux, validateSshHosts } from "../src/lib/ssh-validate"
 import type { PlatformPath, SshConfigHost } from "./ssh-config"
 
 /** The sidebar subline for a config host: `user@hostname:port` (parts that are set). */
@@ -94,10 +90,17 @@ export function controlPathFits(dir: string): boolean {
   return new TextEncoder().encode(dir).length + CONTROL_NAME_BYTES <= SOCKET_PATH_MAX
 }
 
-/** ~/.config/smterm/cm, or /tmp/smterm-<uid> for a long home (caller checks ownership). */
+// ssh pastes the -F path unquoted into the ProxyCommand it builds for ProxyJump (run by
+// /bin/sh), so the wrapper's dir must be shell-safe as well as short.
+const SHELL_SAFE_DIR = /^[A-Za-z0-9._/@+-]+$/
+
+/** Can `dir` hold the wrapper and sockets? Short enough, and shell-safe (see above). */
+export const isUsableDir = (dir: string) => controlPathFits(dir) && SHELL_SAFE_DIR.test(dir)
+
+/** ~/.config/smterm/cm, or /tmp/smterm-<uid> if the home is long or has shell characters. */
 export function controlDir(home: string, uid: number, p: PlatformPath = path.posix): string {
   const primary = p.join(home, ".config", "smterm", "cm")
-  return controlPathFits(primary) ? primary : `/tmp/smterm-${uid}`
+  return isUsableDir(primary) ? primary : `/tmp/smterm-${uid}`
 }
 
 /** lstat-like facts about a candidate control dir. */
@@ -113,73 +116,104 @@ export function isSafeControlDir(st: DirFacts, uid: number): boolean {
   return st.isDirectory && !st.isSymbolicLink && st.uid === uid && (st.mode & 0o077) === 0
 }
 
-/** Can `dir` sit inside ssh's quoted ControlPath unchanged? (`\\` escapes, `${…}` expands.) */
-export const isQuotableDir = (dir: string) => !/["\\$]/.test(dir) && !hasControlChar(dir)
+const WRAPPER_HEADER = [
+  "# Written by smterm for connection reuse. Your own config is read first, so anything",
+  "# you set there wins; the Host * defaults below only fill in what it leaves unset.",
+]
 
-/** The `-F` config smterm runs ssh with: the user's config first, then the system's (ssh's
- *  own order), then our multiplexing defaults — ssh keeps the first value it reads, so any
- *  ControlMaster/ControlPath the user set anywhere wins. null if `dir` can't be quoted. */
+/** The `-F` config smterm runs ssh with: user + system config first (ssh's own order), our
+ *  ControlMaster defaults last — ssh keeps the first value, so the user's settings win. */
 export function muxConfigText(
   dir: string,
-  includes: { user: string; system: string } = {
-    user: "~/.ssh/config",
-    system: "/etc/ssh/ssh_config",
-  },
+  includes: { user?: string; system: string },
 ): string | null {
-  if (!isQuotableDir(dir)) return null
+  if (!isUsableDir(dir)) return null
   return [
-    "# Written by smterm for connection reuse. Your own config is read first, so anything",
-    "# you set there wins; the Host * defaults below only fill in what it leaves unset.",
-    `Include ${includes.user}`,
+    ...WRAPPER_HEADER,
+    `Include ${includes.user ?? "~/.ssh/config"}`,
     `Include ${includes.system}`,
     "Host *",
     "  ControlMaster auto",
-    `  ControlPath "${dir.replace(/%/g, "%%")}/%C"`,
+    `  ControlPath ${dir}/%C`,
     `  ControlPersist ${CONTROL_PERSIST}`,
     "",
   ].join("\n")
 }
 
-/** stat-like facts about the user's ~/.ssh/config. */
+/** Where ssh looks for its system config: `<prefix>/etc/ssh/ssh_config` for a non-/usr
+ *  build (Homebrew, /usr/local), then /etc/ssh/ssh_config. The caller picks the first that exists. */
+export function systemConfigCandidates(sshPath: string, p: PlatformPath = path.posix): string[] {
+  const prefix = p.dirname(p.dirname(sshPath))
+  const system = "/etc/ssh/ssh_config"
+  if (!p.isAbsolute(sshPath) || prefix === "/usr" || prefix === "/") return [system]
+  return [p.join(prefix, "etc", "ssh", "ssh_config"), system]
+}
+
+/** stat-like facts about a config file. */
 export interface FileFacts {
   isFile: boolean
   uid: number
   mode: number
 }
 
-/** ssh refuses a user config others can write — but not through `-F`, so we check first. */
-export function isSafeUserConfig(st: FileFacts | null, uid: number): boolean {
-  if (st === null) return true // no config: nothing to check
+/** Would ssh accept this file as an Include under -F (it checks like a user config)? */
+export function sshAcceptsInclude(st: FileFacts | null, uid: number): boolean {
+  if (st === null) return true // missing: ssh skips it
   return st.isFile && (st.uid === uid || st.uid === 0) && (st.mode & 0o022) === 0
 }
 
-// Runs INSIDE a WSL distro as `sh -c SCRIPT smterm-ssh <target> <extra args…>`. Mirrors the
-// native path there: picks the control dir (short home → ~/.config/smterm/cm, else
-// /tmp/smterm-<uid>), creates it 0700 (never through a symlink), refuses a user config
-// others can write, writes the same -F wrapper (muxConfigText) and runs ssh with it. Any
-// doubt → plain ssh. One line (`;`-joined) so it crosses wsl.exe's command line intact.
+/** Does `ssh -G` output show the user already manages multiplexing (a ControlPath, or an
+ *  active ControlMaster)? Then smterm stays out entirely. */
+export function userManagesMux(g: string): boolean {
+  return /^controlpath\s/im.test(g) || /^controlmaster\s+(yes|auto|ask|autoask)\s*$/im.test(g)
+}
+
+/** Command that prints how ssh resolves a host (`ssh -G`, no connection is made). */
+export function buildSshProbe(
+  remote: RemoteRef,
+  ctx: { sshPath: string },
+): { file: string; args: string[] } {
+  return { file: ctx.sshPath, args: [...(remote.extraArgs ?? []), "-G", "--", remote.target] }
+}
+
+// The wrapper as printf arguments for the WSL script, from the same muxConfigText (so the
+// two can't drift), with the in-distro dir left to the shell as "$d".
+const WSL_WRAPPER_ARGS = muxConfigText("/DIR", { system: "/etc/ssh/ssh_config" })!
+  .split("\n")
+  .slice(0, -1)
+  .map((line) => "'" + line.replace(/'/g, "'\\''").replace("/DIR/", "'\"$d\"'/") + "'")
+  .join(" ")
+
+// Runs INSIDE a WSL distro as `sh -c SCRIPT smterm-ssh <target> <extra args…>`, mirroring the
+// native path: picks a usable control dir (else /tmp/smterm-<uid>), stays out if `ssh -G`
+// shows the user's own multiplexing, refuses a system config ssh would reject under -F,
+// creates the dir 0700 (never through a symlink), writes the wrapper atomically (panes may
+// start at once) and runs ssh -F with it. Any doubt → plain ssh. One `;`-joined line so it
+// crosses wsl.exe's command line intact.
 export const WSL_SSH_SCRIPT = [
   't="$1"; shift',
   'd="$HOME/.config/smterm/cm"',
   // wc -c counts bytes (as sun_path does); ${#d} would count characters.
   `n=$(printf %s "$d" | wc -c); [ $((n + ${CONTROL_NAME_BYTES})) -le ${SOCKET_PATH_MAX} ] || d="/tmp/smterm-$(id -u)"`,
-  // Characters ssh would re-interpret inside the quoted ControlPath (see isQuotableDir).
-  "case \"$d\" in *'%'*|*'\"'*|*'$'*|*'\\'*) exec ssh \"$@\" -t -- \"$t\";; esac",
-  'c="$HOME/.ssh/config"',
-  'if [ -e "$c" ] && { [ ! -O "$c" ] || [ -n "$(find "$c" -prune \\( -perm -020 -o -perm -002 \\) 2>/dev/null)" ]; }; then exec ssh "$@" -t -- "$t"; fi',
+  'case "$d" in *[!A-Za-z0-9._/@+-]*) d="/tmp/smterm-$(id -u)";; esac',
+  'g=$(ssh -G "$@" -- "$t" 2>/dev/null) || exec ssh "$@" -t -- "$t"',
+  `if printf '%s\\n' "$g" | grep -Eiq '^(controlpath[[:space:]]|controlmaster[[:space:]]+(yes|auto|ask|autoask)[[:space:]]*$)'; then exec ssh "$@" -t -- "$t"; fi`,
+  "s=/etc/ssh/ssh_config",
+  'if [ -e "$s" ] && [ -n "$(find -L "$s" -prune \\( -perm -020 -o -perm -002 -o ! \\( -user 0 -o -user "$(id -u)" \\) \\) 2>/dev/null)" ]; then exec ssh "$@" -t -- "$t"; fi',
   '[ -L "$d" ] || mkdir -p "$d" 2>/dev/null',
   'if [ -d "$d" ] && [ ! -L "$d" ] && [ -O "$d" ] && chmod 700 "$d" 2>/dev/null &&' +
-    " printf '%s\\n' '# Written by smterm for connection reuse (see the native file).'" +
-    " 'Include ~/.ssh/config' 'Include /etc/ssh/ssh_config' 'Host *' '  ControlMaster auto'" +
-    ` "  ControlPath \\"$d/%C\\"" '  ControlPersist ${CONTROL_PERSIST}' > "$d/ssh_config" 2>/dev/null; then` +
+    ` printf '%s\\n' ${WSL_WRAPPER_ARGS} > "$d/ssh_config.$$" 2>/dev/null && mv -f "$d/ssh_config.$$" "$d/ssh_config"; then` +
     ' exec ssh -F "$d/ssh_config" "$@" -t -- "$t"; fi',
+  'rm -f "$d/ssh_config.$$" 2>/dev/null',
   'exec ssh "$@" -t -- "$t"',
 ].join("; ")
 
 export interface SpawnContext {
   platform: NodeJS.Platform
   sshPath: string // native ssh binary (`ssh`, or the resolved ssh.exe on Windows)
-  muxConfig: string | null // path of a written, verified -F wrapper; null = no native reuse
+  // Path of the written wrapper; null = plain ssh (reuse off, unusable dir, or `ssh -G`
+  // showed the user manages multiplexing themselves).
+  muxConfig: string | null
   reuse: boolean // settings.ssh.reuseConnections
 }
 

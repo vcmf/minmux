@@ -4,8 +4,6 @@
 import type { SshEnv } from "../types"
 import { hasControlChar } from "./control-chars"
 
-export { hasControlChar }
-
 // Hostname / user characters only (IPv6 brackets, `%` zone ids): no shell metacharacters,
 // which older ssh could pass to a ProxyCommand/Match exec via %h/%r (CVE-2023-51385).
 const SSH_TARGET_RE = /^[A-Za-z0-9._@:%+[\]-]+$/

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
+import { hasControlChar } from "./control-chars"
 import {
-  hasControlChar,
   isSshEnv,
   isSshOptionList,
   isSshTarget,

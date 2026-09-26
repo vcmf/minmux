@@ -192,7 +192,7 @@ export function hostsFromBlocks(blocks: GuardedBlock[]): SshConfigHost[] {
     if (pos.some((p) => /[*?]/.test(p))) wildcard.push(i)
     else
       for (const p of new Set(pos.map((x) => x.toLowerCase())))
-        literal.set(p, [...(literal.get(p) ?? []), i])
+        (literal.get(p) ?? literal.set(p, []).get(p)!).push(i)
   })
   const candidates = (alias: string) => {
     const own = literal.get(alias.toLowerCase()) ?? []
