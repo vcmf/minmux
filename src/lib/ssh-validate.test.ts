@@ -82,7 +82,20 @@ describe("isSshOptionList", () => {
   })
 
   it("rejects options that don't start a session and unknown letters", () => {
-    for (const args of [["-G"], ["-V"], ["-O", "exit"], ["-Q", "cipher"], ["-Z"], ["-vG"]]) {
+    for (const args of [
+      ["-G"],
+      ["-V"],
+      ["-O", "exit"],
+      ["-Q", "cipher"],
+      ["-Z"],
+      ["-vG"],
+      ["-N"],
+      ["-f"],
+      ["-n"],
+      ["-s"],
+      ["-W", "db:5432"],
+      ["-AN"],
+    ]) {
       expect(isSshOptionList(args)).toBe(false)
     }
   })

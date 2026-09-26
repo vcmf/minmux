@@ -1,6 +1,6 @@
 import { DEFAULT_THEME_FAMILY, themeFamilyName, variantOf, type Appearance } from "./themes"
 import type { SshEnv } from "../types"
-import { isSshEnv, isSshOptionList, isSshTarget } from "../lib/ssh-validate"
+import { hasControlChar, isSshEnv, isSshOptionList, isSshTarget } from "../lib/ssh-validate"
 
 /** A host defined in settings.json (in addition to ~/.ssh/config). */
 export interface SshHostSetting {
@@ -86,7 +86,7 @@ const MAX_SSH_HIDDEN = 1000
 function sshHostSetting(v: unknown): SshHostSetting | null {
   const o = asObject(v)
   const name = typeof o.name === "string" ? o.name.trim() : ""
-  if (!name || name.length > 80) return null
+  if (!name || name.length > 80 || hasControlChar(name)) return null
   if (!isSshTarget(o.target)) return null
   let args: string[] = []
   if (o.args !== undefined) {
@@ -120,7 +120,7 @@ export function mergeSshSettings(input: unknown): SshSettings {
           o.hidden
             .filter((x): x is string => typeof x === "string")
             .map((x) => x.trim())
-            .filter((x) => x !== "" && x.length <= 255),
+            .filter((x) => x !== "" && x.length <= 255 && !hasControlChar(x)),
         ),
       ].slice(0, MAX_SSH_HIDDEN)
     : []

@@ -33,10 +33,11 @@ export function parseSshEnv(env: unknown): ParsedSshEnv | null {
 /** Type guard over parseSshEnv. */
 export const isSshEnv = (v: unknown): v is SshEnv => parseSshEnv(v) !== null
 
-// ssh(1) options that take a value (OpenSSH's getopt string), and ones that start a normal
-// session without one. -G/-V/-O/-Q print or control instead of connecting, so they're out.
-const SSH_OPTS_WITH_VALUE = new Set("bceilmopBDEFIJLPRSwW")
-const SSH_FLAGS = new Set("1246afgknqstvxACKMNTXYy")
+// ssh(1) options that take a value (OpenSSH's getopt string), and flags, limited to ones
+// that still open an interactive shell: -G/-V/-O/-Q print or control, -N/-f/-n/-s/-W
+// never give the pane a shell.
+const SSH_OPTS_WITH_VALUE = new Set("bceilmopBDEFIJLPRSw")
+const SSH_FLAGS = new Set("1246agkqtvxACKMTXYy")
 
 /** Are these valid ssh options (each value present)? A stray word would become the host. */
 export function isSshOptionList(args: readonly unknown[]): boolean {

@@ -22,15 +22,19 @@ export interface MergeInput {
   wsl: [distro: string, hosts: SshConfigHost[]][] // each distro's config, in distro order
   settings: SshSettings
   platform: NodeJS.Platform // WSL hosts only run on Windows
+  // Does the ssh config of `env` (blocks, incl. system ssh_config) set multiplexing for a
+  // settings host's target? Settings hosts point at config aliases too.
+  configMux?: (env: SshEnv, target: string) => boolean
 }
 
-/** Config hosts (native, then per WSL distro) + settings hosts; ids unique. The sidebar list
- *  drops hidden hosts; `all` keeps them (main's trust list for restoring saved panes). */
+/** Config + settings hosts, ids unique; `all` keeps hidden ones (main's trust list). */
 export function mergeHosts(
-  { native, wsl, settings, platform }: MergeInput,
+  { native, wsl, settings, platform, configMux }: MergeInput,
   { all = false }: { all?: boolean } = {},
 ): SshHost[] {
-  const hidden = new Set(all ? [] : settings.hidden)
+  // ssh matches aliases case-insensitively, so hiding does too.
+  const hidden = new Set(all ? [] : settings.hidden.map((h) => h.toLowerCase()))
+  const isHidden = (name: string) => hidden.has(name.toLowerCase())
   const runnable = (env: SshEnv) => env === "native" || platform === "win32"
   const out: SshHost[] = []
   const ids = new Set<string>()
@@ -53,7 +57,7 @@ export function mergeHosts(
   }
   if (settings.fromSshConfig || all) {
     // A config alias is only listed if it's safe as an ssh argv destination.
-    const listable = (h: SshConfigHost) => !hidden.has(h.alias) && isSshTarget(h.alias)
+    const listable = (h: SshConfigHost) => !isHidden(h.alias) && isSshTarget(h.alias)
     for (const h of native) if (listable(h)) add(fromConfig(h, "native", "native"))
     for (const [distro, hosts] of wsl) {
       if (!parseSshEnv(`wsl:${distro}`) || !runnable(`wsl:${distro}`)) continue
@@ -61,7 +65,7 @@ export function mergeHosts(
     }
   }
   for (const s of settings.hosts) {
-    if (hidden.has(s.name) || !runnable(s.env)) continue
+    if (isHidden(s.name) || !runnable(s.env)) continue
     add({
       hostId: `settings:${s.name}`,
       label: s.name,
@@ -70,6 +74,7 @@ export function mergeHosts(
       source: "settings",
       ...(s.args.length ? { extraArgs: [...s.args] } : {}),
       ...(s.target !== s.name ? { detail: s.target } : {}),
+      ...(configMux?.(s.env, s.target) ? { ownMux: true as const } : {}),
     })
   }
   return out
@@ -186,7 +191,8 @@ export function buildSshProbe(
   const tail = [...(remote.extraArgs ?? []), "-G", "--", remote.target]
   if (env.kind === "native") return { file: ctx.sshPath, args: tail }
   if (ctx.platform !== "win32") return null
-  return { file: "wsl.exe", args: ["-d", env.distro, "-e", "ssh", ...tail] }
+  // Same start dir as the real spawn, so relative paths in the args resolve the same way.
+  return { file: "wsl.exe", args: ["-d", env.distro, "--cd", "~", "-e", "ssh", ...tail] }
 }
 
 /** The multiplexing options in `ssh -G` output (absent keys mean ssh left them unset). */
@@ -201,8 +207,7 @@ export function parseSshG(out: string): { controlMaster?: string; controlPath?: 
   return r
 }
 
-/** Should smterm add its ControlMaster flags? Only when ssh's resolved config (`g`; null =
- *  the probe failed) leaves multiplexing unset and the config has no explicit value we saw. */
+/** Add our ControlMaster flags? Only if `ssh -G` (null = failed) and our parse both see none. */
 export function wantOurMux(
   g: ReturnType<typeof parseSshG> | null,
   remote: Pick<RemoteRef, "ownMux">,
@@ -215,13 +220,12 @@ export function wantOurMux(
 
 const MAX_LABEL = 200
 
-/** The RemoteRef main will spawn for one the renderer sent. A listed hostId → main's own
- *  copy (target, args, env). Unlisted (host since removed) → the ref's own target and env,
- *  re-validated, with no extra args. null if unusable. */
+/** The RemoteRef to spawn: main's own copy of a known host, else a re-validated bare ref. */
 export function trustedRemote(ref: unknown, hosts: readonly SshHost[]): RemoteRef | null {
   if (!ref || typeof ref !== "object") return null
   const r = ref as Record<string, unknown>
-  if (typeof r.hostId !== "string" || !r.hostId) return null
+  if (typeof r.hostId !== "string" || !r.hostId || r.hostId.length > 300) return null
+  if (hasControlChar(r.hostId)) return null
   const known = hosts.find((h) => h.hostId === r.hostId)
   if (known) {
     return {
@@ -235,6 +239,8 @@ export function trustedRemote(ref: unknown, hosts: readonly SshHost[]): RemoteRe
   }
   if (!isSshTarget(r.target) || !parseSshEnv(r.env)) return null
   const label =
-    typeof r.label === "string" && r.label.trim() ? r.label.slice(0, MAX_LABEL) : r.target
+    typeof r.label === "string" && r.label.trim() && !hasControlChar(r.label)
+      ? r.label.slice(0, MAX_LABEL)
+      : r.target
   return { hostId: r.hostId, label, target: r.target, env: r.env as SshEnv }
 }

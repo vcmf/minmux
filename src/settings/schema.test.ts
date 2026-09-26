@@ -157,7 +157,7 @@ describe("ssh settings", () => {
   })
 
   it("drops hosts with a bad name", () => {
-    for (const name of [undefined, "", "   ", 3, "x".repeat(81)]) {
+    for (const name of [undefined, "", "   ", 3, "x".repeat(81), "prod\u001b[2J", "a\nb"]) {
       expect(mergeSshSettings({ hosts: [{ ...host, name }] }).hosts).toEqual([])
     }
   })
@@ -220,6 +220,16 @@ describe("ssh settings", () => {
       "b",
     ])
     expect(mergeSshSettings({ hidden: "a" }).hidden).toEqual([])
+  })
+
+  it("trims hidden entries so they match trimmed host names", () => {
+    expect(mergeSshSettings({ hidden: [" prod ", "prod", " a"] }).hidden).toEqual(["prod", "a"])
+  })
+
+  it("caps hidden entries in count and length, and drops control characters", () => {
+    const many = Array.from({ length: 1500 }, (_, i) => `h${i}`)
+    expect(mergeSshSettings({ hidden: many }).hidden).toHaveLength(1000)
+    expect(mergeSshSettings({ hidden: ["x".repeat(256), "ok", "a\u0007b"] }).hidden).toEqual(["ok"])
   })
 
   it("round-trips through serialize/parse", () => {

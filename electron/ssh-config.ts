@@ -23,11 +23,10 @@ export interface SshConfigHost {
 type Field = "hostName" | "user" | "port" | "controlMaster" | "controlPath"
 const FIELDS: readonly Field[] = ["hostName", "user", "port", "controlMaster", "controlPath"]
 
-/** A config file in order: option blocks and `Include`s (with the Host patterns in effect
- *  where they appear). Lines before the first Host form a `*` block. */
+/** A config file in order: blocks (`maybe` = unevaluable Match) and Includes with context. */
 export type SshConfigItem =
-  | { type: "block"; patterns: string[]; fields: Partial<Record<Field, string>> }
-  | { type: "include"; patterns: string[]; context: string[] }
+  | { type: "block"; patterns: string[]; fields: Partial<Record<Field, string>>; maybe?: true }
+  | { type: "include"; patterns: string[]; context: string[] | null }
 
 const isSpace = (c: string | undefined) => c !== undefined && /\s/.test(c)
 
@@ -91,12 +90,11 @@ const KEYWORD_FIELDS = new Map<string, Field>([
 
 type Block = Extract<SshConfigItem, { type: "block" }>
 
-/** Host-style patterns for a Match line we can evaluate on an alias: `all` (optionally with
- *  canonical/final) → `*`; a lone `originalhost a,b,!c` → its list. null otherwise. */
+/** Host patterns for a Match we can evaluate on an alias (`all`, `originalhost a,b`), else null. */
 export function matchPatterns(args: string[]): string[] | null {
   const crit = args.map((a) => a.toLowerCase())
-  const rest = crit.filter((c) => c !== "canonical" && c !== "final")
-  if (rest.length === 1 && rest[0] === "all") return ["*"]
+  // canonical/final blocks apply in a later pass we can't predict: unevaluable.
+  if (crit.length === 1 && crit[0] === "all") return ["*"]
   if (crit.length === 2 && crit[0] === "originalhost" && args[1]) {
     const list = args[1].split(",").filter(Boolean)
     return list.length ? list : null
@@ -118,16 +116,19 @@ export function parseSshConfig(text: string): SshConfigItem[] {
       block = { type: "block", patterns: args.filter((a) => a.length > 0), fields: {} }
       items.push(block)
     } else if (key === "match") {
-      // Only criteria we can evaluate on an alias; any other Match never reaches the list.
+      // A Match we can't evaluate may still apply: keep it as `maybe` (never listed or
+      // displayed, but its ControlMaster/ControlPath make smterm step aside).
       const patterns = matchPatterns(args)
-      block = patterns ? { type: "block", patterns, fields: {} } : null
-      if (block) items.push(block)
+      block = patterns
+        ? { type: "block", patterns, fields: {} }
+        : { type: "block", patterns: ["*"], fields: {}, maybe: true }
+      items.push(block)
     } else if (key === "include") {
-      if (args.length)
-        items.push({ type: "include", patterns: args, context: block?.patterns ?? [] })
+      const context = block && !block.maybe ? block.patterns : null
+      if (args.length) items.push({ type: "include", patterns: args, context })
       // The included file's options are read before the rest of this block's.
       if (block) {
-        block = { type: "block", patterns: block.patterns, fields: {} }
+        block = { ...block, fields: {} }
         items.push(block)
       }
     } else if (block && args.length) {
@@ -165,21 +166,41 @@ export function hostMatcher(patterns: string[]): (alias: string) => boolean {
   }
 }
 
-/** A block as the loader collects it: `guards` are the Host lines of enclosing Includes,
- *  all of which must match too (OpenSSH never applies a conditional include otherwise). */
+/** A loaded block; `guards` = Host lines of enclosing Includes (null = unevaluable Match). */
 export interface GuardedBlock {
   patterns: string[]
   fields: Partial<Record<Field, string>>
-  guards?: string[][]
+  maybe?: true
+  guards?: (string[] | null)[]
+}
+
+type Compiled = { b: GuardedBlock; maybe: boolean; applies: (alias: string) => boolean }
+
+// A block applies when its own line and every evaluable guard match; `maybe` = some part
+// of it is an unevaluable Match, so it might.
+const compile = (blocks: GuardedBlock[]): Compiled[] =>
+  blocks.map((b) => {
+    const own = hostMatcher(b.patterns)
+    const guards = (b.guards ?? []).filter((g) => g !== null).map(hostMatcher)
+    const maybe = !!b.maybe || (b.guards ?? []).includes(null)
+    return { b, maybe, applies: (alias) => own(alias) && guards.every((g) => g(alias)) }
+  })
+
+const setsMux = (c: Compiled[], name: string) =>
+  c.some(
+    ({ b, applies }) =>
+      (b.fields.controlMaster !== undefined || b.fields.controlPath !== undefined) && applies(name),
+  )
+
+/** Might this config set ControlMaster/ControlPath for `target` (`user@` stripped)? */
+export function muxSetFor(blocks: GuardedBlock[], target: string): boolean {
+  return setsMux(compile(blocks), target.slice(target.lastIndexOf("@") + 1))
 }
 
 /** Blocks in order (Includes inlined) → hosts, each with ssh's first-match-wins values. */
 export function hostsFromBlocks(blocks: GuardedBlock[]): SshConfigHost[] {
-  const compiled = blocks.map((b) => {
-    const own = hostMatcher(b.patterns)
-    const guards = (b.guards ?? []).map(hostMatcher)
-    return { b, applies: (alias: string) => own(alias) && guards.every((g) => g(alias)) }
-  })
+  const all = compile(blocks)
+  const compiled = all.filter((c) => !c.maybe)
   // List each alias (case-insensitively once, as ssh matches) whose block applies to it.
   const aliases: string[] = []
   const seen = new Set<string>()
@@ -203,7 +224,8 @@ export function hostsFromBlocks(blocks: GuardedBlock[]): SshConfigHost[] {
       host.hostName = v.hostName.replace(/%(%|h)/g, (_m, c: string) => (c === "h" ? alias : "%"))
     if (v.user) host.user = v.user
     if (v.port) host.port = v.port
-    if (v.controlMaster !== undefined || v.controlPath !== undefined) host.ownMux = true
+    if (v.controlMaster !== undefined || v.controlPath !== undefined || setsMux(all, alias))
+      host.ownMux = true
     return host
   })
 }
@@ -222,10 +244,11 @@ export interface LoadOptions {
   maxDepth?: number // Include nesting cap (OpenSSH uses 16)
 }
 
-/** Every config file read, in order (the caller watches these for changes). */
 export interface LoadResult {
   hosts: SshConfigHost[]
-  files: string[]
+  files: string[] // config files read, in order
+  watch: string[] // paths whose change can alter the list: every file tried + glob dirs
+  blocks: GuardedBlock[] // for muxSetFor, and merging with the system ssh_config
 }
 
 const GLOB_CHARS = /[*?[]/
@@ -303,29 +326,37 @@ export function resolveIncludePath(pattern: string, home: string, p: PlatformPat
   return p.join(home, ".ssh", pattern)
 }
 
-// A `*` context (top level, `Host *`, `Match all`) always matches: it adds no guard, so
-// the same file reached under it again counts as the same evaluation.
-const withGuard = (guards: string[][], ctx: string[]) =>
-  ctx.length === 1 && ctx[0] === "*" ? guards : [...guards, ctx]
+// Guards only grow with new information: a `*` context always matches, and a context
+// already in the stack adds nothing, so cyclic Includes revisit the same key and stop.
+const withGuard = (guards: (string[] | null)[], ctx: string[] | null) => {
+  if (ctx && ctx.length === 1 && ctx[0] === "*") return guards
+  const key = JSON.stringify(ctx)
+  return guards.some((g) => JSON.stringify(g) === key) ? guards : [...guards, ctx]
+}
 
-/** Load a config and its Includes into the host list. Files are read once, evaluated once
- *  per Include context; nesting is capped; unreadable files are skipped, never thrown. */
+/** Load a config + Includes: each file read once, evaluated once per context, never throws. */
 export async function loadSshConfig(opts: LoadOptions): Promise<LoadResult> {
   const maxDepth = opts.maxDepth ?? 16
   const blocks: GuardedBlock[] = []
-  const texts = new Map<string, string | null>() // each file is read once
-  const evaluated = new Set<string>() // …and evaluated once per Include context
+  const texts = new Map<string, string | null>()
+  const evaluated = new Set<string>()
   const files: string[] = []
+  const watch = new Set<string>()
+  // Every path we try (found or not) can change the list when it appears or changes.
+  const fs: MiniFs = {
+    readFile: (p) => (watch.add(p), opts.fs.readFile(p)),
+    readdir: (p) => (watch.add(p), opts.fs.readdir(p)),
+  }
   const read = async (file: string) => {
     if (!texts.has(file)) {
-      const text = await opts.fs.readFile(file)
+      const text = await fs.readFile(file)
       texts.set(file, text)
       if (text !== null) files.push(file)
     }
     return texts.get(file)!
   }
 
-  const visit = async (file: string, depth: number, guards: string[][]): Promise<void> => {
+  const visit = async (file: string, depth: number, guards: (string[] | null)[]) => {
     const key = `${file}\0${JSON.stringify(guards)}`
     if (depth > maxDepth || evaluated.has(key)) return
     evaluated.add(key)
@@ -333,12 +364,17 @@ export async function loadSshConfig(opts: LoadOptions): Promise<LoadResult> {
     if (text === null) return
     for (const item of parseSshConfig(text)) {
       if (item.type === "block") {
-        blocks.push({ patterns: item.patterns, fields: item.fields, guards })
+        blocks.push({
+          patterns: item.patterns,
+          fields: item.fields,
+          guards,
+          ...(item.maybe ? { maybe: true as const } : {}),
+        })
         continue
       }
       for (const pat of item.patterns) {
         const resolved = resolveIncludePath(pat, opts.home, opts.path)
-        for (const f of await expandGlob(resolved, opts.fs, opts.path)) {
+        for (const f of await expandGlob(resolved, fs, opts.path)) {
           await visit(f, depth + 1, withGuard(guards, item.context))
         }
       }
@@ -346,7 +382,7 @@ export async function loadSshConfig(opts: LoadOptions): Promise<LoadResult> {
   }
 
   await visit(opts.file, 0, [])
-  return { hosts: hostsFromBlocks(blocks), files }
+  return { hosts: hostsFromBlocks(blocks), files, watch: [...watch], blocks }
 }
 
 const MAX_CONFIG_BYTES = 1024 * 1024 // a real ssh config is a few KB; bound main memory
@@ -371,8 +407,7 @@ export const nodeMiniFs: MiniFs = {
   },
 }
 
-/** MiniFs over a WSL distro's UNC share, so the loader works in Linux paths (absolute
- *  Includes resolve inside the distro). Remembers which share prefix answers. */
+/** MiniFs mapping Linux paths onto a WSL distro's UNC share (remembers the working prefix). */
 export function wslMiniFs(distro: string, base: MiniFs = nodeMiniFs): MiniFs {
   let preferred = 0 // index into wslUncCandidates' prefix order
   const first = async <T>(p: string, read: (q: string) => Promise<T | null>): Promise<T | null> => {

@@ -250,13 +250,15 @@ Main-process wiring. Still no UI.
 
 **Host list service** (in main, off the hot path)
 
-- Native: `loadSshConfig(~/.ssh/config)`.
+- Native: `loadSshConfig(~/.ssh/config)`, then the system config (`/etc/ssh/ssh_config`;
+  Windows `%ProgramData%\ssh\ssh_config`) appended after it: its `blocks` join the user's
+  for `muxSetFor` / `configMux` (settings hosts), and its `watch` paths join the watcher.
 - WSL (Windows only): for each distro from `listShells()`'s WSL entries, resolve the distro
   home once (`wsl.exe -d <d> -e sh -c 'printf %s "$HOME"'`, 5 s timeout, cached), then read
   `<home>/.ssh/config` through `wslUncCandidates(distro, path)`. A distro that fails is
   skipped silently.
-- Merge with `mergeHosts`; cache; recompute on chokidar changes to any config file that was
-  read (the Include set) and on `settings-changed`; emit `ssh-hosts-changed` (debounced 200 ms).
+- Merge with `mergeHosts` (pass `configMux` from each env's blocks); cache; recompute on
+  chokidar changes to any path in `watch` (files tried, glob dirs — so new files show up) and on `settings-changed`; emit `ssh-hosts-changed` (debounced 200 ms).
 - First call is lazy (on `ssh:list-hosts`), so startup cost is zero until the sidebar asks.
 
 **`pty:spawn` remote branch**

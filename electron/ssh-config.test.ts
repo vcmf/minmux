@@ -8,6 +8,7 @@ import {
   hostMatcher,
   hostsFromBlocks,
   matchPatterns,
+  muxSetFor,
   loadSshConfig,
   nodeMiniFs,
   parseSshConfig,
@@ -180,15 +181,36 @@ describe("parseSshConfig", () => {
     expect(hostsOf("Host a\nMatch all\n  User everyone\n")).toEqual([
       { alias: "a", user: "everyone" },
     ])
-    expect(hostsOf("Host a b\nMatch canonical all\n  User c\n")[1]).toEqual({
-      alias: "b",
-      user: "c",
-    })
+    // canonical/final blocks apply in a later pass we can't predict: not displayed.
+    expect(hostsOf("Host a b\nMatch canonical all\n  User c\n")[1]).toEqual({ alias: "b" })
     expect(hostsOf("Host a b c\nMatch originalhost a,!c,b\n  User ab\n")).toEqual([
       { alias: "a", user: "ab" },
       { alias: "b", user: "ab" },
       { alias: "c" },
     ])
+  })
+
+  it("steps aside for every host when an unevaluable Match sets multiplexing", () => {
+    for (const m of [
+      "Match host *.corp",
+      "Match exec true",
+      "Match canonical all",
+      "Match user x",
+    ]) {
+      expect(hostsOf(`Host a\n${m}\n  ControlMaster no\n`)).toEqual([{ alias: "a", ownMux: true }])
+    }
+    // …but an unevaluable Match setting other options changes nothing.
+    expect(hostsOf("Host a\nMatch exec true\n  User x\n")).toEqual([{ alias: "a" }])
+  })
+
+  it("keeps an unevaluable Match's own fields and hosts out of the list", () => {
+    const items = parseSshConfig("Match host x\n  HostName h\n")
+    expect(items[1]).toEqual({
+      type: "block",
+      patterns: ["*"],
+      fields: { hostName: "h" },
+      maybe: true,
+    })
   })
 
   it("marks hosts whose multiplexing is set in an evaluable Match block", () => {
@@ -230,7 +252,7 @@ describe("parseSshConfig", () => {
 
   it("gives an Include inside an unevaluable Match block an empty context", () => {
     const items = parseSshConfig("Match exec true\nInclude x\n")
-    expect(items.find((i) => i.type === "include")).toMatchObject({ context: [] })
+    expect(items.find((i) => i.type === "include")).toMatchObject({ context: null })
   })
 
   it("starts with a `*` block for options before the first Host", () => {
@@ -462,7 +484,7 @@ describe("loadSshConfig", () => {
     })
 
   it("returns an empty list when the config doesn't exist", async () => {
-    expect(await load({})).toEqual({ hosts: [], files: [] })
+    expect(await load({})).toMatchObject({ hosts: [], files: [], blocks: [] })
   })
 
   it("places included hosts at the Include position", async () => {
@@ -583,6 +605,40 @@ describe("loadSshConfig", () => {
       { alias: "b", user: "deploy" },
     ])
     expect(r.files).toEqual(["/h/.ssh/config", "/h/.ssh/common.conf"])
+  })
+
+  it("steps aside when an Include under an unevaluable Match sets multiplexing", async () => {
+    const r = await load({
+      "/h/.ssh/config": "Host a\nMatch exec 'test -f /x'\n  Include mux.conf\n",
+      "/h/.ssh/mux.conf": "Host *\n  ControlPath ~/.ssh/cm-%C\n",
+    })
+    expect(r.hosts).toEqual([{ alias: "a", ownMux: true }])
+  })
+
+  it("stays bounded on a config that includes itself under a Host block", async () => {
+    const files = {
+      "/h/.ssh/config": "Host work\n  Include ~/.ssh/config\n  Include config.d/*\nHost home\n",
+      "/h/.ssh/config.d/a": "Include ~/.ssh/config\nHost a\n",
+      "/h/.ssh/config.d/b": "Include ~/.ssh/config\nHost b\n",
+    }
+    const t0 = performance.now()
+    const r = await load(files)
+    expect(performance.now() - t0).toBeLessThan(200)
+    expect(r.blocks.length).toBeLessThan(40)
+    expect(aliases(r.hosts)).toEqual(["work", "home"])
+  })
+
+  it("reports every path to watch: missing includes, glob dirs, a missing config", async () => {
+    const r = await load({ "/h/.ssh/config": "Include missing.conf config.d/*\nHost a\n" })
+    expect(r.watch).toEqual(
+      expect.arrayContaining(["/h/.ssh/config", "/h/.ssh/missing.conf", "/h/.ssh/config.d"]),
+    )
+    expect((await load({})).watch).toEqual(["/h/.ssh/config"])
+  })
+
+  it("exposes the loaded blocks", async () => {
+    const r = await load({ "/h/.ssh/config": "Host a\n  User u\n" })
+    expect(r.blocks.some((b) => b.patterns[0] === "a" && b.fields.user === "u")).toBe(true)
   })
 
   it("doesn't list hosts from an Include under Match", async () => {
@@ -734,14 +790,15 @@ describe("nodeMiniFs", () => {
 describe("matchPatterns", () => {
   it("maps the criteria we can evaluate on an alias", () => {
     expect(matchPatterns(["all"])).toEqual(["*"])
-    expect(matchPatterns(["canonical", "all"])).toEqual(["*"])
-    expect(matchPatterns(["final", "ALL"])).toEqual(["*"])
+    expect(matchPatterns(["ALL"])).toEqual(["*"])
     expect(matchPatterns(["originalhost", "a,b,!c"])).toEqual(["a", "b", "!c"])
     expect(matchPatterns(["OriginalHost", "x"])).toEqual(["x"])
   })
 
   it("returns null for anything else", () => {
     for (const args of [
+      ["canonical", "all"],
+      ["final", "all"],
       [],
       ["host", "a"],
       ["exec", "true"],
@@ -752,5 +809,23 @@ describe("matchPatterns", () => {
     ]) {
       expect(matchPatterns(args)).toBeNull()
     }
+  })
+})
+
+describe("muxSetFor", () => {
+  const blocks = (text: string) =>
+    parseSshConfig(text).flatMap((i) => (i.type === "block" ? [i] : []))
+
+  it("checks the host part of a target against the config", () => {
+    const b = blocks("Host prod\n  ControlMaster no\nHost *.corp\n  ControlPath /x/%C\n")
+    expect(muxSetFor(b, "prod")).toBe(true)
+    expect(muxSetFor(b, "deploy@prod")).toBe(true)
+    expect(muxSetFor(b, "a@b@db.corp")).toBe(true)
+    expect(muxSetFor(b, "other")).toBe(false)
+    expect(muxSetFor(b, "prod@other")).toBe(false)
+  })
+
+  it("counts unevaluable Match blocks as possibly applying", () => {
+    expect(muxSetFor(blocks("Match exec true\n  ControlMaster auto\n"), "anything")).toBe(true)
   })
 })

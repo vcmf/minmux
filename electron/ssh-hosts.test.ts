@@ -195,6 +195,44 @@ describe("mergeHosts", () => {
     ).toEqual(["native:web", "settings:s"])
   })
 
+  it("matches hidden entries case-insensitively", () => {
+    const hosts = merge({
+      native: [{ alias: "github.com" }, { alias: "keep" }],
+      wsl: [],
+      settings: ssh({
+        hidden: ["GitHub.com", "SECRET"],
+        hosts: [{ name: "secret", target: "s", args: [], env: "native" }],
+      }),
+    })
+    expect(hosts.map((h) => h.hostId)).toEqual(["native:keep"])
+  })
+
+  it("marks settings hosts whose target the ssh config multiplexes", () => {
+    const seen: [string, string][] = []
+    const hosts = merge({
+      native: [],
+      wsl: [],
+      settings: ssh({
+        hosts: [
+          { name: "prod", target: "deploy@prod", args: [], env: "native" },
+          { name: "other", target: "other", args: [], env: "native" },
+        ],
+      }),
+      configMux: (env, target) => {
+        seen.push([env, target])
+        return target === "deploy@prod"
+      },
+    })
+    expect(hosts.map((h) => [h.hostId, h.ownMux])).toEqual([
+      ["settings:prod", true],
+      ["settings:other", undefined],
+    ])
+    expect(seen).toEqual([
+      ["native", "deploy@prod"],
+      ["native", "other"],
+    ])
+  })
+
   it("never returns duplicate ids", () => {
     const hosts = merge({ native: [{ alias: "a" }, { alias: "a" }], wsl: [], settings: ssh() })
     expect(hosts.map((h) => h.hostId)).toEqual(["native:a"])
@@ -627,8 +665,18 @@ describe("trustedRemote", () => {
     }
   })
 
-  it("rejects non-objects and a missing hostId", () => {
-    for (const bad of [null, undefined, "native:web", 3, {}, { hostId: "" }, { hostId: 1 }]) {
+  it("rejects non-objects and a missing, oversized or control-character hostId", () => {
+    for (const bad of [
+      null,
+      undefined,
+      "native:web",
+      3,
+      {},
+      { hostId: "" },
+      { hostId: 1 },
+      { hostId: "x".repeat(301), target: "t", env: "native" },
+      { hostId: "a\u001b[2J", target: "t", env: "native" },
+    ]) {
       expect(trustedRemote(bad, listed)).toBeNull()
     }
   })
@@ -638,6 +686,9 @@ describe("trustedRemote", () => {
     expect(trustedRemote({ hostId: "x", target: "t", env: "native", label: "  " }, [])!.label).toBe(
       "t",
     )
+    expect(
+      trustedRemote({ hostId: "x", target: "t", env: "native", label: "a\nb" }, [])!.label,
+    ).toBe("t")
     expect(
       trustedRemote({ hostId: "x", target: "t", env: "native", label: "y".repeat(500) }, [])!.label,
     ).toHaveLength(200)
@@ -663,7 +714,7 @@ describe("buildSshProbe", () => {
     const r: RemoteRef = { ...remote, env: "wsl:Ubuntu" }
     expect(buildSshProbe(r, { platform: "win32", sshPath: "ssh.exe" })).toEqual({
       file: "wsl.exe",
-      args: ["-d", "Ubuntu", "-e", "ssh", "-G", "--", "web"],
+      args: ["-d", "Ubuntu", "--cd", "~", "-e", "ssh", "-G", "--", "web"],
     })
     expect(buildSshProbe(r, { platform: "darwin", sshPath: "ssh" })).toBeNull()
     expect(
