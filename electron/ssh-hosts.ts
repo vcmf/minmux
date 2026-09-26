@@ -11,7 +11,7 @@ import type { PlatformPath, SshConfigHost } from "./ssh-config"
 
 /** The sidebar subline for a config host: `user@hostname:port` (parts that are set). */
 export function hostDetail(h: SshConfigHost): string | undefined {
-  const host = h.hostName ?? (h.user ? h.alias : undefined)
+  const host = h.hostName ?? (h.user || (h.port && h.port !== "22") ? h.alias : undefined)
   if (!host) return undefined
   const port = h.port && h.port !== "22" ? `:${h.port}` : ""
   return `${h.user ? `${h.user}@` : ""}${host}${port}`
@@ -42,6 +42,7 @@ export function mergeHosts({ native, wsl, settings }: MergeInput): SshHost[] {
       env,
       source: "config",
       ...(detail ? { detail } : {}),
+      ...(h.ownMux ? { ownMux: true as const } : {}),
     }
   }
   if (settings.fromSshConfig) {
@@ -101,7 +102,8 @@ export function isSafeControlDir(st: DirFacts, uid: number): boolean {
 
 /** ControlMaster flags for sockets in `dir` (quoted, `%` → `%%`); [] if it can't be quoted. */
 export function reuseFlags(dir: string): string[] {
-  if (dir.includes('"') || hasControlChar(dir)) return []
+  // Inside ssh's quotes `\` is an escape and `${VAR}` expands: either would change the path.
+  if (/["\\$]/.test(dir) || hasControlChar(dir)) return []
   const controlPath = `${dir.replace(/%/g, "%%")}/%C`
   return [
     "-o",
@@ -115,16 +117,17 @@ export function reuseFlags(dir: string): string[] {
 
 // Runs INSIDE a WSL distro as `sh -c SCRIPT smterm-ssh <target> <extra args…>`: picks the
 // control dir there (short home → ~/.config/smterm/cm, else /tmp/smterm-<uid>), creates it
-// 0700, and adds the ControlMaster flags only for a real dir we own — after the user's own
-// args, so theirs win. Any doubt → plain ssh. One line (`;`-joined) so it crosses
-// wsl.exe's command line intact.
+// 0700 (never chmod-ing through a symlink), and adds the ControlMaster flags only for a real
+// dir we own — after the user's own args, so theirs win. Any doubt → plain ssh. One line
+// (`;`-joined) so it crosses wsl.exe's command line intact.
 export const WSL_SSH_SCRIPT = [
   't="$1"; shift',
   'd="$HOME/.config/smterm/cm"',
   `[ $((\${#d} + ${CONTROL_NAME_BYTES})) -le ${SOCKET_PATH_MAX} ] || d="/tmp/smterm-$(id -u)"`,
-  'case "$d" in *[%\\"]*) exec ssh "$@" -t -- "$t";; esac',
-  'mkdir -p "$d" 2>/dev/null && chmod 700 "$d" 2>/dev/null',
-  'if [ -d "$d" ] && [ ! -L "$d" ] && [ -O "$d" ]; then' +
+  // Characters ssh would re-interpret inside the quoted ControlPath (see reuseFlags).
+  "case \"$d\" in *'%'*|*'\"'*|*'$'*|*'\\'*) exec ssh \"$@\" -t -- \"$t\";; esac",
+  '[ -L "$d" ] || mkdir -p "$d" 2>/dev/null',
+  'if [ -d "$d" ] && [ ! -L "$d" ] && [ -O "$d" ] && chmod 700 "$d" 2>/dev/null; then' +
     ` exec ssh "$@" -o ControlMaster=auto -o "ControlPath=\\"$d/%C\\"" -o ControlPersist=${CONTROL_PERSIST} -t -- "$t"; fi`,
   'exec ssh "$@" -t -- "$t"',
 ].join("; ")
@@ -144,19 +147,21 @@ export function buildSshSpawn(
   const env = parseSshEnv(remote.env)
   if (!env) return null
   const extra = remote.extraArgs ?? []
+  // A host whose own ssh config manages multiplexing keeps it: we add nothing.
+  const reuse = ctx.reuse && !remote.ownMux
   // `--` ends ssh's options, so a destination starting with `-` can never become one.
   const dest = ["-t", "--", remote.target]
   if (env.kind === "native") {
     // Windows' ssh.exe has no ControlMaster support. Our flags go after the user's args:
     // ssh keeps the first value of an option, so a host's own -o ControlMaster=no wins.
-    const canReuse = ctx.reuse && ctx.platform !== "win32" && ctx.controlDir !== null
-    const reuse = canReuse ? reuseFlags(ctx.controlDir!) : []
-    return { file: ctx.sshPath, args: [...extra, ...reuse, ...dest] }
+    const canReuse = reuse && ctx.platform !== "win32" && ctx.controlDir !== null
+    const flags = canReuse ? reuseFlags(ctx.controlDir!) : []
+    return { file: ctx.sshPath, args: [...extra, ...flags, ...dest] }
   }
   if (ctx.platform !== "win32") return null
   // `-e` execs directly (no default-shell re-parse of our args); `--cd ~` starts at home.
   const base = ["-d", env.distro, "--cd", "~", "-e"]
-  return ctx.reuse
+  return reuse
     ? {
         file: "wsl.exe",
         args: [...base, "sh", "-c", WSL_SSH_SCRIPT, "smterm-ssh", remote.target, ...extra],
@@ -181,6 +186,7 @@ export function trustedRemote(ref: unknown, hosts: readonly SshHost[]): RemoteRe
       target: known.target,
       env: known.env,
       ...(known.extraArgs?.length ? { extraArgs: [...known.extraArgs] } : {}),
+      ...(known.ownMux ? { ownMux: true as const } : {}),
     }
   }
   if (!isSshTarget(r.target) || !parseSshEnv(r.env)) return null

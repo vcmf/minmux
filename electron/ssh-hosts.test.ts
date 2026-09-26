@@ -35,7 +35,8 @@ describe("hostDetail", () => {
   it("uses the alias as host when only User is set, and nothing when neither is", () => {
     expect(hostDetail({ alias: "box", user: "u" })).toBe("u@box")
     expect(hostDetail({ alias: "box" })).toBeUndefined()
-    expect(hostDetail({ alias: "box", port: "2200" })).toBeUndefined()
+    expect(hostDetail({ alias: "box", port: "2200" })).toBe("box:2200")
+    expect(hostDetail({ alias: "box", port: "22" })).toBeUndefined()
   })
 })
 
@@ -138,6 +139,16 @@ describe("mergeHosts", () => {
     expect(hosts.map((h) => h.hostId)).toEqual(["settings:x"])
   })
 
+  it("carries ownMux for config hosts that manage their own multiplexing", () => {
+    const hosts = mergeHosts({
+      native: [{ alias: "a", ownMux: true }, { alias: "b" }],
+      wsl: [],
+      settings: ssh(),
+    })
+    expect(hosts[0]!.ownMux).toBe(true)
+    expect(hosts[1]).not.toHaveProperty("ownMux")
+  })
+
   it("skips config aliases that aren't safe ssh destinations", () => {
     const hosts = mergeHosts({
       native: [{ alias: "my box" }, { alias: "-oProxyCommand=x" }, { alias: "ok" }],
@@ -225,6 +236,9 @@ describe("reuseFlags", () => {
 
   it("gives up on paths ssh can't parse safely", () => {
     expect(reuseFlags('/home/"q"/cm')).toEqual([])
+    expect(reuseFlags("/home/a\\b/cm")).toEqual([])
+    expect(reuseFlags("/home/${X}/cm")).toEqual([])
+    expect(reuseFlags("/home/$HOME/cm")).toEqual([])
     expect(reuseFlags("/home/a\nb/cm")).toEqual([])
     expect(reuseFlags("/home/a\tb/cm")).toEqual([])
   })
@@ -271,6 +285,22 @@ describe("buildSshSpawn", () => {
     const r = { ...remote, target: "ubuntu@10.0.0.12", extraArgs: ["-p", "2222", "-A"] }
     const args = buildSshSpawn(r, { ...mac, reuse: false })!.args
     expect(args).toEqual(["-p", "2222", "-A", "-t", "--", "ubuntu@10.0.0.12"])
+  })
+
+  it("adds no reuse flags when the host's ssh config manages multiplexing", () => {
+    expect(buildSshSpawn({ ...remote, ownMux: true }, mac)!.args).toEqual(["-t", "--", "web"])
+    const wslRef: RemoteRef = { ...remote, env: "wsl:Ubuntu", ownMux: true }
+    expect(buildSshSpawn(wslRef, win)!.args).toEqual([
+      "-d",
+      "Ubuntu",
+      "--cd",
+      "~",
+      "-e",
+      "ssh",
+      "-t",
+      "--",
+      "web",
+    ])
   })
 
   it("puts the user's args before our reuse flags, so their -o ControlMaster wins", () => {
@@ -402,8 +432,19 @@ describe.runIf(hasSh && process.platform !== "win32")("WSL_SSH_SCRIPT (real sh)"
     expect(run(home, "web", ["-A"])).toEqual(["-A", "-t", "--", "web"])
   })
 
-  it("falls back to plain ssh when the home path contains % or a quote", () => {
-    for (const name of ["100%", 'a"b']) {
+  it("never chmods through a symlink", () => {
+    const home = path.join(tmp, "h")
+    fs.mkdirSync(path.join(home, ".config/smterm"), { recursive: true })
+    const victim = path.join(tmp, "victim")
+    fs.mkdirSync(victim, { mode: 0o755 })
+    fs.chmodSync(victim, 0o755)
+    fs.symlinkSync(victim, path.join(home, ".config/smterm/cm"))
+    expect(run(home, "web")).toEqual(["-t", "--", "web"])
+    expect(fs.statSync(victim).mode & 0o777).toBe(0o755)
+  })
+
+  it("falls back to plain ssh when the home path contains a character ssh re-interprets", () => {
+    for (const name of ["100%", 'a"b', "a$b", "a\\b", "x${Y}"]) {
       const home = path.join(tmp, name)
       fs.mkdirSync(home)
       expect(run(home, "web", ["-A"])).toEqual(["-A", "-t", "--", "web"])
@@ -497,6 +538,12 @@ describe("trustedRemote", () => {
       target: "web",
       env: "native",
     })
+  })
+
+  it("keeps a listed host's ownMux", () => {
+    const hosts: SshHost[] = [{ ...listed[0]!, ownMux: true }]
+    expect(trustedRemote({ hostId: "native:web" }, hosts)!.ownMux).toBe(true)
+    expect(trustedRemote({ hostId: "native:web" }, listed)).not.toHaveProperty("ownMux")
   })
 
   it("copies a listed host's args (no aliasing)", () => {

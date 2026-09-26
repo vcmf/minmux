@@ -150,8 +150,10 @@ For follow-up panes on the same host, add (unix `ssh` only, including inside WSL
   `Application Support` userData path). Created `0700`. Resolved length is unit-tested.
 - `ControlPersist` keeps the master alive for 10 minutes after the last pane closes. It is a
   background process, so it also outlives an smterm quit (§6).
-- If the user's own config sets `ControlMaster`, command-line `-o` wins. `reuseConnections:
-false` turns ours off.
+- If the host's own ssh config sets `ControlMaster` or `ControlPath` (in its block or a
+  matching `Host *`), smterm adds nothing and the user's multiplexing applies. A settings
+  host's own `-o` args come before ours, so they win too. `reuseConnections: false` turns
+  ours off everywhere.
 - Windows `ssh.exe` does not support ControlMaster. We omit the flags there; each pane
   authenticates separately. Documented, not worked around.
 
@@ -432,7 +434,7 @@ with the right command; closing a pane leaves no tmux session behind.
 | ---------------------------------------------------- | ---------------------------------------------------------------------------------- |
 | ControlPath too long (unix socket limit)             | `%C` hash + short `~/.config/smterm/cm` dir; length unit-tested                    |
 | Stale master after network change blocks new panes   | `ControlPersist` timeout; on connect failure retry once with `-o ControlMaster=no` |
-| User's own `ControlMaster` config conflicts          | Our `-o` flags win; `reuseConnections: false` opts out                             |
+| User's own `ControlMaster` config conflicts          | We step aside for hosts whose config sets it; `reuseConnections: false` opts out   |
 | Restore triggers many auth prompts                   | Lazy connect (D3)                                                                  |
 | WSL spawn path appends shell-integration args        | `SpawnOpts.remote` skips it (1.7)                                                  |
 | tmux options missing on old tmux (< 3.3)             | Options are best-effort; passthrough only needed for phase 3                       |

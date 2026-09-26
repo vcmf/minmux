@@ -15,6 +15,7 @@ export interface RemoteRef {
   target: string // the destination `ssh` gets (an alias or user@host)
   env: SshEnv
   extraArgs?: string[] // extra ssh flags (settings-defined hosts only)
+  ownMux?: true // the host's ssh config sets ControlMaster/ControlPath — don't add ours
 }
 
 /** A saved host as the sidebar lists it. */

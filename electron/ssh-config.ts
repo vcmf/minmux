@@ -17,20 +17,23 @@ export interface SshConfigHost {
   hostName?: string
   user?: string
   port?: string
+  ownMux?: true // its config sets ControlMaster/ControlPath: smterm must not add its own
 }
 
-type DisplayField = "hostName" | "user" | "port"
+type Field = "hostName" | "user" | "port" | "controlMaster" | "controlPath"
+const FIELDS: readonly Field[] = ["hostName", "user", "port", "controlMaster", "controlPath"]
 
 /** A config file in order: option blocks and `Include`s (with the Host patterns in effect
- *  where they appear). Lines before the first Host form a block with `lead` patterns. */
+ *  where they appear). Lines before the first Host form a `*` block. */
 export type SshConfigItem =
-  | { type: "block"; patterns: string[]; fields: Partial<Record<DisplayField, string>> }
+  | { type: "block"; patterns: string[]; fields: Partial<Record<Field, string>> }
   | { type: "include"; patterns: string[]; context: string[] }
 
-/** One config line → tokens (whitespace/`=` separate, quotes group, `#` token ends it). */
+const isSpace = (c: string | undefined) => c !== undefined && /\s/.test(c)
+
+/** One config line → tokens, like OpenSSH's argv_split; [] for a comment, blank or bad line. */
 export function tokenizeLine(line: string): string[] {
   const n = line.length
-  const isSpace = (c: string | undefined) => c !== undefined && /\s/.test(c)
   let i = 0
   while (isSpace(line[i])) i++
   if (i >= n || line[i] === "#") return []
@@ -44,33 +47,54 @@ export function tokenizeLine(line: string): string[] {
   for (;;) {
     while (isSpace(line[i])) i++
     if (i >= n || line[i] === "#") break
+    // Quotes may open anywhere in a token; `\` escapes a quote, a backslash, or (outside
+    // quotes) a space. An unterminated quote makes the line invalid, as it does for ssh.
     let tok = ""
-    if (line[i] === '"') {
-      i++
-      while (i < n && line[i] !== '"') tok += line[i++]
-      i++ // past the closing quote (or the end of an unterminated one)
-    } else {
-      while (i < n && !isSpace(line[i])) tok += line[i++]
+    let quote: string | null = null
+    while (i < n) {
+      const c = line[i]!
+      const next = line[i + 1]
+      if (
+        c === "\\" &&
+        (next === '"' || next === "'" || next === "\\" || (!quote && next === " "))
+      ) {
+        tok += next
+        i += 2
+      } else if (quote) {
+        if (c === quote) quote = null
+        else tok += c
+        i++
+      } else if (isSpace(c)) {
+        break
+      } else if (c === '"' || c === "'") {
+        quote = c
+        i++
+      } else {
+        tok += c
+        i++
+      }
     }
+    if (quote) return []
     out.push(tok)
   }
   return out
 }
 
-// Keywords we keep for the sidebar subline (lower-cased keyword → field).
-const DISPLAY_FIELDS = new Map<string, DisplayField>([
+// Keywords we keep (lower-cased keyword → field).
+const KEYWORD_FIELDS = new Map<string, Field>([
   ["hostname", "hostName"],
   ["user", "user"],
   ["port", "port"],
+  ["controlmaster", "controlMaster"],
+  ["controlpath", "controlPath"],
 ])
 
 type Block = Extract<SshConfigItem, { type: "block" }>
 
-/** Parse one config file's text into ordered items. Pure; never throws. `lead` = the
- *  patterns lines before the first Host fall under: `*` at top level, else the includer's. */
-export function parseSshConfig(text: string, lead: string[] = ["*"]): SshConfigItem[] {
+/** Parse one config file's text into ordered items. Pure; never throws. */
+export function parseSshConfig(text: string): SshConfigItem[] {
   const items: SshConfigItem[] = []
-  let block: Block | null = { type: "block", patterns: [...lead], fields: {} }
+  let block: Block | null = { type: "block", patterns: ["*"], fields: {} }
   items.push(block)
   for (const raw of text.split(/\r?\n/)) {
     const toks = tokenizeLine(raw)
@@ -85,8 +109,13 @@ export function parseSshConfig(text: string, lead: string[] = ["*"]): SshConfigI
     } else if (key === "include") {
       if (args.length)
         items.push({ type: "include", patterns: args, context: block?.patterns ?? [] })
+      // The included file's options are read before the rest of this block's.
+      if (block) {
+        block = { type: "block", patterns: block.patterns, fields: {} }
+        items.push(block)
+      }
     } else if (block && args.length) {
-      const field = DISPLAY_FIELDS.get(key)
+      const field = KEYWORD_FIELDS.get(key)
       // First obtained value wins (OpenSSH semantics).
       if (field && block.fields[field] === undefined) block.fields[field] = args[0]
     }
@@ -120,30 +149,45 @@ export function hostMatcher(patterns: string[]): (alias: string) => boolean {
   }
 }
 
+/** A block as the loader collects it: `guards` are the Host lines of enclosing Includes,
+ *  all of which must match too (OpenSSH never applies a conditional include otherwise). */
+export interface GuardedBlock {
+  patterns: string[]
+  fields: Partial<Record<Field, string>>
+  guards?: string[][]
+}
+
 /** Blocks in order (Includes inlined) → hosts, each with ssh's first-match-wins values. */
-export function hostsFromBlocks(blocks: Omit<Block, "type">[]): SshConfigHost[] {
+export function hostsFromBlocks(blocks: GuardedBlock[]): SshConfigHost[] {
+  const compiled = blocks.map((b) => {
+    const own = hostMatcher(b.patterns)
+    const guards = (b.guards ?? []).map(hostMatcher)
+    return { b, applies: (alias: string) => own(alias) && guards.every((g) => g(alias)) }
+  })
+  // List each alias (case-insensitively once, as ssh matches) whose block applies to it.
   const aliases: string[] = []
   const seen = new Set<string>()
-  for (const b of blocks) {
+  for (const { b, applies } of compiled) {
     for (const p of b.patterns) {
-      if (p && !isPattern(p) && !seen.has(p)) {
-        seen.add(p)
-        aliases.push(p)
-      }
+      if (!p || isPattern(p) || seen.has(p.toLowerCase()) || !applies(p)) continue
+      seen.add(p.toLowerCase())
+      aliases.push(p)
     }
   }
-  const compiled = blocks.map((b) => ({ fields: b.fields, matches: hostMatcher(b.patterns) }))
   return aliases.map((alias) => {
-    const host: SshConfigHost = { alias }
-    for (const b of compiled) {
-      if (!b.matches(alias)) continue
-      for (const f of ["hostName", "user", "port"] as const) {
-        if (host[f] === undefined && b.fields[f] !== undefined) host[f] = b.fields[f]
-      }
+    const v: Partial<Record<Field, string>> = {}
+    for (const { b, applies } of compiled) {
+      if (!applies(alias)) continue
+      for (const f of FIELDS)
+        if (v[f] === undefined && b.fields[f] !== undefined) v[f] = b.fields[f]
     }
+    const host: SshConfigHost = { alias }
     // HostName may use %h (the alias) and %% (a literal %).
-    if (host.hostName)
-      host.hostName = host.hostName.replace(/%(%|h)/g, (_m, c: string) => (c === "h" ? alias : "%"))
+    if (v.hostName)
+      host.hostName = v.hostName.replace(/%(%|h)/g, (_m, c: string) => (c === "h" ? alias : "%"))
+    if (v.user) host.user = v.user
+    if (v.port) host.port = v.port
+    if (v.controlMaster !== undefined || v.controlPath !== undefined) host.ownMux = true
     return host
   })
 }
@@ -245,31 +289,31 @@ export function resolveIncludePath(pattern: string, home: string, p: PlatformPat
  *  diamonds included), nesting is capped, and unreadable files are skipped, never thrown. */
 export async function loadSshConfig(opts: LoadOptions): Promise<LoadResult> {
   const maxDepth = opts.maxDepth ?? 16
-  const blocks: Block[] = []
+  const blocks: GuardedBlock[] = []
   const visited = new Set<string>()
   const files: string[] = []
 
-  const visit = async (file: string, depth: number, lead: string[]): Promise<void> => {
+  const visit = async (file: string, depth: number, guards: string[][]): Promise<void> => {
     if (depth > maxDepth || visited.has(file)) return
     visited.add(file)
     const text = await opts.fs.readFile(file)
     if (text === null) return
     files.push(file)
-    for (const item of parseSshConfig(text, lead)) {
+    for (const item of parseSshConfig(text)) {
       if (item.type === "block") {
-        blocks.push(item)
+        blocks.push({ patterns: item.patterns, fields: item.fields, guards })
         continue
       }
       for (const pat of item.patterns) {
         const resolved = resolveIncludePath(pat, opts.home, opts.path)
         for (const f of await expandGlob(resolved, opts.fs, opts.path)) {
-          await visit(f, depth + 1, item.context)
+          await visit(f, depth + 1, [...guards, item.context])
         }
       }
     }
   }
 
-  await visit(opts.file, 0, ["*"])
+  await visit(opts.file, 0, [])
   return { hosts: hostsFromBlocks(blocks), files }
 }
 
@@ -296,12 +340,20 @@ export const nodeMiniFs: MiniFs = {
 }
 
 /** MiniFs over a WSL distro's UNC share, so the loader works in Linux paths (absolute
- *  Includes like /etc/ssh/… resolve inside the distro, not on the Windows drive). */
+ *  Includes resolve inside the distro). Remembers which share prefix answers. */
 export function wslMiniFs(distro: string, base: MiniFs = nodeMiniFs): MiniFs {
+  let preferred = 0 // index into wslUncCandidates' prefix order
   const first = async <T>(p: string, read: (q: string) => Promise<T | null>): Promise<T | null> => {
-    for (const unc of wslUncCandidates(distro, p)) {
-      const v = await read(unc)
-      if (v !== null) return v
+    const cands = wslUncCandidates(distro, p)
+    const order = cands
+      .map((_, k) => k)
+      .sort((a, b) => (a === preferred ? -1 : b === preferred ? 1 : a - b))
+    for (const k of order) {
+      const v = await read(cands[k]!)
+      if (v !== null) {
+        preferred = k
+        return v
+      }
     }
     return null
   }
