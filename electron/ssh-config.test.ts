@@ -8,6 +8,7 @@ import {
   hostMatcher,
   hostsFromBlocks,
   matchPatterns,
+  makeMuxLookup,
   muxSetFor,
   loadSshConfig,
   nodeMiniFs,
@@ -76,6 +77,11 @@ describe("tokenizeLine", () => {
     expect(tokenizeLine('HostName foo"bar baz"')).toEqual(["HostName", "foobar baz"])
     expect(tokenizeLine("Host 'my box' x")).toEqual(["Host", "my box", "x"])
     expect(tokenizeLine(`Host "it's" 'say "hi"'`)).toEqual(["Host", "it's", 'say "hi"'])
+  })
+
+  it("splits only on ASCII whitespace (an NBSP is part of the token, as in ssh)", () => {
+    expect(tokenizeLine("Host web\u00a0prod other")).toEqual(["Host", "web\u00a0prod", "other"])
+    expect(tokenizeLine("Host\u00a0a")).toEqual(["Host\u00a0a"])
   })
 
   it("handles backslash escapes like argv_split", () => {
@@ -453,6 +459,23 @@ describe("expandGlob", () => {
   })
 })
 
+describe("includeBase", () => {
+  it("resolves the system config's relative Includes against its own dir", async () => {
+    const r = await loadSshConfig({
+      file: "/etc/ssh/ssh_config",
+      home: "/h",
+      fs: fakeFs({
+        "/etc/ssh/ssh_config": "Include ssh_config.d/*.conf\n",
+        "/etc/ssh/ssh_config.d/10-corp.conf": "Host corp\n",
+        "/h/.ssh/ssh_config.d/x.conf": "Host wrong\n",
+      }),
+      path: path.posix,
+      includeBase: "/etc/ssh",
+    })
+    expect(aliases(r.hosts)).toEqual(["corp"])
+  })
+})
+
 describe("resolveIncludePath", () => {
   it("expands ~ and resolves relative paths against ~/.ssh", () => {
     const p = path.posix
@@ -613,6 +636,33 @@ describe("loadSshConfig", () => {
       "/h/.ssh/mux.conf": "Host *\n  ControlPath ~/.ssh/cm-%C\n",
     })
     expect(r.hosts).toEqual([{ alias: "a", ownMux: true }])
+  })
+
+  it("stays small when many Host blocks each include the config itself", async () => {
+    // k blocks × self-Include used to revisit the file once per ordering of contexts (k!).
+    const k = 12
+    const text = Array.from({ length: k }, (_, i) => `Host h${i}\n  Include ~/.ssh/config\n`).join(
+      "",
+    )
+    const t0 = performance.now()
+    const r = await load({ "/h/.ssh/config": text })
+    expect(performance.now() - t0).toBeLessThan(500)
+    expect(r.blocks.length).toBeLessThan(200)
+    expect(r.hosts).toHaveLength(k)
+  })
+
+  it("caps evaluations for a pathological (non-cyclic) include fan-out", async () => {
+    // 14 Host blocks each include a shared file that includes a second one: 2^14 context sets.
+    const hostsText = Array.from({ length: 14 }, (_, i) => `Host h${i}\n  Include a\n`).join("")
+    const files = {
+      "/h/.ssh/config": hostsText,
+      "/h/.ssh/a": "Host *\n  Include b\n",
+      "/h/.ssh/b": "Host x\n",
+    }
+    const t0 = performance.now()
+    const r = await load(files)
+    expect(performance.now() - t0).toBeLessThan(1000)
+    expect(r.blocks.length).toBeLessThanOrEqual(20000)
   })
 
   it("stays bounded on a config that includes itself under a Host block", async () => {
@@ -827,5 +877,15 @@ describe("muxSetFor", () => {
 
   it("counts unevaluable Match blocks as possibly applying", () => {
     expect(muxSetFor(blocks("Match exec true\n  ControlMaster auto\n"), "anything")).toBe(true)
+  })
+})
+
+describe("makeMuxLookup", () => {
+  it("compiles once and answers per target", () => {
+    const blocks = parseSshConfig("Host prod\n  ControlPath /x/%C\n").flatMap((i) =>
+      i.type === "block" ? [i] : [],
+    )
+    const lookup = makeMuxLookup(blocks)
+    expect([lookup("prod"), lookup("u@prod"), lookup("dev")]).toEqual([true, true, false])
   })
 })

@@ -357,6 +357,22 @@ describe("buildSshSpawn", () => {
     expect(args).toEqual(["-p", "2222", "-A", "-t", "--", "ubuntu@10.0.0.12"])
   })
 
+  it("adds nothing at all when the host's args set multiplexing (even ControlMaster=no)", () => {
+    for (const extraArgs of [
+      ["-o", "ControlMaster=no"],
+      ["-S", "/tmp/cm"],
+      ["-M"],
+      ["-oControlPath=/x/%C"],
+    ]) {
+      const args = buildSshSpawn({ ...remote, extraArgs }, mac)!.args
+      expect(args.some((a) => a.startsWith('ControlPath="') || a === "ControlMaster=auto")).toBe(
+        false,
+      )
+      const wslArgs = buildSshSpawn({ ...remote, env: "wsl:Ubuntu", extraArgs }, win)!.args
+      expect(wslArgs).not.toContain(WSL_SSH_SCRIPT)
+    }
+  })
+
   it("adds no reuse flags when the host's ssh config manages multiplexing", () => {
     expect(buildSshSpawn({ ...remote, ownMux: true }, mac)!.args).toEqual(["-t", "--", "web"])
     const wslRef: RemoteRef = { ...remote, env: "wsl:Ubuntu", ownMux: true }
@@ -373,11 +389,10 @@ describe("buildSshSpawn", () => {
     ])
   })
 
-  it("puts the user's args before our reuse flags, so their -o ControlMaster wins", () => {
-    const r = { ...remote, extraArgs: ["-o", "ControlMaster=no"] }
-    const args = buildSshSpawn(r, mac)!.args
-    expect(args.slice(0, 2)).toEqual(["-o", "ControlMaster=no"])
-    expect(args.indexOf("ControlMaster=no")).toBeLessThan(args.indexOf("ControlMaster=auto"))
+  it("puts the user's args before our reuse flags", () => {
+    const args = buildSshSpawn({ ...remote, extraArgs: ["-o", "ServerAliveInterval=5"] }, mac)!.args
+    expect(args.slice(0, 2)).toEqual(["-o", "ServerAliveInterval=5"])
+    expect(args.indexOf("ServerAliveInterval=5")).toBeLessThan(args.indexOf("ControlMaster=auto"))
   })
 
   it("keeps a hostile-looking target after `--` so ssh can't read it as an option", () => {
@@ -638,6 +653,30 @@ describe("trustedRemote", () => {
     expect(r.extraArgs).not.toBe(listed[1]!.extraArgs)
   })
 
+  it("refuses a settings host that's no longer in settings (its args are unknown)", () => {
+    const sent = {
+      hostId: "settings:gone",
+      label: "gone",
+      target: "ubuntu@10.0.0.12",
+      env: "native",
+    }
+    expect(trustedRemote(sent, listed)).toBeNull()
+  })
+
+  it("skips invalid settings entries instead of failing the whole list", () => {
+    const hosts = merge({
+      native: [],
+      wsl: [],
+      settings: ssh({
+        hosts: [
+          { name: "bad", target: "b", args: ["-N"] },
+          { name: "ok", target: "ok" },
+        ],
+      }),
+    })
+    expect(hosts.map((h) => h.hostId)).toEqual(["settings:ok"])
+  })
+
   it("keeps an unlisted host usable with its own validated target and no extra args", () => {
     const sent = {
       hostId: "native:gone",
@@ -750,6 +789,13 @@ describe("parseSshG / wantOurMux", () => {
     for (const cm of ["auto", "yes", "ask", "autoask"])
       expect(wantOurMux({ controlMaster: cm }, {})).toBe(false)
     expect(wantOurMux({ controlMaster: "false", controlPath: "/x/%C" }, {})).toBe(false)
+  })
+
+  it("steps aside when the host's args set multiplexing", () => {
+    expect(wantOurMux({ controlMaster: "false" }, { extraArgs: ["-o", "ControlMaster=no"] })).toBe(
+      false,
+    )
+    expect(wantOurMux({ controlMaster: "false" }, { extraArgs: ["-p", "22"] })).toBe(true)
   })
 
   it("steps aside for an explicit value we parsed, and when the probe failed", () => {

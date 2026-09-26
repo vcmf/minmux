@@ -38,9 +38,23 @@ export const isSshEnv = (v: unknown): v is SshEnv => parseSshEnv(v) !== null
 // never give the pane a shell.
 const SSH_OPTS_WITH_VALUE = new Set("bceilmopBDEFIJLPRSw")
 const SSH_FLAGS = new Set("1246agkqtvxACKMTXYy")
+// -o keywords that likewise stop the pane getting an interactive shell.
+const BLOCKED_O = new Set([
+  "sessiontype",
+  "forkafterauthentication",
+  "remotecommand",
+  "stdinnull",
+  "requesttty",
+])
 
-/** Are these valid ssh options (each value present)? A stray word would become the host. */
-export function isSshOptionList(args: readonly unknown[]): boolean {
+/** The keyword of an `-o` value (`Key=value` or `Key value`), lower-cased. */
+const oKeyword = (v: string) => v.trim().split(/[\s=]/, 1)[0]!.toLowerCase()
+
+/** Walk ssh options, calling `visit(flag, value)`; false if the list isn't valid options. */
+function walkSshOptions(
+  args: readonly unknown[],
+  visit?: (flag: string, value?: string) => void,
+): boolean {
   for (let i = 0; i < args.length; i++) {
     const a = args[i]
     if (
@@ -54,14 +68,88 @@ export function isSshOptionList(args: readonly unknown[]): boolean {
     for (let k = 1; k < a.length; k++) {
       const ch = a[k]!
       if (SSH_OPTS_WITH_VALUE.has(ch)) {
-        if (k + 1 < a.length) break // value attached: -p2222
-        const v = args[i + 1]
+        let v: unknown
+        if (k + 1 < a.length)
+          v = a.slice(k + 1) // attached: -p2222
+        else v = args[++i] // separate: -p 2222
         if (typeof v !== "string" || hasControlChar(v)) return false
-        i++ // value is the next arg: -p 2222
+        visit?.(ch, v)
         break
       }
       if (!SSH_FLAGS.has(ch)) return false
+      visit?.(ch)
     }
   }
   return true
+}
+
+/** Valid ssh options that still open a shell? (A stray word would become the host.) */
+export function isSshOptionList(args: readonly unknown[]): boolean {
+  let ok = true
+  const valid = walkSshOptions(args, (flag, value) => {
+    if (flag === "o" && BLOCKED_O.has(oKeyword(value!))) ok = false
+  })
+  return valid && ok
+}
+
+/** Do these args configure multiplexing themselves (-M, -S, -o ControlMaster/ControlPath)? */
+export function sshArgsSetMux(args: readonly string[] | undefined): boolean {
+  let mux = false
+  walkSshOptions(args ?? [], (flag, value) => {
+    if (flag === "M" || flag === "S") mux = true
+    const kw = flag === "o" ? oKeyword(value!) : ""
+    if (kw === "controlmaster" || kw === "controlpath" || kw === "controlpersist") mux = true
+  })
+  return mux
+}
+
+/** A host defined in settings.json (in addition to ~/.ssh/config). */
+export interface SshHostSetting {
+  name: string // label + stable id
+  target: string // ssh destination (alias or user@host)
+  args: string[] // extra ssh flags, e.g. ["-p", "2222"]
+  env: SshEnv // which ssh runs it ("native", or "wsl:<distro>" on Windows)
+}
+
+const MAX_SSH_HOSTS = 500
+const MAX_SSH_ARGS = 32
+
+/** One settings host, or null if any part is invalid (dropped whole, never half-kept). */
+function sshHostSetting(v: unknown): SshHostSetting | null {
+  if (!v || typeof v !== "object") return null
+  const o = v as Record<string, unknown>
+  const name = typeof o.name === "string" ? o.name.trim() : ""
+  if (!name || name.length > 80 || hasControlChar(name)) return null
+  if (!isSshTarget(o.target)) return null
+  let args: string[] = []
+  if (o.args !== undefined) {
+    if (!Array.isArray(o.args) || o.args.length > MAX_SSH_ARGS) return null
+    if (!isSshOptionList(o.args)) return null
+    args = [...(o.args as string[])]
+  }
+  let env: SshEnv = "native"
+  if (o.env !== undefined && o.env !== "native") {
+    if (!isSshEnv(o.env)) return null
+    env = o.env
+  }
+  return { name, target: o.target, args, env }
+}
+
+/** The usable settings hosts, plus the indexes of rejected entries (for a warning). */
+export function validateSshHosts(raw: readonly unknown[]): {
+  hosts: SshHostSetting[]
+  rejected: number[]
+} {
+  const hosts: SshHostSetting[] = []
+  const rejected: number[] = []
+  const names = new Set<string>()
+  raw.forEach((entry, i) => {
+    const h = i < MAX_SSH_HOSTS ? sshHostSetting(entry) : null
+    if (!h || names.has(h.name)) rejected.push(i)
+    else {
+      names.add(h.name)
+      hosts.push(h)
+    }
+  })
+  return { hosts, rejected }
 }

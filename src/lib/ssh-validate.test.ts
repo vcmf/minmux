@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest"
-import { hasControlChar, isSshEnv, isSshOptionList, isSshTarget, parseSshEnv } from "./ssh-validate"
+import {
+  hasControlChar,
+  isSshEnv,
+  isSshOptionList,
+  isSshTarget,
+  parseSshEnv,
+  sshArgsSetMux,
+  validateSshHosts,
+} from "./ssh-validate"
 
 describe("hasControlChar", () => {
   it("flags C0 controls and DEL only", () => {
@@ -103,5 +111,76 @@ describe("isSshOptionList", () => {
   it("rejects non-strings and control characters", () => {
     for (const args of [[1], [null], ["-o", "a\nb"], ["-A\u0000"]])
       expect(isSshOptionList(args)).toBe(false)
+  })
+})
+
+describe("isSshOptionList: -o keywords", () => {
+  it("rejects -o options that never give the pane a shell, in any spelling", () => {
+    for (const args of [
+      ["-o", "SessionType=none"],
+      ["-oSessionType=none"],
+      ["-o", "ForkAfterAuthentication=yes"],
+      ["-o", "RemoteCommand=true"],
+      ["-o", "remotecommand true"],
+      ["-o", "StdinNull yes"],
+      ["-o", "RequestTTY=no"],
+      ["-A", "-o", " SESSIONTYPE = none"],
+    ]) {
+      expect(isSshOptionList(args)).toBe(false)
+    }
+  })
+
+  it("accepts other -o options", () => {
+    expect(isSshOptionList(["-o", "ServerAliveInterval=30", "-oForwardAgent=yes"])).toBe(true)
+  })
+})
+
+describe("sshArgsSetMux", () => {
+  it("spots multiplexing set by the args themselves", () => {
+    for (const args of [
+      ["-M"],
+      ["-AM"],
+      ["-S", "/tmp/cm"],
+      ["-S/tmp/cm"],
+      ["-o", "ControlMaster=no"],
+      ["-oControlPath=/x/%C"],
+      ["-o", "controlpersist 5m"],
+      ["-p", "22", "-o", "ControlMaster no"],
+    ]) {
+      expect(sshArgsSetMux(args)).toBe(true)
+    }
+  })
+
+  it("is false otherwise", () => {
+    for (const args of [
+      undefined,
+      [],
+      ["-A"],
+      ["-p", "22"],
+      ["-o", "ServerAliveInterval=5"],
+      ["-i", "-M"],
+    ]) {
+      expect(sshArgsSetMux(args)).toBe(false)
+    }
+  })
+})
+
+describe("validateSshHosts", () => {
+  it("returns usable hosts and the indexes it rejected", () => {
+    expect(
+      validateSshHosts([
+        { name: "a", target: "a", args: ["-p", "2222"] },
+        { name: "bad", target: "b", args: ["-o", "RemoteCommand=x"] },
+        { name: "a", target: "dup" },
+      ]),
+    ).toEqual({
+      hosts: [{ name: "a", target: "a", args: ["-p", "2222"], env: "native" }],
+      rejected: [1, 2],
+    })
+  })
+
+  it("copies args (no aliasing of the settings object)", () => {
+    const args = ["-A"]
+    expect(validateSshHosts([{ name: "a", target: "a", args }]).hosts[0]!.args).not.toBe(args)
   })
 })

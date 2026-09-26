@@ -21,14 +21,15 @@ export interface SshConfigHost {
 }
 
 type Field = "hostName" | "user" | "port" | "controlMaster" | "controlPath"
-const FIELDS: readonly Field[] = ["hostName", "user", "port", "controlMaster", "controlPath"]
+const DISPLAY: readonly Field[] = ["hostName", "user", "port"]
 
 /** A config file in order: blocks (`maybe` = unevaluable Match) and Includes with context. */
 export type SshConfigItem =
   | { type: "block"; patterns: string[]; fields: Partial<Record<Field, string>>; maybe?: true }
   | { type: "include"; patterns: string[]; context: string[] | null }
 
-const isSpace = (c: string | undefined) => c !== undefined && /\s/.test(c)
+// ASCII whitespace only, as OpenSSH splits (an NBSP is part of a token there).
+const isSpace = (c: string | undefined) => c !== undefined && /[ \t\r\n\v\f]/.test(c)
 
 /** One config line → tokens, like OpenSSH's argv_split; [] for a comment, blank or bad line. */
 export function tokenizeLine(line: string): string[] {
@@ -186,16 +187,20 @@ const compile = (blocks: GuardedBlock[]): Compiled[] =>
     return { b, maybe, applies: (alias) => own(alias) && guards.every((g) => g(alias)) }
   })
 
-const setsMux = (c: Compiled[], name: string) =>
+const setsMux = (c: readonly Compiled[], name: string) =>
   c.some(
     ({ b, applies }) =>
       (b.fields.controlMaster !== undefined || b.fields.controlPath !== undefined) && applies(name),
   )
 
-/** Might this config set ControlMaster/ControlPath for `target` (`user@` stripped)? */
-export function muxSetFor(blocks: GuardedBlock[], target: string): boolean {
-  return setsMux(compile(blocks), target.slice(target.lastIndexOf("@") + 1))
+/** A lookup (compiled once): might this config set multiplexing for `target` (`user@` stripped)? */
+export function makeMuxLookup(blocks: GuardedBlock[]): (target: string) => boolean {
+  const c = compile(blocks)
+  return (target) => setsMux(c, target.slice(target.lastIndexOf("@") + 1))
 }
+
+/** One-off form of makeMuxLookup. */
+export const muxSetFor = (blocks: GuardedBlock[], target: string) => makeMuxLookup(blocks)(target)
 
 /** Blocks in order (Includes inlined) → hosts, each with ssh's first-match-wins values. */
 export function hostsFromBlocks(blocks: GuardedBlock[]): SshConfigHost[] {
@@ -215,7 +220,7 @@ export function hostsFromBlocks(blocks: GuardedBlock[]): SshConfigHost[] {
     const v: Partial<Record<Field, string>> = {}
     for (const { b, applies } of compiled) {
       if (!applies(alias)) continue
-      for (const f of FIELDS)
+      for (const f of DISPLAY)
         if (v[f] === undefined && b.fields[f] !== undefined) v[f] = b.fields[f]
     }
     const host: SshConfigHost = { alias }
@@ -224,8 +229,7 @@ export function hostsFromBlocks(blocks: GuardedBlock[]): SshConfigHost[] {
       host.hostName = v.hostName.replace(/%(%|h)/g, (_m, c: string) => (c === "h" ? alias : "%"))
     if (v.user) host.user = v.user
     if (v.port) host.port = v.port
-    if (v.controlMaster !== undefined || v.controlPath !== undefined || setsMux(all, alias))
-      host.ownMux = true
+    if (setsMux(all, alias)) host.ownMux = true
     return host
   })
 }
@@ -242,6 +246,7 @@ export interface LoadOptions {
   fs: MiniFs
   path: PlatformPath // path.posix for macOS/Linux/WSL, path.win32 for native Windows
   maxDepth?: number // Include nesting cap (OpenSSH uses 16)
+  includeBase?: string // where relative Includes resolve: ~/.ssh (default), /etc/ssh for the system file
 }
 
 export interface LoadResult {
@@ -319,26 +324,40 @@ export async function expandGlob(pattern: string, fs: MiniFs, p: PlatformPath): 
 }
 
 /** `~` → home; a relative Include path resolves against ~/.ssh (user config semantics). */
-export function resolveIncludePath(pattern: string, home: string, p: PlatformPath): string {
+export function resolveIncludePath(
+  pattern: string,
+  home: string,
+  p: PlatformPath,
+  base: string = p.join(home, ".ssh"),
+): string {
   if (pattern === "~") return home
   if (pattern.startsWith("~/") || pattern.startsWith("~\\")) return p.join(home, pattern.slice(2))
   if (p.isAbsolute(pattern)) return pattern
-  return p.join(home, ".ssh", pattern)
+  return p.join(base, pattern)
 }
 
 // Guards only grow with new information: a `*` context always matches, and a context
-// already in the stack adds nothing, so cyclic Includes revisit the same key and stop.
+// already in the stack adds nothing.
 const withGuard = (guards: (string[] | null)[], ctx: string[] | null) => {
   if (ctx && ctx.length === 1 && ctx[0] === "*") return guards
   const key = JSON.stringify(ctx)
   return guards.some((g) => JSON.stringify(g) === key) ? guards : [...guards, ctx]
 }
 
+// Guards are a conjunction, so their order doesn't matter: key evaluations on the set.
+const guardKey = (guards: (string[] | null)[]) =>
+  [...new Set(guards.map((g) => JSON.stringify(g)))].sort().join("\u0001")
+
+// Hard backstop for pathological configs, far above any real one.
+const MAX_EVALUATIONS = 2000
+const MAX_BLOCKS = 20000
+
 /** Load a config + Includes: each file read once, evaluated once per context, never throws. */
 export async function loadSshConfig(opts: LoadOptions): Promise<LoadResult> {
   const maxDepth = opts.maxDepth ?? 16
+  const base = opts.includeBase ?? opts.path.join(opts.home, ".ssh")
   const blocks: GuardedBlock[] = []
-  const texts = new Map<string, string | null>()
+  const parsed = new Map<string, SshConfigItem[] | null>() // each file read + parsed once
   const evaluated = new Set<string>()
   const files: string[] = []
   const watch = new Set<string>()
@@ -347,22 +366,30 @@ export async function loadSshConfig(opts: LoadOptions): Promise<LoadResult> {
     readFile: (p) => (watch.add(p), opts.fs.readFile(p)),
     readdir: (p) => (watch.add(p), opts.fs.readdir(p)),
   }
-  const read = async (file: string) => {
-    if (!texts.has(file)) {
+  const load = async (file: string) => {
+    if (!parsed.has(file)) {
       const text = await fs.readFile(file)
-      texts.set(file, text)
+      parsed.set(file, text === null ? null : parseSshConfig(text))
       if (text !== null) files.push(file)
     }
-    return texts.get(file)!
+    return parsed.get(file)!
   }
 
-  const visit = async (file: string, depth: number, guards: (string[] | null)[]) => {
-    const key = `${file}\0${JSON.stringify(guards)}`
-    if (depth > maxDepth || evaluated.has(key)) return
+  // `stack` = files on the current Include chain: a true cycle stops (ssh itself rejects one).
+  const visit = async (
+    file: string,
+    depth: number,
+    guards: (string[] | null)[],
+    stack: string[],
+  ) => {
+    const key = `${file}\0${guardKey(guards)}`
+    if (depth > maxDepth || stack.includes(file) || evaluated.has(key)) return
+    if (evaluated.size >= MAX_EVALUATIONS || blocks.length >= MAX_BLOCKS) return
     evaluated.add(key)
-    const text = await read(file)
-    if (text === null) return
-    for (const item of parseSshConfig(text)) {
+    const items = await load(file)
+    if (items === null) return
+    const inner = [...stack, file]
+    for (const item of items) {
       if (item.type === "block") {
         blocks.push({
           patterns: item.patterns,
@@ -373,15 +400,15 @@ export async function loadSshConfig(opts: LoadOptions): Promise<LoadResult> {
         continue
       }
       for (const pat of item.patterns) {
-        const resolved = resolveIncludePath(pat, opts.home, opts.path)
+        const resolved = resolveIncludePath(pat, opts.home, opts.path, base)
         for (const f of await expandGlob(resolved, fs, opts.path)) {
-          await visit(f, depth + 1, withGuard(guards, item.context))
+          await visit(f, depth + 1, withGuard(guards, item.context), inner)
         }
       }
     }
   }
 
-  await visit(opts.file, 0, [])
+  await visit(opts.file, 0, [], [])
   return { hosts: hostsFromBlocks(blocks), files, watch: [...watch], blocks }
 }
 

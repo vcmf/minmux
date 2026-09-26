@@ -6,7 +6,13 @@
 import path from "node:path"
 import type { RemoteRef, SshEnv, SshHost } from "../src/types"
 import type { SshSettings } from "../src/settings/schema"
-import { hasControlChar, isSshTarget, parseSshEnv } from "../src/lib/ssh-validate"
+import {
+  hasControlChar,
+  isSshTarget,
+  parseSshEnv,
+  sshArgsSetMux,
+  validateSshHosts,
+} from "../src/lib/ssh-validate"
 import type { PlatformPath, SshConfigHost } from "./ssh-config"
 
 /** The sidebar subline for a config host: `user@hostname:port` (parts that are set). */
@@ -64,7 +70,7 @@ export function mergeHosts(
       for (const h of hosts) if (listable(h)) add(fromConfig(h, `wsl:${distro}`, `wsl:${distro}`))
     }
   }
-  for (const s of settings.hosts) {
+  for (const s of validateSshHosts(settings.hosts).hosts) {
     if (isHidden(s.name) || !runnable(s.env)) continue
     add({
       hostId: `settings:${s.name}`,
@@ -159,13 +165,13 @@ export function buildSshSpawn(
   const env = parseSshEnv(remote.env)
   if (!env) return null
   const extra = remote.extraArgs ?? []
-  // A host whose own ssh config manages multiplexing keeps it: we add nothing.
-  const reuse = ctx.reuse && !remote.ownMux
+  // A host whose own ssh config or args manage multiplexing keeps it: we add nothing (even a
+  // lone ControlPath of ours would let `-o ControlMaster=no` join a shared connection).
+  const reuse = ctx.reuse && !remote.ownMux && !sshArgsSetMux(extra)
   // `--` ends ssh's options, so a destination starting with `-` can never become one.
   const dest = ["-t", "--", remote.target]
   if (env.kind === "native") {
-    // Windows' ssh.exe has no ControlMaster support. Our flags go after the user's args:
-    // ssh keeps the first value of an option, so a host's own -o ControlMaster=no wins.
+    // Windows' ssh.exe has no ControlMaster support.
     const canReuse = reuse && ctx.platform !== "win32" && ctx.controlDir !== null
     const flags = canReuse ? reuseFlags(ctx.controlDir!) : []
     return { file: ctx.sshPath, args: [...extra, ...flags, ...dest] }
@@ -210,9 +216,9 @@ export function parseSshG(out: string): { controlMaster?: string; controlPath?: 
 /** Add our ControlMaster flags? Only if `ssh -G` (null = failed) and our parse both see none. */
 export function wantOurMux(
   g: ReturnType<typeof parseSshG> | null,
-  remote: Pick<RemoteRef, "ownMux">,
+  remote: Pick<RemoteRef, "ownMux" | "extraArgs">,
 ): boolean {
-  if (remote.ownMux || !g) return false
+  if (remote.ownMux || sshArgsSetMux(remote.extraArgs) || !g) return false
   if (g.controlMaster && g.controlMaster !== "false" && g.controlMaster !== "no") return false
   if (g.controlPath && g.controlPath.toLowerCase() !== "none") return false
   return true
@@ -237,6 +243,8 @@ export function trustedRemote(ref: unknown, hosts: readonly SshHost[]): RemoteRe
       ...(known.ownMux ? { ownMux: true as const } : {}),
     }
   }
+  // A settings host that's gone can't be rebuilt safely (its args are unknown): don't guess.
+  if (r.hostId.startsWith("settings:")) return null
   if (!isSshTarget(r.target) || !parseSshEnv(r.env)) return null
   const label =
     typeof r.label === "string" && r.label.trim() && !hasControlChar(r.label)

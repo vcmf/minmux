@@ -250,7 +250,7 @@ Main-process wiring. Still no UI.
 
 **Host list service** (in main, off the hot path)
 
-- Native: `loadSshConfig(~/.ssh/config)`, then the system config (`/etc/ssh/ssh_config`;
+- Native: `loadSshConfig(~/.ssh/config)`, then the system config (`/etc/ssh/ssh_config`, loaded with `includeBase: /etc/ssh`;
   Windows `%ProgramData%\ssh\ssh_config`) appended after it: its `blocks` join the user's
   for `muxSetFor` / `configMux` (settings hosts), and its `watch` paths join the watcher.
 - WSL (Windows only): for each distro from `listShells()`'s WSL entries, resolve the distro
@@ -347,6 +347,9 @@ per-viewer UI state like other collapse state):
 - Click → `newTab(hostShellOption)`. Hover buttons: split right, split down (split the active
   pane with that host).
 - Empty state: "No hosts in ~/.ssh/config" + "Open ssh config" button.
+- Settings hosts that fail validation stay in settings.json untouched (`validateSshHosts`
+  returns their indexes): show "N hosts in settings.json were skipped" with an "Open
+  settings.json" button, so a typo is visible instead of silently missing.
 
 **Top-bar new-tab picker:** an "SSH" group after local shells, same entries.
 

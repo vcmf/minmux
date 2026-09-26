@@ -3,6 +3,7 @@ import {
   defaultSettings,
   mergeSettings,
   mergeSshSettings,
+  validateSshHosts,
   parseSettings,
   serializeSettings,
 } from "./schema"
@@ -145,20 +146,20 @@ describe("ssh settings", () => {
   })
 
   it("normalizes a valid host (trimmed name, default args and env)", () => {
-    expect(mergeSshSettings({ hosts: [{ ...host, name: "  gpu  " }] }).hosts).toEqual([
+    expect(validateSshHosts([{ ...host, name: "  gpu  " }]).hosts).toEqual([
       { name: "gpu", target: "ubuntu@10.0.0.12", args: [], env: "native" },
     ])
   })
 
   it("keeps args and a wsl env", () => {
     const h = { ...host, args: ["-p", "2222"], env: "wsl:Ubuntu-22.04" }
-    expect(mergeSshSettings({ hosts: [h] }).hosts[0]).toEqual({ ...h, name: "gpu" })
-    expect(mergeSshSettings({ hosts: [{ ...host, env: "native" }] }).hosts[0]!.env).toBe("native")
+    expect(validateSshHosts([h]).hosts[0]).toEqual({ ...h, name: "gpu" })
+    expect(validateSshHosts([{ ...host, env: "native" }]).hosts[0]!.env).toBe("native")
   })
 
   it("drops hosts with a bad name", () => {
     for (const name of [undefined, "", "   ", 3, "x".repeat(81), "prod\u001b[2J", "a\nb"]) {
-      expect(mergeSshSettings({ hosts: [{ ...host, name }] }).hosts).toEqual([])
+      expect(validateSshHosts([{ ...host, name }]).hosts).toEqual([])
     }
   })
 
@@ -173,7 +174,7 @@ describe("ssh settings", () => {
       7,
       "x".repeat(256),
     ]) {
-      expect(mergeSshSettings({ hosts: [{ ...host, target }] }).hosts).toEqual([])
+      expect(validateSshHosts([{ ...host, target }]).hosts).toEqual([])
     }
   })
 
@@ -188,30 +189,38 @@ describe("ssh settings", () => {
       ["-i", "k", "word"],
       ["-G"],
     ]) {
-      expect(mergeSshSettings({ hosts: [{ ...host, args }] }).hosts).toEqual([])
+      expect(validateSshHosts([{ ...host, args }]).hosts).toEqual([])
     }
   })
 
   it("drops hosts with a malformed env", () => {
     for (const env of ["wsl:", "wsl:Ubuntu 22", "docker:x", 1, "WSL:Ubuntu", "wsl:a;b"]) {
-      expect(mergeSshSettings({ hosts: [{ ...host, env }] }).hosts).toEqual([])
+      expect(validateSshHosts([{ ...host, env }]).hosts).toEqual([])
     }
   })
 
-  it("keeps the first of duplicate names and skips non-objects", () => {
-    const hosts = mergeSshSettings({
-      hosts: [null, "x", { ...host }, { ...host, target: "other" }, { name: "b", target: "b" }],
-    }).hosts
-    expect(hosts.map((h) => [h.name, h.target])).toEqual([
+  it("keeps the first of duplicate names and rejects non-objects", () => {
+    const r = validateSshHosts([
+      null,
+      "x",
+      { ...host },
+      { ...host, target: "other" },
+      { name: "b", target: "b" },
+    ])
+    expect(r.hosts.map((h) => [h.name, h.target])).toEqual([
       ["gpu", "ubuntu@10.0.0.12"],
       ["b", "b"],
     ])
+    expect(r.rejected).toEqual([0, 1, 3])
   })
 
-  it("ignores a non-array hosts list and caps its length", () => {
+  it("ignores a non-array hosts list and caps how many are used (not stored)", () => {
     expect(mergeSshSettings({ hosts: { a: host } }).hosts).toEqual([])
     const many = Array.from({ length: 600 }, (_, i) => ({ name: `h${i}`, target: `h${i}` }))
-    expect(mergeSshSettings({ hosts: many }).hosts).toHaveLength(500)
+    expect(mergeSshSettings({ hosts: many }).hosts).toHaveLength(600)
+    const r = validateSshHosts(many)
+    expect(r.hosts).toHaveLength(500)
+    expect(r.rejected).toHaveLength(100)
   })
 
   it("keeps hidden as unique non-empty strings", () => {
@@ -230,6 +239,29 @@ describe("ssh settings", () => {
     const many = Array.from({ length: 1500 }, (_, i) => `h${i}`)
     expect(mergeSshSettings({ hidden: many }).hidden).toHaveLength(1000)
     expect(mergeSshSettings({ hidden: ["x".repeat(256), "ok", "a\u0007b"] }).hidden).toEqual(["ok"])
+  })
+
+  it("keeps settings hosts verbatim, including invalid ones, so a save never erases them", () => {
+    const raw = [
+      { name: "ok", target: "ok" },
+      { name: "typo", target: "t", args: ["-N"] },
+      { name: "half", target: "t", args: ["-p"] },
+      "not even an object",
+    ]
+    const s = mergeSettings({ ssh: { hosts: raw } })
+    expect(s.ssh.hosts).toEqual(raw)
+    expect(JSON.parse(serializeSettings(s)).ssh.hosts).toEqual(raw)
+    expect(validateSshHosts(s.ssh.hosts)).toEqual({
+      hosts: [{ name: "ok", target: "ok", args: [], env: "native" }],
+      rejected: [1, 2, 3],
+    })
+  })
+
+  it("copies the hosts it keeps (no aliasing of the parsed input)", () => {
+    const raw = [{ name: "a", target: "a" }]
+    const s = mergeSshSettings({ hosts: raw })
+    expect(s.hosts).toEqual(raw)
+    expect(s.hosts[0]).not.toBe(raw[0])
   })
 
   it("round-trips through serialize/parse", () => {

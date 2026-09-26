@@ -1,20 +1,15 @@
 import { DEFAULT_THEME_FAMILY, themeFamilyName, variantOf, type Appearance } from "./themes"
-import type { SshEnv } from "../types"
-import { hasControlChar, isSshEnv, isSshOptionList, isSshTarget } from "../lib/ssh-validate"
+import { hasControlChar } from "../lib/ssh-validate"
 
-/** A host defined in settings.json (in addition to ~/.ssh/config). */
-export interface SshHostSetting {
-  name: string // label + stable id
-  target: string // ssh destination (alias or user@host)
-  args: string[] // extra ssh flags, e.g. ["-p", "2222"]
-  env: SshEnv // which ssh runs it ("native", or "wsl:<distro>" on Windows)
-}
+export { validateSshHosts, type SshHostSetting } from "../lib/ssh-validate"
 
 export interface SshSettings {
   fromSshConfig: boolean // list ~/.ssh/config hosts
   reuseConnections: boolean // OpenSSH ControlMaster so later panes skip auth
   hidden: string[] // aliases / names hidden from the list
-  hosts: SshHostSetting[]
+  // Exactly as written in settings.json — validated where used (validateSshHosts), never
+  // here, so re-saving settings can't erase an entry the user got slightly wrong.
+  hosts: unknown[]
 }
 
 export interface Settings {
@@ -78,42 +73,14 @@ const str = (v: unknown, fallback: string): string =>
 const asObject = (v: unknown): Record<string, unknown> =>
   v && typeof v === "object" ? (v as Record<string, unknown>) : {}
 
-const MAX_SSH_HOSTS = 500
-const MAX_SSH_ARGS = 32
 const MAX_SSH_HIDDEN = 1000
 
-/** One settings host, or null if any part is invalid (dropped whole, never half-kept). */
-function sshHostSetting(v: unknown): SshHostSetting | null {
-  const o = asObject(v)
-  const name = typeof o.name === "string" ? o.name.trim() : ""
-  if (!name || name.length > 80 || hasControlChar(name)) return null
-  if (!isSshTarget(o.target)) return null
-  let args: string[] = []
-  if (o.args !== undefined) {
-    if (!Array.isArray(o.args) || o.args.length > MAX_SSH_ARGS) return null
-    if (!isSshOptionList(o.args)) return null
-    args = o.args as string[]
-  }
-  let env: SshEnv = "native"
-  if (o.env !== undefined && o.env !== "native") {
-    if (!isSshEnv(o.env)) return null
-    env = o.env
-  }
-  return { name, target: o.target, args, env }
-}
-
-/** Validate the `ssh` block: bad hosts dropped, duplicate names keep the first. */
+/** The `ssh` block: booleans and `hidden` validated, `hosts` kept verbatim. */
 export function mergeSshSettings(input: unknown): SshSettings {
   const o = asObject(input)
   const d = defaultSettings.ssh
-  const hosts: SshHostSetting[] = []
-  const names = new Set<string>()
-  for (const raw of Array.isArray(o.hosts) ? o.hosts.slice(0, MAX_SSH_HOSTS) : []) {
-    const h = sshHostSetting(raw)
-    if (!h || names.has(h.name)) continue
-    names.add(h.name)
-    hosts.push(h)
-  }
+  // A JSON round-trip copies the entries (and drops anything JSON can't hold).
+  const hosts = Array.isArray(o.hosts) ? (JSON.parse(JSON.stringify(o.hosts)) as unknown[]) : []
   const hidden = Array.isArray(o.hidden)
     ? [
         ...new Set(
