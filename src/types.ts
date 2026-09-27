@@ -4,6 +4,7 @@ export interface ShellOption {
   command: string
   args: string[]
   remote?: RemoteRef // an ssh host: main builds the real command; command/args are labels
+  remoteSaved?: unknown // with remote: a saved host this build couldn't read (kept verbatim)
 }
 
 /** Which `ssh` runs a remote session: the host's own, or one inside a WSL distro. */
@@ -65,4 +66,16 @@ export interface Tab {
   title: string
   root: PaneNode
   activeSessionId: string
+}
+
+/** A pty:spawn request (renderer → main). Shared so main and the renderer can't drift. */
+export interface SpawnOpts {
+  id: string
+  cols: number
+  rows: number
+  shell: string
+  args: string[]
+  cwd?: string // start directory; falls back to $HOME in main if unset
+  bg?: string // theme terminal background hex → COLORFGBG so agents detect light/dark
+  remote?: RemoteRef // an ssh session: main rebuilds the command from its own host list
 }
