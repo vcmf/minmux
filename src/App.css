@@ -993,6 +993,11 @@ body.resizing-col {
   border-left: 2px solid transparent;
   font-size: 12px;
 }
+/* Only the name gives up space on a long row: icons, carets, the indent spacer and badges keep
+   their size (a flex child shrinks by default — the file icon used to squash + shift left). */
+.diff-file > :not(.tree-primary):not(.tree-labels) {
+  flex-shrink: 0;
+}
 .diff-file:hover {
   background: var(--elev);
 }
