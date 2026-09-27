@@ -1,7 +1,16 @@
 import { describe, expect, it } from "vitest"
 import type { Session } from "../types"
 import { testHost } from "../test/helpers"
-import { connectedHostIds, envTitle, groupHosts, hostShellOption, sameHosts } from "./ssh-hosts-ui"
+import {
+  connectedHostIds,
+  envTitle,
+  groupHosts,
+  hostShellOption,
+  hostSubline,
+  remoteBadge,
+  remoteSubline,
+  sameHosts,
+} from "./ssh-hosts-ui"
 
 const session = (id: string, remote?: Session["remote"]): Session => ({
   id,
@@ -85,6 +94,29 @@ describe("sameHosts", () => {
     expect(sameHosts(a, [testHost("a", "native", "x")])).toBe(false)
     expect(sameHosts(a, [testHost("a", "native", "x"), { ...testHost("b"), target: "c" }])).toBe(
       false,
+    )
+  })
+})
+
+describe("remote labels", () => {
+  const native = hostShellOption(testHost("web")).remote!
+  const wsl = hostShellOption(testHost("gpu", "wsl:Ubuntu")).remote!
+
+  it("remoteSubline names the target, and the distro for WSL", () => {
+    expect(remoteSubline(native)).toBe("ssh · web")
+    expect(remoteSubline(wsl)).toBe("ssh · gpu · WSL: Ubuntu")
+  })
+
+  it("remoteBadge is ssh, with the distro for WSL", () => {
+    expect(remoteBadge(native)).toBe("ssh")
+    expect(remoteBadge(wsl)).toBe("ssh · WSL: Ubuntu")
+  })
+
+  it("hostSubline joins label, distro and detail, skipping what's unset", () => {
+    expect(hostSubline(testHost("web"))).toBe("web")
+    expect(hostSubline(testHost("web", "native", "me@h"))).toBe("web · me@h")
+    expect(hostSubline(testHost("gpu", "wsl:Ubuntu", "u@g:2222"))).toBe(
+      "gpu · WSL: Ubuntu · u@g:2222",
     )
   })
 })

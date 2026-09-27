@@ -188,7 +188,9 @@ describe("App — ssh hosts", () => {
     })
     vi.mocked(ipc.listSshHosts).mockResolvedValueOnce([testHost("web")])
     render(<App />)
-    await waitFor(() => expect(useStore.getState().sshHosts.map((h) => h.label)).toEqual(["web"]))
+    await waitFor(() => expect(useStore.getState().sshHosts.map((h) => h.label)).toEqual(["web"]), {
+      timeout: 2000,
+    })
     vi.mocked(ipc.listSshHosts).mockResolvedValueOnce([testHost("web"), testHost("db")])
     changed!()
     await waitFor(() => expect(useStore.getState().sshHosts).toHaveLength(2))
@@ -225,5 +227,23 @@ describe("App — remote panes", () => {
     await new Promise((r) => setTimeout(r, 20))
     expect(ipc.gitStatus).not.toHaveBeenCalled()
     expect(useStore.getState().git).toBeNull()
+  })
+})
+
+describe("App — ssh hosts without a backend", () => {
+  it("a host fetch that throws synchronously doesn't take the app down", async () => {
+    vi.mocked(ipc.listSshHosts).mockImplementation(() => {
+      throw new TypeError("no backend")
+    })
+    render(<App />)
+    await waitFor(() => expect(useStore.getState().tabs).toHaveLength(1))
+    await waitFor(() => expect(ipc.listSshHosts).toHaveBeenCalled(), { timeout: 2000 })
+    expect(screen.getByText("Sessions")).toBeInTheDocument()
+  })
+
+  it("fetches the hosts only after startup, not at mount", async () => {
+    render(<App />)
+    expect(ipc.listSshHosts).not.toHaveBeenCalled()
+    await waitFor(() => expect(ipc.listSshHosts).toHaveBeenCalledTimes(1), { timeout: 2000 })
   })
 })

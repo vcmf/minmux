@@ -8,7 +8,7 @@ import { claudePaneIds } from "../lib/agent-graph"
 import { canMove, findPaneById, type MoveTarget } from "../lib/pane-tree"
 import { dropZone, insertIndex } from "../lib/drop-zone"
 import { displaySessionTitle, shellType } from "../lib/session-label"
-import { envTitle } from "../lib/ssh-hosts-ui"
+import { remoteBadge } from "../lib/ssh-hosts-ui"
 import { statusUi } from "../lib/status-ui"
 import { newSurfaceKey } from "../lib/platform"
 import { resolveDefaultShell } from "../lib/shells"
@@ -293,11 +293,7 @@ export function TerminalPane({ pane, tabId }: { pane: PaneLeaf; tabId: string })
           })}
         </div>
         <span className="pane-badge" title={session?.remote ? session.remote.target : undefined}>
-          {session?.remote
-            ? session.remote.env === "native"
-              ? "ssh"
-              : `ssh · ${envTitle(session.remote.env)}`
-            : shellType(session?.command ?? "")}
+          {session?.remote ? remoteBadge(session.remote) : shellType(session?.command ?? "")}
         </span>
         <div className="pane-header-spacer" />
         <button

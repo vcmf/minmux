@@ -357,3 +357,23 @@ describe("Sidebar — Remote hosts", () => {
     expect(screen.queryByText("Copy path")).not.toBeInTheDocument()
   })
 })
+
+describe("Sidebar — Remote hosts from the keyboard", () => {
+  it("a host row is focusable and Enter / Space open it", () => {
+    st().setSshHosts([testHost("web")])
+    render(<Sidebar />)
+    const row = screen.getByTitle("Open a terminal on web")
+    expect(row.tabIndex).toBe(0)
+    fireEvent.keyDown(row, { key: "Enter" })
+    fireEvent.keyDown(row, { key: " " })
+    expect(st().tabs).toHaveLength(2)
+  })
+
+  it("Enter on a split button splits, without also opening a tab", () => {
+    st().newTab(testShell)
+    st().setSshHosts([testHost("web")])
+    render(<Sidebar />)
+    fireEvent.keyDown(screen.getByTitle("Split right on web"), { key: "Enter" })
+    expect(st().tabs).toHaveLength(1)
+  })
+})

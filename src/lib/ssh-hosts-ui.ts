@@ -1,4 +1,4 @@
-import type { Session, ShellOption, SshEnv, SshHost } from "../types"
+import type { RemoteRef, Session, ShellOption, SshEnv, SshHost } from "../types"
 
 /** The ShellOption that opens a terminal on `host` (main builds the real ssh command). */
 export function hostShellOption(host: SshHost): ShellOption {
@@ -53,4 +53,21 @@ export function sameHosts(a: SshHost[], b: SshHost[]): boolean {
       h.detail === o.detail
     )
   })
+}
+
+/** A remote session's subline: "ssh · web", plus the distro for a WSL host. */
+export function remoteSubline(r: RemoteRef): string {
+  return r.env === "native" ? `ssh · ${r.target}` : `ssh · ${r.target} · ${envTitle(r.env)}`
+}
+
+/** A remote pane's badge: "ssh", plus the distro for a WSL host (the title is the host). */
+export function remoteBadge(r: RemoteRef): string {
+  return r.env === "native" ? "ssh" : `ssh · ${envTitle(r.env)}`
+}
+
+/** A host's palette subline: "web · me@10.0.0.1", with the distro for a WSL host. */
+export function hostSubline(h: SshHost): string {
+  return [h.label, h.env === "native" ? undefined : envTitle(h.env), h.detail]
+    .filter(Boolean)
+    .join(" · ")
 }

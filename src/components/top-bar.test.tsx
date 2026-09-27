@@ -118,3 +118,12 @@ describe("TopBar — SSH hosts in the new-tab picker", () => {
     expect(screen.queryByText("SSH")).not.toBeInTheDocument()
   })
 })
+
+describe("TopBar — picker with hosts but no local shells", () => {
+  it("the caret stays usable so the hosts can still be opened", () => {
+    useStore.setState({ shells: [] })
+    st().setSshHosts([testHost("web")])
+    render(<TopBar />)
+    expect(screen.getByTitle("New tab in…")).not.toBeDisabled()
+  })
+})

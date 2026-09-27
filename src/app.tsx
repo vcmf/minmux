@@ -34,6 +34,9 @@ import "./App.css"
 // overwrite it either (a downgrade would otherwise wipe the saved layout).
 let persistBlocked = false
 
+/** How long after mount the host list is first fetched (the first tab spawns before). */
+const SSH_HOSTS_DELAY_MS = 800
+
 function App() {
   const tabs = useStore((s) => s.tabs)
   const activeTabId = useStore((s) => s.activeTabId)
@@ -139,14 +142,19 @@ function App() {
     let disposed = false
     const refresh = () => {
       const mine = ++seq
-      void ipc
-        .listSshHosts()
-        .then((hosts) => {
-          if (!disposed && mine === seq) useStore.getState().setSshHosts(hosts)
-        })
-        .catch(() => undefined) // no backend / main failed: keep the last list
+      try {
+        void ipc
+          .listSshHosts()
+          .then((hosts) => {
+            if (!disposed && mine === seq) useStore.getState().setSshHosts(hosts)
+          })
+          .catch(() => undefined) // main failed: keep the last list
+      } catch {
+        // no backend
+      }
     }
-    refresh()
+    // After the startup spawns are under way: main builds its host list lazily.
+    const first = setTimeout(refresh, SSH_HOSTS_DELAY_MS)
     let off: (() => void) | undefined
     try {
       off = ipc.onSshHostsChanged(refresh)
@@ -155,6 +163,7 @@ function App() {
     }
     return () => {
       disposed = true
+      clearTimeout(first)
       off?.()
     }
   }, [])

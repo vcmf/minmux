@@ -865,3 +865,18 @@ describe("store — ssh hosts", () => {
     expect(st().sessions[firstTab().activeSessionId]!.remote?.hostId).toBe("native:web")
   })
 })
+
+describe("store — setSshHosts notifies only on a change", () => {
+  beforeEach(resetStore)
+
+  it("an identical list doesn't notify subscribers", () => {
+    st().setSshHosts([testHost("web")])
+    let calls = 0
+    const off = useStore.subscribe(() => calls++)
+    st().setSshHosts([testHost("web")])
+    expect(calls).toBe(0)
+    st().setSshHosts([testHost("db")])
+    expect(calls).toBe(1)
+    off()
+  })
+})

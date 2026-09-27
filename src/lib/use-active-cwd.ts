@@ -3,13 +3,18 @@ import { wslContext, type WslContext } from "./wsl"
 import { workCwd } from "./agent-dirs"
 import type { RemoteRef } from "../types"
 
+type State = ReturnType<typeof useStore.getState>
+
+/** The focused session's id (the active tab's), if any. */
+const focusedId = (s: State): string | undefined =>
+  s.tabs.find((t) => t.id === s.activeTabId)?.activeSessionId
+
 /** The folder the focused pane works in: Claude's while it runs there (a worktree, a `cd`),
  *  else the shell's — drives the git status bar + changes panel. None for an ssh session:
  *  its folders are on the host, so nothing local may read them. */
 export function useActiveWorkCwd(): string | undefined {
   return useStore((s) => {
-    const tab = s.tabs.find((t) => t.id === s.activeTabId)
-    const sid = tab?.activeSessionId
+    const sid = focusedId(s)
     const session = sid ? s.sessions[sid] : undefined
     if (!sid || session?.remote) return undefined
     return workCwd(s.agents, s.paneGit, sid, session?.cwd)
@@ -19,14 +24,14 @@ export function useActiveWorkCwd(): string | undefined {
 /** The focused session's ssh host, if it's remote (the panels show a notice instead). */
 export function useActiveRemote(): RemoteRef | undefined {
   return useStore((s) => {
-    const sid = s.tabs.find((t) => t.id === s.activeTabId)?.activeSessionId
+    const sid = focusedId(s)
     return sid ? s.sessions[sid]?.remote : undefined
   })
 }
 
 /** The focused session's id (keys the per-pane Files-panel root override). */
 export function useActiveSessionId(): string | undefined {
-  return useStore((s) => s.tabs.find((t) => t.id === s.activeTabId)?.activeSessionId)
+  return useStore(focusedId)
 }
 
 /** The Files-panel root for the focused pane: the per-session override if set, else the

@@ -357,8 +357,9 @@ export const useStore = create<AppState>((set, get) => ({
     void saveSettings(validated)
   },
   setShells: (shells) => set({ shells }),
+  // Unchanged → the same state object, so nothing is notified.
   setSshHosts: (hosts) =>
-    set((state) => (sameHosts(state.sshHosts, hosts) ? {} : { sshHosts: hosts })),
+    set((state) => (sameHosts(state.sshHosts, hosts) ? state : { sshHosts: hosts })),
 
   restoreWorkspace: (ws) =>
     set({

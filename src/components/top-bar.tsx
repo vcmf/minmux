@@ -175,7 +175,7 @@ export function TopBar() {
           <button
             className="iconbtn newtab-caret"
             title="New tab in…"
-            disabled={shells.length === 0}
+            disabled={shells.length === 0 && sshHosts.length === 0}
             onClick={() => setShellMenu((v) => !v)}
           >
             <CaretDown size={11} />

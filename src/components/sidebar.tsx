@@ -31,7 +31,7 @@ import { TerminalManager } from "../terminal/terminal-manager"
 import { allPanes } from "../lib/pane-tree"
 import { resolveDefaultShell } from "../lib/shells"
 import { statusUi } from "../lib/status-ui"
-import { connectedHostIds, envTitle, groupHosts, hostShellOption } from "../lib/ssh-hosts-ui"
+import { connectedHostIds, groupHosts, hostShellOption, remoteSubline } from "../lib/ssh-hosts-ui"
 import type { SshHost } from "../types"
 import {
   tabTitle,
@@ -258,9 +258,7 @@ export function Sidebar() {
                         {s.remote ? (
                           // Its folders are on the host: no local folder line or menu.
                           <span className="tree-sub" title={s.remote.target}>
-                            {s.remote.env === "native"
-                              ? `ssh · ${s.remote.target}`
-                              : `ssh · ${s.remote.target} · ${envTitle(s.remote.env)}`}
+                            {remoteSubline(s.remote)}
                           </span>
                         ) : (
                           <DirLines
@@ -470,8 +468,17 @@ function RemoteHosts() {
                     key={h.hostId}
                     className="tree-row remote-row"
                     style={{ paddingLeft: 12 }}
+                    role="button"
+                    tabIndex={0}
                     title={`Open a terminal on ${h.label}`}
                     onClick={() => open(h)}
+                    onKeyDown={(e) => {
+                      if (e.target !== e.currentTarget) return // a split button's own key
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault()
+                        open(h)
+                      }
+                    }}
                   >
                     <span className="tree-icon">
                       <Globe size={14} color={on ? "var(--accent)" : "var(--dim)"} />
