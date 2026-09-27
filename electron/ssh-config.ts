@@ -245,6 +245,7 @@ export interface LoadResult {
   hosts: SshConfigHost[]
   files: string[] // config files read, in order
   watch: string[] // paths whose change can alter the list: every file tried + glob dirs
+  globs: string[] // the Include glob patterns (a new file in a watched dir matters only if it matches)
   blocks: GuardedBlock[] // to merge with the system ssh_config (appended after the user's)
 }
 
@@ -284,6 +285,20 @@ export function globSegmentToRegExp(seg: string): RegExp {
     } else re += escape(c)
   }
   return new RegExp("^" + re + "$")
+}
+
+/** Does `file` match glob `pattern` segment by segment (same rules as expandGlob)? */
+export function globMatchesPath(pattern: string, file: string, p: PlatformPath): boolean {
+  const sep = p.sep === "/" ? /\/+/ : /[\\/]+/
+  const a = pattern.split(sep).filter(Boolean)
+  const b = file.split(sep).filter(Boolean)
+  if (a.length !== b.length) return false
+  return a.every((seg, i) => {
+    const name = b[i]!
+    if (!GLOB_CHARS.test(seg)) return seg === name
+    if (name.startsWith(".") && !seg.startsWith(".")) return false
+    return globSegmentToRegExp(seg).test(name)
+  })
 }
 
 /** Expand a glob path to existing entries, sorted; wildcards skip dotfiles (glob(3)). */
@@ -354,6 +369,7 @@ export async function loadSshConfig(opts: LoadOptions): Promise<LoadResult> {
   const evaluated = new Map<string, number>() // evaluation key → shallowest depth seen
   const files: string[] = []
   const watch = new Set<string>()
+  const globs = new Set<string>()
   // Every path we try (found or not) can change the list when it appears or changes.
   const dirs = new Map<string, Promise<string[] | null>>() // each dir listed once per load
   const fs: MiniFs = {
@@ -400,6 +416,7 @@ export async function loadSshConfig(opts: LoadOptions): Promise<LoadResult> {
       }
       for (const pat of item.patterns) {
         const resolved = resolveIncludePath(pat, opts.home, opts.path, base)
+        if (GLOB_CHARS.test(resolved)) globs.add(resolved)
         for (const f of await expandGlob(resolved, fs, opts.path)) {
           await visit(f, depth + 1, withGuard(guards, item.context), inner)
         }
@@ -408,7 +425,7 @@ export async function loadSshConfig(opts: LoadOptions): Promise<LoadResult> {
   }
 
   await visit(opts.file, 0, [], [])
-  return { hosts: hostsFromBlocks(blocks), files, watch: [...watch], blocks }
+  return { hosts: hostsFromBlocks(blocks), files, watch: [...watch], globs: [...globs], blocks }
 }
 
 const MAX_CONFIG_BYTES = 1024 * 1024 // a real ssh config is a few KB; bound main memory

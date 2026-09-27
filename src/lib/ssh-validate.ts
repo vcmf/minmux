@@ -1,7 +1,7 @@
 // Validators shared by settings (renderer) and the ssh argv builders (main). Kept tiny and
 // dependency-free so main can import it without pulling in the settings/theme tables.
 
-import type { SshEnv } from "../types"
+import type { RemoteRef, SshEnv } from "../types"
 import { hasControlChar } from "./control-chars"
 
 // Hostname / user characters only (IPv6 brackets, `%` zone ids): no shell metacharacters,
@@ -28,135 +28,57 @@ export function parseSshEnv(env: unknown): ParsedSshEnv | null {
 /** Type guard over parseSshEnv. */
 export const isSshEnv = (v: unknown): v is SshEnv => parseSshEnv(v) !== null
 
-// ssh(1) options that take a value (OpenSSH's getopt string), and flags, limited to ones
-// that still open an interactive shell: -G/-V/-O/-Q print or control, -N/-f/-n/-s/-W
-// never give the pane a shell.
-const SSH_OPTS_WITH_VALUE = new Set("bceilmopBDEFIJLPRSw")
-const SSH_FLAGS = new Set("1246agkqtvxACKMTXYy")
-// -o keywords that likewise stop the pane getting an interactive shell.
-const BLOCKED_O = new Set([
-  "sessiontype",
-  "forkafterauthentication",
-  "remotecommand",
-  "stdinnull",
-  "requesttty",
-])
-
-/** The keyword of an `-o` value as ssh reads it: leading blanks/`=` skipped, quotes removed. */
-function oKeyword(v: string): string {
-  let i = 0
-  while (i < v.length && /[ \t=]/.test(v[i]!)) i++
-  let kw = ""
-  let quote = false
-  for (; i < v.length; i++) {
-    const c = v[i]!
-    if (c === '"') quote = !quote
-    else if (!quote && /[ \t=]/.test(c)) break
-    else kw += c
-  }
-  return kw.toLowerCase()
+/** The `ssh` settings block. Hosts come from ~/.ssh/config only: these are presentation
+ *  and session-keeping preferences, never how to connect. */
+export interface SshSettings {
+  hidden: string[] // aliases hidden from the list (e.g. "github.com")
+  keepAliveSeconds: number // ServerAliveInterval smterm adds (0 = add none, the config decides)
+  restore: "auto" | "on-focus" // after a relaunch: reconnect at once, or when the pane is used
 }
 
-/** Walk ssh options, calling `visit(flag, value)`; false if the list isn't valid options. */
-function walkSshOptions(
-  args: readonly unknown[],
-  visit?: (flag: string, value?: string) => void,
-): boolean {
-  for (let i = 0; i < args.length; i++) {
-    const a = args[i]
-    if (
-      typeof a !== "string" ||
-      hasControlChar(a) ||
-      a.length < 2 ||
-      !a.startsWith("-") ||
-      a === "--"
-    )
-      return false
-    for (let k = 1; k < a.length; k++) {
-      const ch = a[k]!
-      if (SSH_OPTS_WITH_VALUE.has(ch)) {
-        let v: unknown
-        if (k + 1 < a.length)
-          v = a.slice(k + 1) // attached: -p2222
-        else v = args[++i] // separate: -p 2222
-        if (typeof v !== "string" || hasControlChar(v)) return false
-        visit?.(ch, v)
-        break
-      }
-      if (!SSH_FLAGS.has(ch)) return false
-      visit?.(ch)
-    }
-  }
-  return true
+const DEFAULT_KEEPALIVE = 30
+const MAX_KEEPALIVE = 3600
+const MAX_SSH_HIDDEN = 1000
+
+const asObject = (v: unknown): Record<string, unknown> =>
+  v && typeof v === "object" ? (v as Record<string, unknown>) : {}
+
+/** The `ssh` block, validated (fresh arrays every call). */
+export function mergeSshSettings(input: unknown): SshSettings {
+  const o = asObject(input)
+  const hidden = Array.isArray(o.hidden)
+    ? [
+        ...new Set(
+          o.hidden
+            .filter((x): x is string => typeof x === "string")
+            .map((x) => x.trim())
+            .filter((x) => x !== "" && x.length <= 255 && !hasControlChar(x)),
+        ),
+      ].slice(0, MAX_SSH_HIDDEN)
+    : []
+  const k = o.keepAliveSeconds
+  const keepAliveSeconds =
+    typeof k === "number" && Number.isFinite(k)
+      ? Math.min(MAX_KEEPALIVE, Math.max(0, Math.round(k)))
+      : DEFAULT_KEEPALIVE
+  const restore = o.restore === "on-focus" ? "on-focus" : "auto"
+  return { hidden, keepAliveSeconds, restore }
 }
 
-/** Valid ssh options that still open a shell? (A stray word would become the host.) */
-export function isSshOptionList(args: readonly unknown[]): boolean {
-  let ok = true
-  const valid = walkSshOptions(args, (flag, value) => {
-    if (flag === "o" && BLOCKED_O.has(oKeyword(value!))) ok = false
-  })
-  return valid && ok
-}
+const MAX_HOST_ID = 300
+const MAX_LABEL = 200
 
-/** Do these args set multiplexing (-M, -S, -o Control*) or their own config file (-F)? */
-export function sshArgsSetMux(args: readonly string[] | undefined): boolean {
-  let mux = false
-  walkSshOptions(args ?? [], (flag, value) => {
-    if (flag === "M" || flag === "S" || flag === "F") mux = true
-    const kw = flag === "o" ? oKeyword(value!) : ""
-    if (kw === "controlmaster" || kw === "controlpath" || kw === "controlpersist") mux = true
-  })
-  return mux
-}
-
-/** A host defined in settings.json (in addition to ~/.ssh/config). */
-export interface SshHostSetting {
-  name: string // label + stable id
-  target: string // ssh destination (alias or user@host)
-  args: string[] // extra ssh flags, e.g. ["-p", "2222"]
-  env: SshEnv // which ssh runs it ("native", or "wsl:<distro>" on Windows)
-}
-
-const MAX_SSH_HOSTS = 500
-const MAX_SSH_ARGS = 32
-
-/** One settings host, or null if any part is invalid (dropped whole, never half-kept). */
-function sshHostSetting(v: unknown): SshHostSetting | null {
+/** A RemoteRef's identity (hostId, target, env; label → target), validated; null if unusable. */
+export function parseRemoteRef(v: unknown): RemoteRef | null {
   if (!v || typeof v !== "object") return null
-  const o = v as Record<string, unknown>
-  const name = typeof o.name === "string" ? o.name.trim() : ""
-  if (!name || name.length > 80 || hasControlChar(name)) return null
-  if (!isSshTarget(o.target)) return null
-  let args: string[] = []
-  if (o.args !== undefined) {
-    if (!Array.isArray(o.args) || o.args.length > MAX_SSH_ARGS) return null
-    if (!isSshOptionList(o.args)) return null
-    args = [...(o.args as string[])]
-  }
-  let env: SshEnv = "native"
-  if (o.env !== undefined && o.env !== "native") {
-    if (!isSshEnv(o.env)) return null
-    env = o.env
-  }
-  return { name, target: o.target, args, env }
+  const r = v as Record<string, unknown>
+  const hostId = typeof r.hostId === "string" ? r.hostId : ""
+  if (!hostId || hostId.length > MAX_HOST_ID || hasControlChar(hostId)) return null
+  if (!isSshTarget(r.target) || !isSshEnv(r.env)) return null
+  return { hostId, label: sshLabel(r.label, r.target), target: r.target, env: r.env }
 }
 
-/** The usable settings hosts, plus the indexes of rejected entries (for a warning). */
-export function validateSshHosts(raw: readonly unknown[]): {
-  hosts: SshHostSetting[]
-  rejected: number[]
-} {
-  const hosts: SshHostSetting[] = []
-  const rejected: number[] = []
-  const names = new Set<string>()
-  raw.forEach((entry, i) => {
-    const h = i < MAX_SSH_HOSTS ? sshHostSetting(entry) : null
-    if (!h || names.has(h.name)) rejected.push(i)
-    else {
-      names.add(h.name)
-      hosts.push(h)
-    }
-  })
-  return { hosts, rejected }
+/** A displayable host label: trimmed-non-empty, no control chars, capped; else `fallback`. */
+export function sshLabel(v: unknown, fallback: string): string {
+  return typeof v === "string" && v.trim() && !hasControlChar(v) ? v.slice(0, MAX_LABEL) : fallback
 }

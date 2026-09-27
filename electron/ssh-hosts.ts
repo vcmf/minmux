@@ -1,17 +1,13 @@
-// SSH remotes: the saved-host list and the exact argv a remote session spawns with
-// (SSH_REMOTES.md §3–§5). Pure — main supplies the platform, the ssh binary and the -F
-// wrapper. Connection reuse: stay out if `ssh -G` shows the user's own multiplexing, else
-// an -F wrapper whose defaults come last, so ssh's own precedence keeps any explicit
-// setting (e.g. `ControlMaster no`) the probe can't see. A RemoteRef from the renderer is
-// untrusted: trustedRemote() rebuilds it from main's own host list before spawning.
+// SSH remotes: the ~/.ssh/config host list and the exact argv a remote session spawns with
+// (SSH_REMOTES.md §3–§5). Pure — main supplies the platform and the ssh binary. smterm runs
+// plain `ssh -t -- <alias>`: ssh applies the user's config exactly as in any terminal. A
+// RemoteRef from the renderer is untrusted: trustedRemote() takes the host from main's own
+// list before anything is spawned.
 
-import path from "node:path"
 import type { RemoteRef, SshEnv, SshHost } from "../src/types"
-import type { SshSettings } from "../src/settings/schema"
-import { hasControlChar } from "../src/lib/control-chars"
-import { parseSshConfig } from "./ssh-config"
-import { isSshTarget, parseSshEnv, sshArgsSetMux, validateSshHosts } from "../src/lib/ssh-validate"
-import type { PlatformPath, SshConfigHost } from "./ssh-config"
+import type { SshSettings } from "../src/lib/ssh-validate"
+import { isSshTarget, parseSshEnv } from "../src/lib/ssh-validate"
+import type { SshConfigHost } from "./ssh-config"
 
 /** The sidebar subline for a config host: `user@hostname:port` (parts that are set). */
 export function hostDetail(h: SshConfigHost): string | undefined {
@@ -24,218 +20,48 @@ export function hostDetail(h: SshConfigHost): string | undefined {
 export interface MergeInput {
   native: SshConfigHost[] // ~/.ssh/config (+ Includes) on this machine
   wsl: [distro: string, hosts: SshConfigHost[]][] // each distro's config, in distro order
-  settings: SshSettings
+  settings: Pick<SshSettings, "hidden">
   platform: NodeJS.Platform // WSL hosts only run on Windows
 }
 
-/** Config + settings hosts, ids unique; `all` keeps hidden ones (main's trust list). */
+/** Config hosts (native, then per WSL distro), ids unique; `all` keeps hidden ones. */
 export function mergeHosts(
   { native, wsl, settings, platform }: MergeInput,
   { all = false }: { all?: boolean } = {},
 ): SshHost[] {
   // ssh matches aliases case-insensitively, so hiding does too.
   const hidden = new Set(all ? [] : settings.hidden.map((h) => h.toLowerCase()))
-  const isHidden = (name: string) => hidden.has(name.toLowerCase())
-  const runnable = (env: SshEnv) => env === "native" || platform === "win32"
+  // A config alias is only listed if it's safe as an ssh argv destination.
+  const listable = (h: SshConfigHost) => !hidden.has(h.alias.toLowerCase()) && isSshTarget(h.alias)
   const out: SshHost[] = []
   const ids = new Set<string>()
-  const add = (h: SshHost) => {
-    if (ids.has(h.hostId)) return
-    ids.add(h.hostId)
-    out.push(h)
-  }
-  const fromConfig = (h: SshConfigHost, env: SshEnv, idPrefix: string): SshHost => {
+  const add = (h: SshConfigHost, env: SshEnv, idPrefix: string) => {
+    const hostId = `${idPrefix}:${h.alias}`
+    if (ids.has(hostId) || !listable(h)) return
+    ids.add(hostId)
     const detail = hostDetail(h)
-    return {
-      hostId: `${idPrefix}:${h.alias}`,
-      label: h.alias,
-      target: h.alias,
-      env,
-      source: "config",
-      ...(detail ? { detail } : {}),
-    }
+    out.push({ hostId, label: h.alias, target: h.alias, env, ...(detail ? { detail } : {}) })
   }
-  if (settings.fromSshConfig || all) {
-    // A config alias is only listed if it's safe as an ssh argv destination.
-    const listable = (h: SshConfigHost) => !isHidden(h.alias) && isSshTarget(h.alias)
-    for (const h of native) if (listable(h)) add(fromConfig(h, "native", "native"))
+  for (const h of native) add(h, "native", "native")
+  if (platform === "win32") {
     for (const [distro, hosts] of wsl) {
-      if (!parseSshEnv(`wsl:${distro}`) || !runnable(`wsl:${distro}`)) continue
-      for (const h of hosts) if (listable(h)) add(fromConfig(h, `wsl:${distro}`, `wsl:${distro}`))
+      if (!parseSshEnv(`wsl:${distro}`)) continue
+      for (const h of hosts) add(h, `wsl:${distro}`, `wsl:${distro}`)
     }
-  }
-  for (const s of validateSshHosts(settings.hosts).hosts) {
-    if (isHidden(s.name) || !runnable(s.env)) continue
-    add({
-      hostId: `settings:${s.name}`,
-      label: s.name,
-      target: s.target,
-      env: s.env,
-      source: "settings",
-      ...(s.args.length ? { extraArgs: [...s.args] } : {}),
-      ...(s.target !== s.name ? { detail: s.target } : {}),
-    })
   }
   return out
 }
 
-export const CONTROL_PERSIST = "10m"
-// sun_path is 104 bytes on macOS/BSD and 108 on Linux, NUL included: stay within 103.
-const SOCKET_PATH_MAX = 103
-// `%C` expands to 40 hex chars, and while creating the master ssh binds a temp name
-// `<path>.<16 random chars>` first: "/" + 40 + "." + 16.
-const CONTROL_NAME_BYTES = 1 + 40 + 1 + 16
-
-/** Does a ControlMaster socket in `dir` stay under the unix socket path limit? */
-export function controlPathFits(dir: string): boolean {
-  return new TextEncoder().encode(dir).length + CONTROL_NAME_BYTES <= SOCKET_PATH_MAX
+/** ssh's own keepalive (in the encrypted channel): keeps idle NAT/firewall state open and
+ *  ends a dead connection after `seconds × 4` instead of hanging. [] for 0. */
+export function keepAliveFlags(seconds: number): string[] {
+  return seconds > 0 ? ["-o", `ServerAliveInterval=${seconds}`, "-o", "ServerAliveCountMax=4"] : []
 }
-
-// ssh pastes the -F path unquoted into the ProxyCommand it builds for ProxyJump (run by
-// /bin/sh), so the wrapper's dir must be shell-safe as well as short.
-const SHELL_SAFE_CHARS = "A-Za-z0-9._/@+-" // shared with the WSL script's `case`
-const SHELL_SAFE_DIR = new RegExp(`^[${SHELL_SAFE_CHARS}]+$`)
-
-/** Can `dir` hold the wrapper and sockets? Short enough, and shell-safe (see above). */
-export const isUsableDir = (dir: string) => controlPathFits(dir) && SHELL_SAFE_DIR.test(dir)
-
-/** ~/.config/smterm/cm, or /tmp/smterm-<uid> if the home is long or has shell characters. */
-export function controlDir(home: string, uid: number, p: PlatformPath = path.posix): string {
-  const primary = p.join(home, ".config", "smterm", "cm")
-  return isUsableDir(primary) ? primary : `/tmp/smterm-${uid}`
-}
-
-/** lstat-like facts about a candidate control dir. */
-export interface DirFacts {
-  isDirectory: boolean
-  isSymbolicLink: boolean
-  uid: number
-  mode: number
-}
-
-/** A real dir we own that nobody else can enter (else they could hijack our sockets). */
-export function isSafeControlDir(st: DirFacts, uid: number): boolean {
-  return st.isDirectory && !st.isSymbolicLink && st.uid === uid && (st.mode & 0o077) === 0
-}
-
-const WRAPPER_HEADER = [
-  "# Written by smterm for connection reuse. Your own config is read first, so anything",
-  "# you set there wins; the Host * defaults below only fill in what it leaves unset.",
-]
-
-// An Include path we can quote: no `"`, no control characters.
-const quotable = (p: string) => !p.includes('"') && !hasControlChar(p)
-
-/** The `-F` wrapper: user + system config first, our ControlMaster defaults last (first wins). */
-export function muxConfigText(
-  dir: string,
-  includes: { user?: string; system: string | null },
-): string | null {
-  const user = includes.user ?? "~/.ssh/config"
-  if (!isUsableDir(dir) || !quotable(user)) return null
-  if (includes.system !== null && !quotable(includes.system)) return null
-  return [
-    ...WRAPPER_HEADER,
-    `Include "${user}"`,
-    ...(includes.system !== null ? [`Include "${includes.system}"`] : []),
-    "Host *",
-    "  ControlMaster auto",
-    `  ControlPath ${dir}/%C`,
-    `  ControlPersist ${CONTROL_PERSIST}`,
-    "",
-  ].join("\n")
-}
-
-/** stat-like facts about a config file. */
-export interface FileFacts {
-  isFile: boolean
-  uid: number
-  mode: number
-}
-
-/** Would ssh accept this file as an Include under -F (it checks like a user config)? */
-export function sshAcceptsInclude(st: FileFacts | null, uid: number): boolean {
-  if (st === null) return true // missing: ssh skips it
-  return st.isFile && (st.uid === uid || st.uid === 0) && (st.mode & 0o022) === 0
-}
-
-/** Does this config Include a relative path? (Under -F it would resolve against ~/.ssh.) */
-export function hasRelativeInclude(text: string): boolean {
-  return parseSshConfig(text).some(
-    (it) =>
-      it.type === "include" && it.patterns.some((p) => !p.startsWith("/") && !p.startsWith("~")),
-  )
-}
-
-// ControlMaster values ssh -G prints when multiplexing is on (`yes` prints as `true`).
-const MUX_ON = ["true", "yes", "auto", "ask", "autoask"]
-const MUX_MANAGED = [
-  /^controlpath\s/im,
-  new RegExp(`^controlmaster\\s+(${MUX_ON.join("|")})\\s*$`, "im"),
-]
-
-/** Does `ssh -G` output show the user already manages multiplexing? Then smterm stays out. */
-export const userManagesMux = (g: string) => MUX_MANAGED.some((re) => re.test(g))
-
-/** The system config ssh actually read, from `ssh -v -G` stderr; files in `userSshDir` skipped. */
-export function probedSystemConfig(debug: string, userSshDir: string): string | null {
-  const inUserDir = (f: string) => f.startsWith(userSshDir.replace(/\/?$/, "/"))
-  for (const m of debug.matchAll(/^debug1: Reading configuration data (.+?)\s*$/gm)) {
-    const file = m[1]!
-    if (!inUserDir(file) && file.endsWith("/ssh_config")) return file
-  }
-  return null
-}
-
-/** Command that shows how ssh resolves a host (`ssh -v -G`: config on stdout, files read on stderr). */
-export function buildSshProbe(
-  remote: RemoteRef,
-  ctx: { sshPath: string },
-): { file: string; args: string[] } {
-  return { file: ctx.sshPath, args: [...(remote.extraArgs ?? []), "-v", "-G", "--", remote.target] }
-}
-
-// The wrapper as printf arguments for the WSL script, from the same muxConfigText (so the
-// two can't drift), with the in-distro dir left to the shell as "$d".
-const WSL_WRAPPER_ARGS = muxConfigText("/DIR", { system: "/etc/ssh/ssh_config" })!
-  .split("\n")
-  .slice(0, -1)
-  .map((line) => "'" + line.replace(/'/g, "'\\''").replace("/DIR/", "'\"$d\"'/") + "'")
-  .join(" ")
-
-// Runs INSIDE a WSL distro as `sh -c SCRIPT smterm-ssh <target> <extra args…>`, mirroring the
-// native path: picks a usable control dir (else /tmp/smterm-<uid>), stays out if `ssh -G`
-// shows the user's own multiplexing, refuses a system config ssh would reject under -F,
-// creates the dir 0700 (never through a symlink), writes the wrapper atomically (panes may
-// start at once) and runs ssh -F with it. Any doubt → plain ssh. One `;`-joined line so it
-// crosses wsl.exe's command line intact.
-export const WSL_SSH_SCRIPT = [
-  't="$1"; shift',
-  'd="$HOME/.config/smterm/cm"',
-  // wc -c counts bytes (as sun_path does); ${#d} would count characters.
-  `n=$(printf %s "$d" | wc -c); [ $((n + ${CONTROL_NAME_BYTES})) -le ${SOCKET_PATH_MAX} ] || d="/tmp/smterm-$(id -u)"`,
-  `case "$d" in *[!${SHELL_SAFE_CHARS}]*) d="/tmp/smterm-$(id -u)";; esac`,
-  'g=$(ssh -G "$@" -- "$t" 2>/dev/null) || exec ssh "$@" -t -- "$t"',
-  `if printf '%s\\n' "$g" | grep -Eiq '^(controlpath[[:space:]]|controlmaster[[:space:]]+(${MUX_ON.join("|")})[[:space:]]*$)'; then exec ssh "$@" -t -- "$t"; fi`,
-  "s=/etc/ssh/ssh_config",
-  // A relative Include in the system file would resolve against ~/.ssh under -F.
-  `if [ -e "$s" ] && grep -Eiq '^[[:space:]]*include[[:space:]=]+[^/~[:space:]]' "$s"; then exec ssh "$@" -t -- "$t"; fi`,
-  'if [ -e "$s" ] && [ -n "$(find -L "$s" -prune \\( -perm -020 -o -perm -002 -o ! \\( -user 0 -o -user "$(id -u)" \\) \\) 2>/dev/null)" ]; then exec ssh "$@" -t -- "$t"; fi',
-  '[ -L "$d" ] || mkdir -p "$d" 2>/dev/null',
-  'if [ -d "$d" ] && [ ! -L "$d" ] && [ -O "$d" ] && chmod 700 "$d" 2>/dev/null &&' +
-    ` printf '%s\\n' ${WSL_WRAPPER_ARGS} > "$d/ssh_config.$$" 2>/dev/null && mv -f "$d/ssh_config.$$" "$d/ssh_config"; then` +
-    ' exec ssh -F "$d/ssh_config" "$@" -t -- "$t"; fi',
-  'rm -f "$d/ssh_config.$$" 2>/dev/null',
-  'exec ssh "$@" -t -- "$t"',
-].join("; ")
 
 export interface SpawnContext {
   platform: NodeJS.Platform
-  sshPath: string // native ssh binary (`ssh`, or the resolved ssh.exe on Windows)
-  // Path of the written wrapper; null = plain ssh (reuse off, unusable dir, or `ssh -G`
-  // showed the user manages multiplexing themselves).
-  muxConfig: string | null
-  reuse: boolean // settings.ssh.reuseConnections
+  sshPath: string // native ssh binary (resolved full path)
+  keepAliveSeconds: number // settings.ssh.keepAliveSeconds
 }
 
 /** node-pty file + args for a remote session; null if this platform can't run its env. */
@@ -245,53 +71,24 @@ export function buildSshSpawn(
 ): { file: string; args: string[] } | null {
   const env = parseSshEnv(remote.env)
   if (!env) return null
-  const extra = remote.extraArgs ?? []
-  // Args that set multiplexing or their own config file keep full control: no wrapper
-  // (even its lone ControlPath would let `-o ControlMaster=no` join a shared connection).
-  const reuse = ctx.reuse && !sshArgsSetMux(extra)
   // `--` ends ssh's options, so a destination starting with `-` can never become one.
-  const dest = ["-t", "--", remote.target]
-  if (env.kind === "native") {
-    // Windows' ssh.exe has no ControlMaster support.
-    const useConfig = reuse && ctx.platform !== "win32" && ctx.muxConfig !== null
-    const config = useConfig ? ["-F", ctx.muxConfig!] : []
-    return { file: ctx.sshPath, args: [...config, ...extra, ...dest] }
-  }
+  const tail = [...keepAliveFlags(ctx.keepAliveSeconds), "-t", "--", remote.target]
+  if (env.kind === "native") return { file: ctx.sshPath, args: tail }
   if (ctx.platform !== "win32") return null
-  // `-e` execs directly (no default-shell re-parse of our args); `--cd ~` starts at home.
-  const base = ["-d", env.distro, "--cd", "~", "-e"]
-  return reuse
-    ? {
-        file: "wsl.exe",
-        args: [...base, "sh", "-c", WSL_SSH_SCRIPT, "smterm-ssh", remote.target, ...extra],
-      }
-    : { file: "wsl.exe", args: [...base, "ssh", ...extra, ...dest] }
+  // The distro's own ssh (its keys, config and agent). `-e` execs directly (no default-
+  // shell re-parse of our args); `--cd ~` starts at home.
+  return { file: "wsl.exe", args: ["-d", env.distro, "--cd", "~", "-e", "ssh", ...tail] }
 }
 
-const MAX_LABEL = 200
-
-/** The RemoteRef to spawn: main's own copy of a known host, else a re-validated bare ref. */
+/** The RemoteRef to spawn: main's own copy of a known host, else null (never a guess). */
 export function trustedRemote(ref: unknown, hosts: readonly SshHost[]): RemoteRef | null {
   if (!ref || typeof ref !== "object") return null
-  const r = ref as Record<string, unknown>
-  if (typeof r.hostId !== "string" || !r.hostId || r.hostId.length > 300) return null
-  if (hasControlChar(r.hostId)) return null
-  const known = hosts.find((h) => h.hostId === r.hostId)
-  if (known) {
-    return {
-      hostId: known.hostId,
-      label: known.label,
-      target: known.target,
-      env: known.env,
-      ...(known.extraArgs?.length ? { extraArgs: [...known.extraArgs] } : {}),
-    }
-  }
-  // A settings host that's gone can't be rebuilt safely (its args are unknown): don't guess.
-  if (r.hostId.startsWith("settings:")) return null
-  if (!isSshTarget(r.target) || !parseSshEnv(r.env)) return null
-  const label =
-    typeof r.label === "string" && r.label.trim() && !hasControlChar(r.label)
-      ? r.label.slice(0, MAX_LABEL)
-      : r.target
-  return { hostId: r.hostId, label, target: r.target, env: r.env as SshEnv }
+  // Only an exact match against main's own (validated) list counts. An unknown host (removed
+  // from the config, or not loaded) is refused: a bare `ssh <alias>` without its
+  // HostName/User could reach a different machine via DNS.
+  const hostId = (ref as { hostId?: unknown }).hostId
+  const known = typeof hostId === "string" ? hosts.find((h) => h.hostId === hostId) : undefined
+  return known
+    ? { hostId: known.hostId, label: known.label, target: known.target, env: known.env }
+    : null
 }

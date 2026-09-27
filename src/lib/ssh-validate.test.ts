@@ -2,11 +2,11 @@ import { describe, expect, it } from "vitest"
 import { hasControlChar } from "./control-chars"
 import {
   isSshEnv,
-  isSshOptionList,
   isSshTarget,
+  mergeSshSettings,
+  parseRemoteRef,
   parseSshEnv,
-  sshArgsSetMux,
-  validateSshHosts,
+  sshLabel,
 } from "./ssh-validate"
 
 describe("hasControlChar", () => {
@@ -34,12 +34,11 @@ describe("isSshTarget", () => {
     }
   })
 
-  it("rejects options, whitespace, control characters, oversize and non-strings", () => {
+  it("rejects options, shell metacharacters, whitespace, URIs, oversize and non-strings", () => {
     for (const t of [
       "-v",
       "a b",
       "a\u0000b",
-      "a\u007fb",
       "",
       "x".repeat(256),
       null,
@@ -53,7 +52,7 @@ describe("isSshTarget", () => {
       'a"b',
       "a\\b",
       "ssh://me@web:2222",
-      "web\u00a0prod",
+      "web prod",
     ]) {
       expect(isSshTarget(t)).toBe(false)
     }
@@ -84,137 +83,77 @@ describe("parseSshEnv / isSshEnv", () => {
   })
 })
 
-describe("isSshOptionList", () => {
-  it("accepts flags, clusters, and options with attached or separate values", () => {
-    for (const args of [
-      [],
-      ["-A"],
-      ["-p", "2222"],
-      ["-p2222"],
-      ["-AXv"],
-      ["-Ai", "~/.ssh/k"],
-      ["-o", "SetEnv=A=b c", "-J", "bastion"],
-      ["-i", "-weird-but-a-value"],
-      ["-4", "-C", "-L", "8080:localhost:80"],
-    ]) {
-      expect(isSshOptionList(args)).toBe(true)
+describe("mergeSshSettings", () => {
+  it("defaults: nothing hidden, a 30 s keepalive, reconnect at once", () => {
+    for (const v of [undefined, null, {}, "nope", 3]) {
+      expect(mergeSshSettings(v)).toEqual({ hidden: [], keepAliveSeconds: 30, restore: "auto" })
     }
   })
 
-  it("rejects bare words (they'd become the destination) and missing values", () => {
-    for (const args of [
-      ["extra"],
-      ["-i", "~/.ssh/k", "extra"],
-      [""],
-      ["-p"],
-      ["-Ap"],
-      ["-"],
-      ["--"],
-      ["host", "-v"],
-    ]) {
-      expect(isSshOptionList(args)).toBe(false)
-    }
-  })
-
-  it("rejects options that don't start a session and unknown letters", () => {
-    for (const args of [
-      ["-G"],
-      ["-V"],
-      ["-O", "exit"],
-      ["-Q", "cipher"],
-      ["-Z"],
-      ["-vG"],
-      ["-N"],
-      ["-f"],
-      ["-n"],
-      ["-s"],
-      ["-W", "db:5432"],
-      ["-AN"],
-    ]) {
-      expect(isSshOptionList(args)).toBe(false)
-    }
-  })
-
-  it("rejects non-strings and control characters", () => {
-    for (const args of [[1], [null], ["-o", "a\nb"], ["-A\u0000"]])
-      expect(isSshOptionList(args)).toBe(false)
-  })
-})
-
-describe("isSshOptionList: -o keywords", () => {
-  it("rejects -o options that never give the pane a shell, in any spelling", () => {
-    for (const args of [
-      ["-o", "SessionType=none"],
-      ["-oSessionType=none"],
-      ["-o", "ForkAfterAuthentication=yes"],
-      ["-o", "RemoteCommand=true"],
-      ["-o", "remotecommand true"],
-      ["-o", "StdinNull yes"],
-      ["-o", "RequestTTY=no"],
-      ["-A", "-o", " SESSIONTYPE = none"],
-      ["-o", "=RemoteCommand echo hi"],
-      ["-o", '"RemoteCommand" echo hi'],
-      ["-o", '"Remote"Command=x'],
-    ]) {
-      expect(isSshOptionList(args)).toBe(false)
-    }
-  })
-
-  it("accepts other -o options", () => {
-    expect(isSshOptionList(["-o", "ServerAliveInterval=30", "-oForwardAgent=yes"])).toBe(true)
-  })
-})
-
-describe("sshArgsSetMux", () => {
-  it("spots multiplexing set by the args themselves", () => {
-    for (const args of [
-      ["-M"],
-      ["-AM"],
-      ["-S", "/tmp/cm"],
-      ["-S/tmp/cm"],
-      ["-o", "ControlMaster=no"],
-      ["-oControlPath=/x/%C"],
-      ["-o", "controlpersist 5m"],
-      ["-p", "22", "-o", "ControlMaster no"],
-      ["-o", "=ControlMaster yes"],
-      ["-o", '"ControlPath" /x'],
-      ["-F", "/my/config"],
-      ["-F/my/config"],
-    ]) {
-      expect(sshArgsSetMux(args)).toBe(true)
-    }
-  })
-
-  it("is false otherwise", () => {
-    for (const args of [
-      undefined,
-      [],
-      ["-A"],
-      ["-p", "22"],
-      ["-o", "ServerAliveInterval=5"],
-      ["-i", "-M"],
-    ]) {
-      expect(sshArgsSetMux(args)).toBe(false)
-    }
-  })
-})
-
-describe("validateSshHosts", () => {
-  it("returns usable hosts and the indexes it rejected", () => {
+  it("keeps hidden as unique, trimmed, non-empty strings, capped", () => {
     expect(
-      validateSshHosts([
-        { name: "a", target: "a", args: ["-p", "2222"] },
-        { name: "bad", target: "b", args: ["-o", "RemoteCommand=x"] },
-        { name: "a", target: "dup" },
-      ]),
-    ).toEqual({
-      hosts: [{ name: "a", target: "a", args: ["-p", "2222"], env: "native" }],
-      rejected: [1, 2],
-    })
+      mergeSshSettings({ hidden: ["a", "a", "", " ", 3, null, "b", " prod "] }).hidden,
+    ).toEqual(["a", "b", "prod"])
+    expect(mergeSshSettings({ hidden: "a" }).hidden).toEqual([])
+    expect(mergeSshSettings({ hidden: ["x".repeat(256), "ok", "a\u0007b"] }).hidden).toEqual(["ok"])
+    const many = Array.from({ length: 1500 }, (_, i) => `h${i}`)
+    expect(mergeSshSettings({ hidden: many }).hidden).toHaveLength(1000)
   })
 
-  it("copies args (no aliasing of the settings object)", () => {
-    const args = ["-A"]
-    expect(validateSshHosts([{ name: "a", target: "a", args }]).hosts[0]!.args).not.toBe(args)
+  it("clamps and rounds keepAliveSeconds; 0 turns it off", () => {
+    expect(mergeSshSettings({ keepAliveSeconds: 0 }).keepAliveSeconds).toBe(0)
+    expect(mergeSshSettings({ keepAliveSeconds: 15.6 }).keepAliveSeconds).toBe(16)
+    expect(mergeSshSettings({ keepAliveSeconds: -5 }).keepAliveSeconds).toBe(0)
+    expect(mergeSshSettings({ keepAliveSeconds: 99999 }).keepAliveSeconds).toBe(3600)
+    expect(mergeSshSettings({ keepAliveSeconds: "60" }).keepAliveSeconds).toBe(30)
+    expect(mergeSshSettings({ keepAliveSeconds: Number.NaN }).keepAliveSeconds).toBe(30)
+  })
+
+  it("restore is auto unless explicitly on-focus", () => {
+    expect(mergeSshSettings({ restore: "on-focus" }).restore).toBe("on-focus")
+    expect(mergeSshSettings({ restore: "never" }).restore).toBe("auto")
+  })
+
+  it("returns fresh arrays every call", () => {
+    const a = mergeSshSettings({})
+    a.hidden.push("x")
+    expect(mergeSshSettings({}).hidden).toEqual([])
+  })
+})
+
+describe("parseRemoteRef", () => {
+  it("keeps a valid ref's identity and drops anything else", () => {
+    expect(
+      parseRemoteRef({
+        hostId: "native:web",
+        label: "web",
+        target: "web",
+        env: "native",
+        extra: 1,
+      }),
+    ).toEqual({ hostId: "native:web", label: "web", target: "web", env: "native" })
+  })
+
+  it("rejects bad ids, targets, envs and non-objects", () => {
+    for (const bad of [
+      null,
+      "x",
+      {},
+      { hostId: "", target: "t", env: "native" },
+      { hostId: "x".repeat(301), target: "t", env: "native" },
+      { hostId: "a\u0000", target: "t", env: "native" },
+      { hostId: "x", target: "a b", env: "native" },
+      { hostId: "x", target: "t", env: "nope" },
+    ]) {
+      expect(parseRemoteRef(bad)).toBeNull()
+    }
+  })
+})
+
+describe("sshLabel", () => {
+  it("uses a clean label, else the fallback, capped at 200", () => {
+    expect(sshLabel("gpu box", "t")).toBe("gpu box")
+    for (const bad of [undefined, "", "  ", "a\nb", 3]) expect(sshLabel(bad, "t")).toBe("t")
+    expect(sshLabel("y".repeat(500), "t")).toHaveLength(200)
   })
 })

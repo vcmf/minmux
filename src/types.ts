@@ -3,6 +3,7 @@ export interface ShellOption {
   label: string
   command: string
   args: string[]
+  remote?: RemoteRef // an ssh host: main builds the real command; command/args are labels
 }
 
 /** Which `ssh` runs a remote session: the host's own, or one inside a WSL distro. */
@@ -10,16 +11,14 @@ export type SshEnv = "native" | `wsl:${string}`
 
 /** Which SSH host a session runs on; main builds the ssh argv from this at spawn. */
 export interface RemoteRef {
-  hostId: string // "native:<alias>" | "wsl:<distro>:<alias>" | "settings:<name>"
+  hostId: string // "native:<alias>" | "wsl:<distro>:<alias>"
   label: string // display name
-  target: string // the destination `ssh` gets (an alias or user@host)
+  target: string // the ~/.ssh/config alias `ssh` gets
   env: SshEnv
-  extraArgs?: string[] // extra ssh flags (settings-defined hosts only)
 }
 
-/** A saved host as the sidebar lists it. */
+/** A ~/.ssh/config host as the sidebar lists it. */
 export interface SshHost extends RemoteRef {
-  source: "config" | "settings"
   detail?: string // "user@hostname:port" subline
 }
 
@@ -36,6 +35,8 @@ export interface Session {
   cwd?: string // reported by the shell via OSC 7; drives the git diff panel
   oscTitle?: string // raw window title from OSC 0/2 (a program may set it)
   detail?: string // why it needs attention (OSC-9 message / "needs input")
+  remote?: RemoteRef // runs on an ssh host: no local cwd, files or git (splits stay on it)
+  remoteSaved?: unknown // a saved host this build couldn't read: written back as-is on save
 }
 
 /** A pane: terminals ("surfaces") stacked as tabs; stable `id`, only the active one shows. */

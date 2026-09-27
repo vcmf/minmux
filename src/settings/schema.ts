@@ -1,16 +1,7 @@
 import { DEFAULT_THEME_FAMILY, themeFamilyName, variantOf, type Appearance } from "./themes"
-import { hasControlChar } from "../lib/control-chars"
+import { mergeSshSettings, type SshSettings } from "../lib/ssh-validate"
 
-export { validateSshHosts, type SshHostSetting } from "../lib/ssh-validate"
-
-export interface SshSettings {
-  fromSshConfig: boolean // list ~/.ssh/config hosts
-  reuseConnections: boolean // OpenSSH ControlMaster so later panes skip auth
-  hidden: string[] // aliases / names hidden from the list
-  // Exactly as written in settings.json — validated where used (validateSshHosts), never
-  // here, so re-saving settings can't erase an entry the user got slightly wrong.
-  hosts: unknown[]
-}
+export { mergeSshSettings, type SshSettings } from "../lib/ssh-validate"
 
 export interface Settings {
   font: {
@@ -59,7 +50,7 @@ export const defaultSettings: Settings = {
   openPath: "code -g {file}:{line}:{col}",
   resumeAgents: "auto",
   resumeBypassPermissions: false,
-  ssh: { fromSshConfig: true, reuseConnections: true, hidden: [], hosts: [] },
+  ssh: mergeSshSettings({}),
 }
 
 const num = (v: unknown, fallback: number, min: number, max: number): number =>
@@ -72,37 +63,6 @@ const str = (v: unknown, fallback: string): string =>
 
 const asObject = (v: unknown): Record<string, unknown> =>
   v && typeof v === "object" ? (v as Record<string, unknown>) : {}
-
-const MAX_SSH_HIDDEN = 1000
-
-/** The `ssh` block: booleans and `hidden` validated, `hosts` kept verbatim. */
-export function mergeSshSettings(input: unknown): SshSettings {
-  const o = asObject(input)
-  const d = defaultSettings.ssh
-  // A JSON round-trip copies the entries (and drops anything JSON can't hold).
-  let hosts: unknown[] = []
-  try {
-    if (Array.isArray(o.hosts)) hosts = JSON.parse(JSON.stringify(o.hosts)) as unknown[]
-  } catch {
-    // cyclic / BigInt input can't be stored as JSON anyway
-  }
-  const hidden = Array.isArray(o.hidden)
-    ? [
-        ...new Set(
-          o.hidden
-            .filter((x): x is string => typeof x === "string")
-            .map((x) => x.trim())
-            .filter((x) => x !== "" && x.length <= 255 && !hasControlChar(x)),
-        ),
-      ].slice(0, MAX_SSH_HIDDEN)
-    : []
-  return {
-    fromSshConfig: bool(o.fromSshConfig, d.fromSshConfig),
-    reuseConnections: bool(o.reuseConnections, d.reuseConnections),
-    hidden,
-    hosts,
-  }
-}
 
 /** Deep-merge arbitrary input over defaults, validating + clamping. Unknown keys ignored. */
 export function mergeSettings(input: unknown): Settings {
