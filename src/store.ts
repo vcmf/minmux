@@ -86,6 +86,7 @@ interface AppState {
   agents: AgentGraph // live tree of Claude agents/sub-agents (M6, fed by hook events)
   home: string
   platform: string // process.platform ("darwin"|"win32"|"linux"); "" until fetched
+  profile: string // a non-default profile's name ("dev"), shown by the brand; "" otherwise
   editor: EditorInfo | null // configured editor availability (file context menu)
   // file open in the preview popup (null = closed); wsl = the pane's distro so a WSL path
   // is read via its UNC share (captured at open time — the active pane may change after).
@@ -99,6 +100,7 @@ interface AppState {
 
   setHome: (home: string) => void
   setPlatform: (platform: string) => void
+  setProfile: (profile: string) => void
   setEditor: (editor: EditorInfo) => void
   setPreview: (preview: { abs: string; name: string; wsl?: WslContext } | null) => void
   setPaneRoot: (sessionId: string, root: string) => void
@@ -275,6 +277,7 @@ export const useStore = create<AppState>((set, get) => ({
   agents: emptyGraph,
   home: "",
   platform: "",
+  profile: "",
   editor: null,
   preview: null,
   paneRoot: {},
@@ -286,6 +289,7 @@ export const useStore = create<AppState>((set, get) => ({
 
   setHome: (home) => set({ home }),
   setPlatform: (platform) => set({ platform }),
+  setProfile: (profile) => set({ profile }),
   setEditor: (editor) => set({ editor }),
   setPreview: (preview) => set({ preview }),
   // Central guard for every reroot entry point (double-click, context menu, breadcrumb,

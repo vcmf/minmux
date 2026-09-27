@@ -48,6 +48,7 @@ import { TranscriptTokens } from "./transcript-tokens"
 import { tokenEventsForBatch } from "./agent-tokens"
 import { AgentMetaTracker } from "./agent-meta"
 import { SessionLedger } from "./agent-sessions"
+import { profileNames, resolveProfile } from "./profile"
 import { PaneGitService } from "./pane-git"
 import type { PaneGitRequest } from "../src/lib/pane-git"
 import type { WslContext } from "../src/lib/wsl"
@@ -57,6 +58,9 @@ import {
   PREVIEW_MAX_SIZE,
   type PreviewData,
 } from "../src/lib/file-preview"
+
+// This process's profile (a dev build is `dev`): picked before anything reads a path.
+const PROFILE_NAMES = profileNames(resolveProfile(process.env.SMTERM_PROFILE, app.isPackaged))
 
 const dir = path.dirname(fileURLToPath(import.meta.url))
 
@@ -306,17 +310,14 @@ async function startAgentObservability(): Promise<void> {
 
 // ── settings.json (source of truth) ────────────────────────────────
 function settingsPath(): string {
-  const base =
-    process.platform === "win32"
-      ? path.join(process.env.APPDATA ?? os.homedir(), "smterm")
-      : path.join(os.homedir(), ".config", "smterm")
-  return path.join(base, "settings.json")
+  return path.join(configDir(), "settings.json")
 }
 
+/** ~/.config/smterm (%APPDATA%\smterm on Windows) — `smterm-<profile>` for another profile. */
 function configDir(): string {
   return process.platform === "win32"
-    ? path.join(process.env.APPDATA ?? os.homedir(), "smterm")
-    : path.join(os.homedir(), ".config", "smterm")
+    ? path.join(process.env.APPDATA ?? os.homedir(), PROFILE_NAMES.appName)
+    : path.join(os.homedir(), ".config", PROFILE_NAMES.appName)
 }
 
 // The window's native background (shown before the renderer paints and in unpainted
@@ -401,6 +402,8 @@ function registerIpc() {
       // SMTERM_SHARE_HISTORY=0 to disable. (For WSL, wslInjection lists it in $WSLENV
       // so it crosses the boundary.)
       const spawnEnv = { ...process.env, ...(inj?.env ?? {}) } as Record<string, string>
+      // Our profile choice isn't the shell's: an smterm started from this pane picks its own.
+      delete spawnEnv.SMTERM_PROFILE
       if (!shareHistoryEnabled()) spawnEnv.SMTERM_SHARE_HISTORY = "0"
       // Tell agents (Claude Code, vim, …) our light/dark background via COLORFGBG — the
       // fallback when the OSC-11 background query can't complete in time (notably across
@@ -583,7 +586,13 @@ function registerIpc() {
   ipcMain.handle("platform:info", async () => {
     const label =
       process.platform === "darwin" ? "macOS" : process.platform === "win32" ? "Windows" : "Linux"
-    return { platform: process.platform, label, release: os.release(), home: os.homedir() }
+    return {
+      platform: process.platform,
+      label,
+      release: os.release(),
+      home: os.homedir(),
+      profile: PROFILE_NAMES.label, // "" for the installed app's profile
+    }
   })
 
   // Settings.
@@ -862,8 +871,13 @@ function openFile(cwd: string, file: string, line?: number, col?: number): void 
 // App identity. Packaged builds get this from the bundle (electron-builder productName),
 // but in dev the app runs from Electron.app, so the dock/menu read "Electron" unless we
 // set it here. AppUserModelId groups the taskbar + routes notifications on Windows.
-app.setName("smterm")
-app.setAppUserModelId("com.smterm.app")
+// Per profile (a dev build is `smterm-dev`): the user-data dir — and with it the
+// single-instance lock and localStorage — is the profile's own, unless the caller chose one.
+app.setName(PROFILE_NAMES.appName)
+app.setAppUserModelId(PROFILE_NAMES.appId)
+if (!app.commandLine.hasSwitch("user-data-dir")) {
+  app.setPath("userData", path.join(app.getPath("appData"), PROFILE_NAMES.appName))
+}
 
 // Single-instance guard. A second launch — an update-relaunch racing the old process, or
 // a stray double-click — would start a SECOND hook receiver on a different ephemeral port

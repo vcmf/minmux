@@ -12,6 +12,7 @@ export function resetStore() {
     tabs: [],
     activeTabId: null,
     shells: [testShell],
+    profile: "",
     windowFocused: true,
     systemDark: true,
     settingsLoaded: false,

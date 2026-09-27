@@ -16,7 +16,7 @@ install: ## Install deps, rebuild native modules, activate git hooks
 ## ─────────────────────────────── Run ─────────────────────────────────
 
 .PHONY: run
-run: ## Run the app in dev mode (opens a window)
+run: ## Run the app in dev mode, dev profile (SMTERM_PROFILE=<name> for another)
 	npm run dev
 
 .PHONY: dev

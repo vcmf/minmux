@@ -56,6 +56,9 @@ export async function launch(o = {}) {
   // URL would make this "built" app load live dev code instead of out/.
   delete env.ELECTRON_RENDERER_URL
   delete env.ELECTRON_RUN_AS_NODE
+  // HOME and --user-data-dir are already throwaway: keep the default profile's paths
+  // (~/.config/smterm, as `cfg` above) instead of the `dev` one an unpackaged build picks.
+  env.SMTERM_PROFILE = "default"
   if (o.gh) {
     try {
       env.GH_TOKEN = execFileSync("gh", ["auth", "token"], { encoding: "utf8" }).trim()

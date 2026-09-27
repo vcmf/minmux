@@ -127,6 +127,16 @@ body {
   font-weight: 600;
   letter-spacing: 0.04em;
 }
+.brand-profile {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 1px 6px;
+  border-radius: 4px;
+  border: 1px solid var(--amber);
+  color: var(--amber);
+}
 
 .vdivider {
   width: 1px;

@@ -106,6 +106,8 @@ rules also in `electron/CLAUDE.md` (loaded on demand). Design detail in `docs/AR
 - **A crashed TUI's mouse mode self-heals** via the zsh/bash `precmd` reset. → GOTCHAS #mouse-reset
 - **zsh/bash history is shared across panes** — integration sets `SHARE_HISTORY`/`histappend`
   (incremental write → also survives close); opt-out via `shareHistory` setting. → GOTCHAS #history
+- **A dev build is the `dev` profile** (own lock, `~/.config/smterm-dev`), so it runs beside the
+  installed app; `SMTERM_PROFILE=<name>` picks another. → GOTCHAS #profiles
 - **`node-pty` is a native module** — `npx electron-rebuild -o node-pty`; not unit-testable in Vitest. → GOTCHAS #node-pty
 - **On Windows the app spawns `wsl.exe`** — never runs _inside_ WSL. → GOTCHAS #windows
 - **Hidden surfaces (and visited background tabs) are parked** — opened off-screen,

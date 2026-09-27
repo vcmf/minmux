@@ -152,6 +152,26 @@ in a cmux pane with the user's `.zshrc` having it off, so cmux enables it itself
   `wslInjection` and forwards it over `$WSLENV`, so the repoint fires there too. bash is
   unaffected (no ZDOTDIR).
 
+## Profiles: a dev build is its own app {#profiles}
+
+An unpackaged build (`make run`) runs as the **`dev` profile**. Its app name is
+`smterm-dev`, so it gets its own Electron user-data dir, which holds the
+**single-instance lock** and localStorage. It also gets its own config dir
+(`~/.config/smterm-dev`: settings, workspace, Claude hook files, ledger). The installed app
+keeps the plain `smterm` names. Without this, `make run` found the installed app's lock,
+focused that window and quit. And had it started, it would have overwritten the installed
+app's `workspace.json` and `claude-hooks.json` (the ECONNREFUSED hook spam the lock exists
+to prevent).
+
+- `SMTERM_PROFILE=<name>` (lowercase, digits, `-`) picks a profile for either build;
+  `default` / `prod` is the installed app's. Resolved once, first thing in `main.ts`
+  (`electron/profile.ts`), before any path is read.
+- An explicit `--user-data-dir` (the `run-smterm` driver) still wins; the driver also sets
+  `SMTERM_PROFILE=default`, since its HOME is throwaway anyway.
+- `SMTERM_PROFILE` is stripped from PTY env, so an smterm started from a pane picks its own.
+- On macOS Electron's `appData` is the real `~/Library/Application Support` even under a
+  fake `$HOME`: a test that fakes HOME must still pass `--user-data-dir`.
+
 ## node-pty is a native module {#node-pty}
 
 After install / Electron upgrades run `npx electron-rebuild -o node-pty` (in
