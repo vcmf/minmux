@@ -8,32 +8,51 @@ import {
 } from "./profile"
 
 describe("resolveProfile", () => {
+  const dev = (env?: string, flag?: string) => resolveProfile({ env, flag, packaged: false })
+  const installed = (env?: string, flag?: string) => resolveProfile({ env, flag, packaged: true })
+
   it("a dev (unpackaged) build is `dev` by default; an installed one is the default", () => {
-    expect(resolveProfile(undefined, false)).toEqual({ profile: "dev" })
-    expect(resolveProfile(undefined, true)).toEqual({ profile: DEFAULT_PROFILE })
-    expect(resolveProfile("", false)).toEqual({ profile: "dev" })
-    expect(resolveProfile("  ", true)).toEqual({ profile: DEFAULT_PROFILE })
+    expect(dev()).toEqual({ profile: "dev" })
+    expect(installed()).toEqual({ profile: DEFAULT_PROFILE })
+    expect(dev("  ")).toEqual({ profile: "dev" })
   })
 
-  it("SMTERM_PROFILE picks one, either way", () => {
-    expect(resolveProfile("qa", true)).toEqual({ profile: "qa" })
-    expect(resolveProfile("wt-ssh-2", false)).toEqual({ profile: "wt-ssh-2" })
-    expect(resolveProfile(" Dev ", true)).toEqual({ profile: "dev" }) // trimmed, case-folded
+  it("an installed app ignores SMTERM_PROFILE entirely — even an invalid one", () => {
+    expect(installed("qa")).toEqual({ profile: DEFAULT_PROFILE })
+    expect(installed("wt_1")).toEqual({ profile: DEFAULT_PROFILE })
+  })
+
+  it("a dev build takes SMTERM_PROFILE", () => {
+    expect(dev("wt-ssh-2")).toEqual({ profile: "wt-ssh-2" })
+    expect(dev(" Dev ")).toEqual({ profile: "dev" }) // trimmed, case-folded
+  })
+
+  it("--profile= picks one for either build, and wins over the env", () => {
+    expect(installed(undefined, "qa")).toEqual({ profile: "qa" })
+    expect(dev("wt1", "qa")).toEqual({ profile: "qa" })
+    expect(installed("qa", "default")).toEqual({ profile: DEFAULT_PROFILE })
   })
 
   it("`default` / `prod` mean the installed app's (real config, real lock)", () => {
     for (const v of ["default", "prod", "PROD"]) {
-      expect(resolveProfile(v, false)).toEqual({ profile: DEFAULT_PROFILE })
+      expect(dev(v)).toEqual({ profile: DEFAULT_PROFILE })
+      expect(installed(undefined, v)).toEqual({ profile: DEFAULT_PROFILE })
     }
   })
 
-  it("an invalid name is an error — never a silent fallback to someone's real data", () => {
+  it("an invalid name is an error naming its source — never a silent fallback", () => {
     for (const bad of ["../x", "a/b", "a b", "-x", "x".repeat(40), "é", "a.b", "wt_1"]) {
-      for (const packaged of [true, false]) {
-        const r = resolveProfile(bad, packaged)
-        expect("error" in r && r.error).toContain("isn't a valid profile name")
+      const fromEnv = dev(bad)
+      expect("error" in fromEnv && fromEnv.error).toContain("SMTERM_PROFILE=")
+      for (const r of [dev(undefined, bad), installed(undefined, bad)]) {
+        expect("error" in r && r.error).toContain("--profile=")
       }
     }
+  })
+
+  it("an empty --profile= is an error too (it was passed, just without a name)", () => {
+    const r = installed(undefined, "")
+    expect("error" in r && r.error).toContain("isn't a valid profile name")
   })
 })
 

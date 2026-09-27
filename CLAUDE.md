@@ -109,7 +109,8 @@ rules also in `electron/CLAUDE.md` (loaded on demand). Design detail in `docs/AR
   (incremental write → also survives close); opt-out via `shareHistory` setting. → GOTCHAS #history
 - **A dev build is the `dev` profile**: own user-data dir (the lock), config dir
   (`~/.config/smterm-dev`) and shell-integration dir, so it runs beside the installed app;
-  `SMTERM_PROFILE=<name>` picks another. Paths come from `configDir()`, never "smterm". → GOTCHAS #profiles
+  `SMTERM_PROFILE=<name>` picks another (dev builds only; `--profile=<name>` for either).
+  Paths come from `configDir()`, never "smterm". → GOTCHAS #profiles
 - **`node-pty` is a native module** — `npx electron-rebuild -o node-pty`; not unit-testable in Vitest. → GOTCHAS #node-pty
 - **On Windows the app spawns `wsl.exe`** — never runs _inside_ WSL. → GOTCHAS #windows
 - **Hidden surfaces (and visited background tabs) are parked** — opened off-screen,

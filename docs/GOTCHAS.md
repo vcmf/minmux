@@ -169,7 +169,9 @@ Without this, `make run` found the installed app's lock, focused that window and
 had it started, it would have overwritten the installed app's workspace and
 `claude-hooks.json` (the ECONNREFUSED hook spam the lock exists to prevent).
 
-- `SMTERM_PROFILE=<name>` (lowercase, digits, `-`) picks a profile for either build;
+- `--profile=<name>` (lowercase, digits, `-`; the `=` is required — Chromium's switch syntax)
+  picks a profile for either build. **`SMTERM_PROFILE` works for a dev build only**: an
+  installed app ignores ambient env, so an export meant for dev runs can never move it.
   `default` / `prod` is the installed app's. An **invalid** name stops main synchronously
   (stderr + an error box on macOS/Windows; Linux has no dialog before ready) before any name,
   path or lock is set, so it never falls back to some profile's real data. Resolved once, first thing in

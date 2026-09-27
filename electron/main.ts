@@ -65,7 +65,13 @@ import {
 // so it can never fall back to (and write into) another profile's data. Then the env is
 // scrubbed of what a parent smterm set for its own pane (its hook file, pane id, our profile
 // choice), so nothing we spawn — shells, editors, git — inherits it.
-const PROFILE_CHOICE = resolveProfile(process.env.SMTERM_PROFILE, app.isPackaged)
+const PROFILE_CHOICE = resolveProfile({
+  flag: app.commandLine.hasSwitch("profile")
+    ? app.commandLine.getSwitchValue("profile")
+    : undefined,
+  env: process.env.SMTERM_PROFILE,
+  packaged: app.isPackaged,
+})
 if ("error" in PROFILE_CHOICE) {
   console.error(`smterm: ${PROFILE_CHOICE.error}`) // Linux shows no dialog before ready
   dialog.showErrorBox("smterm can't start", PROFILE_CHOICE.error) // blocks on macOS / Windows
