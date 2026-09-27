@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react"
 import { useShallow } from "zustand/react/shallow"
-import { Globe, Terminal, TerminalWindow, X, Columns, Rows } from "@phosphor-icons/react"
+import { Globe, Plugs, Terminal, TerminalWindow, X, Columns, Rows } from "@phosphor-icons/react"
 import { TerminalManager } from "../terminal/terminal-manager"
 import { activeTheme, useStore } from "../store"
 import { sessionColor } from "../lib/session-color"
@@ -9,6 +9,7 @@ import { canMove, findPaneById, type MoveTarget } from "../lib/pane-tree"
 import { dropZone, insertIndex } from "../lib/drop-zone"
 import { displaySessionTitle, shellType } from "../lib/session-label"
 import { remoteBadge } from "../lib/ssh-hosts-ui"
+import { isIdle } from "../lib/remote-connect"
 import { statusUi } from "../lib/status-ui"
 import { newSurfaceKey } from "../lib/platform"
 import { resolveDefaultShell } from "../lib/shells"
@@ -41,6 +42,11 @@ export function TerminalPane({ pane, tabId }: { pane: PaneLeaf; tabId: string })
       s.activeTabId === tabId && s.tabs.find((t) => t.id === tabId)?.activeSessionId === activeId,
   )
   const status = session?.status ?? "idle"
+  // An ssh pane waiting at a Connect prompt (restored on-focus, closed, or failed).
+  const remoteIdle = useStore((s) => {
+    const p = s.remotePhase[activeId]
+    return isIdle(p) ? p : undefined
+  })
   // The focus/attention top rail only disambiguates between panes — pointless when
   // the tab has a single pane, so suppress it there.
   const isSplit = useStore((s) => {
@@ -296,6 +302,20 @@ export function TerminalPane({ pane, tabId }: { pane: PaneLeaf; tabId: string })
           {session?.remote ? remoteBadge(session.remote) : shellType(session?.command ?? "")}
         </span>
         <div className="pane-header-spacer" />
+        {remoteIdle && (
+          <button
+            className="pane-connect"
+            title={remoteIdle === "waiting" ? "Connect (Enter)" : "Reconnect (Enter)"}
+            onMouseDown={(e) => e.stopPropagation()}
+            onClick={() => {
+              TerminalManager.connect(activeId)
+              TerminalManager.focus(activeId)
+            }}
+          >
+            <Plugs size={12} />
+            {remoteIdle === "waiting" ? "Connect" : remoteIdle === "failed" ? "Retry" : "Reconnect"}
+          </button>
+        )}
         <button
           className="iconbtn"
           style={{ width: 22, height: 22 }}

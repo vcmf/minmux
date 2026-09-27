@@ -16,6 +16,7 @@ import {
 } from "./lib/pane-tree"
 import { inheritShell, resolveDefaultShell } from "./lib/shells"
 import { sameHosts } from "./lib/ssh-hosts-ui"
+import type { RemotePhase } from "./lib/remote-connect"
 import { reduceSignals } from "./lib/session-status"
 import type { SignalEvent } from "./lib/session-status"
 import { inGitKey, paneOfGitKey } from "./lib/agent-dirs"
@@ -85,6 +86,7 @@ interface AppState {
   activeTabId: string | null
   shells: ShellOption[]
   sshHosts: SshHost[] // saved ssh hosts (main's list, refreshed when ~/.ssh/config changes)
+  remotePhase: Record<string, RemotePhase> // ssh panes started here: where each connection is
   sshHostsLoaded: boolean // main has answered once (before that, "no hosts" isn't known)
   windowFocused: boolean
   systemDark: boolean // OS prefers a dark colour scheme (drives appearance: "system")
@@ -131,6 +133,7 @@ interface AppState {
   settingsLoaded: boolean // settings.json read at least once (gates theming + first spawns)
   setShells: (shells: ShellOption[]) => void
   setSshHosts: (hosts: SshHost[]) => void
+  setRemotePhase: (sessionId: string, phase: RemotePhase) => void
   restoreWorkspace: (ws: WorkspaceState) => void
   setRightPanelWidth: (px: number, maxAvail?: number) => void
   newTab: (shell: ShellOption) => void
@@ -242,13 +245,15 @@ function markSeen(sessions: Record<string, Session>, sessionId: string): Record<
 function dropSessions(
   state: AppState,
   ids: string[],
-): Pick<AppState, "sessions" | "paneRoot" | "agentMeta" | "paneGit" | "resume"> {
+): Pick<AppState, "sessions" | "paneRoot" | "agentMeta" | "paneGit" | "resume" | "remotePhase"> {
   const sessions = { ...state.sessions }
   const paneRoot = { ...state.paneRoot }
   const agentMeta = { ...state.agentMeta }
   const paneGit = { ...state.paneGit }
   const resume = { ...state.resume }
+  const remotePhase = { ...state.remotePhase }
   for (const id of ids) {
+    delete remotePhase[id]
     delete resume[id]
     delete paneGit[id]
     delete paneGit[inGitKey(id)] // …and its Claude `in` folder's
@@ -256,7 +261,7 @@ function dropSessions(
     delete paneRoot[id] // don't leak the pane's root override
     delete agentMeta[id] // …or its Claude accent
   }
-  return { sessions, paneRoot, agentMeta, paneGit, resume }
+  return { sessions, paneRoot, agentMeta, paneGit, resume, remotePhase }
 }
 
 /** Remove a tab; if it was active, the last remaining tab takes over. */
@@ -274,6 +279,7 @@ export const useStore = create<AppState>((set, get) => ({
   shells: [],
   sshHosts: [],
   sshHostsLoaded: false,
+  remotePhase: {},
   windowFocused: true,
   // Seeded from the OS now (not after an effect) so "system" never starts on the wrong scheme.
   systemDark:
@@ -359,6 +365,14 @@ export const useStore = create<AppState>((set, get) => ({
     void saveSettings(validated)
   },
   setShells: (shells) => set({ shells }),
+  // Unchanged, or the session is gone (a late answer after a close) → the same state.
+  setRemotePhase: (sessionId, phase) =>
+    set((state) =>
+      state.remotePhase[sessionId] === phase || !state.sessions[sessionId]
+        ? state
+        : { remotePhase: { ...state.remotePhase, [sessionId]: phase } },
+    ),
+
   // Unchanged → the same state object, so nothing is notified.
   setSshHosts: (hosts) =>
     set((state) =>
@@ -369,7 +383,11 @@ export const useStore = create<AppState>((set, get) => ({
 
   restoreWorkspace: (ws) =>
     set({
-      sessions: ws.sessions,
+      // Marked so a restored ssh pane can follow `ssh.restore` (terminal-manager).
+      sessions: Object.fromEntries(
+        Object.entries(ws.sessions).map(([id, s]) => [id, s.remote ? { ...s, restored: true } : s]),
+      ),
+      remotePhase: {},
       tabs: ws.tabs,
       activeTabId: ws.activeTabId,
       ...(ws.rightPanelWidth !== undefined ? { rightPanelWidth: ws.rightPanelWidth } : {}),

@@ -133,6 +133,31 @@ export function SettingsPanel() {
           />
         </label>
 
+        <h3 className="settings-section">SSH</h3>
+        <label className="settings-row">
+          <span>Reconnect on launch</span>
+          <select
+            value={settings.ssh.restore}
+            onChange={(e) =>
+              update({
+                ...settings,
+                ssh: { ...settings.ssh, restore: e.target.value as Settings["ssh"]["restore"] },
+              })
+            }
+          >
+            <option value="auto">Right away</option>
+            <option value="on-focus">When I press Enter</option>
+          </select>
+        </label>
+
+        <label className="settings-row">
+          <span>Keepalive (seconds, 0 = off)</span>
+          <KeepAliveInput
+            value={settings.ssh.keepAliveSeconds}
+            onCommit={(n) => update({ ...settings, ssh: { ...settings.ssh, keepAliveSeconds: n } })}
+          />
+        </label>
+
         <div className="settings-footer">
           <button className="btn" onClick={() => void openSettingsFile(settings)}>
             Open settings.json
@@ -141,5 +166,29 @@ export function SettingsPanel() {
         </div>
       </div>
     </div>
+  )
+}
+
+/** Keepalive seconds, saved on blur or Enter — not per keystroke (an emptied field would
+ *  save 0 = off, and every key would rewrite settings.json). */
+function KeepAliveInput({ value, onCommit }: { value: number; onCommit: (n: number) => void }) {
+  const [draft, setDraft] = useState(String(value))
+  useEffect(() => setDraft(String(value)), [value])
+  const commit = () => {
+    const n = Number(draft)
+    if (draft.trim() === "" || !Number.isFinite(n)) return setDraft(String(value)) // keep it
+    if (n !== value) onCommit(n)
+    else setDraft(String(value))
+  }
+  return (
+    <input
+      type="number"
+      min={0}
+      max={3600}
+      value={draft}
+      onChange={(e) => setDraft(e.target.value)}
+      onBlur={commit}
+      onKeyDown={(e) => e.key === "Enter" && commit()}
+    />
   )
 }

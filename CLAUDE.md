@@ -24,6 +24,8 @@ electron/                 main process (Node) — see electron/CLAUDE.md
   transcript-fold.ts      chunked incremental JSONL reader, shared by:
     transcript-tokens.ts  · token badge      transcript-meta.ts · /color + /rename
   agent-meta.ts           per-pane transcript watch → session colour (agents:meta)
+  ssh-config.ts · ssh-service.ts  ~/.ssh/config → host list (watched) · spawn plans (trusted)
+  pending-spawns.ts       one spawn per pane while an async (ssh) plan is built
 src/
   app.tsx · store.ts      compose + global effects/pollers · Zustand state + actions
   types.ts                Session, PaneLeaf/PaneNode (pane = surfaces), Tab, DropZone
@@ -115,4 +117,6 @@ rules also in `electron/CLAUDE.md` (loaded on demand). Design detail in `docs/AR
 - **`/color` + `/rename` live only in Claude's transcript**; slash commands fire no hook. → GOTCHAS #claude-transcript
 - **Relaunch resumes Claude sessions** from a hook-fed ledger: any SessionEnd while running
   clears an entry; a quit freezes it first; one shot per session. → GOTCHAS #resume
+- **SSH panes have no local cwd; main rebuilds their ssh command** from its own host list;
+  reconnect reuses the session id (xterm listeners wired once). → GOTCHAS #ssh
 - **Agent-status reducer has a known flaw** — don't quick-patch (needs a test matrix). → GOTCHAS #agent-status, ARCHITECTURE §9a

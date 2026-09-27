@@ -1987,3 +1987,23 @@ body.resizing-col {
   outline-offset: 1px;
   border-radius: 3px;
 }
+
+/* ── Pane header: Connect / Reconnect for an idle ssh pane ── */
+.pane-connect {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 20px;
+  padding: 0 8px;
+  margin-right: 4px;
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+.pane-connect:hover {
+  background: var(--elev);
+}

@@ -367,7 +367,7 @@ function writeSettings(contents: string): void {
 // The renderer's spawn request (src/lib/ipc.ts), with `remote` untrusted until SshService
 // rebuilds it from main's own list.
 type SpawnOpts = Omit<SpawnRequest, "remote"> & { remote?: unknown }
-type SpawnResult = { reattached: boolean; integrated: boolean }
+type SpawnResult = { reattached: boolean; integrated: boolean; started?: boolean }
 
 /** A reloaded renderer asking for a live session: rebind output, resize, replay history. */
 function reattach(rec: PtySession, sender: Electron.WebContents, opts: SpawnOpts): SpawnResult {
@@ -625,6 +625,8 @@ function registerIpc() {
     if (joined) return joined as Promise<SpawnResult>
     const existing = sessions.get(opts.id)
     if (existing) return reattach(existing, event.sender, opts)
+    // Reattach only (a restored ssh pane waiting for Enter): nothing live → start nothing.
+    if (opts.attachOnly === true) return { reattached: false, integrated: false, started: false }
     if (opts.remote !== undefined) {
       return pendingSpawns.start(opts.id, event.sender, opts.cols, opts.rows, (outcome) =>
         spawnRemote(opts, outcome),

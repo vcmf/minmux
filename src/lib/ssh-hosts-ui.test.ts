@@ -70,18 +70,21 @@ describe("groupHosts", () => {
 })
 
 describe("connectedHostIds", () => {
-  it("lists each host with an open session once, sorted; local sessions don't count", () => {
+  it("lists each host with a live session once, sorted; local sessions don't count", () => {
     const web = hostShellOption(testHost("web")).remote
     const db = hostShellOption(testHost("db")).remote
     expect(
-      connectedHostIds({
-        a: session("a", web),
-        b: session("b"),
-        c: session("c", db),
-        d: session("d", web),
-      }),
+      connectedHostIds(
+        {
+          a: session("a", web),
+          b: session("b"),
+          c: session("c", db),
+          d: session("d", web),
+        },
+        { a: "live", b: "live", c: "live", d: "live" },
+      ),
     ).toEqual(["native:db", "native:web"])
-    expect(connectedHostIds({})).toEqual([])
+    expect(connectedHostIds({}, {})).toEqual([])
   })
 })
 
@@ -118,5 +121,17 @@ describe("remote labels", () => {
     expect(hostSubline(testHost("gpu", "wsl:Ubuntu", "u@g:2222"))).toBe(
       "gpu · WSL: Ubuntu · u@g:2222",
     )
+  })
+})
+
+describe("connectedHostIds — only live panes count", () => {
+  it("dialing, waiting, closed, failed and never-started panes don't count", () => {
+    const web = hostShellOption(testHost("web")).remote
+    const sessions = { a: session("a", web), b: session("b", web) }
+    expect(connectedHostIds(sessions, { a: "closed", b: "live" })).toEqual(["native:web"])
+    for (const p of ["starting", "waiting", "closed", "failed"]) {
+      expect(connectedHostIds(sessions, { a: p, b: p })).toEqual([])
+    }
+    expect(connectedHostIds(sessions, {})).toEqual([]) // a restored background tab, not started
   })
 })

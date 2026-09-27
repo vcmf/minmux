@@ -36,6 +36,9 @@ for coding agents, this is that.
   jump to its pane.
 - 🪟 **Real multiplexer.** Tabs and resizable splits. Split a pane and it keeps your shell and
   directory. Quit and reopen and your layout comes back.
+- 🌐 **SSH hosts in one click.** The hosts in your `~/.ssh/config` are listed in the sidebar.
+  Click one for a terminal on it; splits and new terminals from that pane stay on the host. A
+  dropped connection says so and reconnects on Enter.
 - 🖥️ **Cross-platform.** macOS, Linux, and Windows, with WSL as a first-class shell target.
 - ⌨️ **Command palette (⌘K).** New sessions, splits, theme switching, settings.
 - 🎨 **Themes and fonts.** Minimal Dark, Tokyo Night, Catppuccin, Gruvbox; bundled fonts and
@@ -123,8 +126,41 @@ in-app settings panel; a live watcher re-applies changes as you save.
   "appearance": "system", // dark | light | system (follow the OS)
   "cursorBlink": true,
   "scrollback": 5000,
+  "ssh": { "hidden": [], "keepAliveSeconds": 30, "restore": "auto" }, // restore: auto | on-focus
 }
 ```
+
+## SSH hosts
+
+smterm reads the hosts from your `~/.ssh/config` (including `Include`d files) and shows them in
+the sidebar's **Remote** section, the new-tab picker and the command palette (`SSH: Connect to
+host`). It never keeps its own host list, passwords or keys: a click runs the system `ssh
+<alias>`, so keys, `ssh-agent`, 1Password, `ProxyJump` and password or 2FA prompts all work as
+in any terminal. Editing the config updates the list as you save. Wildcard patterns
+(`Host *.corp`) aren't listed; hide a host with `"ssh": { "hidden": ["github.com"] }`.
+
+- **Splits stay on the host.** Splitting an SSH pane, or opening a new terminal in it, opens
+  another `ssh` to the same host. "Open folder in split" stays local.
+- **Keepalive.** smterm adds `ServerAliveInterval=30` (with `ServerAliveCountMax=4`), so an idle
+  pane survives NAT timeouts and a dead link ends in about two minutes instead of hanging.
+  `"ssh": { "keepAliveSeconds": 0 }` leaves it to your config.
+- **Reconnect.** When `ssh` exits, the pane says why and Enter (or the **Reconnect** button)
+  connects again. After a relaunch SSH panes reconnect as they're shown; with
+  `"ssh": { "restore": "on-focus" }` they wait for Enter instead, which is handy for password
+  or 2FA hosts.
+- **Prompt-free splits.** Each pane is its own `ssh`. For hosts that ask for a password, let
+  OpenSSH share one connection by adding this to your `~/.ssh/config`:
+
+  ```
+  Host *
+    ControlMaster auto
+    ControlPath ~/.ssh/cm-%C
+    ControlPersist 10m
+  ```
+
+- **WSL.** On Windows, the hosts in each running WSL distro's `~/.ssh/config` are listed too and
+  connect with that distro's own `ssh`.
+- The Changes and Files panels show local folders only, so for an SSH pane they say it's remote.
 
 ## What is still rough
 

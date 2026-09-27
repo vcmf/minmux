@@ -67,3 +67,31 @@ describe("SettingsPanel", () => {
     expect(st().settingsOpen).toBe(false)
   })
 })
+
+describe("SettingsPanel — SSH", () => {
+  it("edits the restore mode and keepalive through the validated settings", () => {
+    render(<SettingsPanel />)
+    fireEvent.change(screen.getByLabelText("Reconnect on launch"), {
+      target: { value: "on-focus" },
+    })
+    expect(st().settings.ssh.restore).toBe("on-focus")
+    const keepAlive = screen.getByLabelText("Keepalive (seconds, 0 = off)")
+    fireEvent.change(keepAlive, { target: { value: "99999" } })
+    expect(st().settings.ssh.keepAliveSeconds).toBe(30) // not saved per keystroke
+    fireEvent.blur(keepAlive)
+    expect(st().settings.ssh.keepAliveSeconds).toBe(3600) // clamped by the schema
+    expect(ipc.writeSettings).toHaveBeenCalled()
+  })
+
+  it("an emptied keepalive field isn't saved as 0 (off)", () => {
+    render(<SettingsPanel />)
+    const keepAlive = screen.getByLabelText("Keepalive (seconds, 0 = off)") as HTMLInputElement
+    fireEvent.change(keepAlive, { target: { value: "" } })
+    fireEvent.blur(keepAlive)
+    expect(st().settings.ssh.keepAliveSeconds).toBe(30)
+    expect(keepAlive.value).toBe("30")
+    fireEvent.change(keepAlive, { target: { value: "60" } })
+    fireEvent.keyDown(keepAlive, { key: "Enter" })
+    expect(st().settings.ssh.keepAliveSeconds).toBe(60)
+  })
+})

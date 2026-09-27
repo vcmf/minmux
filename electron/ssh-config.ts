@@ -1,6 +1,6 @@
 // Reads the user's OpenSSH client config into a host list for the sidebar (SSH remotes,
-// see SSH_REMOTES.md §3a). We only list aliases; `ssh <alias>` resolves everything else,
-// so HostName/User/Port are kept for display only. Parsing is pure; file access is
+// see docs/design/SSH_REMOTES.md §3a). We only list aliases; `ssh <alias>` resolves
+// everything else, so HostName/User/Port are kept for display only. Parsing is pure; file access is
 // injected so the same loader reads a WSL distro's config (Linux paths) through its UNC
 // share via wslMiniFs.
 

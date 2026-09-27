@@ -19,6 +19,17 @@ import { findFilePaths } from "../lib/file-links"
 import { isPosixShell, withCd } from "../lib/resume"
 import { canType, newShellFlow, onMark, parseMark, type ShellFlow } from "../lib/resume-flow"
 import { isMac, isWindows } from "../lib/platform"
+import {
+  afterStart,
+  banner,
+  cleanError,
+  firstStart,
+  idleMessage,
+  isIdle,
+  onKey,
+  type RemoteIdle,
+  type RemotePhase,
+} from "../lib/remote-connect"
 
 interface Entry {
   term: Terminal
@@ -28,6 +39,9 @@ interface Entry {
   opened: boolean // xterm mounted into a DOM host (first time on-screen)
   spawned: boolean // PTY spawned/reattached + output listeners wired (may precede `opened`)
   offData?: () => void
+  offExit?: () => void
+  remote?: RemotePhase // ssh panes only: where the connection is (rules: lib/remote-connect)
+  startSeq?: number // bumps per PTY request: a stale answer never moves `remote`
   joinerId?: number
   idleTimer?: ReturnType<typeof setTimeout>
   lastOutputSignal?: number
@@ -302,6 +316,105 @@ function applyLigatures(entry: Entry, on: boolean) {
   }
 }
 
+/** Ask main for this pane's PTY: spawn it, or (attachOnly) only reattach a live one. The
+ *  store's session is used when it has one, so a reconnect uses the pane as it is now. */
+function requestPty(id: string, entry: Entry, attachOnly: boolean, given?: Session) {
+  const session = useStore.getState().sessions[id] ?? given
+  if (!session) return
+  const { term } = entry
+  const seq = (entry.startSeq ?? 0) + 1
+  entry.startSeq = seq
+  if (session.remote) setPhase(id, entry, "starting")
+  void ipc
+    .ptySpawn({
+      id: session.id,
+      cols: term.cols,
+      rows: term.rows,
+      shell: session.command,
+      args: session.args,
+      cwd: session.cwd, // inherited from the pane this was split/opened from
+      // An ssh session: main rebuilds the command from its own host list (never ours).
+      ...(session.remote ? { remote: session.remote } : {}),
+      ...(attachOnly ? { attachOnly: true } : {}),
+      // → COLORFGBG so agents detect light/dark (fallback when the OSC-11 bg query can't
+      // complete, e.g. across the wsl.exe hop). Captured at spawn: a running shell's env
+      // can't be rewritten, so a later theme switch — incl. appearance "system" following
+      // the OS — only affects newly-spawned panes. On native, OSC-11 self-corrects live; on
+      // WSL a pane opened before the switch keeps the stale value until it's replaced.
+      // (Startup loads settings before any restore spawns, so first spawns are correct.)
+      bg: activeTheme(useStore.getState()).terminal.background,
+    })
+    .then(({ reattached, integrated, started }) => {
+      if (entries.get(id) !== entry) return // closed meanwhile
+      if (entry.startSeq !== seq) {
+        entry.flow.replaying = false // superseded (e.g. it exited first): nothing is replaying
+        return
+      }
+      if (entry.remote) {
+        const next = afterStart(entry.remote, started)
+        if (next === "waiting") setIdle(id, entry, "waiting")
+        else setPhase(id, entry, next)
+      }
+      // A reattach replays up to 256 KB of old output: its OSC 133 marks must not drive live
+      // side effects (e.g. a replayed "command ended" would drop a running Claude's ledger
+      // entry). xterm parses writes in order, so an empty write's callback = replay parsed.
+      if (reattached) term.write("", () => (entry.flow.replaying = false))
+      else entry.flow.replaying = false
+      // Main knows whether our integration was actually injected (a cold WSL VM or an
+      // unrecognised bash may run plain) — never guess from the shell's name.
+      entry.flow.integrated = integrated === true
+      armResumeTimer(id, entry)
+    })
+    .catch((e) => {
+      // Closed while the spawn was still preparing (e.g. an ssh probe): nothing to report to.
+      if (entries.get(id) !== entry || entry.startSeq !== seq) return
+      entry.flow.replaying = false
+      if (entry.remote) return setIdle(id, entry, "failed", { error: cleanError(e) })
+      term.write(`\r\n\x1b[31m[spawn error] ${e}\x1b[0m\r\n`)
+      const r = useStore.getState().resume[id]
+      if (r?.phase === "pending") {
+        entry.flow.resumeStage = undefined
+        useStore.getState().setResume(id, {
+          phase: "skipped",
+          plan: { ...r.plan, reason: "the shell couldn't start" },
+        })
+      }
+    })
+  entry.flow.replaying = true
+}
+
+/** Record an ssh pane's phase here (keys) and in the store (header button, sidebar dot). */
+function setPhase(id: string, entry: Entry, phase: RemotePhase) {
+  entry.remote = phase
+  useStore.getState().setRemotePhase(id, phase)
+}
+
+// Undo what a program on the dropped connection left on: alt screen, mouse tracking, focus
+// events, bracketed paste, application cursor keys; show the cursor. Otherwise the next
+// shell prints into a stale alt screen and clicks type escape codes into it.
+const RESET_MODES =
+  "\x1b[?1049l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?1004l\x1b[?2004l\x1b[?1l\x1b[?25h\x1b[0m"
+
+/** An ssh pane stops at a prompt: say why, and show Connect in its header. */
+function setIdle(
+  id: string,
+  entry: Entry,
+  phase: RemoteIdle,
+  info?: { code?: number; signal?: number; error?: string },
+) {
+  const label = useStore.getState().sessions[id]?.remote?.label ?? "the host"
+  entry.term.write(banner(idleMessage(phase, label, info)))
+  setPhase(id, entry, phase)
+}
+
+/** Enter (or Connect) on an idle ssh pane: start ssh again under the same session id. */
+function connectRemote(id: string, entry: Entry) {
+  if (!isIdle(entry.remote)) return
+  const label = useStore.getState().sessions[id]?.remote?.label ?? "the host"
+  entry.term.write(banner(`connecting to ${label}…`))
+  requestPty(id, entry, false)
+}
+
 function spawn(session: Session, entry: Entry) {
   if (entry.spawned) return
   entry.spawned = true
@@ -324,50 +437,19 @@ function spawn(session: Session, entry: Entry) {
     }, IDLE_MS)
   })
 
-  void ipc
-    .ptySpawn({
-      id: session.id,
-      cols: term.cols,
-      rows: term.rows,
-      shell: session.command,
-      args: session.args,
-      cwd: session.cwd, // inherited from the pane this was split/opened from
-      // An ssh session: main rebuilds the command from its own host list (never ours).
-      ...(session.remote ? { remote: session.remote } : {}),
-      // → COLORFGBG so agents detect light/dark (fallback when the OSC-11 bg query can't
-      // complete, e.g. across the wsl.exe hop). Captured at spawn: a running shell's env
-      // can't be rewritten, so a later theme switch — incl. appearance "system" following
-      // the OS — only affects newly-spawned panes. On native, OSC-11 self-corrects live; on
-      // WSL a pane opened before the switch keeps the stale value until it's replaced.
-      // (Startup loads settings before any restore spawns, so first spawns are correct.)
-      bg: activeTheme(useStore.getState()).terminal.background,
-    })
-    .then(({ reattached, integrated }) => {
-      // A reattach replays up to 256 KB of old output: its OSC 133 marks must not drive live
-      // side effects (e.g. a replayed "command ended" would drop a running Claude's ledger
-      // entry). xterm parses writes in order, so an empty write's callback = replay parsed.
-      if (reattached) term.write("", () => (entry.flow.replaying = false))
-      else entry.flow.replaying = false
-      // Main knows whether our integration was actually injected (a cold WSL VM or an
-      // unrecognised bash may run plain) — never guess from the shell's name.
-      entry.flow.integrated = integrated === true
-      armResumeTimer(session.id, entry)
-    })
-    .catch((e) => {
-      // Closed while the spawn was still preparing (e.g. an ssh probe): nothing to report to.
+  if (session.remote) {
+    // A dropped link or `exit` on the host: say so, and let Enter (or Connect) reconnect.
+    entry.offExit = ipc.onPtyExit(session.id, (e) => {
       if (entries.get(session.id) !== entry) return
-      entry.flow.replaying = false
-      term.write(`\r\n\x1b[31m[spawn error] ${e}\x1b[0m\r\n`)
-      const r = useStore.getState().resume[session.id]
-      if (r?.phase === "pending") {
-        entry.flow.resumeStage = undefined
-        useStore.getState().setResume(session.id, {
-          phase: "skipped",
-          plan: { ...r.plan, reason: "the shell couldn't start" },
-        })
-      }
+      entry.startSeq = (entry.startSeq ?? 0) + 1 // an answer still in flight is stale now
+      clearTimeout(entry.idleTimer)
+      useStore.getState().signalSession(session.id, { type: "command-end" }) // nothing runs now
+      entry.term.write(RESET_MODES)
+      setIdle(session.id, entry, "closed", e)
     })
-  entry.flow.replaying = true
+    const restore = useStore.getState().settings.ssh.restore
+    requestPty(session.id, entry, firstStart(!!session.restored, restore) === "attach", session)
+  } else requestPty(session.id, entry, false, session)
 
   // This pane was inside a Claude session when smterm quit/crashed: resume it once the shell
   // is ready. Shells with our integration (zsh/bash, incl. inside WSL) announce their first
@@ -379,7 +461,15 @@ function spawn(session: Session, entry: Entry) {
     entry.flow.resumeStage = "await-prompt" // a first prompt typing it can arrive any time now
   }
 
-  term.onData((data) => ipc.ptyWrite(session.id, data))
+  term.onData((data) => {
+    // An ssh pane that isn't connected: Enter connects, anything else goes nowhere.
+    if (entry.remote) {
+      const k = onKey(entry.remote, data)
+      if (k === "connect") return connectRemote(session.id, entry)
+      if (k === "drop") return
+    }
+    ipc.ptyWrite(session.id, data)
+  })
 
   // OSC 0/2 (window title) → live session title (shells set it to cmd/cwd;
   // agents like Claude Code can set it to the task). Manual rename still wins
@@ -807,6 +897,12 @@ export const TerminalManager = {
     reconcileRenderers()
   },
 
+  /** The pane header's Connect: same as Enter on an idle ssh pane. */
+  connect(id: string) {
+    const entry = entries.get(id)
+    if (entry) connectRemote(id, entry)
+  },
+
   dispose(id: string) {
     const entry = entries.get(id)
     if (entry) clearTimeout(entry.resumeTimer)
@@ -816,6 +912,7 @@ export const TerminalManager = {
     clearTimeout(entry.idleTimer)
     releaseWebgl(entry)
     entry.offData?.()
+    entry.offExit?.()
     ipc.ptyKill(id)
     entry.term.dispose()
     entry.host.remove()

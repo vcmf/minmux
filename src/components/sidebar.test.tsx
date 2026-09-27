@@ -318,9 +318,10 @@ describe("Sidebar — Remote hosts", () => {
     expect(allSessionIds(st().tabs[0]!.root)).toHaveLength(3)
   })
 
-  it("marks hosts with an open session as connected", () => {
+  it("marks hosts with a live session as connected", () => {
     st().setSshHosts([testHost("web"), testHost("db")])
     st().newTab(hostShellOption(testHost("web")))
+    st().setRemotePhase(st().tabs[0]!.activeSessionId, "live")
     render(<Sidebar />)
     expect(screen.getAllByTitle("Connected")).toHaveLength(1)
     const row = screen.getByTitle("Open a terminal on web").closest(".remote-row")!
@@ -376,5 +377,17 @@ describe("Sidebar — before the first host list arrives", () => {
     expect(screen.queryByText("No hosts in ~/.ssh/config")).not.toBeInTheDocument()
     act(() => st().setSshHosts([]))
     expect(screen.getByText("No hosts in ~/.ssh/config")).toBeInTheDocument()
+  })
+})
+
+describe("Sidebar — a dropped connection", () => {
+  it("the host's connected dot goes away while its only pane is closed", () => {
+    st().setSshHosts([testHost("web")])
+    st().newTab(hostShellOption(testHost("web")))
+    st().setRemotePhase(st().tabs[0]!.activeSessionId, "live")
+    render(<Sidebar />)
+    expect(screen.getAllByTitle("Connected")).toHaveLength(1)
+    act(() => st().setRemotePhase(st().tabs[0]!.activeSessionId, "closed"))
+    expect(screen.queryByTitle("Connected")).not.toBeInTheDocument()
   })
 })
