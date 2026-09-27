@@ -434,6 +434,7 @@ function App() {
     void ipc.platformInfo().then((i) => {
       useStore.getState().setHome(i.home)
       useStore.getState().setPlatform(i.platform)
+      useStore.getState().setProfile(i.profile)
     })
     void ipc.editorInfo().then((e) => useStore.getState().setEditor(e))
   }, [])

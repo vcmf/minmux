@@ -152,6 +152,45 @@ in a cmux pane with the user's `.zshrc` having it off, so cmux enables it itself
   `wslInjection` and forwards it over `$WSLENV`, so the repoint fires there too. bash is
   unaffected (no ZDOTDIR).
 
+## Profiles: a dev build is its own app {#profiles}
+
+An unpackaged build (`make run`) runs as the **`dev` profile**; the installed app keeps the
+plain `smterm` names. A profile owns every piece of per-instance state:
+
+- **Electron user-data dir** (`~/Library/Application Support/smterm-dev`, `%APPDATA%\smterm-dev`,
+  `~/.config/smterm-dev` on Linux): the **single-instance lock** and localStorage.
+- **Config dir** (`~/.config/smterm-dev`, `%APPDATA%\smterm-dev`): settings, workspace,
+  Claude hook files and ledger, diagnostics.
+- **Shell-integration dir** (`$TMPDIR/smterm-dev/shell-integration`): rewritten on every
+  spawn, so a shared one would feed an installed app's new shells another branch's scripts
+  (or a half-written `.zshrc`).
+
+Without this, `make run` found the installed app's lock, focused that window and quit — and
+had it started, it would have overwritten the installed app's workspace and
+`claude-hooks.json` (the ECONNREFUSED hook spam the lock exists to prevent).
+
+- `--profile=<name>` (lowercase, digits, `-`; the `=` is required — Chromium's switch syntax)
+  picks a profile for either build. **`SMTERM_PROFILE` works for a dev build only**: an
+  installed app ignores ambient env, so an export meant for dev runs can never move it.
+  `default` / `prod` is the installed app's. An **invalid** name stops main synchronously
+  (stderr + an error box on macOS/Windows; Linux has no dialog before ready) before any name,
+  path or lock is set, so it never falls back to some profile's real data. Resolved once, first thing in
+  `main.ts` (`electron/profile.ts`), before any path is read.
+- **A parent smterm's per-pane env is scrubbed at startup** (`SMTERM_CLAUDE_SETTINGS`,
+  `SMTERM_PANE_ID`, `SMTERM_PROFILE`, …): a dev build launched from an installed pane must
+  not report Claude events into the installed app's hook dir, and nothing we spawn (shells,
+  editors, git) inherits our profile.
+- The Windows AppUserModelId stays `com.smterm.app` for every profile: toasts only show for
+  an id a Start Menu shortcut registers.
+- An explicit `--user-data-dir` (the `run-smterm` driver) still wins; the driver sets
+  `SMTERM_PROFILE=default` (its HOME is throwaway) unless given `profile`, **and a scratch
+  `TMPDIR`**: the shell-integration dir lives there, and the real one is the installed app's.
+- The login-shell env import (packaged builds) re-adds any var we lack, so the scrub runs
+  again after it. `ELECTRON_RENDERER_URL` is read once (honoured only unpackaged) and
+  deleted from `process.env`, so no child — shell, editor, git — inherits it.
+- On macOS Electron's `appData` is the real `~/Library/Application Support` even under a
+  fake `$HOME`: a test that fakes HOME must still pass `--user-data-dir`.
+
 ## node-pty is a native module {#node-pty}
 
 After install / Electron upgrades run `npx electron-rebuild -o node-pty` (in

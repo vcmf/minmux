@@ -173,7 +173,7 @@ export function FilesPanel() {
                 openFileMenu(e, { abs: r.path, rel: relTo(r.path), isDir: false })
               }
             >
-              <span style={{ width: 12 }} />
+              <span style={{ flex: "0 0 12px" }} /> {/* lines the icon up with folders' caret */}
               <FileIcon size={14} color={color ?? "var(--dim)"} />
               <span className="tree-primary" style={color ? { color } : undefined}>
                 {r.name}

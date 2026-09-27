@@ -127,6 +127,16 @@ body {
   font-weight: 600;
   letter-spacing: 0.04em;
 }
+.brand-profile {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 1px 6px;
+  border-radius: 4px;
+  border: 1px solid var(--amber);
+  color: var(--amber);
+}
 
 .vdivider {
   width: 1px;
@@ -1089,6 +1099,11 @@ body.resizing-col {
   cursor: default;
   border-left: 2px solid transparent;
   font-size: 12px;
+}
+/* A bare icon never shrinks next to a long name (an inline svg's overflow:hidden drops its flex
+   min-width to 0, so it used to squash + shift left); the name ellipsizes instead. */
+.diff-file > svg {
+  flex: none;
 }
 .diff-file:hover {
   background: var(--elev);

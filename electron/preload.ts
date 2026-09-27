@@ -115,6 +115,8 @@ const api = {
       platform: string
       label: string
       release: string
+      home: string
+      profile: string
     }>,
 
   paneGitInfo: (reqs: PaneGitRequest[]) =>

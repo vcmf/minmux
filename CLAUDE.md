@@ -26,6 +26,7 @@ electron/                 main process (Node) — see electron/CLAUDE.md
   agent-meta.ts           per-pane transcript watch → session colour (agents:meta)
   ssh-config.ts · ssh-service.ts  ~/.ssh/config → host list (watched) · spawn plans (trusted)
   pending-spawns.ts       one spawn per pane while an async (ssh) plan is built
+  profile.ts              which profile this process is (dev build = `dev`): names + env scrub
 src/
   app.tsx · store.ts      compose + global effects/pollers · Zustand state + actions
   types.ts                Session, PaneLeaf/PaneNode (pane = surfaces), Tab, DropZone
@@ -108,6 +109,10 @@ rules also in `electron/CLAUDE.md` (loaded on demand). Design detail in `docs/AR
 - **A crashed TUI's mouse mode self-heals** via the zsh/bash `precmd` reset. → GOTCHAS #mouse-reset
 - **zsh/bash history is shared across panes** — integration sets `SHARE_HISTORY`/`histappend`
   (incremental write → also survives close); opt-out via `shareHistory` setting. → GOTCHAS #history
+- **A dev build is the `dev` profile**: own user-data dir (the lock), config dir
+  (`~/.config/smterm-dev`) and shell-integration dir, so it runs beside the installed app;
+  `SMTERM_PROFILE=<name>` picks another (dev builds only; `--profile=<name>` for either).
+  Paths come from `configDir()`, never "smterm". → GOTCHAS #profiles
 - **`node-pty` is a native module** — `npx electron-rebuild -o node-pty`; not unit-testable in Vitest. → GOTCHAS #node-pty
 - **On Windows the app spawns `wsl.exe`** — never runs _inside_ WSL. → GOTCHAS #windows
 - **Hidden surfaces (and visited background tabs) are parked** — opened off-screen,

@@ -28,6 +28,7 @@ import {
   defaultWslDistro,
   parseWslDistroArg,
   parseWslDistros,
+  setIntegrationDirName,
 } from "./shell-integration"
 import { gitStatus, gitDiff } from "./git"
 import { OutputCoalescer } from "./coalescer"
@@ -49,6 +50,7 @@ import { TranscriptTokens } from "./transcript-tokens"
 import { tokenEventsForBatch } from "./agent-tokens"
 import { AgentMetaTracker } from "./agent-meta"
 import { SessionLedger } from "./agent-sessions"
+import { displayName, profileNames, resolveProfile, scrubParentInstanceEnv } from "./profile"
 import { PaneGitService } from "./pane-git"
 import { SshService } from "./ssh-service"
 import { PendingSpawns, type PendingOutcome } from "./pending-spawns"
@@ -63,6 +65,33 @@ import {
   PREVIEW_MAX_SIZE,
   type PreviewData,
 } from "../src/lib/file-preview"
+
+// This process's profile (a dev build is `dev`): picked before anything reads a path. An
+// invalid SMTERM_PROFILE stops here, synchronously — before any name, path or lock is set —
+// so it can never fall back to (and write into) another profile's data. Then the env is
+// scrubbed of what a parent smterm set for its own pane (its hook file, pane id, our profile
+// choice), so nothing we spawn — shells, editors, git — inherits it.
+const PROFILE_CHOICE = resolveProfile({
+  flag: app.commandLine.hasSwitch("profile")
+    ? app.commandLine.getSwitchValue("profile")
+    : undefined,
+  env: process.env.SMTERM_PROFILE,
+  packaged: app.isPackaged,
+})
+if ("error" in PROFILE_CHOICE) {
+  // macOS / Windows: a blocking error box (+ stderr for a terminal launch). Linux has no
+  // dialog before ready — showErrorBox prints to stderr there itself.
+  if (process.platform !== "linux") console.error(`smterm: ${PROFILE_CHOICE.error}`)
+  dialog.showErrorBox("smterm can't start", PROFILE_CHOICE.error)
+  process.exit(1)
+}
+const PROFILE_NAMES = profileNames(PROFILE_CHOICE.profile)
+scrubParentInstanceEnv(process.env)
+setIntegrationDirName(PROFILE_NAMES.appName)
+// electron-vite's dev-server URL is for this process only: read once, then gone from the env
+// every child inherits (shells, the editor openFile starts, git), and only honoured unpackaged.
+const DEV_RENDERER_URL = app.isPackaged ? undefined : process.env.ELECTRON_RENDERER_URL
+delete process.env.ELECTRON_RENDERER_URL
 
 const dir = path.dirname(fileURLToPath(import.meta.url))
 
@@ -189,7 +218,7 @@ function createWindow() {
     height: 720,
     minWidth: 640,
     minHeight: 420,
-    title: "smterm",
+    title: displayName(PROFILE_NAMES),
     backgroundColor: readWindowBg(), // last theme's bg — a light theme mustn't open dark
     frame: false, // frameless — the app draws its own top bar + window controls
     ...(icon ? { icon } : {}), // window/taskbar icon (win/linux; macOS uses the dock icon)
@@ -202,6 +231,8 @@ function createWindow() {
   })
 
   mainWindow = win
+  // Main owns the title ("smterm (dev)"): index.html's <title> would reset it on load.
+  win.on("page-title-updated", (e) => e.preventDefault())
   win.on("session-end", () => sessionLedger().freeze(60_000)) // Windows logout/shutdown — see onPower
   win.on("closed", () => {
     mainWindow = null
@@ -219,8 +250,8 @@ function createWindow() {
     })
   }
 
-  if (process.env.ELECTRON_RENDERER_URL) {
-    void win.loadURL(process.env.ELECTRON_RENDERER_URL)
+  if (DEV_RENDERER_URL) {
+    void win.loadURL(DEV_RENDERER_URL)
   } else {
     void win.loadFile(path.join(dir, "../renderer/index.html"))
   }
@@ -317,17 +348,14 @@ async function startAgentObservability(): Promise<void> {
 
 // ── settings.json (source of truth) ────────────────────────────────
 function settingsPath(): string {
-  const base =
-    process.platform === "win32"
-      ? path.join(process.env.APPDATA ?? os.homedir(), "smterm")
-      : path.join(os.homedir(), ".config", "smterm")
-  return path.join(base, "settings.json")
+  return path.join(configDir(), "settings.json")
 }
 
+/** ~/.config/smterm (%APPDATA%\smterm on Windows) — `smterm-<profile>` for another profile. */
 function configDir(): string {
   return process.platform === "win32"
-    ? path.join(process.env.APPDATA ?? os.homedir(), "smterm")
-    : path.join(os.homedir(), ".config", "smterm")
+    ? path.join(process.env.APPDATA ?? os.homedir(), PROFILE_NAMES.appName)
+    : path.join(os.homedir(), ".config", PROFILE_NAMES.appName)
 }
 
 // The window's native background (shown before the renderer paints and in unpainted
@@ -815,7 +843,13 @@ function registerIpc() {
   ipcMain.handle("platform:info", async () => {
     const label =
       process.platform === "darwin" ? "macOS" : process.platform === "win32" ? "Windows" : "Linux"
-    return { platform: process.platform, label, release: os.release(), home: os.homedir() }
+    return {
+      platform: process.platform,
+      label,
+      release: os.release(),
+      home: os.homedir(),
+      profile: PROFILE_NAMES.label, // "" for the installed app's profile
+    }
   })
 
   // Settings.
@@ -1080,8 +1114,15 @@ function openFile(cwd: string, file: string, line?: number, col?: number): void 
 // App identity. Packaged builds get this from the bundle (electron-builder productName),
 // but in dev the app runs from Electron.app, so the dock/menu read "Electron" unless we
 // set it here. AppUserModelId groups the taskbar + routes notifications on Windows.
-app.setName("smterm")
+// Per profile (a dev build is `smterm-dev`): the user-data dir — and with it the
+// single-instance lock and localStorage — is the profile's own, unless the caller chose one.
+// The AppUserModelId stays shared: on Windows toasts only show for an id a Start Menu
+// shortcut registers, and only the installer's (com.smterm.app) exists.
+app.setName(displayName(PROFILE_NAMES)) // the menu / About name: "smterm (dev)", like the window
 app.setAppUserModelId("com.smterm.app")
+if (!app.commandLine.hasSwitch("user-data-dir")) {
+  app.setPath("userData", path.join(app.getPath("appData"), PROFILE_NAMES.appName))
+}
 
 // Single-instance guard. A second launch — an update-relaunch racing the old process, or
 // a stray double-click — would start a SECOND hook receiver on a different ephemeral port
@@ -1103,7 +1144,10 @@ app.whenReady().then(async () => {
   // Homebrew/cargo tools (starship, etc.). Import the login shell's real env before any
   // PTY spawns. Only when packaged — in dev the app is launched from a terminal that
   // already has the full env, so this cost (~one shell invocation) is skipped.
-  if (process.platform !== "win32" && app.isPackaged) applyLoginShellEnv(defaultShell())
+  if (process.platform !== "win32" && app.isPackaged) {
+    applyLoginShellEnv(defaultShell())
+    scrubParentInstanceEnv(process.env) // the import adds any var we lack — these too
+  }
   // macOS dock icon: packaged builds get it from the .app bundle, but `make run` (dev)
   // shows the default Electron icon unless we set it here.
   if (process.platform === "darwin") {
@@ -1260,7 +1304,7 @@ app.on("before-quit", (e) => {
       buttons: ["Cancel", "Quit"],
       defaultId: 1,
       cancelId: 0,
-      message: "Quit smterm?",
+      message: `Quit ${displayName(PROFILE_NAMES)}?`,
       detail: `This closes ${n} running session${n === 1 ? "" : "s"} and their processes.`,
       checkboxLabel: "Don't warn again",
       checkboxChecked: false,

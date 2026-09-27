@@ -165,8 +165,15 @@ export interface Injection {
   args: string[]
 }
 
+// Per profile (main sets it at startup): each instance rewrites these scripts on every spawn,
+// so a dev build on another branch must never write the scripts an installed app's shells read.
+let integrationDirName = "smterm"
+export function setIntegrationDirName(name: string): void {
+  integrationDirName = name
+}
+
 function integrationBase(): string {
-  return path.join(os.tmpdir(), "smterm", "shell-integration")
+  return path.join(os.tmpdir(), integrationDirName, "shell-integration")
 }
 
 function materialize(base: string): void {
