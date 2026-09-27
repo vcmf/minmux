@@ -36,6 +36,7 @@ export function TopBar() {
   const rightView = useStore((s) => s.rightView)
   const sidebarCollapsed = useStore((s) => s.sidebarCollapsed)
   const scheme = useStore((s) => activeTheme(s).scheme)
+  const profile = useStore((s) => s.profile)
   const [maximized, setMaximized] = useState(false)
   const [shellMenu, setShellMenu] = useState(false)
 
@@ -105,6 +106,14 @@ export function TopBar() {
       <div className="brand">
         <img className="brand-icon" src={brandIcon} alt="" width={18} height={18} />
         <span className="brand-name">smterm</span>
+        {profile && (
+          <span
+            className="brand-profile"
+            title={`Profile "${profile}" — its own settings and layout`}
+          >
+            {profile}
+          </span>
+        )}
       </div>
       <div className="vdivider" />
 

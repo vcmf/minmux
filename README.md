@@ -157,6 +157,14 @@ make run       # dev mode
 make dist      # package an installable build for your OS
 ```
 
+`make run` uses its own **dev profile** (`~/.config/smterm-dev`, `%APPDATA%\smterm-dev` on
+Windows; a DEV badge by the logo), so it runs next to an installed smterm without touching its
+settings or layout.
+`SMTERM_PROFILE=<name> make run` picks another profile (one per worktree, say);
+`SMTERM_PROFILE=default` uses the installed app's config, only while that app is closed. An
+installed smterm ignores `SMTERM_PROFILE`; start it with `--profile=<name>` instead (macOS:
+`open -a smterm --args --profile=qa`).
+
 Run `make help` for the full list of targets (`make check` runs lint + tests, `make fmt`
 formats). Logic lives in small pure modules with real tests (`make test`).
 

@@ -35,6 +35,8 @@ const electronBin = () => {
  * @param {boolean} [o.gh] pass the user's gh token as GH_TOKEN — gh keeps its login in the macOS
  *   Keychain, which a fake HOME can't reach (in-memory for this process only)
  * @param {string} [o.scratch] where HOME/user-data live (default: a fresh temp dir)
+ * @param {string} [o.profile] SMTERM_PROFILE for the app (default "default": HOME is throwaway
+ *   anyway, so the plain ~/.config/smterm paths)
  */
 export async function launch(o = {}) {
   if (!fs.existsSync(path.join(REPO, "out/main/main.js"))) {
@@ -42,20 +44,41 @@ export async function launch(o = {}) {
   }
   const scratch = o.scratch ?? fs.mkdtempSync(path.join(os.tmpdir(), "smterm-drive-"))
   const home = path.join(scratch, "home")
-  // Must match main's configDir(): %APPDATA%\smterm on Windows, ~/.config/smterm elsewhere.
   const appData = path.join(scratch, "appdata")
+  // Must match main's configDir() — `smterm`, or `smterm-<profile>` (%APPDATA% on Windows,
+  // ~/.config elsewhere) — so the same rules as electron/profile.ts: trimmed, lowercased,
+  // validated; blank = unset (here: the default profile).
+  const profile = (o.profile ?? "").trim().toLowerCase() || "default"
+  if (profile !== "default" && profile !== "prod" && !/^[a-z0-9][a-z0-9-]{0,31}$/.test(profile)) {
+    throw new Error(`launch: invalid profile "${o.profile}" (lowercase letters, digits and -)`)
+  }
+  const dirName = profile === "default" || profile === "prod" ? "smterm" : `smterm-${profile}`
   const cfg =
-    process.platform === "win32"
-      ? path.join(appData, "smterm")
-      : path.join(home, ".config", "smterm")
+    process.platform === "win32" ? path.join(appData, dirName) : path.join(home, ".config", dirName)
   fs.mkdirSync(cfg, { recursive: true })
   if (o.settings) fs.writeFileSync(path.join(cfg, "settings.json"), JSON.stringify(o.settings))
 
-  const env = { ...process.env, HOME: home, ZDOTDIR: home, APPDATA: appData, USERPROFILE: home }
+  // A scratch TMPDIR too: the app rewrites its shell-integration scripts in
+  // $TMPDIR/<profile>/shell-integration on every spawn — the real one is the installed app's.
+  const tmp = path.join(scratch, "tmp")
+  fs.mkdirSync(tmp, { recursive: true })
+  const env = {
+    ...process.env,
+    HOME: home,
+    ZDOTDIR: home,
+    APPDATA: appData,
+    USERPROFILE: home,
+    TMPDIR: tmp,
+    TMP: tmp,
+    TEMP: tmp,
+  }
   // Inherited from a dev smterm's shell (main copies its env into every PTY): the dev-server
   // URL would make this "built" app load live dev code instead of out/.
   delete env.ELECTRON_RENDERER_URL
   delete env.ELECTRON_RUN_AS_NODE
+  // HOME and --user-data-dir are already throwaway: the default profile's paths unless the
+  // caller asked for another (an unpackaged build would otherwise pick `dev`).
+  env.SMTERM_PROFILE = profile
   if (o.gh) {
     try {
       env.GH_TOKEN = execFileSync("gh", ["auth", "token"], { encoding: "utf8" }).trim()

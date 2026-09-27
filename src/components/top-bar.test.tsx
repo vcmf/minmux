@@ -98,3 +98,14 @@ describe("TopBar", () => {
     expect(st().settings.appearance).toBe("dark")
   })
 })
+
+describe("TopBar — profile badge", () => {
+  it("shows a non-default profile next to the brand, nothing for the installed app", () => {
+    const { unmount } = render(<TopBar />)
+    expect(document.querySelector(".brand-profile")).toBeNull()
+    unmount()
+    useStore.setState({ profile: "dev" })
+    render(<TopBar />)
+    expect(document.querySelector(".brand-profile")!.textContent).toBe("dev")
+  })
+})
