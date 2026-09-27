@@ -993,6 +993,11 @@ body.resizing-col {
   border-left: 2px solid transparent;
   font-size: 12px;
 }
+/* A bare icon never shrinks next to a long name (an inline svg's overflow:hidden drops its flex
+   min-width to 0, so it used to squash + shift left); the name ellipsizes instead. */
+.diff-file > svg {
+  flex: none;
+}
 .diff-file:hover {
   background: var(--elev);
 }
