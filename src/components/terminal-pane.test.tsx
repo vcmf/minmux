@@ -329,15 +329,15 @@ describe("TerminalPane — ssh Connect button", () => {
 
   it("names what it does per phase, and connects + focuses the pane", () => {
     const { tabId, id } = mountRemote()
-    st().setRemoteIdle(id, "waiting")
+    st().setRemotePhase(id, "waiting")
     const view = renderPane(tabId)
     fireEvent.click(screen.getByText("Connect"))
     expect(TerminalManager.connect).toHaveBeenCalledWith(id)
     expect(TerminalManager.focus).toHaveBeenCalledWith(id)
-    st().setRemoteIdle(id, "closed")
+    st().setRemotePhase(id, "closed")
     view.rerender()
     expect(screen.getByText("Reconnect")).toBeInTheDocument()
-    st().setRemoteIdle(id, "failed")
+    st().setRemotePhase(id, "failed")
     view.rerender()
     expect(screen.getByText("Retry")).toBeInTheDocument()
   })

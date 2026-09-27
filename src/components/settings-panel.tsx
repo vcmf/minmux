@@ -152,17 +152,9 @@ export function SettingsPanel() {
 
         <label className="settings-row">
           <span>Keepalive (seconds, 0 = off)</span>
-          <input
-            type="number"
-            min={0}
-            max={3600}
+          <KeepAliveInput
             value={settings.ssh.keepAliveSeconds}
-            onChange={(e) =>
-              update({
-                ...settings,
-                ssh: { ...settings.ssh, keepAliveSeconds: Number(e.target.value) },
-              })
-            }
+            onCommit={(n) => update({ ...settings, ssh: { ...settings.ssh, keepAliveSeconds: n } })}
           />
         </label>
 
@@ -174,5 +166,29 @@ export function SettingsPanel() {
         </div>
       </div>
     </div>
+  )
+}
+
+/** Keepalive seconds, saved on blur or Enter — not per keystroke (an emptied field would
+ *  save 0 = off, and every key would rewrite settings.json). */
+function KeepAliveInput({ value, onCommit }: { value: number; onCommit: (n: number) => void }) {
+  const [draft, setDraft] = useState(String(value))
+  useEffect(() => setDraft(String(value)), [value])
+  const commit = () => {
+    const n = Number(draft)
+    if (draft.trim() === "" || !Number.isFinite(n)) return setDraft(String(value)) // keep it
+    if (n !== value) onCommit(n)
+    else setDraft(String(value))
+  }
+  return (
+    <input
+      type="number"
+      min={0}
+      max={3600}
+      value={draft}
+      onChange={(e) => setDraft(e.target.value)}
+      onBlur={commit}
+      onKeyDown={(e) => e.key === "Enter" && commit()}
+    />
   )
 }

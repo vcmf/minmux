@@ -9,6 +9,7 @@ import { canMove, findPaneById, type MoveTarget } from "../lib/pane-tree"
 import { dropZone, insertIndex } from "../lib/drop-zone"
 import { displaySessionTitle, shellType } from "../lib/session-label"
 import { remoteBadge } from "../lib/ssh-hosts-ui"
+import { isIdle } from "../lib/remote-connect"
 import { statusUi } from "../lib/status-ui"
 import { newSurfaceKey } from "../lib/platform"
 import { resolveDefaultShell } from "../lib/shells"
@@ -42,7 +43,10 @@ export function TerminalPane({ pane, tabId }: { pane: PaneLeaf; tabId: string })
   )
   const status = session?.status ?? "idle"
   // An ssh pane waiting at a Connect prompt (restored on-focus, closed, or failed).
-  const remoteIdle = useStore((s) => s.remoteIdle[activeId])
+  const remoteIdle = useStore((s) => {
+    const p = s.remotePhase[activeId]
+    return isIdle(p) ? p : undefined
+  })
   // The focus/attention top rail only disambiguates between panes — pointless when
   // the tab has a single pane, so suppress it there.
   const isSplit = useStore((s) => {

@@ -131,17 +131,17 @@ target one.
 
 **Reconnect after exit.** `onPtyExit(id)` marks the entry exited. Remote sessions show
 `[smterm] connection closed (code N) — press Enter to reconnect` (`exit` → "session ended");
-Enter respawns the **same session id** (reset `entry.spawned`, drop the old data listener,
-`ptySpawn` again — main dropped the old record on exit).
+Enter respawns the **same session id**: the xterm listeners stay wired (a second
+`term.onData` would send every key twice); only the PTY is requested again — main dropped the
+old record on exit.
 
-**Tests:** the defer/exit state machine lives in `remote-connect.ts`
-(`initial(session, restored, restoreSetting)`, `onKey`, `onExit`) with unit tests; the xterm
-wiring stays thin.
+**Tests:** the rules live in `remote-connect.ts` with unit tests; the xterm wiring stays thin
+and is driven by `terminal-manager.test.ts` against a fake xterm.
 
 As built: `lib/remote-connect.ts` holds the rules (`firstStart`, `afterStart`, `onKey`,
 `idleMessage`, `cleanError`). A restored on-focus pane asks main with `attachOnly`, so a
-renderer reload still reattaches a live ssh instead of waiting. Store `remoteIdle`
-(waiting / closed / failed) drives the header's Connect / Reconnect / Retry button and keeps
+renderer reload still reattaches a live ssh instead of waiting. Store `remotePhase`
+(starting / live / waiting / closed / failed) drives the header's Connect / Reconnect / Retry button and keeps
 the sidebar's connected dot to live connections. xterm listeners are wired once per entry; a
 reconnect only re-requests the PTY. `settings-panel` gains an SSH section (restore, keepalive).
 `terminal-manager.test.ts` drives the lifecycle against a fake xterm.

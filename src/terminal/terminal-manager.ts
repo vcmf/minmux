@@ -317,14 +317,14 @@ function applyLigatures(entry: Entry, on: boolean) {
 }
 
 /** Ask main for this pane's PTY: spawn it, or (attachOnly) only reattach a live one. The
- *  session is read now, so a reconnect uses the pane as it is. */
-function requestPty(id: string, entry: Entry, attachOnly: boolean) {
-  const session = useStore.getState().sessions[id]
+ *  store's session is used when it has one, so a reconnect uses the pane as it is now. */
+function requestPty(id: string, entry: Entry, attachOnly: boolean, given?: Session) {
+  const session = useStore.getState().sessions[id] ?? given
   if (!session) return
   const { term } = entry
   const seq = (entry.startSeq ?? 0) + 1
   entry.startSeq = seq
-  if (session.remote) entry.remote = "starting"
+  if (session.remote) setPhase(id, entry, "starting")
   void ipc
     .ptySpawn({
       id: session.id,
@@ -345,11 +345,15 @@ function requestPty(id: string, entry: Entry, attachOnly: boolean) {
       bg: activeTheme(useStore.getState()).terminal.background,
     })
     .then(({ reattached, integrated, started }) => {
-      if (entries.get(id) !== entry || entry.startSeq !== seq) return // closed, or superseded
+      if (entries.get(id) !== entry) return // closed meanwhile
+      if (entry.startSeq !== seq) {
+        entry.flow.replaying = false // superseded (e.g. it exited first): nothing is replaying
+        return
+      }
       if (entry.remote) {
-        entry.remote = afterStart(entry.remote, started)
-        if (entry.remote === "waiting") setIdle(id, entry, "waiting")
-        else useStore.getState().setRemoteIdle(id, null)
+        const next = afterStart(entry.remote, started)
+        if (next === "waiting") setIdle(id, entry, "waiting")
+        else setPhase(id, entry, next)
       }
       // A reattach replays up to 256 KB of old output: its OSC 133 marks must not drive live
       // side effects (e.g. a replayed "command ended" would drop a running Claude's ledger
@@ -379,6 +383,18 @@ function requestPty(id: string, entry: Entry, attachOnly: boolean) {
   entry.flow.replaying = true
 }
 
+/** Record an ssh pane's phase here (keys) and in the store (header button, sidebar dot). */
+function setPhase(id: string, entry: Entry, phase: RemotePhase) {
+  entry.remote = phase
+  useStore.getState().setRemotePhase(id, phase)
+}
+
+// Undo what a program on the dropped connection left on: alt screen, mouse tracking, focus
+// events, bracketed paste, application cursor keys; show the cursor. Otherwise the next
+// shell prints into a stale alt screen and clicks type escape codes into it.
+const RESET_MODES =
+  "\x1b[?1049l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?1004l\x1b[?2004l\x1b[?1l\x1b[?25h\x1b[0m"
+
 /** An ssh pane stops at a prompt: say why, and show Connect in its header. */
 function setIdle(
   id: string,
@@ -386,10 +402,9 @@ function setIdle(
   phase: RemoteIdle,
   info?: { code?: number; signal?: number; error?: string },
 ) {
-  entry.remote = phase
   const label = useStore.getState().sessions[id]?.remote?.label ?? "the host"
   entry.term.write(banner(idleMessage(phase, label, info)))
-  useStore.getState().setRemoteIdle(id, phase)
+  setPhase(id, entry, phase)
 }
 
 /** Enter (or Connect) on an idle ssh pane: start ssh again under the same session id. */
@@ -397,7 +412,6 @@ function connectRemote(id: string, entry: Entry) {
   if (!isIdle(entry.remote)) return
   const label = useStore.getState().sessions[id]?.remote?.label ?? "the host"
   entry.term.write(banner(`connecting to ${label}…`))
-  useStore.getState().setRemoteIdle(id, null)
   requestPty(id, entry, false)
 }
 
@@ -429,11 +443,13 @@ function spawn(session: Session, entry: Entry) {
       if (entries.get(session.id) !== entry) return
       entry.startSeq = (entry.startSeq ?? 0) + 1 // an answer still in flight is stale now
       clearTimeout(entry.idleTimer)
+      useStore.getState().signalSession(session.id, { type: "command-end" }) // nothing runs now
+      entry.term.write(RESET_MODES)
       setIdle(session.id, entry, "closed", e)
     })
     const restore = useStore.getState().settings.ssh.restore
-    requestPty(session.id, entry, firstStart(!!session.restored, restore) === "attach")
-  } else requestPty(session.id, entry, false)
+    requestPty(session.id, entry, firstStart(!!session.restored, restore) === "attach", session)
+  } else requestPty(session.id, entry, false, session)
 
   // This pane was inside a Claude session when smterm quit/crashed: resume it once the shell
   // is ready. Shells with our integration (zsh/bash, incl. inside WSL) announce their first

@@ -324,7 +324,7 @@ CI: GitHub Actions matrix (macos/ubuntu/windows). Auto-update later via `electro
   (sidebar branch + PR) · `agents:meta-snapshot` · `fs:*` / `file:*` / `dialog:pick-directory` /
   `editor:info` (files panel, links, preview) · `window:*` (frameless controls, native bg) ·
   `platform:info` · `app:*` (version, update check, metrics) · `open-external` / `open-path` /
-  `notify` / `clipboard:*` · `ssh:list-hosts` / `ssh:open-config`.
+  `notify` / `clipboard:*` · `ssh:list-hosts` (invoke) / `ssh:open-config` (send).
 - **Main → renderer** (`webContents.send`): `pty:data:<id>` (coalesced PTY bytes — the hot path;
   nothing else rides it) · `pty:exit:<id>` (the process ended on its own) · `ssh-hosts-changed`
   · `agents:events` (hook batches + token totals) · `agents:meta`
@@ -362,8 +362,7 @@ Config dir: `~/.config/smterm/` (`%APPDATA%\smterm\` on Windows).
 
 Design: `docs/design/SSH_REMOTES.md`; build log: `docs/design/SSH_IMPLEMENTATION_PLAN.md`.
 
-- **Hosts come from `~/.ssh/config` only** (plus each running WSL distro's). `electron/
-ssh-config.ts` reads it (Includes, conditional blocks, first value wins) into aliases;
+- **Hosts come from `~/.ssh/config` only** (plus each running WSL distro's). `electron/ssh-config.ts` reads it (Includes, conditional blocks, first value wins) into aliases;
   `ssh-service.ts` keeps the merged list, watched by one chokidar watcher, and tells the
   renderer on change. No host is defined in smterm.
 - **Main trusts only its own list.** A remote session carries a `RemoteRef` (host id, label,

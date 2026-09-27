@@ -33,14 +33,16 @@ export function groupHosts(hosts: SshHost[]): HostGroup[] {
   return [...groups.values()]
 }
 
-/** hostIds with a connected session (not one waiting at a Connect prompt), sorted — a
- *  stable primitive list for useShallow. */
+/** hostIds with a live ssh (not dialing, not waiting at a Connect prompt, not a restored
+ *  pane that hasn't started), sorted — a stable primitive list for useShallow. */
 export function connectedHostIds(
   sessions: Record<string, Session>,
-  idle: Record<string, unknown> = {},
+  phases: Record<string, string>,
 ): string[] {
   const ids = new Set<string>()
-  for (const s of Object.values(sessions)) if (s.remote && !idle[s.id]) ids.add(s.remote.hostId)
+  for (const s of Object.values(sessions)) {
+    if (s.remote && phases[s.id] === "live") ids.add(s.remote.hostId)
+  }
   return [...ids].sort()
 }
 

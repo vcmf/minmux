@@ -120,7 +120,7 @@ describe("TerminalManager — ssh restore", () => {
     expect(spawnCalls()[0]!.attachOnly).toBe(true)
     await flush()
     expect(term.written).toContain("web — press Enter to connect")
-    expect(st().remoteIdle[id]).toBe("waiting")
+    expect(st().remotePhase[id]).toBe("waiting")
 
     term.type("ls\r") // not a bare Enter: dropped, never sent to a host that isn't there
     term.type("x")
@@ -132,7 +132,7 @@ describe("TerminalManager — ssh restore", () => {
     expect(spawnCalls()[1]!.attachOnly).toBeUndefined()
     expect(spawnCalls()[1]!.id).toBe(id) // the same session id
     expect(ipc.ptyWrite).not.toHaveBeenCalled() // the Enter that connected isn't forwarded
-    expect(st().remoteIdle[id]).toBeUndefined()
+    expect(st().remotePhase[id]).toBe("starting")
     await flush()
     term.type("x")
     expect(ipc.ptyWrite).toHaveBeenCalledWith(id, "x")
@@ -143,7 +143,7 @@ describe("TerminalManager — ssh restore", () => {
     const { id, term } = start({ restored: true, restore: "on-focus" })
     await flush()
     expect(term.written).not.toContain("press Enter")
-    expect(st().remoteIdle[id]).toBeUndefined()
+    expect(st().remotePhase[id]).toBe("live")
     term.type("x")
     expect(ipc.ptyWrite).toHaveBeenCalledWith(id, "x")
   })
@@ -166,7 +166,7 @@ describe("TerminalManager — ssh exit and reconnect", () => {
     await flush()
     exitHandlers[id]!({ code: 255, signal: 0 })
     expect(term.written).toContain("connection to web closed (code 255) — press Enter to reconnect")
-    expect(st().remoteIdle[id]).toBe("closed")
+    expect(st().remotePhase[id]).toBe("closed")
     term.type("q")
     expect(ipc.ptyWrite).not.toHaveBeenCalled()
     term.type("\r")
@@ -196,7 +196,7 @@ describe("TerminalManager — ssh exit and reconnect", () => {
     expect(term.written).toContain("couldn't connect to web: ssh isn't installed [2J")
     expect(term.written).not.toContain("\u001b[2J")
     expect(term.written).not.toContain("[spawn error]")
-    expect(st().remoteIdle[id]).toBe("failed")
+    expect(st().remotePhase[id]).toBe("failed")
     TerminalManager.connect(id)
     expect(spawnCalls()).toHaveLength(2)
     TerminalManager.connect(id) // already connecting: no second spawn
@@ -210,7 +210,7 @@ describe("TerminalManager — ssh exit and reconnect", () => {
     exitHandlers[id]!({ code: 255, signal: 0 }) // (an exit can't really precede its start's answer)
     resolveFirst({ reattached: false })
     await flush()
-    expect(st().remoteIdle[id]).toBe("closed")
+    expect(st().remotePhase[id]).toBe("closed")
     term.type("x")
     expect(ipc.ptyWrite).not.toHaveBeenCalled()
   })
@@ -222,7 +222,7 @@ describe("TerminalManager — ssh exit and reconnect", () => {
     TerminalManager.dispose(id)
     resolveFirst({ reattached: false, started: false })
     await flush()
-    expect(st().remoteIdle[id]).toBeUndefined()
+    expect(st().remotePhase[id]).not.toBe("waiting") // the late answer changed nothing
     expect(exitHandlers[id]).toBeUndefined() // the exit listener went with it
   })
 
@@ -231,5 +231,60 @@ describe("TerminalManager — ssh exit and reconnect", () => {
     await flush()
     term.type("x")
     expect(ipc.ptyWrite).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe("TerminalManager — what a dropped connection leaves behind", () => {
+  it("resets the modes a TUI left on (alt screen, mouse, focus events, paste, cursor keys)", async () => {
+    const { id, term } = start({})
+    await flush()
+    exitHandlers[id]!({ code: 255, signal: 0 })
+    for (const m of [
+      "?1049l",
+      "?1000l",
+      "?1002l",
+      "?1003l",
+      "?1006l",
+      "?1004l",
+      "?2004l",
+      "?1l",
+      "?25h",
+    ]) {
+      expect(term.written).toContain(`\x1b[${m}`)
+    }
+    // …before the banner, so the banner lands on the normal screen.
+    expect(term.written.indexOf("\x1b[?1049l")).toBeLessThan(term.written.indexOf("[smterm]"))
+  })
+
+  it("ends a 'running' status (nothing runs in a closed pane)", async () => {
+    const { id } = start({})
+    await flush()
+    st().signalSession(id, { type: "command-start" })
+    expect(st().sessions[id]!.running).toBe(true)
+    exitHandlers[id]!({ code: 255, signal: 0 })
+    expect(st().sessions[id]!.running).toBeFalsy()
+  })
+
+  it("the store follows the phase: starting → live → closed → starting", async () => {
+    const { id, term } = start({})
+    expect(st().remotePhase[id]).toBe("starting")
+    await flush()
+    expect(st().remotePhase[id]).toBe("live")
+    exitHandlers[id]!({ code: 255, signal: 0 })
+    expect(st().remotePhase[id]).toBe("closed")
+    term.type("\r")
+    expect(st().remotePhase[id]).toBe("starting")
+  })
+
+  it("a start for a session the store doesn't hold yet still spawns (the one given is used)", () => {
+    TerminalManager.ensureRunning({
+      id: "not-in-store",
+      title: "",
+      command: "/bin/sh",
+      args: [],
+      status: "idle",
+      unread: false,
+    })
+    expect(spawnCalls().map((c) => c.id)).toContain("not-in-store")
   })
 })

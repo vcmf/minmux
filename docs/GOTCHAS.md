@@ -362,6 +362,12 @@ and `terminal-manager` types `claude --resume <id> [--permission-mode m]` at the
   entry and only re-requests the PTY; a second `term.onData` would send every key twice.
 - **`attachOnly`** exists for `restore: "on-focus"`: reattach a live PTY after a reload, but
   start nothing. Without it a reload would either dial every host again or strand a live one.
+  Under `auto` a restored pane always spawns, so a renderer reload also redials a pane that
+  was sitting at a closed/failed prompt (main has no PTY for it to reattach) — by design.
+- **The sidebar's connected dot means `remotePhase === "live"`**: a pane still dialing, at a
+  Connect prompt, or in a background tab that hasn't started doesn't light it.
+- **A dropped connection resets xterm's modes** (alt screen, mouse, focus, bracketed paste,
+  cursor keys) before the banner: the remote `precmd` mouse reset never runs locally.
 
 ## Agent-status reducer has a known flaw {#agent-status}
 
