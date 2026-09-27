@@ -132,6 +132,33 @@ function App() {
     }
   }, [])
 
+  // Saved ssh hosts: fetched off the startup path (the first tab never waits on it), then
+  // re-fetched whenever main sees ~/.ssh/config change. A late answer never overwrites a newer.
+  useEffect(() => {
+    let seq = 0
+    let disposed = false
+    const refresh = () => {
+      const mine = ++seq
+      void ipc
+        .listSshHosts()
+        .then((hosts) => {
+          if (!disposed && mine === seq) useStore.getState().setSshHosts(hosts)
+        })
+        .catch(() => undefined) // no backend / main failed: keep the last list
+    }
+    refresh()
+    let off: (() => void) | undefined
+    try {
+      off = ipc.onSshHostsChanged(refresh)
+    } catch {
+      // no backend
+    }
+    return () => {
+      disposed = true
+      off?.()
+    }
+  }, [])
+
   // Persist the layout (debounced) so the next launch restores it. Skips writes
   // when only runtime status changed (serialized JSON is identical).
   useEffect(() => {

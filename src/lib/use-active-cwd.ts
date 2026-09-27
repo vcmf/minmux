@@ -1,14 +1,26 @@
 import { useStore } from "../store"
 import { wslContext, type WslContext } from "./wsl"
 import { workCwd } from "./agent-dirs"
+import type { RemoteRef } from "../types"
 
 /** The folder the focused pane works in: Claude's while it runs there (a worktree, a `cd`),
- *  else the shell's — drives the git status bar + changes panel. */
+ *  else the shell's — drives the git status bar + changes panel. None for an ssh session:
+ *  its folders are on the host, so nothing local may read them. */
 export function useActiveWorkCwd(): string | undefined {
   return useStore((s) => {
     const tab = s.tabs.find((t) => t.id === s.activeTabId)
     const sid = tab?.activeSessionId
-    return sid ? workCwd(s.agents, s.paneGit, sid, s.sessions[sid]?.cwd) : undefined
+    const session = sid ? s.sessions[sid] : undefined
+    if (!sid || session?.remote) return undefined
+    return workCwd(s.agents, s.paneGit, sid, session?.cwd)
+  })
+}
+
+/** The focused session's ssh host, if it's remote (the panels show a notice instead). */
+export function useActiveRemote(): RemoteRef | undefined {
+  return useStore((s) => {
+    const sid = s.tabs.find((t) => t.id === s.activeTabId)?.activeSessionId
+    return sid ? s.sessions[sid]?.remote : undefined
   })
 }
 
@@ -29,7 +41,9 @@ export function useFilesRoot(): {
   // Claude's checkout while it works in another one — the same repo the git badges come from.
   const cwd = useActiveWorkCwd()
   const sessionId = useActiveSessionId()
-  const override = useStore((s) => (sessionId ? s.paneRoot[sessionId] : undefined))
+  const override = useStore((s) =>
+    sessionId && !s.sessions[sessionId]?.remote ? s.paneRoot[sessionId] : undefined,
+  )
   return { root: override ?? cwd, cwd, sessionId, diverged: !!override && override !== cwd }
 }
 

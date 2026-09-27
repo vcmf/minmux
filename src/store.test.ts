@@ -1,7 +1,8 @@
 import { describe, it, expect, beforeEach } from "vitest"
 import { useStore, isVisibleIn, isSessionVisible } from "./store"
 import { allSessionIds, visibleSessionIds } from "./lib/pane-tree"
-import { resetStore, testShell as shell } from "./test/helpers"
+import { resetStore, testHost, testShell as shell } from "./test/helpers"
+import { hostShellOption } from "./lib/ssh-hosts-ui"
 import { RIGHT_PANEL_MIN, RIGHT_PANEL_MAX } from "./lib/right-panel"
 import type { ShellOption } from "./types"
 
@@ -811,5 +812,56 @@ describe("store — an unreadable saved host", () => {
     const s = st().sessions[firstTab().activeSessionId]!
     expect(s.remote?.hostId).toBe("unavailable")
     expect(s.remoteSaved).toEqual(saved)
+  })
+})
+
+describe("store — ssh hosts", () => {
+  beforeEach(resetStore)
+
+  it("setSshHosts keeps the same reference when the list didn't change", () => {
+    st().setSshHosts([testHost("web")])
+    const before = st().sshHosts
+    st().setSshHosts([testHost("web")])
+    expect(st().sshHosts).toBe(before)
+    st().setSshHosts([testHost("web"), testHost("db")])
+    expect(st().sshHosts.map((h) => h.label)).toEqual(["web", "db"])
+  })
+
+  it("a new tab on a host is a remote session with no local cwd", () => {
+    st().setShells([shell])
+    st().newTab(shell)
+    const local = st().tabs[0]!.activeSessionId
+    st().setSessionCwd(local, "/repo")
+    st().newTab(hostShellOption(testHost("web")))
+    const s = st().sessions[st().tabs[1]!.activeSessionId]!
+    expect(s.remote).toEqual({ hostId: "native:web", label: "web", target: "web", env: "native" })
+    expect(s.cwd).toBeUndefined()
+  })
+
+  it("splitWith splits a local pane onto the host (not the source's shell or cwd)", () => {
+    st().setShells([shell])
+    st().newTab(shell)
+    const local = st().tabs[0]!.activeSessionId
+    st().setSessionCwd(local, "/repo")
+    st().splitWith("row", hostShellOption(testHost("web")))
+    const tab = firstTab()
+    expect(allSessionIds(tab.root)).toHaveLength(2)
+    const s = st().sessions[tab.activeSessionId]!
+    expect(s.remote?.hostId).toBe("native:web")
+    expect(s.cwd).toBeUndefined()
+    expect(st().sessions[local]!.remote).toBeUndefined()
+  })
+
+  it("splitWith a local shell from an ssh pane stays local", () => {
+    st().setShells([shell])
+    st().newTab(hostShellOption(testHost("web")))
+    st().splitWith("column", shell)
+    expect(st().sessions[firstTab().activeSessionId]!.remote).toBeUndefined()
+  })
+
+  it("splitWith with no tab opens one", () => {
+    st().splitWith("row", hostShellOption(testHost("web")))
+    expect(st().tabs).toHaveLength(1)
+    expect(st().sessions[firstTab().activeSessionId]!.remote?.hostId).toBe("native:web")
   })
 })

@@ -12,6 +12,7 @@ import {
   Sun,
   Moon,
   CircleHalf,
+  Globe,
   X,
 } from "@phosphor-icons/react"
 import { useStore } from "../store"
@@ -19,6 +20,8 @@ import { THEME_FAMILIES } from "../settings/themes"
 import { openSettingsFile } from "../settings/io"
 import { resolveDefaultShell } from "../lib/shells"
 import { newSurfaceKey } from "../lib/platform"
+import { ipc } from "../lib/ipc"
+import { envTitle, hostShellOption } from "../lib/ssh-hosts-ui"
 
 interface Command {
   group: string
@@ -31,6 +34,7 @@ interface Command {
 /** ⌘K command palette — spawn/split/switch/theme/settings over real state. */
 export function CommandPalette() {
   const shells = useStore((s) => s.shells)
+  const sshHosts = useStore((s) => s.sshHosts)
   const tabs = useStore((s) => s.tabs)
   const activeTabId = useStore((s) => s.activeTabId)
   const settings = useStore((s) => s.settings)
@@ -86,6 +90,35 @@ export function CommandPalette() {
       )
     }
 
+    for (const h of sshHosts) {
+      const where =
+        h.env === "native" ? h.detail : [envTitle(h.env), h.detail].filter(Boolean).join(" · ")
+      const sub = where ? `${h.label} · ${where}` : h.label
+      list.push(
+        {
+          group: "SSH",
+          label: "Connect to host",
+          sub,
+          icon: <Globe size={16} />,
+          run: () => store.newTab(hostShellOption(h)),
+        },
+        {
+          group: "SSH",
+          label: "Split right on host",
+          sub,
+          icon: <Columns size={16} />,
+          run: () => store.splitWith("row", hostShellOption(h)),
+        },
+      )
+    }
+    list.push({
+      group: "SSH",
+      label: "Open ssh config",
+      sub: "~/.ssh/config",
+      icon: <FileText size={16} />,
+      run: () => ipc.openSshConfig(),
+    })
+
     for (const tab of tabs) {
       if (tab.id === activeTabId) continue
       list.push({
@@ -140,7 +173,7 @@ export function CommandPalette() {
       },
     )
     return list
-  }, [shells, tabs, activeTabId, settings])
+  }, [shells, sshHosts, tabs, activeTabId, settings])
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase()

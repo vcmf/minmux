@@ -15,6 +15,7 @@ import {
   SidebarSimple,
   Sun,
   Moon,
+  Globe,
 } from "@phosphor-icons/react"
 import { activeTheme, useStore } from "../store"
 import { ipc } from "../lib/ipc"
@@ -22,6 +23,7 @@ import { allSessionIds } from "../lib/pane-tree"
 import { aggregateBadge } from "../lib/session-status"
 import { tabTitle } from "../lib/session-label"
 import { resolveDefaultShell } from "../lib/shells"
+import { envTitle, hostShellOption } from "../lib/ssh-hosts-ui"
 import { TerminalManager } from "../terminal/terminal-manager"
 import brandIcon from "../assets/icon.png"
 
@@ -30,6 +32,7 @@ export function TopBar() {
   const tabs = useStore((s) => s.tabs)
   const activeTabId = useStore((s) => s.activeTabId)
   const shells = useStore((s) => s.shells)
+  const sshHosts = useStore((s) => s.sshHosts)
   const sessions = useStore((s) => s.sessions)
   const home = useStore((s) => s.home)
   const defaultShellPref = useStore((s) => s.settings.defaultShell)
@@ -185,6 +188,23 @@ export function TopBar() {
                   <button key={sh.id} className="shell-menu-item" onMouseDown={() => openTab(sh)}>
                     <span>{sh.label}</span>
                     {sh.id === defaultShell?.id && <span className="shell-menu-def">default</span>}
+                  </button>
+                ))}
+                {sshHosts.length > 0 && <div className="shell-menu-group">SSH</div>}
+                {sshHosts.map((h) => (
+                  <button
+                    key={h.hostId}
+                    className="shell-menu-item"
+                    title={h.detail}
+                    onMouseDown={() => openTab(hostShellOption(h))}
+                  >
+                    <span className="shell-menu-host">
+                      <Globe size={12} />
+                      {h.label}
+                    </span>
+                    {h.env !== "native" && (
+                      <span className="shell-menu-def">{envTitle(h.env)}</span>
+                    )}
                   </button>
                 ))}
               </div>

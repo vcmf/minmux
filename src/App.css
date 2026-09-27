@@ -319,6 +319,20 @@ body {
   font-size: 10px;
   color: var(--faint);
 }
+.shell-menu-group {
+  padding: 6px 10px 2px;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: var(--faint);
+  border-top: 1px solid var(--border);
+  margin-top: 4px;
+}
+.shell-menu-host {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
 
 /* Right-click file/folder menu — same chrome as the shell dropdown, but anchored
    at viewport coords (fixed) above the backdrop, with disabled items + separators. */
@@ -529,6 +543,73 @@ body {
   color: var(--faint);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
+}
+/* ── Sidebar: saved ssh hosts ───────────────────────── */
+.remote {
+  flex: 0 1 auto;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  max-height: 40%;
+  border-top: 1px solid var(--border);
+}
+.remote-header {
+  border-bottom: none;
+}
+.remote-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--faint);
+  cursor: pointer;
+}
+.remote-count {
+  font-size: 10.5px;
+}
+.remote-list {
+  overflow-y: auto;
+  padding-bottom: 6px;
+}
+.remote-group {
+  padding: 6px 12px 2px;
+  font-size: 10.5px;
+  color: var(--faint);
+}
+.remote-row {
+  cursor: pointer;
+}
+.remote-actions {
+  display: none;
+  gap: 2px;
+  margin-left: auto;
+}
+.remote-actions .iconbtn {
+  width: 22px;
+  height: 22px;
+}
+.remote-row:hover .remote-actions,
+.remote-row:focus-within .remote-actions {
+  display: inline-flex;
+}
+.remote-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 4px 14px 8px;
+  font-size: 11px;
+}
+.remote-empty-btn {
+  border: 1px solid var(--border);
+  background: var(--elev);
+  color: var(--text);
+  border-radius: 4px;
+  padding: 3px 8px;
+  font: inherit;
+  cursor: pointer;
 }
 .legend {
   flex: 0 0 auto;

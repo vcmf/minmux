@@ -4,7 +4,7 @@ import { TopBar } from "./top-bar"
 import { useStore } from "../store"
 import { ipc } from "../lib/ipc"
 import { allSessionIds } from "../lib/pane-tree"
-import { resetStore, testShell } from "../test/helpers"
+import { resetStore, testHost, testShell } from "../test/helpers"
 
 const st = () => useStore.getState()
 
@@ -96,5 +96,25 @@ describe("TopBar", () => {
     render(<TopBar />)
     fireEvent.click(screen.getByLabelText("Switch to dark theme"))
     expect(st().settings.appearance).toBe("dark")
+  })
+})
+
+describe("TopBar — SSH hosts in the new-tab picker", () => {
+  it("lists hosts after the shells and opens one in a new tab", () => {
+    st().setSshHosts([testHost("web"), testHost("gpu", "wsl:Ubuntu")])
+    render(<TopBar />)
+    fireEvent.click(screen.getByTitle("New tab in…"))
+    expect(screen.getByText("SSH")).toBeInTheDocument()
+    expect(screen.getByText("WSL: Ubuntu")).toBeInTheDocument()
+    fireEvent.mouseDown(screen.getByText("gpu"))
+    expect(st().tabs).toHaveLength(1)
+    expect(st().sessions[st().tabs[0]!.activeSessionId]!.remote?.hostId).toBe("wsl:Ubuntu:gpu")
+    expect(screen.queryByText("SSH")).not.toBeInTheDocument() // the menu closed
+  })
+
+  it("has no SSH group without hosts", () => {
+    render(<TopBar />)
+    fireEvent.click(screen.getByTitle("New tab in…"))
+    expect(screen.queryByText("SSH")).not.toBeInTheDocument()
   })
 })

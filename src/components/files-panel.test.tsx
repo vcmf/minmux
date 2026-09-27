@@ -4,7 +4,8 @@ import { FilesPanel } from "./files-panel"
 import { useStore } from "../store"
 import { ipc } from "../lib/ipc"
 import { allSessionIds } from "../lib/pane-tree"
-import { resetStore, testShell } from "../test/helpers"
+import { resetStore, testHost, testShell } from "../test/helpers"
+import { hostShellOption } from "../lib/ssh-hosts-ui"
 import type { ShellOption } from "../types"
 import { fireEvent } from "@testing-library/react"
 
@@ -61,5 +62,28 @@ describe("FilesPanel", () => {
       abs: "/home/me/wsltest/app.ts",
       wsl: { distro: "Ubuntu" },
     })
+  })
+})
+
+describe("FilesPanel — remote session", () => {
+  beforeEach(() => {
+    resetStore()
+    vi.clearAllMocks()
+  })
+
+  it("shows the remote notice and reads nothing locally", () => {
+    st().newTab(hostShellOption(testHost("gpu")))
+    render(<FilesPanel />)
+    expect(screen.getByText(/Remote session on/)).toBeInTheDocument()
+    expect(screen.queryByText(/No folder/)).not.toBeInTheDocument()
+    expect(ipc.readdir).not.toHaveBeenCalled()
+  })
+
+  it("ignores a root override for a remote session", () => {
+    st().newTab(hostShellOption(testHost("gpu")))
+    const id = st().tabs[0]!.activeSessionId
+    useStore.setState({ paneRoot: { [id]: "/Users/me" } })
+    render(<FilesPanel />)
+    expect(ipc.readdir).not.toHaveBeenCalled()
   })
 })

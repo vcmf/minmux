@@ -2,7 +2,8 @@ import { useEffect, useMemo, useState } from "react"
 import { FileText, FilePlus, FileX, X } from "@phosphor-icons/react"
 import { useStore } from "../store"
 import { ipc } from "../lib/ipc"
-import { useActiveWorkCwd, getActiveWsl } from "../lib/use-active-cwd"
+import { useActiveRemote, useActiveWorkCwd, getActiveWsl } from "../lib/use-active-cwd"
+import { RemoteNotice } from "./remote-notice"
 import { useFileMenu } from "./use-file-menu"
 import type { ChangeStatus, DiffLine } from "../lib/ipc"
 
@@ -17,6 +18,7 @@ const fileIcon = (status: ChangeStatus) => {
 export function DiffPanel() {
   const git = useStore((s) => s.git)
   const cwd = useActiveWorkCwd() // the diff of where Claude works (its worktree), if it runs
+  const remote = useActiveRemote()
   const [selected, setSelected] = useState<string | null>(null)
   const [diff, setDiff] = useState<DiffLine[]>([])
 
@@ -53,7 +55,7 @@ export function DiffPanel() {
       <div className="diffpanel-header">
         <span className="section-label">Changes</span>
         <span className="diff-summary">
-          {git?.isRepo ? (
+          {remote ? null : git?.isRepo ? (
             <>
               <span className="add">+{git.add}</span> <span className="del">−{git.del}</span>{" "}
               <span className="status-faint">
@@ -69,35 +71,37 @@ export function DiffPanel() {
         </button>
       </div>
 
+      {remote && <RemoteNotice remote={remote} what="changes" />}
       <div className="diff-files">
-        {files.map((f) => (
-          <div
-            key={f.path}
-            className={`diff-file${f.path === selected ? " selected" : ""}`}
-            onMouseDown={(e) => e.button === 0 && setSelected(f.path)}
-            onContextMenu={(e) =>
-              openFileMenu(e, {
-                abs: root ? `${root}/${f.path}` : f.path,
-                rel: f.path,
-                isDir: false,
-              })
-            }
-          >
-            <span className="tree-icon">{fileIcon(f.status)}</span>
-            <div className="tree-labels">
-              <span className="tree-primary">{f.name}</span>
-              <span className="tree-sub">{f.dir === "." ? "" : f.dir}</span>
+        {!remote &&
+          files.map((f) => (
+            <div
+              key={f.path}
+              className={`diff-file${f.path === selected ? " selected" : ""}`}
+              onMouseDown={(e) => e.button === 0 && setSelected(f.path)}
+              onContextMenu={(e) =>
+                openFileMenu(e, {
+                  abs: root ? `${root}/${f.path}` : f.path,
+                  rel: f.path,
+                  isDir: false,
+                })
+              }
+            >
+              <span className="tree-icon">{fileIcon(f.status)}</span>
+              <div className="tree-labels">
+                <span className="tree-primary">{f.name}</span>
+                <span className="tree-sub">{f.dir === "." ? "" : f.dir}</span>
+              </div>
+              <span className="add">+{f.add}</span>
+              <span className="del">−{f.del}</span>
             </div>
-            <span className="add">+{f.add}</span>
-            <span className="del">−{f.del}</span>
-          </div>
-        ))}
-        {git?.isRepo && files.length === 0 && (
+          ))}
+        {!remote && git?.isRepo && files.length === 0 && (
           <div className="diff-empty status-faint">Working tree clean</div>
         )}
       </div>
 
-      {selected && (
+      {!remote && selected && (
         <div className="diff-body">
           {diff.map((l, i) => (
             <div key={i} className={`diff-line ${l.type}`}>

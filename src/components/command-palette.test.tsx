@@ -3,7 +3,8 @@ import { render, screen, fireEvent } from "@testing-library/react"
 import { CommandPalette } from "./command-palette"
 import { useStore } from "../store"
 import { allSessionIds } from "../lib/pane-tree"
-import { resetStore, testShell } from "../test/helpers"
+import { resetStore, testHost, testShell } from "../test/helpers"
+import { ipc } from "../lib/ipc"
 
 const st = () => useStore.getState()
 
@@ -63,5 +64,35 @@ describe("CommandPalette", () => {
     fireEvent.change(screen.getByRole("textbox"), { target: { value: "appearance light" } })
     fireEvent.keyDown(screen.getByRole("textbox"), { key: "Enter" })
     expect(st().settings.appearance).toBe("light")
+  })
+})
+
+describe("CommandPalette — SSH", () => {
+  it("connects to a host found by name", () => {
+    st().setSshHosts([testHost("web", "native", "me@10.0.0.1"), testHost("db")])
+    render(<CommandPalette />)
+    // Matches on the host detail too (the sub line).
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "10.0.0.1" } })
+    expect(screen.getByText("Connect to host")).toBeInTheDocument()
+    fireEvent.keyDown(screen.getByRole("textbox"), { key: "Enter" })
+    expect(st().tabs).toHaveLength(1)
+    expect(st().sessions[st().tabs[0]!.activeSessionId]!.remote?.hostId).toBe("native:web")
+  })
+
+  it("splits right on a host", () => {
+    st().newTab(testShell)
+    st().setSshHosts([testHost("web")])
+    render(<CommandPalette />)
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "split right on host" } })
+    fireEvent.keyDown(screen.getByRole("textbox"), { key: "Enter" })
+    expect(allSessionIds(st().tabs[0]!.root)).toHaveLength(2)
+    expect(st().sessions[st().tabs[0]!.activeSessionId]!.remote?.hostId).toBe("native:web")
+  })
+
+  it("opens the ssh config, even with no hosts", () => {
+    render(<CommandPalette />)
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "ssh config" } })
+    fireEvent.keyDown(screen.getByRole("textbox"), { key: "Enter" })
+    expect(ipc.openSshConfig).toHaveBeenCalled()
   })
 })

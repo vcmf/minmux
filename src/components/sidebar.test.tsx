@@ -3,7 +3,9 @@ import { render, screen, fireEvent, act } from "@testing-library/react"
 import { Sidebar } from "./sidebar"
 import { useStore } from "../store"
 import { allSessionIds } from "../lib/pane-tree"
-import { resetStore, testShell } from "../test/helpers"
+import { resetStore, testHost, testShell } from "../test/helpers"
+import { ipc } from "../lib/ipc"
+import { hostShellOption } from "../lib/ssh-hosts-ui"
 
 vi.mock("../terminal/terminal-manager", () => ({
   TerminalManager: { attach: vi.fn(), fit: vi.fn(), focus: vi.fn(), dispose: vi.fn() },
@@ -266,5 +268,92 @@ describe("Sidebar — folder lines: full path + right-click menu", () => {
     fireEvent.contextMenu(container.querySelector(".tree-dir")!)
     expect(screen.getByText("WSL path")).toBeInTheDocument()
     expect(screen.getByText(/Reveal in|Show in/).closest("button")).toBeDisabled()
+  })
+})
+
+describe("Sidebar — Remote hosts", () => {
+  beforeEach(() => {
+    try {
+      localStorage.clear()
+    } catch {
+      // no storage in this environment
+    }
+  })
+
+  it("lists saved hosts with their detail, without env headings for one env", () => {
+    st().setSshHosts([testHost("web", "native", "me@10.0.0.1"), testHost("db")])
+    render(<Sidebar />)
+    expect(screen.getByText("Remote")).toBeInTheDocument()
+    expect(screen.getByText("web")).toBeInTheDocument()
+    expect(screen.getByText("me@10.0.0.1")).toBeInTheDocument()
+    expect(screen.getByText("db")).toBeInTheDocument()
+    expect(screen.queryByText("This machine")).not.toBeInTheDocument()
+  })
+
+  it("groups by environment when there's more than one", () => {
+    st().setSshHosts([testHost("web"), testHost("gpu", "wsl:Ubuntu")])
+    render(<Sidebar />)
+    expect(screen.getByText("This machine")).toBeInTheDocument()
+    expect(screen.getByText("WSL: Ubuntu")).toBeInTheDocument()
+  })
+
+  it("clicking a host opens a new tab on it", () => {
+    st().setSshHosts([testHost("web")])
+    render(<Sidebar />)
+    fireEvent.click(screen.getByTitle("Open a terminal on web"))
+    expect(st().tabs).toHaveLength(1)
+    expect(st().sessions[st().tabs[0]!.activeSessionId]!.remote?.hostId).toBe("native:web")
+  })
+
+  it("the hover split buttons split the active pane onto the host, not a new tab", () => {
+    st().newTab(testShell)
+    st().setSshHosts([testHost("web")])
+    render(<Sidebar />)
+    fireEvent.click(screen.getByTitle("Split right on web"))
+    expect(st().tabs).toHaveLength(1)
+    const tab = st().tabs[0]!
+    expect(tab.root.type === "split" && tab.root.direction).toBe("row")
+    expect(st().sessions[tab.activeSessionId]!.remote?.hostId).toBe("native:web")
+    fireEvent.click(screen.getByTitle("Split down on web"))
+    expect(allSessionIds(st().tabs[0]!.root)).toHaveLength(3)
+  })
+
+  it("marks hosts with an open session as connected", () => {
+    st().setSshHosts([testHost("web"), testHost("db")])
+    st().newTab(hostShellOption(testHost("web")))
+    render(<Sidebar />)
+    expect(screen.getAllByTitle("Connected")).toHaveLength(1)
+    const row = screen.getByTitle("Open a terminal on web")
+    expect(row.querySelector('[title="Connected"]')).not.toBeNull()
+  })
+
+  it("an empty list says so and offers to open the ssh config", () => {
+    render(<Sidebar />)
+    expect(screen.getByText("No hosts in ~/.ssh/config")).toBeInTheDocument()
+    fireEvent.click(screen.getByText("Open ssh config"))
+    expect(ipc.openSshConfig).toHaveBeenCalledTimes(1)
+    fireEvent.click(screen.getByTitle("Open ssh config"))
+    expect(ipc.openSshConfig).toHaveBeenCalledTimes(2)
+  })
+
+  it("collapses, and remembers it", () => {
+    st().setSshHosts([testHost("web")])
+    const { unmount } = render(<Sidebar />)
+    fireEvent.click(screen.getByText("Remote"))
+    expect(screen.queryByTitle("Open a terminal on web")).not.toBeInTheDocument()
+    unmount()
+    render(<Sidebar />)
+    expect(screen.queryByTitle("Open a terminal on web")).not.toBeInTheDocument()
+    fireEvent.click(screen.getByText("Remote"))
+    expect(screen.getByTitle("Open a terminal on web")).toBeInTheDocument()
+  })
+
+  it("a remote pane row shows the host, a globe and no local folder line or menu", () => {
+    st().newTab(hostShellOption(testHost("gpu", "wsl:Ubuntu")))
+    render(<Sidebar />)
+    const sub = screen.getByText("ssh · gpu · WSL: Ubuntu")
+    expect(screen.queryByText("shell")).not.toBeInTheDocument() // the no-cwd folder line
+    fireEvent.contextMenu(sub)
+    expect(screen.queryByText("Copy path")).not.toBeInTheDocument()
   })
 })
