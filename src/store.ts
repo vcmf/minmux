@@ -14,7 +14,7 @@ import {
   splitNode,
   visibleSessionIds,
 } from "./lib/pane-tree"
-import { inheritShell } from "./lib/shells"
+import { inheritShell, resolveDefaultShell } from "./lib/shells"
 import { reduceSignals } from "./lib/session-status"
 import type { SignalEvent } from "./lib/session-status"
 import { inGitKey, paneOfGitKey } from "./lib/agent-dirs"
@@ -46,8 +46,18 @@ function makeSession(shell: ShellOption, initialCwd?: string): Session {
     args: shell.args,
     status: "idle",
     unread: false,
-    cwd: initialCwd,
+    // A remote session's shell runs on the host: a local cwd would be meaningless there.
+    ...(shell.remote ? { remote: { ...shell.remote } } : { cwd: initialCwd }),
+    ...(shell.remote && shell.remoteSaved !== undefined ? { remoteSaved: shell.remoteSaved } : {}),
   }
+}
+
+/** The shell to open a LOCAL folder with, beside `src`: its own, unless it's an ssh session
+ *  (the folder is on this machine, not the host) — then the default local shell. */
+function localShellFor(state: AppState, src: Session | undefined): ShellOption | undefined {
+  const inherited = inheritShell(state.shells, src)
+  if (inherited && !inherited.remote) return inherited
+  return resolveDefaultShell(state.shells, state.settings.defaultShell)
 }
 
 /** The cwd of the currently focused terminal, if known — new panes/tabs inherit it. */
@@ -327,7 +337,8 @@ export const useStore = create<AppState>((set, get) => ({
   setSessionCwd: (sessionId, cwd) =>
     set((state) => {
       const s = state.sessions[sessionId]
-      if (!s || s.cwd === cwd) return {}
+      // A remote shell's OSC 7 path is on the host: local panels must never read it.
+      if (!s || s.remote || s.cwd === cwd) return {}
       return { sessions: { ...state.sessions, [sessionId]: { ...s, cwd } } }
     }),
   setPaletteOpen: (paletteOpen) => set({ paletteOpen }),
@@ -404,7 +415,7 @@ export const useStore = create<AppState>((set, get) => ({
       if (!tab) return {}
       const agentSession = paneId ? state.sessions[paneId] : undefined
       const src = state.sessions[tab.activeSessionId]
-      const shell = inheritShell(state.shells, agentSession ?? src) ?? state.shells[0]
+      const shell = localShellFor(state, agentSession ?? src)
       if (!shell) return {}
       return splitActivePane(state, { shell, cwd, direction: "row" })
     }),
@@ -415,7 +426,7 @@ export const useStore = create<AppState>((set, get) => ({
     const before = get().activeTabId
     set((state) => {
       const tab = state.tabs.find((t) => allSessionIds(t.root).includes(paneId))
-      const shell = inheritShell(state.shells, state.sessions[paneId]) ?? state.shells[0]
+      const shell = localShellFor(state, state.sessions[paneId])
       if (!tab || !shell) return {}
       // Split the pane holding it — as shown (no surface swap), not marked seen itself.
       const tabs = state.tabs.map((t) => (t.id === tab.id ? { ...t, activeSessionId: paneId } : t))

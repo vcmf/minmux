@@ -91,3 +91,18 @@ describe("shortCwd / sessionSubline", () => {
     expect(sessionSubline(undefined, home, "main")).toBe("main")
   })
 })
+
+describe("displaySessionTitle — ssh sessions", () => {
+  const remote = { hostId: "native:gpu", label: "gpu box", target: "gpu", env: "native" as const }
+
+  it("shows the host label, unless the program set a custom title", () => {
+    expect(displaySessionTitle(mk({ command: "ssh", remote }), home)).toBe("gpu box")
+    // the remote shell's default "user@host: ~/dir" isn't custom — the host label wins
+    expect(
+      displaySessionTitle(mk({ command: "ssh", remote, oscTitle: "me@gpu: ~/src" }), home),
+    ).toBe("gpu box")
+    expect(
+      displaySessionTitle(mk({ command: "ssh", remote, oscTitle: "Fix the build" }), home),
+    ).toBe("Fix the build")
+  })
+})

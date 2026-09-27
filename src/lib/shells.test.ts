@@ -57,3 +57,35 @@ describe("inheritShell", () => {
     expect(inheritShell([pwsh, wsl], undefined)).toBeUndefined()
   })
 })
+
+describe("inheritShell — ssh sessions", () => {
+  const remote = { hostId: "native:gpu", label: "gpu", target: "gpu", env: "native" as const }
+
+  it("keeps a remote source on its host, whatever the list holds", () => {
+    const got = inheritShell([zsh], { command: "ssh", args: ["gpu"], remote })!
+    expect(got).toEqual({ id: "native:gpu", label: "gpu", command: "ssh", args: ["gpu"], remote })
+    expect(got.remote).not.toBe(remote)
+  })
+
+  it("leaves a local source local", () => {
+    expect(inheritShell([zsh], { command: "/bin/zsh", args: [] })).toBe(zsh)
+  })
+})
+
+describe("inheritShell — an unreadable saved host", () => {
+  it("carries the saved original onto the split, so it isn't lost on the next save", () => {
+    const remote = {
+      hostId: "unavailable",
+      label: "ssh",
+      target: "unavailable",
+      env: "native" as const,
+    }
+    const saved = { hostId: "wsl2:x:y", env: "new-kind" }
+    expect(
+      inheritShell([zsh], { command: "ssh", args: [], remote, remoteSaved: saved }),
+    ).toMatchObject({
+      remote,
+      remoteSaved: saved,
+    })
+  })
+})

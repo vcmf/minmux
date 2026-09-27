@@ -727,3 +727,89 @@ describe("splitPaneAt", () => {
     expect(st().tabs).toBe(before)
   })
 })
+
+describe("store — ssh remote sessions", () => {
+  beforeEach(resetStore)
+
+  const remote = { hostId: "native:web", label: "web", target: "web", env: "native" as const }
+  const sshShell: ShellOption = {
+    id: "native:web",
+    label: "web",
+    command: "ssh",
+    args: ["web"],
+    remote,
+  }
+  const focused = () => st().sessions[firstTab().activeSessionId]!
+
+  it("a tab opened on a host is a remote session with no local cwd", () => {
+    st().setShells([shell])
+    st().newTab(sshShell)
+    expect(focused().remote).toEqual(remote)
+    expect(focused().remote).not.toBe(remote) // copied, not aliased
+    expect(focused().cwd).toBeUndefined()
+  })
+
+  it("splits and new surfaces from an ssh pane stay on the same host", () => {
+    st().setShells([shell])
+    st().newTab(sshShell)
+    st().splitActive("row", shell)
+    expect(focused().remote?.hostId).toBe("native:web")
+    st().newSurface(shell)
+    expect(focused().remote?.hostId).toBe("native:web")
+    expect(Object.values(st().sessions).every((x) => x.remote?.hostId === "native:web")).toBe(true)
+  })
+
+  it("ignores OSC 7 cwd reports from a remote shell (the path is on the host)", () => {
+    st().newTab(sshShell)
+    const id = focused().id
+    st().setSessionCwd(id, "/home/remote/project")
+    expect(st().sessions[id]!.cwd).toBeUndefined()
+  })
+
+  it("opening a local folder beside an ssh pane uses a local shell", () => {
+    st().setShells([shell])
+    st().newTab(sshShell)
+    const sshId = focused().id
+    st().openFolderInSplit("/Users/me/proj")
+    expect(focused().remote).toBeUndefined()
+    expect(focused().command).toBe(shell.command)
+    expect(focused().cwd).toBe("/Users/me/proj")
+    st().splitPaneAt(sshId, "/Users/me/other")
+    expect(focused().remote).toBeUndefined()
+    expect(focused().cwd).toBe("/Users/me/other")
+  })
+
+  it("local panes still split into their own shell", () => {
+    st().setShells([shell, wslShell])
+    st().newTab(wslShell)
+    st().openFolderInSplit("/home/me")
+    expect(focused().command).toBe("wsl.exe")
+  })
+})
+
+describe("store — an unreadable saved host", () => {
+  beforeEach(resetStore)
+
+  it("a split keeps the saved original", () => {
+    const remote = {
+      hostId: "unavailable",
+      label: "ssh",
+      target: "unavailable",
+      env: "native" as const,
+    }
+    const saved = { hostId: "wsl2:x:y", env: "new-kind" }
+    st().setShells([shell])
+    st().newTab({
+      id: "unavailable",
+      label: "ssh",
+      command: "ssh",
+      args: [],
+      remote,
+      remoteSaved: saved,
+    })
+    st().splitActive("row", shell)
+    const s = st().sessions[firstTab().activeSessionId]!
+    expect(s.remote?.hostId).toBe("unavailable")
+    expect(s.remoteSaved).toEqual(saved)
+  })
+})

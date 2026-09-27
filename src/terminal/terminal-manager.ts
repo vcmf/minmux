@@ -332,6 +332,8 @@ function spawn(session: Session, entry: Entry) {
       shell: session.command,
       args: session.args,
       cwd: session.cwd, // inherited from the pane this was split/opened from
+      // An ssh session: main rebuilds the command from its own host list (never ours).
+      ...(session.remote ? { remote: session.remote } : {}),
       // → COLORFGBG so agents detect light/dark (fallback when the OSC-11 bg query can't
       // complete, e.g. across the wsl.exe hop). Captured at spawn: a running shell's env
       // can't be rewritten, so a later theme switch — incl. appearance "system" following
@@ -352,6 +354,8 @@ function spawn(session: Session, entry: Entry) {
       armResumeTimer(session.id, entry)
     })
     .catch((e) => {
+      // Closed while the spawn was still preparing (e.g. an ssh probe): nothing to report to.
+      if (entries.get(session.id) !== entry) return
       entry.flow.replaying = false
       term.write(`\r\n\x1b[31m[spawn error] ${e}\x1b[0m\r\n`)
       const r = useStore.getState().resume[session.id]
@@ -370,7 +374,8 @@ function spawn(session: Session, entry: Entry) {
   // prompt (OSC 133 D) — wait for it and never type blind: a slow rc may be sitting on its own
   // prompt ("update? [Y/n]") that the keystrokes would answer. If it never comes, fall back to
   // offering [Resume]. Shells without integration (pwsh, cmd, fish) get a short grace period.
-  if (useStore.getState().resume[session.id]?.phase === "pending") {
+  // (Never for a remote session: its shell and any Claude in it run on the host.)
+  if (!session.remote && useStore.getState().resume[session.id]?.phase === "pending") {
     entry.flow.resumeStage = "await-prompt" // a first prompt typing it can arrive any time now
   }
 
@@ -444,7 +449,9 @@ function spawn(session: Session, entry: Entry) {
   // exist against the session cwd (kills false positives — versions, domains, etc.
   // that don't resolve to a file), and open on click (Cmd/Ctrl-click while a TUI holds
   // mouse mode, so a bare click still reaches the app). Single-row for now.
-  if (useStore.getState().settings.fileLinks) {
+  // Not for remote sessions: their paths are on the host, and validating them locally
+  // would turn e.g. /etc/hosts in remote output into a link to the LOCAL file.
+  if (useStore.getState().settings.fileLinks && !session.remote) {
     term.registerLinkProvider({
       provideLinks(y, cb) {
         const text = term.buffer.active.getLine(y - 1)?.translateToString(true) ?? ""

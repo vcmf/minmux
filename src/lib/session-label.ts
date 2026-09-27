@@ -30,10 +30,11 @@ export function isCustomOscTitle(title: string | undefined): boolean {
   return true
 }
 
-/** A pane's display title: custom program title > cwd basename > shell name. */
+/** A pane's display title: custom program title > ssh host > cwd basename > shell name. */
 export function displaySessionTitle(session: Session | undefined, home: string): string {
   if (!session) return "shell"
   if (isCustomOscTitle(session.oscTitle)) return session.oscTitle!.trim()
+  if (session.remote) return session.remote.label
   return cwdBasename(session.cwd, home) || shellType(session.command) || session.title || "shell"
 }
 
