@@ -46,14 +46,32 @@ export async function launch(o = {}) {
   const home = path.join(scratch, "home")
   // Must match main's configDir(): %APPDATA%\smterm on Windows, ~/.config/smterm elsewhere.
   const appData = path.join(scratch, "appdata")
-  const profile = o.profile ?? "default"
+  // Same rules as electron/profile.ts (trimmed, lowercased, validated), so `cfg` is the dir
+  // the app reads.
+  const profile = (o.profile ?? "default").trim().toLowerCase()
+  if (profile !== "default" && profile !== "prod" && !/^[a-z0-9][a-z0-9-]{0,31}$/.test(profile)) {
+    throw new Error(`launch: invalid profile "${o.profile}" (lowercase letters, digits and -)`)
+  }
   const dirName = profile === "default" || profile === "prod" ? "smterm" : `smterm-${profile}`
   const cfg =
     process.platform === "win32" ? path.join(appData, dirName) : path.join(home, ".config", dirName)
   fs.mkdirSync(cfg, { recursive: true })
   if (o.settings) fs.writeFileSync(path.join(cfg, "settings.json"), JSON.stringify(o.settings))
 
-  const env = { ...process.env, HOME: home, ZDOTDIR: home, APPDATA: appData, USERPROFILE: home }
+  // A scratch TMPDIR too: the app rewrites its shell-integration scripts in
+  // $TMPDIR/<profile>/shell-integration on every spawn — the real one is the installed app's.
+  const tmp = path.join(scratch, "tmp")
+  fs.mkdirSync(tmp, { recursive: true })
+  const env = {
+    ...process.env,
+    HOME: home,
+    ZDOTDIR: home,
+    APPDATA: appData,
+    USERPROFILE: home,
+    TMPDIR: tmp,
+    TMP: tmp,
+    TEMP: tmp,
+  }
   // Inherited from a dev smterm's shell (main copies its env into every PTY): the dev-server
   // URL would make this "built" app load live dev code instead of out/.
   delete env.ELECTRON_RENDERER_URL

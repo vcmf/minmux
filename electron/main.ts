@@ -27,6 +27,7 @@ import {
   buildWslInjection,
   defaultWslDistro,
   parseWslDistroArg,
+  setIntegrationDirName,
 } from "./shell-integration"
 import { gitStatus, gitDiff } from "./git"
 import { OutputCoalescer } from "./coalescer"
@@ -49,7 +50,6 @@ import { tokenEventsForBatch } from "./agent-tokens"
 import { AgentMetaTracker } from "./agent-meta"
 import { SessionLedger } from "./agent-sessions"
 import { displayName, profileNames, resolveProfile, scrubParentInstanceEnv } from "./profile"
-import { setIntegrationDirName } from "./shell-integration"
 import { PaneGitService } from "./pane-git"
 import type { PaneGitRequest } from "../src/lib/pane-git"
 import type { WslContext } from "../src/lib/wsl"
@@ -60,11 +60,18 @@ import {
   type PreviewData,
 } from "../src/lib/file-preview"
 
-// This process's profile (a dev build is `dev`): picked before anything reads a path. Then
-// the env is scrubbed of what a parent smterm set for its own pane (its hook file, pane id,
-// our profile choice), so nothing we spawn — shells, editors, git — inherits it.
+// This process's profile (a dev build is `dev`): picked before anything reads a path. An
+// invalid SMTERM_PROFILE stops here, synchronously — before any name, path or lock is set —
+// so it can never fall back to (and write into) another profile's data. Then the env is
+// scrubbed of what a parent smterm set for its own pane (its hook file, pane id, our profile
+// choice), so nothing we spawn — shells, editors, git — inherits it.
 const PROFILE_CHOICE = resolveProfile(process.env.SMTERM_PROFILE, app.isPackaged)
-const PROFILE_NAMES = profileNames("profile" in PROFILE_CHOICE ? PROFILE_CHOICE.profile : "")
+if ("error" in PROFILE_CHOICE) {
+  console.error(`smterm: ${PROFILE_CHOICE.error}`) // Linux shows no dialog before ready
+  dialog.showErrorBox("smterm can't start", PROFILE_CHOICE.error) // blocks on macOS / Windows
+  process.exit(1)
+}
+const PROFILE_NAMES = profileNames(PROFILE_CHOICE.profile)
 scrubParentInstanceEnv(process.env)
 setIntegrationDirName(PROFILE_NAMES.appName)
 
@@ -202,6 +209,8 @@ function createWindow() {
   })
 
   mainWindow = win
+  // Main owns the title ("smterm (dev)"): index.html's <title> would reset it on load.
+  win.on("page-title-updated", (e) => e.preventDefault())
   win.on("session-end", () => sessionLedger().freeze(60_000)) // Windows logout/shutdown — see onPower
   win.on("closed", () => {
     mainWindow = null
@@ -219,7 +228,7 @@ function createWindow() {
     })
   }
 
-  if (process.env.ELECTRON_RENDERER_URL) {
+  if (!app.isPackaged && process.env.ELECTRON_RENDERER_URL) {
     void win.loadURL(process.env.ELECTRON_RENDERER_URL)
   } else {
     void win.loadFile(path.join(dir, "../renderer/index.html"))
@@ -408,6 +417,9 @@ function registerIpc() {
       // SMTERM_SHARE_HISTORY=0 to disable. (For WSL, wslInjection lists it in $WSLENV
       // so it crosses the boundary.)
       const spawnEnv = { ...process.env, ...(inj?.env ?? {}) } as Record<string, string>
+      // electron-vite's dev-server URL is ours: an Electron app started from this pane would
+      // load our dev renderer instead of its own.
+      delete spawnEnv.ELECTRON_RENDERER_URL
       if (!shareHistoryEnabled()) spawnEnv.SMTERM_SHARE_HISTORY = "0"
       // Tell agents (Claude Code, vim, …) our light/dark background via COLORFGBG — the
       // fallback when the OSC-11 background query can't complete in time (notably across
@@ -879,11 +891,6 @@ function openFile(cwd: string, file: string, line?: number, col?: number): void 
 // single-instance lock and localStorage — is the profile's own, unless the caller chose one.
 // The AppUserModelId stays shared: on Windows toasts only show for an id a Start Menu
 // shortcut registers, and only the installer's (com.smterm.app) exists.
-// An invalid SMTERM_PROFILE refuses to start rather than guess a profile.
-if ("error" in PROFILE_CHOICE) {
-  dialog.showErrorBox("smterm can't start", PROFILE_CHOICE.error)
-  app.exit(1)
-}
 app.setName(PROFILE_NAMES.appName)
 app.setAppUserModelId("com.smterm.app")
 if (!app.commandLine.hasSwitch("user-data-dir")) {
@@ -896,8 +903,7 @@ if (!app.commandLine.hasSwitch("user-data-dir")) {
 // survivor's Claude sessions keep POSTing to the now-dead port → `connect ECONNREFUSED`
 // on every hook, spamming the agent's output. Hold a lock: the second instance just focuses
 // the running window and quits, so there's always exactly one receiver / one config writer.
-// (An invalid SMTERM_PROFILE is exiting: take no lock — its fallback names are the real app's.)
-const gotSingleInstanceLock = "profile" in PROFILE_CHOICE && app.requestSingleInstanceLock()
+const gotSingleInstanceLock = app.requestSingleInstanceLock()
 if (!gotSingleInstanceLock) app.quit()
 app.on("second-instance", () => {
   if (!mainWindow || draining()) return // quitting: don't resurface a window whose shells are ending
@@ -911,7 +917,10 @@ app.whenReady().then(async () => {
   // Homebrew/cargo tools (starship, etc.). Import the login shell's real env before any
   // PTY spawns. Only when packaged — in dev the app is launched from a terminal that
   // already has the full env, so this cost (~one shell invocation) is skipped.
-  if (process.platform !== "win32" && app.isPackaged) applyLoginShellEnv(defaultShell())
+  if (process.platform !== "win32" && app.isPackaged) {
+    applyLoginShellEnv(defaultShell())
+    scrubParentInstanceEnv(process.env) // the import adds any var we lack — these too
+  }
   // macOS dock icon: packaged builds get it from the .app bundle, but `make run` (dev)
   // shows the default Electron icon unless we set it here.
   if (process.platform === "darwin") {

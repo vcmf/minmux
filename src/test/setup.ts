@@ -49,6 +49,7 @@ const smtermStub = {
     label: "macOS",
     release: "test",
     home: "/Users/test",
+    profile: "",
   })),
   paneGitInfo: vi.fn(async () => ({})),
   gitStatus: vi.fn(async () => ({

@@ -170,8 +170,9 @@ had it started, it would have overwritten the installed app's workspace and
 `claude-hooks.json` (the ECONNREFUSED hook spam the lock exists to prevent).
 
 - `SMTERM_PROFILE=<name>` (lowercase, digits, `-`) picks a profile for either build;
-  `default` / `prod` is the installed app's. An **invalid** name refuses to start (an error
-  box) rather than fall back to some profile's real data. Resolved once, first thing in
+  `default` / `prod` is the installed app's. An **invalid** name stops main synchronously
+  (stderr + an error box on macOS/Windows; Linux has no dialog before ready) before any name,
+  path or lock is set, so it never falls back to some profile's real data. Resolved once, first thing in
   `main.ts` (`electron/profile.ts`), before any path is read.
 - **A parent smterm's per-pane env is scrubbed at startup** (`SMTERM_CLAUDE_SETTINGS`,
   `SMTERM_PANE_ID`, `SMTERM_PROFILE`, …): a dev build launched from an installed pane must
@@ -180,7 +181,10 @@ had it started, it would have overwritten the installed app's workspace and
 - The Windows AppUserModelId stays `com.smterm.app` for every profile: toasts only show for
   an id a Start Menu shortcut registers.
 - An explicit `--user-data-dir` (the `run-smterm` driver) still wins; the driver sets
-  `SMTERM_PROFILE=default` (its HOME is throwaway) unless given `profile`.
+  `SMTERM_PROFILE=default` (its HOME is throwaway) unless given `profile`, **and a scratch
+  `TMPDIR`**: the shell-integration dir lives there, and the real one is the installed app's.
+- The login-shell env import (packaged builds) re-adds any var we lack, so the scrub runs
+  again after it. `ELECTRON_RENDERER_URL` is honoured only unpackaged and never reaches PTYs.
 - On macOS Electron's `appData` is the real `~/Library/Application Support` even under a
   fake `$HOME`: a test that fakes HOME must still pass `--user-data-dir`.
 
