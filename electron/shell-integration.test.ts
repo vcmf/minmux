@@ -1,8 +1,11 @@
-import { describe, it, expect } from "vitest"
+import { describe, it, expect, afterEach } from "vitest"
+import os from "node:os"
+import path from "node:path"
 import {
   parseWslDistros,
   parseDefaultDistro,
   buildInjection,
+  setIntegrationDirName,
   isWslShell,
   wslCdArgs,
   parseWslDistroArg,
@@ -206,5 +209,21 @@ describe("shared history (cmux-like)", () => {
     expect(BASH_RC).toContain("__smterm_armed=1")
     // precmd opens the window AFTER capturing $? (the D exit code must be the user's command's)
     expect(BASH_RC.indexOf("local ret=$?")).toBeLessThan(BASH_RC.indexOf("__smterm_in_pc=1"))
+  })
+})
+
+describe("buildInjection — per-profile script dir", () => {
+  afterEach(() => setIntegrationDirName("smterm"))
+
+  it("each profile writes its own scripts (a dev build never rewrites the installed app's)", () => {
+    const def = buildInjection("/bin/zsh")!
+    expect(def.env.ZDOTDIR).toBe(path.join(os.tmpdir(), "smterm", "shell-integration", "zsh"))
+    setIntegrationDirName("smterm-dev")
+    const dev = buildInjection("/bin/zsh")!
+    expect(dev.env.ZDOTDIR).toBe(path.join(os.tmpdir(), "smterm-dev", "shell-integration", "zsh"))
+    const bash = buildInjection("/bin/bash")!
+    expect(bash.args[bash.args.length - 1]).toBe(
+      path.join(os.tmpdir(), "smterm-dev", "shell-integration", "bash", "bashrc"),
+    )
   })
 })

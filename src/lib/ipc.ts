@@ -96,7 +96,7 @@ export interface PlatformInfo {
   label: string
   release: string
   home: string
-  profile?: string // "dev" etc. for a non-default profile; "" / absent for the installed app's
+  profile: string // "dev" etc. for a non-default profile; "" for the installed app's
 }
 
 export type ChangeStatus = "M" | "A" | "D" | "R" | "?"

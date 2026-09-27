@@ -48,7 +48,8 @@ import { TranscriptTokens } from "./transcript-tokens"
 import { tokenEventsForBatch } from "./agent-tokens"
 import { AgentMetaTracker } from "./agent-meta"
 import { SessionLedger } from "./agent-sessions"
-import { profileNames, resolveProfile } from "./profile"
+import { displayName, profileNames, resolveProfile, scrubParentInstanceEnv } from "./profile"
+import { setIntegrationDirName } from "./shell-integration"
 import { PaneGitService } from "./pane-git"
 import type { PaneGitRequest } from "../src/lib/pane-git"
 import type { WslContext } from "../src/lib/wsl"
@@ -59,8 +60,13 @@ import {
   type PreviewData,
 } from "../src/lib/file-preview"
 
-// This process's profile (a dev build is `dev`): picked before anything reads a path.
-const PROFILE_NAMES = profileNames(resolveProfile(process.env.SMTERM_PROFILE, app.isPackaged))
+// This process's profile (a dev build is `dev`): picked before anything reads a path. Then
+// the env is scrubbed of what a parent smterm set for its own pane (its hook file, pane id,
+// our profile choice), so nothing we spawn — shells, editors, git — inherits it.
+const PROFILE_CHOICE = resolveProfile(process.env.SMTERM_PROFILE, app.isPackaged)
+const PROFILE_NAMES = profileNames("profile" in PROFILE_CHOICE ? PROFILE_CHOICE.profile : "")
+scrubParentInstanceEnv(process.env)
+setIntegrationDirName(PROFILE_NAMES.appName)
 
 const dir = path.dirname(fileURLToPath(import.meta.url))
 
@@ -183,7 +189,7 @@ function createWindow() {
     height: 720,
     minWidth: 640,
     minHeight: 420,
-    title: "smterm",
+    title: displayName(PROFILE_NAMES),
     backgroundColor: readWindowBg(), // last theme's bg — a light theme mustn't open dark
     frame: false, // frameless — the app draws its own top bar + window controls
     ...(icon ? { icon } : {}), // window/taskbar icon (win/linux; macOS uses the dock icon)
@@ -402,8 +408,6 @@ function registerIpc() {
       // SMTERM_SHARE_HISTORY=0 to disable. (For WSL, wslInjection lists it in $WSLENV
       // so it crosses the boundary.)
       const spawnEnv = { ...process.env, ...(inj?.env ?? {}) } as Record<string, string>
-      // Our profile choice isn't the shell's: an smterm started from this pane picks its own.
-      delete spawnEnv.SMTERM_PROFILE
       if (!shareHistoryEnabled()) spawnEnv.SMTERM_SHARE_HISTORY = "0"
       // Tell agents (Claude Code, vim, …) our light/dark background via COLORFGBG — the
       // fallback when the OSC-11 background query can't complete in time (notably across
@@ -873,8 +877,15 @@ function openFile(cwd: string, file: string, line?: number, col?: number): void 
 // set it here. AppUserModelId groups the taskbar + routes notifications on Windows.
 // Per profile (a dev build is `smterm-dev`): the user-data dir — and with it the
 // single-instance lock and localStorage — is the profile's own, unless the caller chose one.
+// The AppUserModelId stays shared: on Windows toasts only show for an id a Start Menu
+// shortcut registers, and only the installer's (com.smterm.app) exists.
+// An invalid SMTERM_PROFILE refuses to start rather than guess a profile.
+if ("error" in PROFILE_CHOICE) {
+  dialog.showErrorBox("smterm can't start", PROFILE_CHOICE.error)
+  app.exit(1)
+}
 app.setName(PROFILE_NAMES.appName)
-app.setAppUserModelId(PROFILE_NAMES.appId)
+app.setAppUserModelId("com.smterm.app")
 if (!app.commandLine.hasSwitch("user-data-dir")) {
   app.setPath("userData", path.join(app.getPath("appData"), PROFILE_NAMES.appName))
 }
@@ -885,7 +896,8 @@ if (!app.commandLine.hasSwitch("user-data-dir")) {
 // survivor's Claude sessions keep POSTing to the now-dead port → `connect ECONNREFUSED`
 // on every hook, spamming the agent's output. Hold a lock: the second instance just focuses
 // the running window and quits, so there's always exactly one receiver / one config writer.
-const gotSingleInstanceLock = app.requestSingleInstanceLock()
+// (An invalid SMTERM_PROFILE is exiting: take no lock — its fallback names are the real app's.)
+const gotSingleInstanceLock = "profile" in PROFILE_CHOICE && app.requestSingleInstanceLock()
 if (!gotSingleInstanceLock) app.quit()
 app.on("second-instance", () => {
   if (!mainWindow || draining()) return // quitting: don't resurface a window whose shells are ending
@@ -1045,7 +1057,7 @@ app.on("before-quit", (e) => {
       buttons: ["Cancel", "Quit"],
       defaultId: 1,
       cancelId: 0,
-      message: "Quit smterm?",
+      message: `Quit ${displayName(PROFILE_NAMES)}?`,
       detail: `This closes ${n} running session${n === 1 ? "" : "s"} and their processes.`,
       checkboxLabel: "Don't warn again",
       checkboxChecked: false,

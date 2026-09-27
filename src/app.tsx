@@ -398,7 +398,9 @@ function App() {
     void ipc.platformInfo().then((i) => {
       useStore.getState().setHome(i.home)
       useStore.getState().setPlatform(i.platform)
-      useStore.getState().setProfile(i.profile ?? "")
+      useStore.getState().setProfile(i.profile)
+      // The OS window title (Alt-Tab, Mission Control, taskbar) tells the instances apart too.
+      if (i.profile) document.title = `smterm (${i.profile})`
     })
     void ipc.editorInfo().then((e) => useStore.getState().setEditor(e))
   }, [])

@@ -335,7 +335,8 @@ CI: GitHub Actions matrix (macos/ubuntu/windows). Auto-update later via `electro
 
 ## 12. Persistence & session lifetime
 
-Config dir: `~/.config/smterm/` (`%APPDATA%\smterm\` on Windows).
+Config dir: `~/.config/smterm/` (`%APPDATA%\smterm\` on Windows) — `smterm-<profile>` for a
+non-default profile; a dev build is `smterm-dev` (GOTCHAS #profiles).
 
 - **`settings.json`** — the source of truth for preferences (font, theme family + appearance,
   renderer, shell, …). A `chokidar` watcher applies hand-edits live; the settings panel writes
