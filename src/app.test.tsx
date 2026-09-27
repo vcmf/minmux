@@ -247,3 +247,22 @@ describe("App — ssh hosts without a backend", () => {
     await waitFor(() => expect(ipc.listSshHosts).toHaveBeenCalledTimes(1), { timeout: 2000 })
   })
 })
+
+describe("App — a host list main couldn't build", () => {
+  it("keeps the last list instead of wiping it", async () => {
+    let changed: (() => void) | undefined
+    vi.mocked(ipc.onSshHostsChanged).mockImplementation((cb) => {
+      changed = cb
+      return () => {}
+    })
+    vi.mocked(ipc.listSshHosts)
+      .mockResolvedValueOnce([testHost("web")])
+      .mockResolvedValueOnce(null)
+    render(<App />)
+    await waitFor(() => expect(useStore.getState().sshHosts).toHaveLength(1), { timeout: 2000 })
+    changed!()
+    await waitFor(() => expect(ipc.listSshHosts).toHaveBeenCalledTimes(2))
+    await new Promise((r) => setTimeout(r, 10))
+    expect(useStore.getState().sshHosts.map((h) => h.label)).toEqual(["web"])
+  })
+})

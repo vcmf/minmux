@@ -583,6 +583,20 @@ body {
 .remote-row {
   cursor: pointer;
 }
+.remote-open {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
 .remote-actions {
   display: none;
   gap: 2px;

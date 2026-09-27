@@ -697,11 +697,12 @@ function registerIpc() {
   ipcMain.handle("shells:list", async () => listShells())
 
   // SSH remotes — the saved-host list (lazy: first asked by the sidebar) + its config file.
+  // null = the list couldn't be built (the renderer keeps what it has), never "no hosts".
   ipcMain.handle("ssh:list-hosts", async () => {
     try {
       return await ssh().hosts()
     } catch {
-      return []
+      return null
     }
   })
   ipcMain.on("ssh:open-config", () => {

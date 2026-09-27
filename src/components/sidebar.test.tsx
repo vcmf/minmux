@@ -323,11 +323,12 @@ describe("Sidebar — Remote hosts", () => {
     st().newTab(hostShellOption(testHost("web")))
     render(<Sidebar />)
     expect(screen.getAllByTitle("Connected")).toHaveLength(1)
-    const row = screen.getByTitle("Open a terminal on web")
+    const row = screen.getByTitle("Open a terminal on web").closest(".remote-row")!
     expect(row.querySelector('[title="Connected"]')).not.toBeNull()
   })
 
   it("an empty list says so and offers to open the ssh config", () => {
+    st().setSshHosts([])
     render(<Sidebar />)
     expect(screen.getByText("No hosts in ~/.ssh/config")).toBeInTheDocument()
     fireEvent.click(screen.getByText("Open ssh config"))
@@ -358,22 +359,22 @@ describe("Sidebar — Remote hosts", () => {
   })
 })
 
-describe("Sidebar — Remote hosts from the keyboard", () => {
-  it("a host row is focusable and Enter / Space open it", () => {
+describe("Sidebar — Remote hosts, accessibly", () => {
+  it("a host's label is a real button (Enter/Space for free); the splits are its siblings", () => {
     st().setSshHosts([testHost("web")])
     render(<Sidebar />)
-    const row = screen.getByTitle("Open a terminal on web")
-    expect(row.tabIndex).toBe(0)
-    fireEvent.keyDown(row, { key: "Enter" })
-    fireEvent.keyDown(row, { key: " " })
-    expect(st().tabs).toHaveLength(2)
+    const open = screen.getByTitle("Open a terminal on web")
+    expect(open.tagName).toBe("BUTTON")
+    expect(open.querySelector("button")).toBeNull()
+    expect(open.contains(screen.getByTitle("Split right on web"))).toBe(false)
   })
+})
 
-  it("Enter on a split button splits, without also opening a tab", () => {
-    st().newTab(testShell)
-    st().setSshHosts([testHost("web")])
+describe("Sidebar — before the first host list arrives", () => {
+  it("shows no empty state until main has answered", () => {
     render(<Sidebar />)
-    fireEvent.keyDown(screen.getByTitle("Split right on web"), { key: "Enter" })
-    expect(st().tabs).toHaveLength(1)
+    expect(screen.queryByText("No hosts in ~/.ssh/config")).not.toBeInTheDocument()
+    act(() => st().setSshHosts([]))
+    expect(screen.getByText("No hosts in ~/.ssh/config")).toBeInTheDocument()
   })
 })

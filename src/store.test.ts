@@ -869,6 +869,12 @@ describe("store — ssh hosts", () => {
 describe("store — setSshHosts notifies only on a change", () => {
   beforeEach(resetStore)
 
+  it("the first answer marks the list loaded, even an empty one", () => {
+    expect(st().sshHostsLoaded).toBe(false)
+    st().setSshHosts([])
+    expect(st().sshHostsLoaded).toBe(true)
+  })
+
   it("an identical list doesn't notify subscribers", () => {
     st().setSshHosts([testHost("web")])
     let calls = 0

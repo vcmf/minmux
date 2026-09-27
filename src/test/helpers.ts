@@ -22,6 +22,7 @@ export function resetStore() {
     activeTabId: null,
     shells: [testShell],
     sshHosts: [],
+    sshHostsLoaded: false,
     windowFocused: true,
     systemDark: true,
     settingsLoaded: false,

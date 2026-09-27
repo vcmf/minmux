@@ -136,3 +136,32 @@ describe("CommandPalette — a host list that changes while it's open", () => {
     expect(items[0]!.className).not.toContain("selected")
   })
 })
+
+describe("CommandPalette — selection follows identity, not text", () => {
+  it("a host whose detail changes stays selected", () => {
+    st().setSshHosts([testHost("alpha"), testHost("web", "native", "me@10.0.0.1")])
+    render(<CommandPalette />)
+    const input = screen.getByRole("textbox")
+    fireEvent.change(input, { target: { value: "connect to host" } })
+    fireEvent.keyDown(input, { key: "ArrowDown" })
+    act(() => st().setSshHosts([testHost("alpha"), testHost("web", "native", "me@10.9.9.9")]))
+    fireEvent.keyDown(input, { key: "Enter" })
+    expect(st().sessions[st().tabs[0]!.activeSessionId]!.remote?.hostId).toBe("native:web")
+  })
+
+  it("the highlighted tab stays highlighted when an earlier same-titled tab closes", () => {
+    st().newTab(testShell)
+    st().newTab(testShell)
+    st().newTab(testShell)
+    st().newTab(testShell) // active; the other three are "Switch session" rows, all untitled
+    const [t1, t2, t3] = st().tabs.map((t) => t.id)
+    render(<CommandPalette />)
+    const input = screen.getByRole("textbox")
+    fireEvent.change(input, { target: { value: "switch session" } })
+    fireEvent.keyDown(input, { key: "ArrowDown" }) // → t2
+    act(() => st().closeTab(t1!))
+    fireEvent.keyDown(input, { key: "Enter" })
+    expect(st().activeTabId).toBe(t2)
+    expect(t3).toBeDefined()
+  })
+})

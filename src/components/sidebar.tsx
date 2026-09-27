@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react"
+import { useCallback, useMemo, useState } from "react"
 import { useShallow } from "zustand/react/shallow"
 import {
   CaretDown,
@@ -422,9 +422,10 @@ function writeCollapsed(v: boolean) {
 /** The saved ssh hosts (~/.ssh/config): click → a new tab on the host; hover → split. */
 function RemoteHosts() {
   const hosts = useStore((s) => s.sshHosts)
+  const loaded = useStore((s) => s.sshHostsLoaded)
   const connected = useStore(useShallow((s) => connectedHostIds(s.sessions)))
   const [collapsed, setCollapsed] = useState(readCollapsed)
-  const groups = groupHosts(hosts)
+  const groups = useMemo(() => groupHosts(hosts), [hosts])
 
   const toggle = () => {
     setCollapsed((v) => {
@@ -450,7 +451,7 @@ function RemoteHosts() {
       </div>
       {!collapsed && (
         <div className="remote-list">
-          {hosts.length === 0 && (
+          {loaded && hosts.length === 0 && (
             <div className="remote-empty">
               <span className="status-faint">No hosts in ~/.ssh/config</span>
               <button className="remote-empty-btn" onClick={() => ipc.openSshConfig()}>
@@ -464,29 +465,22 @@ function RemoteHosts() {
               {g.hosts.map((h) => {
                 const on = connected.includes(h.hostId)
                 return (
-                  <div
-                    key={h.hostId}
-                    className="tree-row remote-row"
-                    style={{ paddingLeft: 12 }}
-                    role="button"
-                    tabIndex={0}
-                    title={`Open a terminal on ${h.label}`}
-                    onClick={() => open(h)}
-                    onKeyDown={(e) => {
-                      if (e.target !== e.currentTarget) return // a split button's own key
-                      if (e.key === "Enter" || e.key === " ") {
-                        e.preventDefault()
-                        open(h)
-                      }
-                    }}
-                  >
-                    <span className="tree-icon">
-                      <Globe size={14} color={on ? "var(--accent)" : "var(--dim)"} />
-                    </span>
-                    <div className="tree-labels">
-                      <span className="tree-primary">{h.label}</span>
-                      {h.detail && <span className="tree-sub">{h.detail}</span>}
-                    </div>
+                  // The row's label is its own button; the split buttons are siblings (a
+                  // button can't hold buttons — assistive tech would flatten them).
+                  <div key={h.hostId} className="tree-row remote-row" style={{ paddingLeft: 12 }}>
+                    <button
+                      className="remote-open"
+                      title={`Open a terminal on ${h.label}`}
+                      onClick={() => open(h)}
+                    >
+                      <span className="tree-icon">
+                        <Globe size={14} color={on ? "var(--accent)" : "var(--dim)"} />
+                      </span>
+                      <span className="tree-labels">
+                        <span className="tree-primary">{h.label}</span>
+                        {h.detail && <span className="tree-sub">{h.detail}</span>}
+                      </span>
+                    </button>
                     <span className="remote-actions">
                       <button
                         className="iconbtn"

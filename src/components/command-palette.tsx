@@ -24,6 +24,7 @@ import { ipc } from "../lib/ipc"
 import { hostShellOption, hostSubline } from "../lib/ssh-hosts-ui"
 
 interface Command {
+  id?: string // a stable identity (tab id, host id) when the text alone isn't one
   group: string
   label: string
   sub?: string
@@ -33,14 +34,14 @@ interface Command {
 
 type KeyedCommand = Command & { key: string }
 
-/** A stable key per command (group · label · sub, numbered when two read the same). */
+/** A stable key per command: its id when it has one (a tab, a host), else its text. */
 function withKeys(list: Command[]): KeyedCommand[] {
   const seen = new Map<string, number>()
   return list.map((c) => {
-    const base = `${c.group}\0${c.label}\0${c.sub ?? ""}`
-    const n = seen.get(base) ?? 0
+    const base = `${c.group}\0${c.label}\0${c.id ?? c.sub ?? ""}`
+    const n = seen.get(base) ?? 0 // only text-keyed duplicates (none today) get numbered
     seen.set(base, n + 1)
-    return { ...c, key: `${base}\0${n}` }
+    return { ...c, key: n ? `${base}\0${n}` : base }
   })
 }
 
@@ -110,6 +111,7 @@ export function CommandPalette() {
       list.push(
         {
           group: "SSH",
+          id: h.hostId,
           label: "Connect to host",
           sub,
           icon: <Globe size={16} />,
@@ -117,6 +119,7 @@ export function CommandPalette() {
         },
         {
           group: "SSH",
+          id: h.hostId,
           label: "Split right on host",
           sub,
           icon: <Columns size={16} />,
@@ -136,6 +139,7 @@ export function CommandPalette() {
       if (tab.id === activeTabId) continue
       list.push({
         group: "Navigate",
+        id: tab.id,
         label: "Switch session",
         sub: tab.title,
         icon: <SquaresFour size={16} />,

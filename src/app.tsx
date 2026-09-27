@@ -146,7 +146,7 @@ function App() {
         void ipc
           .listSshHosts()
           .then((hosts) => {
-            if (!disposed && mine === seq) useStore.getState().setSshHosts(hosts)
+            if (!disposed && mine === seq && hosts) useStore.getState().setSshHosts(hosts)
           })
           .catch(() => undefined) // main failed: keep the last list
       } catch {

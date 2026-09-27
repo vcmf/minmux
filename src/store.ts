@@ -85,6 +85,7 @@ interface AppState {
   activeTabId: string | null
   shells: ShellOption[]
   sshHosts: SshHost[] // saved ssh hosts (main's list, refreshed when ~/.ssh/config changes)
+  sshHostsLoaded: boolean // main has answered once (before that, "no hosts" isn't known)
   windowFocused: boolean
   systemDark: boolean // OS prefers a dark colour scheme (drives appearance: "system")
   settings: Settings
@@ -272,6 +273,7 @@ export const useStore = create<AppState>((set, get) => ({
   activeTabId: null,
   shells: [],
   sshHosts: [],
+  sshHostsLoaded: false,
   windowFocused: true,
   // Seeded from the OS now (not after an effect) so "system" never starts on the wrong scheme.
   systemDark:
@@ -359,7 +361,11 @@ export const useStore = create<AppState>((set, get) => ({
   setShells: (shells) => set({ shells }),
   // Unchanged → the same state object, so nothing is notified.
   setSshHosts: (hosts) =>
-    set((state) => (sameHosts(state.sshHosts, hosts) ? state : { sshHosts: hosts })),
+    set((state) =>
+      state.sshHostsLoaded && sameHosts(state.sshHosts, hosts)
+        ? state
+        : { sshHosts: hosts, sshHostsLoaded: true },
+    ),
 
   restoreWorkspace: (ws) =>
     set({
