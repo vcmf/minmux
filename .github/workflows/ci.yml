@@ -2,8 +2,8 @@ name: CI
 
 on:
   push:
-    branches: [main]
-  pull_request:
+    branches: [main, "epic**"] # epic** also matches slashed names like epic/ssh
+  pull_request: # every PR, whatever its base — incl. PRs into epic* branches
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
