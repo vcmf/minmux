@@ -2,7 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { CaretRight, CaretDown, Folder, File as FileIcon, X } from "@phosphor-icons/react"
 import { useStore } from "../store"
 import { ipc } from "../lib/ipc"
-import { useFilesRoot, getActiveWsl } from "../lib/use-active-cwd"
+import { useActiveRemote, useFilesRoot, getActiveWsl } from "../lib/use-active-cwd"
+import { RemoteNotice } from "./remote-notice"
 import { isAbsoluteHostPath } from "../lib/file-actions"
 import {
   FileTreeCache,
@@ -27,6 +28,7 @@ const cache = new FileTreeCache(16)
  *  expand; caches per root (restore on revisit). Tree logic is the pure `lib/file-tree`. */
 export function FilesPanel() {
   const { root, cwd, sessionId, diverged } = useFilesRoot()
+  const remote = useActiveRemote()
   const git = useStore((s) => s.git)
   const [tree, setTree] = useState<FileTreeState | null>(null)
   const rootRef = useRef<string | undefined>(undefined)
@@ -121,7 +123,8 @@ export function FilesPanel() {
       </div>
       {root && <RootBreadcrumb root={root} cwd={cwd} sessionId={sessionId} diverged={diverged} />}
       <div className="diff-files agents-files">
-        {!root && (
+        {remote && <RemoteNotice remote={remote} what="files" />}
+        {!root && !remote && (
           <div className="diff-empty status-faint">
             No folder — the focused pane has no cwd yet.
           </div>

@@ -34,6 +34,9 @@ import "./App.css"
 // overwrite it either (a downgrade would otherwise wipe the saved layout).
 let persistBlocked = false
 
+/** How long after mount the host list is first fetched (the first tab spawns before). */
+const SSH_HOSTS_DELAY_MS = 800
+
 function App() {
   const tabs = useStore((s) => s.tabs)
   const activeTabId = useStore((s) => s.activeTabId)
@@ -129,6 +132,39 @@ function App() {
     })()
     return () => {
       cancelled = true
+    }
+  }, [])
+
+  // Saved ssh hosts: fetched off the startup path (the first tab never waits on it), then
+  // re-fetched whenever main sees ~/.ssh/config change. A late answer never overwrites a newer.
+  useEffect(() => {
+    let seq = 0
+    let disposed = false
+    const refresh = () => {
+      const mine = ++seq
+      try {
+        void ipc
+          .listSshHosts()
+          .then((hosts) => {
+            if (!disposed && mine === seq && hosts) useStore.getState().setSshHosts(hosts)
+          })
+          .catch(() => undefined) // main failed: keep the last list
+      } catch {
+        // no backend
+      }
+    }
+    // After the startup spawns are under way: main builds its host list lazily.
+    const first = setTimeout(refresh, SSH_HOSTS_DELAY_MS)
+    let off: (() => void) | undefined
+    try {
+      off = ipc.onSshHostsChanged(refresh)
+    } catch {
+      // no backend
+    }
+    return () => {
+      disposed = true
+      clearTimeout(first)
+      off?.()
     }
   }, [])
 

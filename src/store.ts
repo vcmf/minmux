@@ -1,5 +1,5 @@
 import { create } from "zustand"
-import type { Session, ShellOption, Tab } from "./types"
+import type { Session, ShellOption, SshHost, Tab } from "./types"
 import {
   addSurface,
   allSessionIds,
@@ -15,6 +15,7 @@ import {
   visibleSessionIds,
 } from "./lib/pane-tree"
 import { inheritShell, resolveDefaultShell } from "./lib/shells"
+import { sameHosts } from "./lib/ssh-hosts-ui"
 import { reduceSignals } from "./lib/session-status"
 import type { SignalEvent } from "./lib/session-status"
 import { inGitKey, paneOfGitKey } from "./lib/agent-dirs"
@@ -83,6 +84,8 @@ interface AppState {
   tabs: Tab[]
   activeTabId: string | null
   shells: ShellOption[]
+  sshHosts: SshHost[] // saved ssh hosts (main's list, refreshed when ~/.ssh/config changes)
+  sshHostsLoaded: boolean // main has answered once (before that, "no hosts" isn't known)
   windowFocused: boolean
   systemDark: boolean // OS prefers a dark colour scheme (drives appearance: "system")
   settings: Settings
@@ -127,9 +130,11 @@ interface AppState {
   updateSettings: (next: Settings) => void // validate + apply + persist (every UI entry point)
   settingsLoaded: boolean // settings.json read at least once (gates theming + first spawns)
   setShells: (shells: ShellOption[]) => void
+  setSshHosts: (hosts: SshHost[]) => void
   restoreWorkspace: (ws: WorkspaceState) => void
   setRightPanelWidth: (px: number, maxAvail?: number) => void
   newTab: (shell: ShellOption) => void
+  splitWith: (direction: "row" | "column", shell: ShellOption) => void // a new tab if none
   closeTab: (tabId: string) => void
   setActiveTab: (tabId: string) => void
   renameTab: (tabId: string, title: string) => void
@@ -267,6 +272,8 @@ export const useStore = create<AppState>((set, get) => ({
   tabs: [],
   activeTabId: null,
   shells: [],
+  sshHosts: [],
+  sshHostsLoaded: false,
   windowFocused: true,
   // Seeded from the OS now (not after an effect) so "system" never starts on the wrong scheme.
   systemDark:
@@ -352,6 +359,13 @@ export const useStore = create<AppState>((set, get) => ({
     void saveSettings(validated)
   },
   setShells: (shells) => set({ shells }),
+  // Unchanged → the same state object, so nothing is notified.
+  setSshHosts: (hosts) =>
+    set((state) =>
+      state.sshHostsLoaded && sameHosts(state.sshHosts, hosts)
+        ? state
+        : { sshHosts: hosts, sshHostsLoaded: true },
+    ),
 
   restoreWorkspace: (ws) =>
     set({
@@ -394,6 +408,12 @@ export const useStore = create<AppState>((set, get) => ({
     set((state) => ({
       tabs: state.tabs.map((t) => (t.id === tabId ? { ...t, title } : t)),
     })),
+
+  // Split the active pane with a given shell (e.g. an ssh host), not the source's own.
+  splitWith: (direction, shell) => {
+    if (!get().tabs.some((t) => t.id === get().activeTabId)) return get().newTab(shell)
+    set((state) => splitActivePane(state, { shell, direction }))
+  },
 
   splitActive: (direction, fallback) =>
     set((state) => {

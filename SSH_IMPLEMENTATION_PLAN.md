@@ -5,7 +5,7 @@ Build plan for phase 1 of [`SSH_REMOTES.md`](./SSH_REMOTES.md): hosts from `~/.s
 _why_ live in that doc; this one is the _how_, as four stacked PRs on `epic/ssh-remotes`.
 Phases 2 (tmux) and 3 (remote shell integration) get their own plan once phase 1 ships.
 
-Status: **A and B built** (2026-09-27), in review. Scope revised on 2026-09-27: no automatic
+Status: **A and B merged** into the epic, **C built** (2026-09-27), in review. Scope revised on 2026-09-27: no automatic
 connection reuse, no settings-defined hosts (see `SSH_REMOTES.md` §4b, D1/D8).
 
 ---
@@ -31,9 +31,9 @@ connection reuse, no settings-defined hosts (see `SSH_REMOTES.md` §4b, D1/D8).
 
 | PR    | Title                                                                       | Status    |
 | ----- | --------------------------------------------------------------------------- | --------- |
-| **A** | `✨ feat(ssh): parse ssh config and build ssh spawn commands` (#63)         | 🚧 review |
-| **B** | `✨ feat(ssh): spawn remote sessions and keep them in the layout`           | 🚧 review |
-| **C** | `✨ feat(ssh): connect to saved hosts from the sidebar, picker and palette` | ⬜        |
+| **A** | `✨ feat(ssh): parse ssh config and build ssh spawn commands` (#63)         | ✅ merged |
+| **B** | `✨ feat(ssh): spawn remote sessions and keep them in the layout` (#66)     | ✅ merged |
+| **C** | `✨ feat(ssh): connect to saved hosts from the sidebar, picker and palette` | 🚧 review |
 | **D** | `✨ feat(ssh): reconnect on restore and after exit` (+ docs)                | ⬜        |
 
 ---
@@ -106,7 +106,13 @@ session is remote. Git polling already stops (remote sessions have no cwd).
 **Tests:** sidebar lists hosts, groups by env, connected dot, click creates a remote tab,
 empty state; picker SSH group; palette entries; panels show the remote notice.
 
-- [ ] Step 5 done
+As built: pure helpers in `src/lib/ssh-hosts-ui.ts` (`hostShellOption`, `groupHosts`,
+`connectedHostIds`, `sameHosts`); store `sshHosts` + `splitWith(direction, shell)`; the
+collapsed state of the Remote section is a per-window `localStorage` convenience;
+`useActiveWorkCwd` returns nothing for a remote session, so no local git or file read can
+target one.
+
+- [x] Step 5 done
 
 ---
 

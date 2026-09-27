@@ -1,11 +1,15 @@
-import { useCallback, useState } from "react"
+import { useCallback, useMemo, useState } from "react"
 import { useShallow } from "zustand/react/shallow"
 import {
   CaretDown,
   CaretRight,
+  Columns,
+  FileText,
   GitMerge,
+  Globe,
   GitPullRequest,
   Plus,
+  Rows,
   Terminal,
 } from "@phosphor-icons/react"
 import { activeTheme, useStore } from "../store"
@@ -27,6 +31,8 @@ import { TerminalManager } from "../terminal/terminal-manager"
 import { allPanes } from "../lib/pane-tree"
 import { resolveDefaultShell } from "../lib/shells"
 import { statusUi } from "../lib/status-ui"
+import { connectedHostIds, groupHosts, hostShellOption, remoteSubline } from "../lib/ssh-hosts-ui"
+import type { SshHost } from "../types"
 import {
   tabTitle,
   sessionSubline,
@@ -221,7 +227,11 @@ export function Sidebar() {
                     >
                       <span className="tree-icon">
                         {(() => {
-                          const Icon = claudePanes.includes(id) ? ClaudeIcon : Terminal
+                          const Icon = claudePanes.includes(id)
+                            ? ClaudeIcon
+                            : s.remote
+                              ? Globe
+                              : Terminal
                           return (
                             <Icon
                               size={14}
@@ -245,14 +255,21 @@ export function Sidebar() {
                             </span>
                           )
                         )}
-                        <DirLines
-                          shellCwd={s.cwd}
-                          home={home}
-                          shellGit={paneGit[id]}
-                          inGit={paneGit[inGitKey(id)]}
-                          work={work[id]}
-                          onMenu={(e, path) => openDirMenu(e, path, id)}
-                        />
+                        {s.remote ? (
+                          // Its folders are on the host: no local folder line or menu.
+                          <span className="tree-sub" title={s.remote.target}>
+                            {remoteSubline(s.remote)}
+                          </span>
+                        ) : (
+                          <DirLines
+                            shellCwd={s.cwd}
+                            home={home}
+                            shellGit={paneGit[id]}
+                            inGit={paneGit[inGitKey(id)]}
+                            work={work[id]}
+                            onMenu={(e, path) => openDirMenu(e, path, id)}
+                          />
+                        )}
                       </div>
                       {s.status !== "attention" && (
                         <span className="tree-meta" style={{ color: `var(--${ui.dot})` }}>
@@ -267,6 +284,8 @@ export function Sidebar() {
           )
         })}
       </div>
+
+      <RemoteHosts />
 
       {dirMenu && (
         <ContextMenu
@@ -379,5 +398,119 @@ function PrLine({ pr }: { pr: PrInfo }) {
       </button>
       <span style={{ color: `var(--${ui.color})` }}>{ui.word}</span>
     </span>
+  )
+}
+
+const REMOTE_COLLAPSED_KEY = "smterm.sidebar.remoteCollapsed"
+
+// A per-window convenience: storage can be missing or throw (private mode, tests).
+function readCollapsed(): boolean {
+  try {
+    return localStorage.getItem(REMOTE_COLLAPSED_KEY) === "1"
+  } catch {
+    return false
+  }
+}
+function writeCollapsed(v: boolean) {
+  try {
+    localStorage.setItem(REMOTE_COLLAPSED_KEY, v ? "1" : "0")
+  } catch {
+    // not remembered — fine
+  }
+}
+
+/** The saved ssh hosts (~/.ssh/config): click → a new tab on the host; hover → split. */
+function RemoteHosts() {
+  const hosts = useStore((s) => s.sshHosts)
+  const loaded = useStore((s) => s.sshHostsLoaded)
+  const connected = useStore(useShallow((s) => connectedHostIds(s.sessions)))
+  const [collapsed, setCollapsed] = useState(readCollapsed)
+  const groups = useMemo(() => groupHosts(hosts), [hosts])
+
+  const toggle = () => {
+    setCollapsed((v) => {
+      writeCollapsed(!v)
+      return !v
+    })
+  }
+  const open = (h: SshHost) => useStore.getState().newTab(hostShellOption(h))
+  const split = (h: SshHost, direction: "row" | "column") =>
+    useStore.getState().splitWith(direction, hostShellOption(h))
+
+  return (
+    <div className="remote">
+      <div className="sidebar-header remote-header">
+        <button className="remote-toggle" onClick={toggle} aria-expanded={!collapsed}>
+          {collapsed ? <CaretRight size={11} /> : <CaretDown size={11} />}
+          <span className="section-label">Remote</span>
+          {hosts.length > 0 && <span className="status-faint remote-count">{hosts.length}</span>}
+        </button>
+        <button className="iconbtn" title="Open ssh config" onClick={() => ipc.openSshConfig()}>
+          <FileText size={14} />
+        </button>
+      </div>
+      {!collapsed && (
+        <div className="remote-list">
+          {loaded && hosts.length === 0 && (
+            <div className="remote-empty">
+              <span className="status-faint">No hosts in ~/.ssh/config</span>
+              <button className="remote-empty-btn" onClick={() => ipc.openSshConfig()}>
+                Open ssh config
+              </button>
+            </div>
+          )}
+          {groups.map((g) => (
+            <div key={g.env}>
+              {groups.length > 1 && <div className="remote-group">{g.title}</div>}
+              {g.hosts.map((h) => {
+                const on = connected.includes(h.hostId)
+                return (
+                  // The row's label is its own button; the split buttons are siblings (a
+                  // button can't hold buttons — assistive tech would flatten them).
+                  <div key={h.hostId} className="tree-row remote-row" style={{ paddingLeft: 12 }}>
+                    <button
+                      className="remote-open"
+                      title={`Open a terminal on ${h.label}`}
+                      onClick={() => open(h)}
+                    >
+                      <span className="tree-icon">
+                        <Globe size={14} color={on ? "var(--accent)" : "var(--dim)"} />
+                      </span>
+                      <span className="tree-labels">
+                        <span className="tree-primary">{h.label}</span>
+                        {h.detail && <span className="tree-sub">{h.detail}</span>}
+                      </span>
+                    </button>
+                    <span className="remote-actions">
+                      <button
+                        className="iconbtn"
+                        title={`Split right on ${h.label}`}
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          split(h, "row")
+                        }}
+                      >
+                        <Columns size={13} />
+                      </button>
+                      <button
+                        className="iconbtn"
+                        title={`Split down on ${h.label}`}
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          split(h, "column")
+                        }}
+                      >
+                        <Rows size={13} />
+                      </button>
+                    </span>
+                    {on && <span className="dot accent" title="Connected" />}
+                  </div>
+                )
+              })}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
   )
 }

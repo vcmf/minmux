@@ -24,7 +24,7 @@ export interface Ipc {
   ptyKill: (id: string) => void
   // The PTY's process exited on its own (not a pty:kill) — e.g. a dropped ssh connection.
   onPtyExit: (id: string, cb: (e: { code: number; signal: number }) => void) => () => void
-  listSshHosts: () => Promise<SshHost[]>
+  listSshHosts: () => Promise<SshHost[] | null> // null = main couldn't build it this time
   onSshHostsChanged: (cb: () => void) => () => void
   openSshConfig: () => void // opens ~/.ssh/config (creating an empty one if needed)
   listShells: () => Promise<ShellOption[]>
