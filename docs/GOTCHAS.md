@@ -346,6 +346,23 @@ and `terminal-manager` types `claude --resume <id> [--permission-mode m]` at the
   repo. None handles an rc that execs tmux. If fish/pwsh users hit problems, (b) per shell
   is the candidate.
 
+## SSH panes {#ssh}
+
+- **A remote session never has a local cwd.** Its OSC 7 path is on the host, so the store
+  ignores it and `useActiveWorkCwd` returns nothing for it; the Changes/Files panels show a
+  notice instead of reading a local folder with the same name. Don't "fix" an SSH pane's
+  missing cwd — that would point git or readdir at the wrong machine.
+- **Main rebuilds the command.** Never trust `remote.target` from the renderer (or
+  workspace.json); `trustedRemote` looks the host id up in main's list. A saved host this
+  build can't read restores as "unavailable" and is written back unchanged.
+- **The WSL path skips our shell integration** (`wsl.exe … -e ssh`, no `--rcfile`).
+- **One spawn per pane; typed-ahead keys are dropped** while the plan is built, and while a
+  pane is waiting/closed/failed only a bare Enter does anything (it reconnects).
+- **Reconnect reuses the session id.** terminal-manager wires xterm listeners once per
+  entry and only re-requests the PTY; a second `term.onData` would send every key twice.
+- **`attachOnly`** exists for `restore: "on-focus"`: reattach a live PTY after a reload, but
+  start nothing. Without it a reload would either dial every host again or strand a live one.
+
 ## Agent-status reducer has a known flaw {#agent-status}
 
 `lib/session-status.ts`: `running` = OSC-133 C..D (process alive) ≠ actively working, so

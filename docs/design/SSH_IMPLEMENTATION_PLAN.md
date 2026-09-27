@@ -5,7 +5,7 @@ Build plan for phase 1 of [`SSH_REMOTES.md`](./SSH_REMOTES.md): hosts from `~/.s
 _why_ live in that doc; this one is the _how_, as four stacked PRs on `epic/ssh-remotes`.
 Phases 2 (tmux) and 3 (remote shell integration) get their own plan once phase 1 ships.
 
-Status: **A and B merged** into the epic, **C built** (2026-09-27), in review. Scope revised on 2026-09-27: no automatic
+Status: **A–C merged** into the epic, **D built** (2026-09-27), in review. Scope revised on 2026-09-27: no automatic
 connection reuse, no settings-defined hosts (see `SSH_REMOTES.md` §4b, D1/D8).
 
 ---
@@ -29,12 +29,12 @@ connection reuse, no settings-defined hosts (see `SSH_REMOTES.md` §4b, D1/D8).
 
 ## 1. PR sequence
 
-| PR    | Title                                                                       | Status    |
-| ----- | --------------------------------------------------------------------------- | --------- |
-| **A** | `✨ feat(ssh): parse ssh config and build ssh spawn commands` (#63)         | ✅ merged |
-| **B** | `✨ feat(ssh): spawn remote sessions and keep them in the layout` (#66)     | ✅ merged |
-| **C** | `✨ feat(ssh): connect to saved hosts from the sidebar, picker and palette` | 🚧 review |
-| **D** | `✨ feat(ssh): reconnect on restore and after exit` (+ docs)                | ⬜        |
+| PR    | Title                                                                             | Status    |
+| ----- | --------------------------------------------------------------------------------- | --------- |
+| **A** | `✨ feat(ssh): parse ssh config and build ssh spawn commands` (#63)               | ✅ merged |
+| **B** | `✨ feat(ssh): spawn remote sessions and keep them in the layout` (#66)           | ✅ merged |
+| **C** | `✨ feat(ssh): connect to saved hosts from the sidebar, picker and palette` (#68) | ✅ merged |
+| **D** | `✨ feat(ssh): reconnect on restore and after exit` (+ docs)                      | 🚧 review |
 
 ---
 
@@ -126,8 +126,8 @@ target one.
 - `"auto"` (default): restored SSH panes connect as they're shown (the active tab at once,
   background tabs when first opened — the existing lazy start).
 - `"on-focus"`: a restored remote session doesn't spawn on attach; the xterm shows
-  `[smterm] gpu-box — press Enter to connect`, and the first key (or a Connect button in the
-  pane header) spawns it. The key that triggered it is not forwarded.
+  `[smterm] gpu-box — press Enter to connect`, and Enter (or a Connect button in the pane
+  header) spawns it. Other keys are dropped; the Enter isn't forwarded.
 
 **Reconnect after exit.** `onPtyExit(id)` marks the entry exited. Remote sessions show
 `[smterm] connection closed (code N) — press Enter to reconnect` (`exit` → "session ended");
@@ -138,7 +138,15 @@ Enter respawns the **same session id** (reset `entry.spawned`, drop the old data
 (`initial(session, restored, restoreSetting)`, `onKey`, `onExit`) with unit tests; the xterm
 wiring stays thin.
 
-- [ ] Step 6 done
+As built: `lib/remote-connect.ts` holds the rules (`firstStart`, `afterStart`, `onKey`,
+`idleMessage`, `cleanError`). A restored on-focus pane asks main with `attachOnly`, so a
+renderer reload still reattaches a live ssh instead of waiting. Store `remoteIdle`
+(waiting / closed / failed) drives the header's Connect / Reconnect / Retry button and keeps
+the sidebar's connected dot to live connections. xterm listeners are wired once per entry; a
+reconnect only re-requests the PTY. `settings-panel` gains an SSH section (restore, keepalive).
+`terminal-manager.test.ts` drives the lifecycle against a fake xterm.
+
+- [x] Step 6 done
 
 ---
 
@@ -152,7 +160,7 @@ wiring stays thin.
 - `docs/ROADMAP.md`: milestone row. `CLAUDE.md`: structure lines + a one-line gotcha.
 - Move `SSH_REMOTES.md` / this plan to `docs/design/` once phase 1 ships; tick phase 1.
 
-- [ ] Step 7 done
+- [x] Step 7 done
 
 ---
 

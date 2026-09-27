@@ -1,5 +1,5 @@
-// Main-process SSH remotes service (SSH_IMPLEMENTATION_PLAN.md step 3): the host list
-// (~/.ssh/config natively and in WSL distros), watching those files, and turning a
+// Main-process SSH remotes service (docs/design/SSH_IMPLEMENTATION_PLAN.md step 3): the
+// host list (~/.ssh/config natively and in WSL distros), watching those files, and turning a
 // renderer's RemoteRef into the exact ssh command. Everything touching the OS is injected
 // (SshDeps) so it's unit-tested; all of it is async and off the PTY → renderer path.
 

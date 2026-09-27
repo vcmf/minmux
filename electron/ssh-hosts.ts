@@ -1,6 +1,6 @@
 // SSH remotes: the ~/.ssh/config host list and the exact argv a remote session spawns with
-// (SSH_REMOTES.md §3–§5). Pure — main supplies the platform and the ssh binary. smterm runs
-// plain `ssh -t -- <alias>`: ssh applies the user's config exactly as in any terminal. A
+// (docs/design/SSH_REMOTES.md §3–§5). Pure — main supplies the platform and the ssh
+// binary. smterm runs plain `ssh -t -- <alias>`: ssh applies the user's config exactly as in any terminal. A
 // RemoteRef from the renderer is untrusted: trustedRemote() takes the host from main's own
 // list before anything is spawned.
 
