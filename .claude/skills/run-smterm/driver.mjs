@@ -44,11 +44,11 @@ export async function launch(o = {}) {
   }
   const scratch = o.scratch ?? fs.mkdtempSync(path.join(os.tmpdir(), "smterm-drive-"))
   const home = path.join(scratch, "home")
-  // Must match main's configDir(): %APPDATA%\smterm on Windows, ~/.config/smterm elsewhere.
   const appData = path.join(scratch, "appdata")
-  // Same rules as electron/profile.ts (trimmed, lowercased, validated), so `cfg` is the dir
-  // the app reads.
-  const profile = (o.profile ?? "default").trim().toLowerCase()
+  // Must match main's configDir() — `smterm`, or `smterm-<profile>` (%APPDATA% on Windows,
+  // ~/.config elsewhere) — so the same rules as electron/profile.ts: trimmed, lowercased,
+  // validated; blank = unset (here: the default profile).
+  const profile = (o.profile ?? "").trim().toLowerCase() || "default"
   if (profile !== "default" && profile !== "prod" && !/^[a-z0-9][a-z0-9-]{0,31}$/.test(profile)) {
     throw new Error(`launch: invalid profile "${o.profile}" (lowercase letters, digits and -)`)
   }

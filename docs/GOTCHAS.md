@@ -186,7 +186,8 @@ had it started, it would have overwritten the installed app's workspace and
   `SMTERM_PROFILE=default` (its HOME is throwaway) unless given `profile`, **and a scratch
   `TMPDIR`**: the shell-integration dir lives there, and the real one is the installed app's.
 - The login-shell env import (packaged builds) re-adds any var we lack, so the scrub runs
-  again after it. `ELECTRON_RENDERER_URL` is honoured only unpackaged and never reaches PTYs.
+  again after it. `ELECTRON_RENDERER_URL` is read once (honoured only unpackaged) and
+  deleted from `process.env`, so no child — shell, editor, git — inherits it.
 - On macOS Electron's `appData` is the real `~/Library/Application Support` even under a
   fake `$HOME`: a test that fakes HOME must still pass `--user-data-dir`.
 

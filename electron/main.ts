@@ -73,13 +73,19 @@ const PROFILE_CHOICE = resolveProfile({
   packaged: app.isPackaged,
 })
 if ("error" in PROFILE_CHOICE) {
-  console.error(`smterm: ${PROFILE_CHOICE.error}`) // Linux shows no dialog before ready
-  dialog.showErrorBox("smterm can't start", PROFILE_CHOICE.error) // blocks on macOS / Windows
+  // macOS / Windows: a blocking error box (+ stderr for a terminal launch). Linux has no
+  // dialog before ready — showErrorBox prints to stderr there itself.
+  if (process.platform !== "linux") console.error(`smterm: ${PROFILE_CHOICE.error}`)
+  dialog.showErrorBox("smterm can't start", PROFILE_CHOICE.error)
   process.exit(1)
 }
 const PROFILE_NAMES = profileNames(PROFILE_CHOICE.profile)
 scrubParentInstanceEnv(process.env)
 setIntegrationDirName(PROFILE_NAMES.appName)
+// electron-vite's dev-server URL is for this process only: read once, then gone from the env
+// every child inherits (shells, the editor openFile starts, git), and only honoured unpackaged.
+const DEV_RENDERER_URL = app.isPackaged ? undefined : process.env.ELECTRON_RENDERER_URL
+delete process.env.ELECTRON_RENDERER_URL
 
 const dir = path.dirname(fileURLToPath(import.meta.url))
 
@@ -234,8 +240,8 @@ function createWindow() {
     })
   }
 
-  if (!app.isPackaged && process.env.ELECTRON_RENDERER_URL) {
-    void win.loadURL(process.env.ELECTRON_RENDERER_URL)
+  if (DEV_RENDERER_URL) {
+    void win.loadURL(DEV_RENDERER_URL)
   } else {
     void win.loadFile(path.join(dir, "../renderer/index.html"))
   }
@@ -423,9 +429,6 @@ function registerIpc() {
       // SMTERM_SHARE_HISTORY=0 to disable. (For WSL, wslInjection lists it in $WSLENV
       // so it crosses the boundary.)
       const spawnEnv = { ...process.env, ...(inj?.env ?? {}) } as Record<string, string>
-      // electron-vite's dev-server URL is ours: an Electron app started from this pane would
-      // load our dev renderer instead of its own.
-      delete spawnEnv.ELECTRON_RENDERER_URL
       if (!shareHistoryEnabled()) spawnEnv.SMTERM_SHARE_HISTORY = "0"
       // Tell agents (Claude Code, vim, …) our light/dark background via COLORFGBG — the
       // fallback when the OSC-11 background query can't complete in time (notably across
@@ -897,7 +900,7 @@ function openFile(cwd: string, file: string, line?: number, col?: number): void 
 // single-instance lock and localStorage — is the profile's own, unless the caller chose one.
 // The AppUserModelId stays shared: on Windows toasts only show for an id a Start Menu
 // shortcut registers, and only the installer's (com.smterm.app) exists.
-app.setName(PROFILE_NAMES.appName)
+app.setName(displayName(PROFILE_NAMES)) // the menu / About name: "smterm (dev)", like the window
 app.setAppUserModelId("com.smterm.app")
 if (!app.commandLine.hasSwitch("user-data-dir")) {
   app.setPath("userData", path.join(app.getPath("appData"), PROFILE_NAMES.appName))
