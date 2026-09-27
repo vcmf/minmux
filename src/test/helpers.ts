@@ -23,6 +23,7 @@ export function resetStore() {
     shells: [testShell],
     sshHosts: [],
     sshHostsLoaded: false,
+    remoteIdle: {},
     windowFocused: true,
     systemDark: true,
     settingsLoaded: false,

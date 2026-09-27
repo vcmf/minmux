@@ -3,7 +3,9 @@ import { render, screen, fireEvent, createEvent } from "@testing-library/react"
 import { TerminalPane } from "./terminal-pane"
 import { useStore } from "../store"
 import { allSessionIds } from "../lib/pane-tree"
-import { resetStore, testShell } from "../test/helpers"
+import { resetStore, testHost, testShell } from "../test/helpers"
+import { hostShellOption } from "../lib/ssh-hosts-ui"
+import { TerminalManager } from "../terminal/terminal-manager"
 import type { PaneLeaf } from "../types"
 
 vi.mock("../terminal/terminal-manager", () => ({
@@ -15,6 +17,7 @@ vi.mock("../terminal/terminal-manager", () => ({
     fit: vi.fn(),
     focus: vi.fn(),
     dispose: vi.fn(),
+    connect: vi.fn(),
   },
 }))
 
@@ -307,5 +310,41 @@ describe("TerminalPane — Claude session colour", () => {
     const pane = container.querySelector(".terminal-pane")!
     expect(pane).toHaveClass("waiting")
     expect(pane).not.toHaveClass("tinted")
+  })
+})
+
+describe("TerminalPane — ssh Connect button", () => {
+  const mountRemote = () => {
+    st().newTab(hostShellOption(testHost("web")))
+    const tab = st().tabs[0]!
+    return { tabId: tab.id, id: tab.activeSessionId }
+  }
+
+  it("hidden while connected", () => {
+    const { tabId } = mountRemote()
+    renderPane(tabId)
+    expect(screen.queryByText("Connect")).not.toBeInTheDocument()
+    expect(screen.queryByText("Reconnect")).not.toBeInTheDocument()
+  })
+
+  it("names what it does per phase, and connects + focuses the pane", () => {
+    const { tabId, id } = mountRemote()
+    st().setRemoteIdle(id, "waiting")
+    const view = renderPane(tabId)
+    fireEvent.click(screen.getByText("Connect"))
+    expect(TerminalManager.connect).toHaveBeenCalledWith(id)
+    expect(TerminalManager.focus).toHaveBeenCalledWith(id)
+    st().setRemoteIdle(id, "closed")
+    view.rerender()
+    expect(screen.getByText("Reconnect")).toBeInTheDocument()
+    st().setRemoteIdle(id, "failed")
+    view.rerender()
+    expect(screen.getByText("Retry")).toBeInTheDocument()
+  })
+
+  it("never shows for a local pane", () => {
+    const { tabId } = mountPane()
+    renderPane(tabId)
+    expect(screen.queryByTitle(/Connect|Reconnect/)).not.toBeInTheDocument()
   })
 })

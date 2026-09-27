@@ -423,3 +423,33 @@ describe("restoreRemote", () => {
     ).toHaveLength(200)
   })
 })
+
+describe("workspace — runtime-only session fields", () => {
+  it("never saves `restored`", () => {
+    const remote = { hostId: "native:web", label: "web", target: "web", env: "native" as const }
+    const out = serializeWorkspace({
+      sessions: {
+        r: {
+          id: "r",
+          title: "",
+          command: "ssh",
+          args: [],
+          status: "idle",
+          unread: false,
+          remote,
+          restored: true,
+        },
+      },
+      tabs: [
+        {
+          id: "t",
+          title: "",
+          root: { type: "leaf", id: "p", sessionIds: ["r"], activeSessionId: "r" },
+          activeSessionId: "r",
+        },
+      ],
+      activeTabId: "t",
+    })
+    expect(JSON.stringify(out)).not.toContain("restored")
+  })
+})

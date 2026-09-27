@@ -886,3 +886,81 @@ describe("store — setSshHosts notifies only on a change", () => {
     off()
   })
 })
+
+describe("store — remote connection state", () => {
+  beforeEach(resetStore)
+
+  it("setRemoteIdle sets and clears, and keeps the same state when unchanged", () => {
+    st().newTab(hostShellOption(testHost("web")))
+    const id = firstTab().activeSessionId
+    st().setRemoteIdle(id, "closed")
+    expect(st().remoteIdle[id]).toBe("closed")
+    const before = useStore.getState()
+    st().setRemoteIdle(id, "closed")
+    expect(useStore.getState()).toBe(before)
+    st().setRemoteIdle(id, null)
+    expect(st().remoteIdle).toEqual({})
+    const cleared = useStore.getState()
+    st().setRemoteIdle(id, null)
+    expect(useStore.getState()).toBe(cleared)
+  })
+
+  it("never records a state for a session that's gone (a late answer after a close)", () => {
+    st().setRemoteIdle("gone", "failed")
+    expect(st().remoteIdle).toEqual({})
+  })
+
+  it("closing the pane drops its state", () => {
+    st().newTab(hostShellOption(testHost("web")))
+    const id = firstTab().activeSessionId
+    st().setRemoteIdle(id, "waiting")
+    st().closeTab(firstTab().id)
+    expect(st().remoteIdle).toEqual({})
+  })
+
+  it("restoreWorkspace marks remote sessions restored (only those) and resets idle state", () => {
+    st().newTab(hostShellOption(testHost("web")))
+    st().setRemoteIdle(firstTab().activeSessionId, "closed")
+    const remote = { ...hostShellOption(testHost("db")).remote! }
+    st().restoreWorkspace({
+      sessions: {
+        r: { id: "r", title: "", command: "ssh", args: [], status: "idle", unread: false, remote },
+        l: { id: "l", title: "", command: "/bin/sh", args: [], status: "idle", unread: false },
+      },
+      tabs: [
+        {
+          id: "t",
+          title: "",
+          root: { type: "leaf", id: "p", sessionIds: ["r", "l"], activeSessionId: "r" },
+          activeSessionId: "r",
+        },
+      ],
+      activeTabId: "t",
+    })
+    expect(st().sessions.r!.restored).toBe(true)
+    expect(st().sessions.l!.restored).toBeUndefined()
+    expect(st().remoteIdle).toEqual({})
+  })
+
+  it("a split from a restored pane is not itself restored", () => {
+    const remote = { ...hostShellOption(testHost("db")).remote! }
+    st().restoreWorkspace({
+      sessions: {
+        r: { id: "r", title: "", command: "ssh", args: [], status: "idle", unread: false, remote },
+      },
+      tabs: [
+        {
+          id: "t",
+          title: "",
+          root: { type: "leaf", id: "p", sessionIds: ["r"], activeSessionId: "r" },
+          activeSessionId: "r",
+        },
+      ],
+      activeTabId: "t",
+    })
+    st().splitActive("row", shell)
+    const s = st().sessions[firstTab().activeSessionId]!
+    expect(s.remote?.hostId).toBe("native:db")
+    expect(s.restored).toBeUndefined()
+  })
+})

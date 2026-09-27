@@ -67,3 +67,18 @@ describe("SettingsPanel", () => {
     expect(st().settingsOpen).toBe(false)
   })
 })
+
+describe("SettingsPanel — SSH", () => {
+  it("edits the restore mode and keepalive through the validated settings", () => {
+    render(<SettingsPanel />)
+    fireEvent.change(screen.getByLabelText("Reconnect on launch"), {
+      target: { value: "on-focus" },
+    })
+    expect(st().settings.ssh.restore).toBe("on-focus")
+    fireEvent.change(screen.getByLabelText("Keepalive (seconds, 0 = off)"), {
+      target: { value: "99999" },
+    })
+    expect(st().settings.ssh.keepAliveSeconds).toBe(3600) // clamped by the schema
+    expect(ipc.writeSettings).toHaveBeenCalled()
+  })
+})

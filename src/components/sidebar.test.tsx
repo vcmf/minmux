@@ -378,3 +378,14 @@ describe("Sidebar — before the first host list arrives", () => {
     expect(screen.getByText("No hosts in ~/.ssh/config")).toBeInTheDocument()
   })
 })
+
+describe("Sidebar — a dropped connection", () => {
+  it("the host's connected dot goes away while its only pane is closed", () => {
+    st().setSshHosts([testHost("web")])
+    st().newTab(hostShellOption(testHost("web")))
+    render(<Sidebar />)
+    expect(screen.getAllByTitle("Connected")).toHaveLength(1)
+    act(() => st().setRemoteIdle(st().tabs[0]!.activeSessionId, "closed"))
+    expect(screen.queryByTitle("Connected")).not.toBeInTheDocument()
+  })
+})

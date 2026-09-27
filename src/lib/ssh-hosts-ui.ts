@@ -33,10 +33,14 @@ export function groupHosts(hosts: SshHost[]): HostGroup[] {
   return [...groups.values()]
 }
 
-/** hostIds with an open session, sorted (a stable primitive list for useShallow). */
-export function connectedHostIds(sessions: Record<string, Session>): string[] {
+/** hostIds with a connected session (not one waiting at a Connect prompt), sorted — a
+ *  stable primitive list for useShallow. */
+export function connectedHostIds(
+  sessions: Record<string, Session>,
+  idle: Record<string, unknown> = {},
+): string[] {
   const ids = new Set<string>()
-  for (const s of Object.values(sessions)) if (s.remote) ids.add(s.remote.hostId)
+  for (const s of Object.values(sessions)) if (s.remote && !idle[s.id]) ids.add(s.remote.hostId)
   return [...ids].sort()
 }
 

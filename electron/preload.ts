@@ -15,6 +15,7 @@ const api = {
     cwd?: string
     bg?: string
     remote?: unknown
+    attachOnly?: boolean
   }) => ipcRenderer.invoke("pty:spawn", opts),
 
   onPtyExit: (id: string, cb: (e: { code: number; signal: number }) => void) => {

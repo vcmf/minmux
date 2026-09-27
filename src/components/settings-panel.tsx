@@ -133,6 +133,39 @@ export function SettingsPanel() {
           />
         </label>
 
+        <h3 className="settings-section">SSH</h3>
+        <label className="settings-row">
+          <span>Reconnect on launch</span>
+          <select
+            value={settings.ssh.restore}
+            onChange={(e) =>
+              update({
+                ...settings,
+                ssh: { ...settings.ssh, restore: e.target.value as Settings["ssh"]["restore"] },
+              })
+            }
+          >
+            <option value="auto">Right away</option>
+            <option value="on-focus">When I press Enter</option>
+          </select>
+        </label>
+
+        <label className="settings-row">
+          <span>Keepalive (seconds, 0 = off)</span>
+          <input
+            type="number"
+            min={0}
+            max={3600}
+            value={settings.ssh.keepAliveSeconds}
+            onChange={(e) =>
+              update({
+                ...settings,
+                ssh: { ...settings.ssh, keepAliveSeconds: Number(e.target.value) },
+              })
+            }
+          />
+        </label>
+
         <div className="settings-footer">
           <button className="btn" onClick={() => void openSettingsFile(settings)}>
             Open settings.json

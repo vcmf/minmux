@@ -423,7 +423,7 @@ function writeCollapsed(v: boolean) {
 function RemoteHosts() {
   const hosts = useStore((s) => s.sshHosts)
   const loaded = useStore((s) => s.sshHostsLoaded)
-  const connected = useStore(useShallow((s) => connectedHostIds(s.sessions)))
+  const connected = useStore(useShallow((s) => connectedHostIds(s.sessions, s.remoteIdle)))
   const [collapsed, setCollapsed] = useState(readCollapsed)
   const groups = useMemo(() => groupHosts(hosts), [hosts])
 

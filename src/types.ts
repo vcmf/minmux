@@ -38,6 +38,7 @@ export interface Session {
   detail?: string // why it needs attention (OSC-9 message / "needs input")
   remote?: RemoteRef // runs on an ssh host: no local cwd, files or git (splits stay on it)
   remoteSaved?: unknown // a saved host this build couldn't read: written back as-is on save
+  restored?: boolean // runtime only (never saved): came from workspace.json this launch/reload
 }
 
 /** A pane: terminals ("surfaces") stacked as tabs; stable `id`, only the active one shows. */
@@ -78,4 +79,5 @@ export interface SpawnOpts {
   cwd?: string // start directory; falls back to $HOME in main if unset
   bg?: string // theme terminal background hex → COLORFGBG so agents detect light/dark
   remote?: RemoteRef // an ssh session: main rebuilds the command from its own host list
+  attachOnly?: boolean // reattach a live PTY, but start nothing (a restored on-focus ssh pane)
 }

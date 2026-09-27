@@ -120,3 +120,12 @@ describe("remote labels", () => {
     )
   })
 })
+
+describe("connectedHostIds — idle panes", () => {
+  it("a pane waiting at a Connect prompt doesn't count; another live one on the host does", () => {
+    const web = hostShellOption(testHost("web")).remote
+    const sessions = { a: session("a", web), b: session("b", web) }
+    expect(connectedHostIds(sessions, { a: "closed" })).toEqual(["native:web"])
+    expect(connectedHostIds(sessions, { a: "closed", b: "waiting" })).toEqual([])
+  })
+})
