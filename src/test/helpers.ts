@@ -1,9 +1,18 @@
 import { useStore } from "../store"
 import { defaultSettings } from "../settings/schema"
-import type { ShellOption } from "../types"
+import type { ShellOption, SshEnv, SshHost } from "../types"
 import { emptyGraph } from "../lib/agent-graph"
 
 export const testShell: ShellOption = { id: "sh", label: "sh", command: "/bin/sh", args: [] }
+
+/** A saved ssh host as main lists it. */
+export const testHost = (alias: string, env: SshEnv = "native", detail?: string): SshHost => ({
+  hostId: env === "native" ? `native:${alias}` : `${env}:${alias}`,
+  label: alias,
+  target: alias,
+  env,
+  ...(detail ? { detail } : {}),
+})
 
 /** Reset the singleton store to a clean initial state between tests (keeps actions). */
 export function resetStore() {
@@ -12,6 +21,10 @@ export function resetStore() {
     tabs: [],
     activeTabId: null,
     shells: [testShell],
+    sshHosts: [],
+    sshHostsLoaded: false,
+    remotePhase: {},
+    remoteDetail: {},
     profile: "",
     windowFocused: true,
     systemDark: true,
@@ -19,6 +32,8 @@ export function resetStore() {
     settings: defaultSettings,
     settingsOpen: false,
     paletteOpen: false,
+    hostPickerOpen: false,
+    sshRecent: [],
     searchOpen: false,
     rightView: null,
     sidebarCollapsed: false,

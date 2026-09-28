@@ -1,5 +1,5 @@
 import { create } from "zustand"
-import type { Session, ShellOption, Tab } from "./types"
+import type { Session, ShellOption, SshHost, Tab } from "./types"
 import {
   addSurface,
   allSessionIds,
@@ -14,7 +14,11 @@ import {
   splitNode,
   visibleSessionIds,
 } from "./lib/pane-tree"
-import { inheritShell } from "./lib/shells"
+import { inheritShell, resolveDefaultShell } from "./lib/shells"
+import { hostShellOption, sameHosts } from "./lib/ssh-hosts-ui"
+import { pushRecent, toggleHidden, togglePinned } from "./lib/ssh-host-list"
+import { DEFAULT_HIDDEN_HOSTS } from "./lib/ssh-validate"
+import type { RemotePhase } from "./lib/remote-connect"
 import { reduceSignals } from "./lib/session-status"
 import type { SignalEvent } from "./lib/session-status"
 import { inGitKey, paneOfGitKey } from "./lib/agent-dirs"
@@ -46,8 +50,18 @@ function makeSession(shell: ShellOption, initialCwd?: string): Session {
     args: shell.args,
     status: "idle",
     unread: false,
-    cwd: initialCwd,
+    // A remote session's shell runs on the host: a local cwd would be meaningless there.
+    ...(shell.remote ? { remote: { ...shell.remote } } : { cwd: initialCwd }),
+    ...(shell.remote && shell.remoteSaved !== undefined ? { remoteSaved: shell.remoteSaved } : {}),
   }
+}
+
+/** The shell to open a LOCAL folder with, beside `src`: its own, unless it's an ssh session
+ *  (the folder is on this machine, not the host) — then the default local shell. */
+function localShellFor(state: AppState, src: Session | undefined): ShellOption | undefined {
+  const inherited = inheritShell(state.shells, src)
+  if (inherited && !inherited.remote) return inherited
+  return resolveDefaultShell(state.shells, state.settings.defaultShell)
 }
 
 /** The cwd of the currently focused terminal, if known — new panes/tabs inherit it. */
@@ -73,11 +87,17 @@ interface AppState {
   tabs: Tab[]
   activeTabId: string | null
   shells: ShellOption[]
+  sshHosts: SshHost[] // saved ssh hosts (main's list, refreshed when ~/.ssh/config changes)
+  remotePhase: Record<string, RemotePhase> // ssh panes started here: where each connection is
+  remoteDetail: Record<string, string> // with it: the prompt ("password") or failure kind
+  sshHostsLoaded: boolean // main has answered once (before that, "no hosts" isn't known)
   windowFocused: boolean
   systemDark: boolean // OS prefers a dark colour scheme (drives appearance: "system")
   settings: Settings
   settingsOpen: boolean
   paletteOpen: boolean
+  hostPickerOpen: boolean // the "Connect to host" picker
+  sshRecent: string[] // hostIds, newest first (a convenience: localStorage, last writer wins)
   searchOpen: boolean
   rightView: RightView // which view the single right-side panel shows (null = hidden)
   rightPanelWidth: number // px width of the right panel (drag-resizable, persisted)
@@ -112,6 +132,11 @@ interface AppState {
   setRightView: (view: RightView) => void
   setSessionCwd: (sessionId: string, cwd: string) => void
   setPaletteOpen: (open: boolean) => void
+  setHostPickerOpen: (open: boolean) => void
+  /** Open a host: a new tab, or a split of the active pane. Remembered as recent. */
+  openHost: (host: SshHost, how: "tab" | "row" | "column") => void
+  toggleHostPinned: (hostId: string) => void // settings.ssh.pinned
+  setHostHidden: (alias: string, hide: boolean) => void // settings.ssh.hidden
   setSearchOpen: (open: boolean) => void
   setSidebarCollapsed: (collapsed: boolean) => void
   setSettingsOpen: (open: boolean) => void
@@ -119,9 +144,12 @@ interface AppState {
   updateSettings: (next: Settings) => void // validate + apply + persist (every UI entry point)
   settingsLoaded: boolean // settings.json read at least once (gates theming + first spawns)
   setShells: (shells: ShellOption[]) => void
-  restoreWorkspace: (ws: WorkspaceState) => void
+  setSshHosts: (hosts: SshHost[]) => void
+  setRemotePhase: (sessionId: string, phase: RemotePhase, detail?: string) => void
+  restoreWorkspace: (ws: WorkspaceState, livePtys?: string[]) => void
   setRightPanelWidth: (px: number, maxAvail?: number) => void
   newTab: (shell: ShellOption) => void
+  splitWith: (direction: "row" | "column", shell: ShellOption) => void // a new tab if none
   closeTab: (tabId: string) => void
   setActiveTab: (tabId: string) => void
   renameTab: (tabId: string, title: string) => void
@@ -229,13 +257,20 @@ function markSeen(sessions: Record<string, Session>, sessionId: string): Record<
 function dropSessions(
   state: AppState,
   ids: string[],
-): Pick<AppState, "sessions" | "paneRoot" | "agentMeta" | "paneGit" | "resume"> {
+): Pick<
+  AppState,
+  "sessions" | "paneRoot" | "agentMeta" | "paneGit" | "resume" | "remotePhase" | "remoteDetail"
+> {
   const sessions = { ...state.sessions }
   const paneRoot = { ...state.paneRoot }
   const agentMeta = { ...state.agentMeta }
   const paneGit = { ...state.paneGit }
   const resume = { ...state.resume }
+  const remotePhase = { ...state.remotePhase }
+  const remoteDetail = { ...state.remoteDetail }
   for (const id of ids) {
+    delete remotePhase[id]
+    delete remoteDetail[id]
     delete resume[id]
     delete paneGit[id]
     delete paneGit[inGitKey(id)] // …and its Claude `in` folder's
@@ -243,7 +278,7 @@ function dropSessions(
     delete paneRoot[id] // don't leak the pane's root override
     delete agentMeta[id] // …or its Claude accent
   }
-  return { sessions, paneRoot, agentMeta, paneGit, resume }
+  return { sessions, paneRoot, agentMeta, paneGit, resume, remotePhase, remoteDetail }
 }
 
 /** Remove a tab; if it was active, the last remaining tab takes over. */
@@ -254,11 +289,34 @@ function withoutTab(state: AppState, tabId: string): Pick<AppState, "tabs" | "ac
   return { tabs, activeTabId }
 }
 
+const RECENT_KEY = "smterm.ssh.recent"
+
+// Recent hosts are a convenience: storage can be missing or throw (private mode, tests).
+function readRecent(): string[] {
+  try {
+    const v: unknown = JSON.parse(localStorage.getItem(RECENT_KEY) ?? "[]")
+    return Array.isArray(v) ? v.filter((x): x is string => typeof x === "string").slice(0, 10) : []
+  } catch {
+    return []
+  }
+}
+function writeRecent(ids: string[]) {
+  try {
+    localStorage.setItem(RECENT_KEY, JSON.stringify(ids))
+  } catch {
+    // not remembered: fine
+  }
+}
+
 export const useStore = create<AppState>((set, get) => ({
   sessions: {},
   tabs: [],
   activeTabId: null,
   shells: [],
+  sshHosts: [],
+  sshHostsLoaded: false,
+  remotePhase: {},
+  remoteDetail: {},
   windowFocused: true,
   // Seeded from the OS now (not after an effect) so "system" never starts on the wrong scheme.
   systemDark:
@@ -269,6 +327,8 @@ export const useStore = create<AppState>((set, get) => ({
   settingsLoaded: false,
   settingsOpen: false,
   paletteOpen: false,
+  hostPickerOpen: false,
+  sshRecent: readRecent(),
   searchOpen: false,
   rightView: null,
   rightPanelWidth: RIGHT_PANEL_DEFAULT,
@@ -331,10 +391,46 @@ export const useStore = create<AppState>((set, get) => ({
   setSessionCwd: (sessionId, cwd) =>
     set((state) => {
       const s = state.sessions[sessionId]
-      if (!s || s.cwd === cwd) return {}
+      // A remote shell's OSC 7 path is on the host: local panels must never read it.
+      if (!s || s.remote || s.cwd === cwd) return {}
       return { sessions: { ...state.sessions, [sessionId]: { ...s, cwd } } }
     }),
-  setPaletteOpen: (paletteOpen) => set({ paletteOpen }),
+  // One overlay at a time: opening either closes the other (⌘K over an open picker).
+  setPaletteOpen: (paletteOpen) =>
+    set(paletteOpen ? { paletteOpen, hostPickerOpen: false } : { paletteOpen }),
+  setHostPickerOpen: (hostPickerOpen) =>
+    set(hostPickerOpen ? { hostPickerOpen, paletteOpen: false } : { hostPickerOpen }),
+  openHost: (host, how) => {
+    if (host.hidden) return // listed only so it can be shown again
+    const shell = hostShellOption(host)
+    if (how === "tab") get().newTab(shell)
+    else get().splitWith(how, shell)
+    const sshRecent = pushRecent(get().sshRecent, host.hostId)
+    set({ sshRecent })
+    writeRecent(sshRecent)
+  },
+  toggleHostPinned: (hostId) => {
+    const st = get()
+    const ssh = st.settings.ssh
+    st.updateSettings({ ...st.settings, ssh: { ...ssh, pinned: togglePinned(ssh.pinned, hostId) } })
+  },
+  setHostHidden: (alias, hide) => {
+    const st = get()
+    const ssh = st.settings.ssh
+    const isDefault = DEFAULT_HIDDEN_HOSTS.some((a) => a.toLowerCase() === alias.toLowerCase())
+    st.updateSettings({
+      ...st.settings,
+      ssh: {
+        ...ssh,
+        hidden: toggleHidden(ssh.hidden, alias, hide),
+        // Showing a default-hidden git host is recorded as "shown"; hiding it again undoes that.
+        shown:
+          isDefault && !hide
+            ? toggleHidden(ssh.shown, alias, true)
+            : toggleHidden(ssh.shown, alias, false),
+      },
+    })
+  },
   setSearchOpen: (searchOpen) => set({ searchOpen }),
   setSidebarCollapsed: (sidebarCollapsed) => set({ sidebarCollapsed }),
   setSettingsOpen: (settingsOpen) => set({ settingsOpen }),
@@ -345,10 +441,45 @@ export const useStore = create<AppState>((set, get) => ({
     void saveSettings(validated)
   },
   setShells: (shells) => set({ shells }),
+  // Unchanged, or the session is gone (a late answer after a close) → the same state.
+  setRemotePhase: (sessionId, phase, detail) =>
+    set((state) => {
+      if (!state.sessions[sessionId]) return state
+      const samePhase = state.remotePhase[sessionId] === phase
+      const sameDetail = state.remoteDetail[sessionId] === detail
+      if (samePhase && sameDetail) return state
+      let remoteDetail = state.remoteDetail
+      if (!sameDetail) {
+        remoteDetail = { ...state.remoteDetail }
+        if (detail === undefined) delete remoteDetail[sessionId]
+        else remoteDetail[sessionId] = detail
+      }
+      return {
+        remotePhase: samePhase ? state.remotePhase : { ...state.remotePhase, [sessionId]: phase },
+        remoteDetail,
+      }
+    }),
 
-  restoreWorkspace: (ws) =>
+  // Unchanged → the same state object, so nothing is notified.
+  setSshHosts: (hosts) =>
+    set((state) =>
+      state.sshHostsLoaded && sameHosts(state.sshHosts, hosts)
+        ? state
+        : { sshHosts: hosts, sshHostsLoaded: true },
+    ),
+
+  restoreWorkspace: (ws, livePtys = []) =>
     set({
-      sessions: ws.sessions,
+      // Marked so a restored ssh pane can follow `ssh.restore` (terminal-manager) — unless its
+      // ssh is still live in main (a renderer reload): that one isn't waiting for anything.
+      sessions: Object.fromEntries(
+        Object.entries(ws.sessions).map(([id, s]) => [
+          id,
+          s.remote && !livePtys.includes(id) ? { ...s, restored: true } : s,
+        ]),
+      ),
+      remotePhase: {},
+      remoteDetail: {},
       tabs: ws.tabs,
       activeTabId: ws.activeTabId,
       ...(ws.rightPanelWidth !== undefined ? { rightPanelWidth: ws.rightPanelWidth } : {}),
@@ -388,6 +519,12 @@ export const useStore = create<AppState>((set, get) => ({
       tabs: state.tabs.map((t) => (t.id === tabId ? { ...t, title } : t)),
     })),
 
+  // Split the active pane with a given shell (e.g. an ssh host), not the source's own.
+  splitWith: (direction, shell) => {
+    if (!get().tabs.some((t) => t.id === get().activeTabId)) return get().newTab(shell)
+    set((state) => splitActivePane(state, { shell, direction }))
+  },
+
   splitActive: (direction, fallback) =>
     set((state) => {
       const tab = state.tabs.find((t) => t.id === state.activeTabId)
@@ -408,7 +545,7 @@ export const useStore = create<AppState>((set, get) => ({
       if (!tab) return {}
       const agentSession = paneId ? state.sessions[paneId] : undefined
       const src = state.sessions[tab.activeSessionId]
-      const shell = inheritShell(state.shells, agentSession ?? src) ?? state.shells[0]
+      const shell = localShellFor(state, agentSession ?? src)
       if (!shell) return {}
       return splitActivePane(state, { shell, cwd, direction: "row" })
     }),
@@ -419,7 +556,7 @@ export const useStore = create<AppState>((set, get) => ({
     const before = get().activeTabId
     set((state) => {
       const tab = state.tabs.find((t) => allSessionIds(t.root).includes(paneId))
-      const shell = inheritShell(state.shells, state.sessions[paneId]) ?? state.shells[0]
+      const shell = localShellFor(state, state.sessions[paneId])
       if (!tab || !shell) return {}
       // Split the pane holding it — as shown (no surface swap), not marked seen itself.
       const tabs = state.tabs.map((t) => (t.id === tab.id ? { ...t, activeSessionId: paneId } : t))

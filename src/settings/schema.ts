@@ -1,4 +1,7 @@
 import { DEFAULT_THEME_FAMILY, themeFamilyName, variantOf, type Appearance } from "./themes"
+import { mergeSshSettings, type SshSettings } from "../lib/ssh-validate"
+
+export { mergeSshSettings, type SshSettings } from "../lib/ssh-validate"
 
 export interface Settings {
   font: {
@@ -23,6 +26,7 @@ export interface Settings {
   openPath: string // editor command for clicked paths; "" = OS default. {file}/{line}/{col}
   resumeAgents: "auto" | "ask" | "off" // on relaunch, resume the Claude session each pane was in
   resumeBypassPermissions: boolean // also restore --permission-mode bypassPermissions (else default)
+  ssh: SshSettings
 }
 
 export const defaultSettings: Settings = {
@@ -46,6 +50,7 @@ export const defaultSettings: Settings = {
   openPath: "code -g {file}:{line}:{col}",
   resumeAgents: "auto",
   resumeBypassPermissions: false,
+  ssh: mergeSshSettings({}),
 }
 
 const num = (v: unknown, fallback: number, min: number, max: number): number =>
@@ -93,6 +98,7 @@ export function mergeSettings(input: unknown): Settings {
         ? o.resumeAgents
         : d.resumeAgents,
     resumeBypassPermissions: bool(o.resumeBypassPermissions, d.resumeBypassPermissions),
+    ssh: mergeSshSettings(o.ssh),
   }
 }
 

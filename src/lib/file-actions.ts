@@ -28,8 +28,8 @@ export function revealLabel(platform: string): string {
 export type FileActionId =
   "preview" | "open" | "setRoot" | "reveal" | "copyPath" | "copyRel" | "openHere"
 
-export interface MenuItemSpec {
-  id: FileActionId
+export interface MenuItemSpec<Id extends string = FileActionId> {
+  id: Id
   label: string
   disabled?: boolean
   hint?: string // muted trailing note, e.g. "not found"

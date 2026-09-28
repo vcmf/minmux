@@ -4,7 +4,8 @@ import { DiffPanel } from "./diff-panel"
 import { useStore } from "../store"
 import { ipc } from "../lib/ipc"
 import { allSessionIds } from "../lib/pane-tree"
-import { resetStore, testShell } from "../test/helpers"
+import { resetStore, testHost, testShell } from "../test/helpers"
+import { hostShellOption } from "../lib/ssh-hosts-ui"
 import type { GitStatus } from "../lib/ipc"
 
 const st = () => useStore.getState()
@@ -56,5 +57,17 @@ describe("DiffPanel", () => {
     st().setGit({ ...status, files: [], add: 0, del: 0 })
     render(<DiffPanel />)
     expect(screen.getByText(/Working tree clean/i)).toBeInTheDocument()
+  })
+})
+
+describe("DiffPanel — remote session", () => {
+  it("shows the remote notice instead of the (stale) local changes", () => {
+    st().newTab(hostShellOption(testHost("gpu")))
+    render(<DiffPanel />)
+    expect(screen.getByText(/Remote session on/)).toBeInTheDocument()
+    expect(screen.getByText("gpu")).toBeInTheDocument()
+    expect(screen.queryByText("a.ts")).not.toBeInTheDocument()
+    expect(screen.queryByText("+9")).not.toBeInTheDocument()
+    expect(ipc.gitDiff).not.toHaveBeenCalled()
   })
 })

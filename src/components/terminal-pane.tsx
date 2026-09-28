@@ -1,13 +1,17 @@
 import { useEffect, useRef, useState } from "react"
 import { useShallow } from "zustand/react/shallow"
-import { Terminal, TerminalWindow, X, Columns, Rows } from "@phosphor-icons/react"
+import { Globe, Plugs, Terminal, TerminalWindow, X, Columns, Rows } from "@phosphor-icons/react"
 import { TerminalManager } from "../terminal/terminal-manager"
+import { ipc } from "../lib/ipc"
 import { activeTheme, useStore } from "../store"
 import { sessionColor } from "../lib/session-color"
 import { claudePaneIds } from "../lib/agent-graph"
 import { canMove, findPaneById, type MoveTarget } from "../lib/pane-tree"
 import { dropZone, insertIndex } from "../lib/drop-zone"
 import { displaySessionTitle, shellType } from "../lib/session-label"
+import { hostColor, hostColorCss, remoteWhere } from "../lib/ssh-hosts-ui"
+import { isIdle, remoteStatusUi } from "../lib/remote-connect"
+import { canRetry, type SshFailure } from "../lib/ssh-errors"
 import { statusUi } from "../lib/status-ui"
 import { newSurfaceKey } from "../lib/platform"
 import { resolveDefaultShell } from "../lib/shells"
@@ -40,6 +44,28 @@ export function TerminalPane({ pane, tabId }: { pane: PaneLeaf; tabId: string })
       s.activeTabId === tabId && s.tabs.find((t) => t.id === tabId)?.activeSessionId === activeId,
   )
   const status = session?.status ?? "idle"
+  // An ssh pane waiting at a Connect prompt (restored on-focus, closed, or failed).
+  const remoteIdle = useStore((s) => {
+    const p = s.remotePhase[activeId]
+    return isIdle(p) ? p : undefined
+  })
+  // The failure kind (phase failed) or "ended" / "lost" (phase closed).
+  const remoteDetail = useStore((s) => s.remoteDetail[activeId])
+  const failure = remoteDetail as SshFailure | undefined
+  const sshHosts = useStore((s) => s.sshHosts)
+  const hostColors = useStore((s) => s.settings.ssh.colors)
+  // A surface's host colour as CSS (undefined = none set, or a local shell).
+  const colorOf = (s: { remote?: { target: string } } | undefined) => {
+    const c = s?.remote ? hostColor(s.remote.target, hostColors) : undefined
+    return c ? hostColorCss(c) : undefined
+  }
+  const activeColor = colorOf(session)
+  // Each surface's remote phase + detail, flat primitives (a surface tab shows its state dot).
+  const remoteFlat = useStore(
+    useShallow((s) =>
+      pane.sessionIds.flatMap((id) => [s.remotePhase[id] ?? "", s.remoteDetail[id] ?? ""]),
+    ),
+  )
   // The focus/attention top rail only disambiguates between panes — pointless when
   // the tab has a single pane, so suppress it there.
   const isSplit = useStore((s) => {
@@ -179,6 +205,8 @@ export function TerminalPane({ pane, tabId }: { pane: PaneLeaf; tabId: string })
     >
       <div
         className="pane-header"
+        // A host with a colour marks the whole header (left rail), not just its chip.
+        style={activeColor ? { boxShadow: `inset 3px 0 0 ${activeColor}` } : undefined}
         // The whole header is the strip's drop area: a slot between tabs reorders / joins
         // this pane there; past the last tab (incl. the empty header space) = the end.
         onDragOver={(e) => {
@@ -223,7 +251,13 @@ export function TerminalPane({ pane, tabId }: { pane: PaneLeaf; tabId: string })
           {pane.sessionIds.map((id, i) => {
             const s = surfaces[i]
             const active = id === activeId
-            const ui = statusUi(s?.status ?? "idle")
+            const ui = s?.remote
+              ? remoteStatusUi(
+                  (remoteFlat[i * 2] || undefined) as Parameters<typeof remoteStatusUi>[0],
+                  s.status,
+                  remoteFlat[i * 2 + 1] || undefined,
+                )
+              : statusUi(s?.status ?? "idle")
             return (
               <div
                 key={id}
@@ -261,20 +295,27 @@ export function TerminalPane({ pane, tabId }: { pane: PaneLeaf; tabId: string })
                 }}
               >
                 {(() => {
-                  const Icon = claudeFlags[i] === "1" ? ClaudeIcon : Terminal
+                  const Icon = claudeFlags[i] === "1" ? ClaudeIcon : s?.remote ? Globe : Terminal
                   return (
                     <Icon
                       size={13}
                       weight="fill"
                       // The session's colour when it has one (the tab "dot"), else focus/dim.
-                      color={accents[i] ?? (active && focused ? "var(--accent)" : "var(--dim)")}
+                      // A host's colour (a safety cue) beats a Claude /color accent.
+                      color={
+                        colorOf(s) ??
+                        accents[i] ??
+                        (active && focused ? "var(--accent)" : "var(--dim)")
+                      }
                     />
                   )
                 })()}
                 <span className="pane-title">{displaySessionTitle(s, home)}</span>
                 {/* Hidden surfaces surface their state on the tab (you can't see the pane). */}
                 {/* Static dot (no pulse): don't animate compositing next to a WebGL canvas. */}
-                {!active && s && s.status !== "idle" && <span className={`dot ${ui.dot}`} />}
+                {!active && s && (ui.dot !== "faint" || s.status !== "idle") && (
+                  <span className={`dot ${ui.dot}`} />
+                )}
                 {multi && (
                   <button
                     className="surface-close"
@@ -291,8 +332,51 @@ export function TerminalPane({ pane, tabId }: { pane: PaneLeaf; tabId: string })
             )
           })}
         </div>
-        <span className="pane-badge">{shellType(session?.command ?? "")}</span>
+        {session?.remote ? (
+          // Where this pane runs: user@hostname (else the alias), in the host's colour if set.
+          <span
+            className={`host-chip${activeColor ? " colored" : ""}`}
+            style={activeColor ? ({ "--host": activeColor } as React.CSSProperties) : undefined}
+            title={`ssh ${session.remote.target}`}
+          >
+            {remoteWhere(session.remote, sshHosts)}
+          </span>
+        ) : (
+          <span className="pane-badge">{shellType(session?.command ?? "")}</span>
+        )}
         <div className="pane-header-spacer" />
+        {remoteIdle === "failed" &&
+          failure === "host-gone" &&
+          session?.remote?.env === "native" && (
+            <button
+              className="pane-connect"
+              title="Open ~/.ssh/config"
+              onMouseDown={(e) => e.stopPropagation()}
+              onClick={() => ipc.openSshConfig()}
+            >
+              Open ssh config
+            </button>
+          )}
+        {remoteIdle && !(remoteIdle === "failed" && failure && !canRetry(failure)) && (
+          <button
+            className="pane-connect"
+            title={remoteIdle === "waiting" ? "Connect (Enter)" : "Reconnect (Enter)"}
+            onMouseDown={(e) => e.stopPropagation()}
+            onClick={() => {
+              TerminalManager.connect(activeId)
+              TerminalManager.focus(activeId)
+            }}
+          >
+            <Plugs size={12} />
+            {remoteIdle === "waiting"
+              ? "Connect"
+              : remoteIdle === "failed"
+                ? "Retry"
+                : remoteDetail === "ended"
+                  ? "Start again"
+                  : "Reconnect"}
+          </button>
+        )}
         <button
           className="iconbtn"
           style={{ width: 22, height: 22 }}

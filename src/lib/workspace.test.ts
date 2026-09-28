@@ -5,6 +5,7 @@ import {
   migratePaneNode,
   parseWorkspace,
   readWorkspaceFile,
+  restoreRemote,
   serializeToJson,
 } from "./workspace"
 import type { WorkspaceState } from "./workspace"
@@ -305,5 +306,150 @@ describe("workspace v1 → v2 pane migration", () => {
     const root = restored.tabs[0]!.root
     if (root.type !== "split") throw new Error("expected split")
     expect(root.children.map((c) => c.id)).toEqual(["dup", "pane-b"])
+  })
+})
+
+describe("workspace — ssh sessions", () => {
+  const remote = {
+    hostId: "native:gpu",
+    label: "gpu",
+    target: "u@10.0.0.9",
+    env: "native" as const,
+  }
+  const sshSession: Session = {
+    ...session,
+    command: "ssh",
+    args: ["u@10.0.0.9"],
+    cwd: undefined,
+    remote,
+  }
+  const sshState: WorkspaceState = { sessions: { s1: sshSession }, tabs: [tab], activeTabId: "t1" }
+
+  it("persists the host without its args (main rebuilds them) and restores it", () => {
+    const json = JSON.parse(serializeToJson(sshState))
+    expect(json.sessions[0].remote).toEqual({
+      hostId: "native:gpu",
+      label: "gpu",
+      target: "u@10.0.0.9",
+      env: "native",
+    })
+    const back = deserializeWorkspace(json)!
+    expect(back.sessions.s1!.remote).toEqual({
+      hostId: "native:gpu",
+      label: "gpu",
+      target: "u@10.0.0.9",
+      env: "native",
+    })
+    expect(back.sessions.s1!.cwd).toBeUndefined()
+  })
+
+  it("never restores a local cwd onto a remote session", () => {
+    const json = JSON.parse(serializeToJson(sshState))
+    json.sessions[0].cwd = "/Users/me"
+    expect(deserializeWorkspace(json)!.sessions.s1!.cwd).toBeUndefined()
+  })
+
+  it("keeps a malformed host remote-but-unavailable (never its saved `ssh` run locally)", () => {
+    for (const bad of [
+      { hostId: "x", label: "prod", target: "a;b", env: "native" },
+      { hostId: "x", target: "web", env: "docker:new-kind" }, // e.g. from a newer build
+      "not an object",
+    ]) {
+      const json = JSON.parse(serializeToJson(sshState))
+      json.sessions[0].remote = bad
+      const back = deserializeWorkspace(json)!
+      expect(back.sessions.s1!.remote).toMatchObject({
+        hostId: "unavailable",
+        target: "unavailable",
+      })
+      expect(back.sessions.s1!.cwd).toBeUndefined()
+    }
+    const json = JSON.parse(serializeToJson(sshState))
+    json.sessions[0].remote = { hostId: "x", label: "prod", target: "a;b", env: "native" }
+    expect(deserializeWorkspace(json)!.sessions.s1!.remote!.label).toBe("prod")
+  })
+
+  it("writes an unreadable saved host back exactly as it was (a newer build can still read it)", () => {
+    const saved = { hostId: "wsl2:Ubuntu:box", target: "box", env: "docker:new-kind", future: true }
+    const json = JSON.parse(serializeToJson(sshState))
+    json.sessions[0].remote = saved
+    const restored = deserializeWorkspace(json)!
+    const again = JSON.parse(serializeToJson(restored))
+    expect(again.sessions[0].remote).toEqual(saved)
+  })
+
+  it("still reads files written before ssh support", () => {
+    expect(
+      deserializeWorkspace(JSON.parse(serializeToJson(state)))!.sessions.s1!.remote,
+    ).toBeUndefined()
+  })
+})
+
+describe("restoreRemote", () => {
+  it("accepts a well-formed host and falls back the label to the target", () => {
+    expect(restoreRemote({ hostId: "native:web", target: "web", env: "native" })).toEqual({
+      hostId: "native:web",
+      label: "web",
+      target: "web",
+      env: "native",
+    })
+    expect(
+      restoreRemote({ hostId: "wsl:Ubuntu:w", label: "w", target: "w", env: "wsl:Ubuntu" })!.env,
+    ).toBe("wsl:Ubuntu")
+  })
+
+  it("rejects bad ids, targets, envs and non-objects", () => {
+    for (const bad of [
+      null,
+      "native:web",
+      {},
+      { hostId: "", target: "web", env: "native" },
+      { hostId: "x".repeat(301), target: "web", env: "native" },
+      { hostId: "a\nb", target: "web", env: "native" },
+      { hostId: "x", target: "-oProxyCommand=y", env: "native" },
+      { hostId: "x", target: "$(id)@h", env: "native" },
+      { hostId: "x", target: "web", env: "docker:x" },
+    ]) {
+      expect(restoreRemote(bad)).toBeUndefined()
+    }
+  })
+
+  it("drops a label with control characters and caps a long one", () => {
+    expect(
+      restoreRemote({ hostId: "x", label: "a\u001b[2J", target: "t", env: "native" })!.label,
+    ).toBe("t")
+    expect(
+      restoreRemote({ hostId: "x", label: "y".repeat(500), target: "t", env: "native" })!.label,
+    ).toHaveLength(200)
+  })
+})
+
+describe("workspace — runtime-only session fields", () => {
+  it("never saves `restored`", () => {
+    const remote = { hostId: "native:web", label: "web", target: "web", env: "native" as const }
+    const out = serializeWorkspace({
+      sessions: {
+        r: {
+          id: "r",
+          title: "",
+          command: "ssh",
+          args: [],
+          status: "idle",
+          unread: false,
+          remote,
+          restored: true,
+        },
+      },
+      tabs: [
+        {
+          id: "t",
+          title: "",
+          root: { type: "leaf", id: "p", sessionIds: ["r"], activeSessionId: "r" },
+          activeSessionId: "r",
+        },
+      ],
+      activeTabId: "t",
+    })
+    expect(JSON.stringify(out)).not.toContain("restored")
   })
 })

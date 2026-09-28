@@ -1,10 +1,12 @@
 import { describe, it, expect, beforeEach, vi } from "vitest"
-import { render, screen, fireEvent } from "@testing-library/react"
+import { act, render, screen, fireEvent } from "@testing-library/react"
 import { TopBar } from "./top-bar"
 import { useStore } from "../store"
 import { ipc } from "../lib/ipc"
+import { TerminalManager } from "../terminal/terminal-manager"
 import { allSessionIds } from "../lib/pane-tree"
-import { resetStore, testShell } from "../test/helpers"
+import { resetStore, testHost, testShell } from "../test/helpers"
+import { hostShellOption } from "../lib/ssh-hosts-ui"
 
 const st = () => useStore.getState()
 
@@ -99,6 +101,35 @@ describe("TopBar", () => {
   })
 })
 
+describe("TopBar — SSH hosts in the new-tab picker", () => {
+  it("lists hosts after the shells and opens one in a new tab", () => {
+    st().setSshHosts([testHost("web"), testHost("gpu", "wsl:Ubuntu")])
+    render(<TopBar />)
+    fireEvent.click(screen.getByTitle("New tab in…"))
+    expect(screen.getByText("SSH")).toBeInTheDocument()
+    expect(screen.getByText("WSL: Ubuntu")).toBeInTheDocument()
+    fireEvent.mouseDown(screen.getByText("gpu"))
+    expect(st().tabs).toHaveLength(1)
+    expect(st().sessions[st().tabs[0]!.activeSessionId]!.remote?.hostId).toBe("wsl:Ubuntu:gpu")
+    expect(screen.queryByText("SSH")).not.toBeInTheDocument() // the menu closed
+  })
+
+  it("has no SSH group without hosts", () => {
+    render(<TopBar />)
+    fireEvent.click(screen.getByTitle("New tab in…"))
+    expect(screen.queryByText("SSH")).not.toBeInTheDocument()
+  })
+})
+
+describe("TopBar — picker with hosts but no local shells", () => {
+  it("the caret stays usable so the hosts can still be opened", () => {
+    useStore.setState({ shells: [] })
+    st().setSshHosts([testHost("web")])
+    render(<TopBar />)
+    expect(screen.getByTitle("New tab in…")).not.toBeDisabled()
+  })
+})
+
 describe("TopBar — profile badge", () => {
   it("shows a non-default profile next to the brand, nothing for the installed app", () => {
     const { unmount } = render(<TopBar />)
@@ -107,5 +138,103 @@ describe("TopBar — profile badge", () => {
     useStore.setState({ profile: "dev" })
     render(<TopBar />)
     expect(document.querySelector(".brand-profile")!.textContent).toBe("dev")
+  })
+})
+
+describe("TopBar — ssh states on the tab dot and the bell", () => {
+  it("a disconnected ssh pane turns its tab's dot red; a prompt, amber, and counts on the bell", () => {
+    st().newTab(hostShellOption(testHost("web")))
+    const id = st().tabs[0]!.activeSessionId
+    st().setRemotePhase(id, "closed", "lost")
+    st().newTab(testShell) // another tab in front: the ssh pane is off-screen
+    const { rerender } = render(<TopBar />)
+    expect(document.querySelector(".tab .dot.red")).not.toBeNull()
+    act(() => st().setRemotePhase(id, "prompt", "password"))
+    rerender(<TopBar />)
+    expect(document.querySelector(".tab .dot.amber")).not.toBeNull()
+    expect(screen.getByText("1")).toBeInTheDocument() // bell count
+  })
+
+  it("a clean exit on the host isn't a red tab", () => {
+    st().newTab(hostShellOption(testHost("web")))
+    st().setRemotePhase(st().tabs[0]!.activeSessionId, "closed", "ended")
+    render(<TopBar />)
+    expect(document.querySelector(".tab .dot.red")).toBeNull()
+  })
+
+  it("a live ssh pane leaves the tab dot to the ordinary status", () => {
+    st().newTab(hostShellOption(testHost("web")))
+    st().setRemotePhase(st().tabs[0]!.activeSessionId, "live")
+    render(<TopBar />)
+    expect(document.querySelector(".tab .dot.red, .tab .dot.amber")).toBeNull()
+  })
+})
+
+describe("TopBar — host colour on the tab", () => {
+  it("a tab whose focused pane is on a coloured host is underlined in that colour", () => {
+    useStore.setState((s) => ({
+      settings: { ...s.settings, ssh: { ...s.settings.ssh, colors: { "prod-*": "red" } } },
+    }))
+    st().newTab(hostShellOption(testHost("prod-db")))
+    st().newTab(testShell)
+    render(<TopBar />)
+    const tabs = [...document.querySelectorAll(".tab")] as HTMLElement[]
+    expect(tabs[0]!.style.boxShadow).toContain("var(--red)")
+    expect(tabs[1]!.style.boxShadow).toBe("")
+  })
+})
+
+describe("TopBar — tabs spanning hosts", () => {
+  it("shows the +N in its own span (it survives the title's ellipsis)", () => {
+    st().newTab(hostShellOption(testHost("prod-db-replica-eu-west-1")))
+    st().splitWith("row", hostShellOption(testHost("staging")))
+    render(<TopBar />)
+    expect(document.querySelector(".tab-title")!.textContent).toBe("staging")
+    expect(document.querySelector(".tab-more")!.textContent).toBe("+1")
+  })
+})
+
+describe("TopBar — renaming a tab that spans hosts", () => {
+  it("pre-fills the name only, so a plain blur can't pin the live +N", () => {
+    st().newTab(hostShellOption(testHost("gpu")))
+    st().splitWith("row", testShell)
+    render(<TopBar />)
+    fireEvent.doubleClick(document.querySelector(".tab")!)
+    const input = document.querySelector(".tab-rename") as HTMLInputElement
+    expect(input.value).not.toContain("+1")
+  })
+})
+
+describe("TopBar — the new-tab menu's hosts", () => {
+  it("lists the first few (pinned, recent, then config order) and All hosts… for the rest", () => {
+    st().setSshHosts([
+      ...Array.from({ length: 9 }, (_, i) => testHost(`h${i}`)),
+      { ...testHost("github.com"), hidden: true },
+    ])
+    useStore.setState({ sshRecent: ["native:h8"] })
+    render(<TopBar />)
+    fireEvent.click(screen.getByTitle("New tab in…"))
+    const names = [...document.querySelectorAll(".shell-menu-host-name")].map((e) => e.textContent)
+    expect(names).toEqual(["h8", "h0", "h1", "h2", "h3", "h4"])
+    expect(screen.queryByText("github.com")).not.toBeInTheDocument()
+    fireEvent.mouseDown(screen.getByText("All hosts (9)…"))
+    expect(st().hostPickerOpen).toBe(true)
+  })
+})
+
+describe("TopBar — Connect all", () => {
+  it("shows with two or more waiting ssh panes, and connects them", () => {
+    const spy = vi.spyOn(TerminalManager, "connectAll").mockImplementation(() => {})
+    st().newTab(hostShellOption(testHost("a")))
+    st().newTab(hostShellOption(testHost("b")))
+    const [x, y] = st().tabs.map((t) => t.activeSessionId)
+    st().setRemotePhase(x!, "waiting")
+    const { rerender } = render(<TopBar />)
+    expect(screen.queryByText(/Connect all/)).not.toBeInTheDocument() // one: its own button will do
+    act(() => st().setRemotePhase(y!, "waiting"))
+    rerender(<TopBar />)
+    fireEvent.click(screen.getByText("Connect all (2)"))
+    expect(spy).toHaveBeenCalled()
+    spy.mockRestore()
   })
 })

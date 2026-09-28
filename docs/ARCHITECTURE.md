@@ -324,9 +324,10 @@ CI: GitHub Actions matrix (macos/ubuntu/windows). Auto-update later via `electro
   (sidebar branch + PR) · `agents:meta-snapshot` · `fs:*` / `file:*` / `dialog:pick-directory` /
   `editor:info` (files panel, links, preview) · `window:*` (frameless controls, native bg) ·
   `platform:info` · `app:*` (version, update check, metrics) · `open-external` / `open-path` /
-  `notify` / `clipboard:*`.
+  `notify` / `clipboard:*` · `ssh:list-hosts` (invoke) / `ssh:open-config` (send).
 - **Main → renderer** (`webContents.send`): `pty:data:<id>` (coalesced PTY bytes — the hot path;
-  nothing else rides it) · `agents:events` (hook batches + token totals) · `agents:meta`
+  nothing else rides it) · `pty:exit:<id>` (the process ended on its own) · `ssh-hosts-changed`
+  · `agents:events` (hook batches + token totals) · `agents:meta`
   (per-pane Claude colour/name) · `settings-changed` · `window:maximize-change`.
 - **Security:** `contextIsolation: true`, `nodeIntegration: false`; the renderer only sees the
   typed API the preload exposes.
@@ -355,6 +356,29 @@ non-default profile; a dev build is `smterm-dev` (GOTCHAS #profiles).
   dialog); relaunch respawns shells at the saved cwd. Surviving a quit needs the daemon
   (Appendix A, ROADMAP M5). Terminals start lazily per tab: after a restore only the active
   tab's panes spawn; a background tab's shells start when it's first shown.
+
+---
+
+## 12a. SSH remotes
+
+Design: `docs/design/SSH_REMOTES.md`; build log: `docs/design/SSH_IMPLEMENTATION_PLAN.md`.
+
+- **Hosts come from `~/.ssh/config` only** (plus each running WSL distro's). `electron/ssh-config.ts` reads it (Includes, conditional blocks, first value wins) into aliases;
+  `ssh-service.ts` keeps the merged list, watched by one chokidar watcher, and tells the
+  renderer on change. No host is defined in smterm.
+- **Main trusts only its own list.** A remote session carries a `RemoteRef` (host id, label,
+  target, env); on `pty:spawn` main looks the id up in its list and builds the argv itself
+  (`ssh [keepalive] -t -- <alias>`, or `wsl.exe -d <distro> -e ssh …`). An unknown host is
+  refused, never run as a bare alias.
+- **Plain ssh.** No connection reuse, no shell integration, no local cwd: OSC 7, file links,
+  git and the Files panel are off for remote panes (their paths are on the host).
+- **One spawn per pane** (`pending-spawns.ts`): building the plan is async, so a reload joins
+  the pending spawn, a close means it never starts, and keys typed before ssh exists are
+  dropped (never echoed ahead of a password prompt).
+- **Lifecycle in the renderer** (`lib/remote-connect.ts`, pure): `pty:exit:<id>` turns a pane
+  `closed`, a refused spawn `failed`, a restored pane under `ssh.restore = "on-focus"`
+  `waiting` (it asks main with `attachOnly`, so a reload still reattaches a live ssh). Idle
+  panes drop keys; Enter or the header's Connect respawns the same session id.
 
 ---
 

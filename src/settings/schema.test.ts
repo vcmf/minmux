@@ -1,5 +1,12 @@
+import { DEFAULT_HIDDEN_HOSTS } from "../lib/ssh-validate"
 import { describe, it, expect } from "vitest"
-import { defaultSettings, mergeSettings, parseSettings, serializeSettings } from "./schema"
+import {
+  defaultSettings,
+  mergeSettings,
+  mergeSshSettings,
+  parseSettings,
+  serializeSettings,
+} from "./schema"
 
 describe("mergeSettings", () => {
   it("returns defaults for empty/garbage input", () => {
@@ -102,5 +109,66 @@ describe("parseSettings", () => {
     expect(defaultSettings.resumeBypassPermissions).toBe(false)
     expect(mergeSettings({ resumeAgents: "ask" }).resumeAgents).toBe("ask")
     expect(mergeSettings({ resumeAgents: "sometimes" }).resumeAgents).toBe("auto")
+  })
+})
+
+describe("ssh settings", () => {
+  it("defaults: nothing hidden, a 30 s keepalive, reconnect at once", () => {
+    expect(defaultSettings.ssh).toEqual({
+      hidden: [],
+      shown: [],
+      pinned: [],
+      keepAliveSeconds: 30,
+      restore: "auto",
+      autoReconnect: true,
+      colors: {},
+    })
+    expect(mergeSettings({}).ssh).toEqual(defaultSettings.ssh)
+    expect(mergeSettings({ ssh: "nope" }).ssh).toEqual(defaultSettings.ssh)
+  })
+
+  it("reads the block through mergeSettings", () => {
+    expect(
+      mergeSettings({
+        ssh: {
+          hidden: ["github.com"],
+          keepAliveSeconds: 0,
+          restore: "on-focus",
+          colors: { "prod-*": "red" },
+        },
+      }).ssh,
+    ).toEqual({
+      hidden: ["github.com"],
+      shown: [],
+      pinned: [],
+      keepAliveSeconds: 0,
+      restore: "on-focus",
+      autoReconnect: true,
+      colors: { "prod-*": "red" },
+    })
+  })
+
+  it("defaultSettings.ssh has its own arrays (mutating it can't leak into later merges)", () => {
+    const hidden = defaultSettings.ssh.hidden
+    hidden.push("leak")
+    try {
+      expect(mergeSettings({}).ssh.hidden).toEqual([])
+      expect(mergeSshSettings({}).hidden).toEqual([])
+      expect(DEFAULT_HIDDEN_HOSTS).not.toContain("leak")
+    } finally {
+      hidden.pop()
+    }
+  })
+
+  it("drops keys from older builds (hosts, reuseConnections, fromSshConfig)", () => {
+    const s = mergeSettings({
+      ssh: { hosts: [{ name: "x" }], reuseConnections: true, fromSshConfig: false },
+    })
+    expect(s.ssh).toEqual(defaultSettings.ssh)
+  })
+
+  it("round-trips through serialize/parse", () => {
+    const s = mergeSettings({ ssh: { hidden: ["x"], keepAliveSeconds: 45 } })
+    expect(parseSettings(serializeSettings(s)).ssh).toEqual(s.ssh)
   })
 })
