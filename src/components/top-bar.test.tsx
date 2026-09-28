@@ -192,3 +192,14 @@ describe("TopBar — tabs spanning hosts", () => {
     expect(document.querySelector(".tab-more")!.textContent).toBe("+1")
   })
 })
+
+describe("TopBar — renaming a tab that spans hosts", () => {
+  it("pre-fills the name only, so a plain blur can't pin the live +N", () => {
+    st().newTab(hostShellOption(testHost("gpu")))
+    st().splitWith("row", testShell)
+    render(<TopBar />)
+    fireEvent.doubleClick(document.querySelector(".tab")!)
+    const input = document.querySelector(".tab-rename") as HTMLInputElement
+    expect(input.value).not.toContain("+1")
+  })
+})

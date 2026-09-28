@@ -23,7 +23,7 @@ import { allSessionIds } from "../lib/pane-tree"
 import { aggregateBadge } from "../lib/session-status"
 import { tabRemoteBadge } from "../lib/remote-connect"
 import { hostColor, hostColorCss } from "../lib/ssh-hosts-ui"
-import { tabTitle, tabTitleParts } from "../lib/session-label"
+import { tabTitleParts } from "../lib/session-label"
 import { resolveDefaultShell } from "../lib/shells"
 import { envTitle, hostShellOption } from "../lib/ssh-hosts-ui"
 import { TerminalManager } from "../terminal/terminal-manager"
@@ -165,7 +165,8 @@ export function TopBar() {
                   return c ? { boxShadow: `inset 0 -2px 0 ${hostColorCss(c)}` } : undefined
                 })()}
                 onMouseDown={() => useStore.getState().setActiveTab(tab.id)}
-                onDoubleClick={() => startRename(tab.id, tabTitle(tab, sessions, home))}
+                // The name only: the live "+N" must not be pinned into a manual title.
+                onDoubleClick={() => startRename(tab.id, tabTitleParts(tab, sessions, home).base)}
               >
                 {(badge || remote) && (
                   <span

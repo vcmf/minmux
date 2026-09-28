@@ -69,26 +69,57 @@ export function remoteWhere(r: RemoteRef, hosts: SshHost[]): string {
   return r.env === "native" ? detail : `${detail} · ${envTitle(r.env)}`
 }
 
-// `*` any run, `?` one character; case-insensitive, like ssh's own Host patterns.
-function globToRegExp(pattern: string): RegExp {
-  const body = pattern
-    .replace(/[.+^${}()|[\]\\]/g, "\\$&")
-    .replace(/\*/g, ".*")
-    .replace(/\?/g, ".")
-  return new RegExp(`^${body}$`, "i")
+/** `*` any run, `?` one character, case-insensitive, like ssh's Host patterns. Linear
+ *  (one backtrack point), so no pattern can stall a render the way a regex could. */
+export function globMatch(pattern: string, text: string): boolean {
+  const p = pattern.toLowerCase()
+  const t = text.toLowerCase()
+  let pi = 0
+  let ti = 0
+  let star = -1
+  let mark = 0
+  while (ti < t.length) {
+    if (pi < p.length && (p[pi] === "?" || p[pi] === t[ti])) {
+      pi++
+      ti++
+    } else if (pi < p.length && p[pi] === "*") {
+      star = pi++
+      mark = ti
+    } else if (star !== -1) {
+      pi = star + 1
+      ti = ++mark
+    } else return false
+  }
+  while (pi < p.length && p[pi] === "*") pi++
+  return pi === p.length
+}
+
+/** An ssh-style pattern list ("prod-*,db-*,!db-test"): some positive entry matches and no
+ *  negated one does. */
+export function patternListMatch(list: string, alias: string): boolean {
+  let hit = false
+  for (const raw of list.split(",")) {
+    const entry = raw.trim()
+    if (!entry) continue
+    if (entry.startsWith("!")) {
+      if (globMatch(entry.slice(1), alias)) return false
+    } else if (globMatch(entry, alias)) hit = true
+  }
+  return hit
 }
 
 /** The colour the user gave this host (first matching pattern in `ssh.colors`), if any. */
 export function hostColor(alias: string, colors: Record<string, string>): string | undefined {
   for (const [pattern, color] of Object.entries(colors)) {
-    if (globToRegExp(pattern).test(alias)) return color
+    if (patternListMatch(pattern, alias)) return color
   }
   return undefined
 }
 
-/** CSS for a host colour: a theme token for the named ones, the hex as-is. */
+/** CSS for a host colour: a theme token for the named ones, the hex as-is. (No named green:
+ *  the theme green is the focus / connected colour.) */
 export function hostColorCss(color: string): string {
-  return color === "green" ? "var(--accent)" : color.startsWith("#") ? color : `var(--${color})`
+  return color.startsWith("#") ? color : `var(--${color})`
 }
 
 /** A host's palette subline: "web · me@10.0.0.1", with the distro for a WSL host. */

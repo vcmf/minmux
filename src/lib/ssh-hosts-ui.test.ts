@@ -6,7 +6,9 @@ import {
   envTitle,
   groupHosts,
   hostShellOption,
+  patternListMatch,
   hostSubline,
+  globMatch,
   hostColor,
   hostColorCss,
   remoteWhere,
@@ -153,7 +155,7 @@ describe("hostColor", () => {
     expect(hostColor("web", {})).toBeUndefined()
     expect(hostColor("a.b", { "a.b": "red" })).toBe("red")
     expect(hostColor("axb", { "a.b": "red" })).toBeUndefined()
-    expect(hostColor("h(1)", { "h(1)": "green" })).toBe("green")
+    expect(hostColor("h(1)", { "h(1)": "blue" })).toBe("blue")
   })
 })
 
@@ -162,7 +164,38 @@ describe("hostColorCss", () => {
     expect(hostColorCss("red")).toBe("var(--red)")
     expect(hostColorCss("amber")).toBe("var(--amber)")
     expect(hostColorCss("blue")).toBe("var(--blue)")
-    expect(hostColorCss("green")).toBe("var(--accent)")
     expect(hostColorCss("#aa00ff")).toBe("#aa00ff")
+  })
+})
+
+describe("globMatch", () => {
+  it("* and ?, case-insensitive, whole string", () => {
+    expect(globMatch("prod-*", "prod-db")).toBe(true)
+    expect(globMatch("*-db", "prod-db")).toBe(true)
+    expect(globMatch("p?od", "PROD")).toBe(true)
+    expect(globMatch("prod", "prod-db")).toBe(false)
+    expect(globMatch("*", "")).toBe(true)
+    expect(globMatch("a*b*c", "axxbyyc")).toBe(true)
+    expect(globMatch("a*b*c", "axxbyy")).toBe(false)
+  })
+
+  it("a pathological pattern stays fast (no regex backtracking)", () => {
+    const pattern = "*".repeat(120) + "x"
+    const t0 = performance.now()
+    for (let i = 0; i < 200; i++) globMatch(pattern, "a".repeat(60))
+    expect(performance.now() - t0).toBeLessThan(200)
+    expect(globMatch(pattern, "a".repeat(60))).toBe(false)
+    expect(globMatch("*a*a*a*a*a*a*a*a*b", "a".repeat(80))).toBe(false)
+  })
+})
+
+describe("patternListMatch", () => {
+  it("ssh-style lists: any positive entry, and no negated one", () => {
+    expect(patternListMatch("prod-*,db-*", "db-1")).toBe(true)
+    expect(patternListMatch("prod-*, db-*", "db-1")).toBe(true)
+    expect(patternListMatch("prod-*,!prod-test", "prod-test")).toBe(false)
+    expect(patternListMatch("prod-*,!prod-test", "prod-api")).toBe(true)
+    expect(patternListMatch("!bastion", "web")).toBe(false) // negations alone match nothing
+    expect(patternListMatch(",,", "web")).toBe(false)
   })
 })

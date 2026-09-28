@@ -255,9 +255,10 @@ export function Sidebar() {
                             <Icon
                               size={14}
                               weight="fill"
+                              // A host's colour (a safety cue) beats a Claude /color accent.
                               color={
-                                accentOf(id) ??
                                 (s.remote ? hostCss(s.remote.target) : undefined) ??
+                                accentOf(id) ??
                                 (isActive ? "var(--accent)" : "var(--dim)")
                               }
                             />

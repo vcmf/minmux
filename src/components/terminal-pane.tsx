@@ -301,9 +301,10 @@ export function TerminalPane({ pane, tabId }: { pane: PaneLeaf; tabId: string })
                       size={13}
                       weight="fill"
                       // The session's colour when it has one (the tab "dot"), else focus/dim.
+                      // A host's colour (a safety cue) beats a Claude /color accent.
                       color={
-                        accents[i] ??
                         colorOf(s) ??
+                        accents[i] ??
                         (active && focused ? "var(--accent)" : "var(--dim)")
                       }
                     />

@@ -444,3 +444,17 @@ describe("TerminalPane — host chip and colour", () => {
     expect(document.querySelector(".pane-badge")).not.toBeNull()
   })
 })
+
+describe("TerminalPane — a host colour beats a Claude accent", () => {
+  it("the globe keeps the host's colour when the pane's Claude set /color", () => {
+    useStore.setState((s) => ({
+      settings: { ...s.settings, ssh: { ...s.settings.ssh, colors: { "prod-*": "red" } } },
+    }))
+    st().newTab(hostShellOption(testHost("prod-db")))
+    const tab = st().tabs[0]!
+    st().setAgentMeta(tab.activeSessionId, { color: "green" } as never)
+    renderPane(tab.id)
+    const icon = document.querySelector(".surface-tab svg")!
+    expect(icon.getAttribute("color") ?? icon.getAttribute("fill")).toContain("var(--red)")
+  })
+})

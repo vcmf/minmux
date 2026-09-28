@@ -300,10 +300,12 @@ prompt heuristic in S1, which runs on the existing throttled output-idle path.
       [connecting](ssh-ux/s1-connecting.png), [password](ssh-ux/s1-password.png),
       [disconnected](ssh-ux/s1-disconnected.png), [host gone](ssh-ux/s1-host-gone.png).
 - [x] **S2** host chip, per-host colour, titles (F4, F9, F10, F11). A remote pane's header
-      shows a `user@hostname` chip (the host's detail, else its alias) instead of `SSH`; it
+      shows a chip with where it runs (the host's `user@hostname:port` from the config, else its
+      alias; it follows the current config, i.e. what a reconnect would use) instead of `SSH`; it
       shrinks first and hides below 520 px of header, where the rail and globe still carry the
-      host. `ssh.colors` (`"prod-*": "red"`, first match; red / amber / green / blue as theme
-      tokens, or `#rrggbb`) colours the chip, a left rail on the pane header, the globe on the
+      host (the surface tab's icon is a globe even uncoloured). `ssh.colors` (ssh-style pattern
+      lists such as `"prod-*,!prod-test": "red"`, first match; red / amber / blue as theme
+      tokens, or `#rrggbb`; no named green, the focus / connected colour) colours the chip, a left rail on the pane header, the globe on the
       surface tab and sidebar rows, and the tab's underline. Uncoloured hosts stay neutral. A tab
       spanning places reads `focused +N` with the `+N` outside the ellipsis; the pane row's
       subline is `user@hostname`. Shots: [colours](ssh-ux/s2-colors.png),

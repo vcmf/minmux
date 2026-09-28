@@ -177,8 +177,8 @@ describe("mergeSshSettings — colors", () => {
         "a\u0007b": "red",
       },
     }).colors
-    expect(c).toEqual({ "prod-*": "red", lab: "#aa00ff" })
-    expect(Object.keys(c)).toEqual(["prod-*", "lab"])
+    expect(c).toEqual({ "prod-*": "red", "staging-*": "amber", lab: "#aa00ff" })
+    expect(Object.keys(c)).toEqual(["prod-*", "staging-*", "lab"])
   })
 
   it("isn't an object → none; capped at 100 patterns", () => {
@@ -186,5 +186,23 @@ describe("mergeSshSettings — colors", () => {
     expect(mergeSshSettings({ colors: ["red"] }).colors).toEqual({})
     const many = Object.fromEntries(Array.from({ length: 150 }, (_, i) => [`h${i}`, "red"]))
     expect(Object.keys(mergeSshSettings({ colors: many }).colors)).toHaveLength(100)
+  })
+})
+
+describe("mergeSshSettings — colors, edge cases", () => {
+  it("colour names in any case; no named green (the focus / connected colour)", () => {
+    expect(mergeSshSettings({ colors: { a: "Red", b: "BLUE", c: "green" } }).colors).toEqual({
+      a: "red",
+      b: "blue",
+    })
+  })
+
+  it("patterns that look like object members are ordinary patterns", () => {
+    const c = mergeSshSettings({
+      colors: JSON.parse('{"constructor": "red", "toString": "amber", "__proto__": "blue"}'),
+    }).colors
+    expect(Object.keys(c).sort()).toEqual(["__proto__", "constructor", "toString"])
+    expect(c.constructor).toBe("red")
+    expect(Object.getPrototypeOf(c)).toBe(Object.prototype) // not replaced by "__proto__"
   })
 })

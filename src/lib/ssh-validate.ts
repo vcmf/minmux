@@ -38,14 +38,14 @@ export interface SshSettings {
 }
 
 /** Named host colours (theme tokens, so they follow light/dark). Anything else is #rrggbb. */
-export const HOST_COLOR_NAMES = ["red", "amber", "green", "blue"] as const
+export const HOST_COLOR_NAMES = ["red", "amber", "blue"] as const
 const HEX_COLOR = /^#[0-9a-f]{6}$/i
 const MAX_SSH_COLORS = 100
 
 /** A usable host colour value: a named one or #rrggbb. */
 export const isHostColor = (v: unknown): v is string =>
   typeof v === "string" &&
-  ((HOST_COLOR_NAMES as readonly string[]).includes(v) || HEX_COLOR.test(v))
+  ((HOST_COLOR_NAMES as readonly string[]).includes(v.toLowerCase()) || HEX_COLOR.test(v))
 
 const DEFAULT_KEEPALIVE = 30
 const MAX_KEEPALIVE = 3600
@@ -74,13 +74,15 @@ export function mergeSshSettings(input: unknown): SshSettings {
       : DEFAULT_KEEPALIVE
   const restore = o.restore === "on-focus" ? "on-focus" : "auto"
   // Insertion order kept: the first matching pattern wins.
-  const colors: Record<string, string> = {}
+  // A Map while building: pattern keys like "constructor" / "__proto__" are ordinary here.
+  const picked = new Map<string, string>()
   for (const [k, v] of Object.entries(Array.isArray(o.colors) ? {} : asObject(o.colors))) {
     const key = k.trim()
     if (!key || key.length > 255 || hasControlChar(key) || !isHostColor(v)) continue
-    if (Object.keys(colors).length >= MAX_SSH_COLORS) break
-    if (!(key in colors)) colors[key] = v.toLowerCase()
+    if (picked.size >= MAX_SSH_COLORS) break
+    if (!picked.has(key)) picked.set(key, v.toLowerCase())
   }
+  const colors = Object.fromEntries(picked) // own data properties, even for "__proto__"
   return { hidden, keepAliveSeconds, restore, colors }
 }
 
