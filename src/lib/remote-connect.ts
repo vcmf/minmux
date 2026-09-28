@@ -98,7 +98,14 @@ export function exitReason(code: number, signal: number): string {
 export function idleMessage(
   phase: RemoteIdle,
   label: string,
-  info?: { code?: number; signal?: number; error?: string; wslDistro?: string },
+  info?: {
+    code?: number
+    signal?: number
+    error?: string
+    wslDistro?: string
+    retry?: { attempt: number; delayMs: number } // an automatic reconnect is scheduled
+    gaveUp?: number // the automatic reconnects ran out after this many tries
+  },
 ): string {
   const close = "Esc twice to close"
   if (phase === "waiting") return `${label} isn't connected yet. Enter to connect · ${close}`
@@ -121,6 +128,13 @@ export function idleMessage(
   }
   const code = info?.code ?? 0
   const signal = info?.signal ?? 0
+  if (info?.retry) {
+    const { attempt, delayMs } = info.retry
+    return `Connection to ${label} lost (${exitReason(code, signal)}). Reconnecting in ${Math.round(delayMs / 1000)} s (${attempt}/${RETRY_DELAYS_MS.length}) · Enter to reconnect now · ${close}`
+  }
+  if (info?.gaveUp) {
+    return `Couldn't reconnect to ${label} after ${info.gaveUp} ${info.gaveUp === 1 ? "try" : "tries"}. Enter to try again · ${close}`
+  }
   if (code === 0 && !signal) {
     return `Session on ${label} ended. Enter to start a new one · ${close}`
   }
@@ -140,10 +154,10 @@ export function remoteStatusUi(
       return { dot: "faint", word: "connecting", pulse: true }
     case "prompt":
       return { dot: "amber", word: prompt ?? "needs input", pulse: false }
-    case "closed": // `detail` "ended" = a clean exit on the host: not a failure
-      return detail === "ended"
-        ? { dot: "hollow", word: "ended", pulse: false }
-        : { dot: "red", word: "disconnected", pulse: false }
+    case "closed": // `detail`: "ended" (a clean exit), "retrying" (a reconnect is scheduled), "lost"
+      if (detail === "ended") return { dot: "hollow", word: "ended", pulse: false }
+      if (detail === "retrying") return { dot: "amber", word: "reconnecting", pulse: true }
+      return { dot: "red", word: "disconnected", pulse: false }
     case "failed":
       return { dot: "red", word: "can't connect", pulse: false }
     case "waiting":
@@ -186,7 +200,50 @@ export function tabRemoteBadge(
 ): "prompt" | "down" | null {
   if (panes.some((p) => p.phase === "prompt")) return "prompt"
   const down = panes.some(
-    (p) => p.phase === "failed" || (p.phase === "closed" && p.detail !== "ended"),
+    (p) =>
+      p.phase === "failed" ||
+      (p.phase === "closed" && p.detail !== "ended" && p.detail !== "retrying"),
   )
   return down ? "down" : null
+}
+
+/** Backoff for the automatic reconnects after a drop; their count is the budget. */
+export const RETRY_DELAYS_MS = [2000, 5000, 10000]
+/** A connection live this long counts as established: its drop starts a fresh retry budget.
+ *  Shorter-lived ones (usually an auth failure) only continue a sequence already running. */
+export const STABLE_MS = 30_000
+
+/** Whether to reconnect a dropped ssh on its own, and when. Only a lost link (exit 255, no
+ *  signal) of an established connection — never a clean exit, a remote command's own code, a
+ *  drop at a password / host-key prompt, or something that dies at once — and at most
+ *  RETRY_DELAYS_MS.length times in a row. Each try is a fresh login shell: nothing re-runs. */
+export function retryPlan(o: {
+  enabled: boolean
+  code: number
+  signal: number
+  atPrompt: boolean
+  liveForMs: number // how long this connection was live (0 = never got past connecting)
+  attempt: number // the retry this connection came from (0 = not a retry)
+}): { attempt: number; delayMs: number } | null {
+  if (!o.enabled || o.signal || o.code !== 255 || o.atPrompt) return null
+  const next = o.liveForMs >= STABLE_MS ? 1 : o.attempt > 0 ? o.attempt + 1 : 0
+  if (next === 0 || next > RETRY_DELAYS_MS.length) return null
+  return { attempt: next, delayMs: RETRY_DELAYS_MS[next - 1]! }
+}
+
+/** ssh panes Connect all should connect: waiting at a Connect prompt, or restored under
+ *  on-focus in a tab that hasn't been shown yet (not started, so no phase). */
+export function waitingRemoteIds(
+  sessions: Record<string, { id: string; remote?: unknown; restored?: boolean }>,
+  phases: Record<string, RemotePhase>,
+  restore: SshSettings["restore"],
+): string[] {
+  return Object.values(sessions)
+    .filter(
+      (s) =>
+        s.remote &&
+        (phases[s.id] === "waiting" ||
+          (phases[s.id] === undefined && s.restored && restore === "on-focus")),
+    )
+    .map((s) => s.id)
 }

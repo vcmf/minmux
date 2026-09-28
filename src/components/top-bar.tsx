@@ -16,12 +16,13 @@ import {
   Sun,
   Moon,
   Globe,
+  Plugs,
 } from "@phosphor-icons/react"
 import { activeTheme, useStore } from "../store"
 import { ipc } from "../lib/ipc"
 import { allSessionIds } from "../lib/pane-tree"
 import { aggregateBadge } from "../lib/session-status"
-import { tabRemoteBadge } from "../lib/remote-connect"
+import { tabRemoteBadge, waitingRemoteIds } from "../lib/remote-connect"
 import { hostColor, hostColorCss } from "../lib/ssh-hosts-ui"
 import { tabTitleParts } from "../lib/session-label"
 import { resolveDefaultShell } from "../lib/shells"
@@ -54,6 +55,10 @@ export function TopBar() {
   const remoteDetail = useStore((s) => s.remoteDetail)
   const windowFocused = useStore((s) => s.windowFocused)
   const hostColors = useStore((s) => s.settings.ssh.colors)
+  // ssh panes waiting at a Connect prompt (a relaunch under on-focus): one click connects all.
+  const waitingSsh = useStore(
+    (s) => waitingRemoteIds(s.sessions, s.remotePhase, s.settings.ssh.restore).length,
+  )
   const home = useStore((s) => s.home)
   const defaultShellPref = useStore((s) => s.settings.defaultShell)
   const rightView = useStore((s) => s.rightView)
@@ -297,6 +302,16 @@ export function TopBar() {
       </div>
 
       <div className="topbar-right">
+        {waitingSsh >= 2 && (
+          <button
+            className="connect-all"
+            title="Connect every ssh pane that's waiting"
+            onClick={() => TerminalManager.connectAll()}
+          >
+            <Plugs size={13} />
+            Connect all ({waitingSsh})
+          </button>
+        )}
         <button
           className={`iconbtn bell${waiting.length ? " has" : ""}`}
           title={waiting.length ? `${waiting.length} waiting — jump` : "No sessions waiting"}

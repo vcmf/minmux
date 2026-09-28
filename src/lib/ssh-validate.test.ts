@@ -94,6 +94,7 @@ describe("mergeSshSettings", () => {
         pinned: [],
         keepAliveSeconds: 30,
         restore: "auto",
+        autoReconnect: true,
         colors: {},
       })
     }
@@ -232,5 +233,13 @@ describe("effectiveHidden", () => {
       "bastion",
       ...DEFAULT_HIDDEN_HOSTS.filter((a) => a !== "github.com"),
     ])
+  })
+})
+
+describe("mergeSshSettings — autoReconnect", () => {
+  it("on unless explicitly false", () => {
+    expect(mergeSshSettings({ autoReconnect: false }).autoReconnect).toBe(false)
+    expect(mergeSshSettings({ autoReconnect: "no" }).autoReconnect).toBe(true)
+    expect(mergeSshSettings({}).autoReconnect).toBe(true)
   })
 })

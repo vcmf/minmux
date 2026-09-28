@@ -63,6 +63,7 @@ export function Sidebar() {
   // ssh panes: connecting / at a prompt / disconnected … (stable refs; change on a transition)
   const remotePhase = useStore((s) => s.remotePhase)
   const remoteDetail = useStore((s) => s.remoteDetail)
+  const sshRestore = useStore((s) => s.settings.ssh.restore)
   const sshHosts = useStore((s) => s.sshHosts)
   const hostColors = useStore((s) => s.settings.ssh.colors)
   const hostCss = (target: string) => {
@@ -229,7 +230,14 @@ export function Sidebar() {
                   const s = sessions[id]
                   if (!s) return null
                   const ui = s.remote
-                    ? remoteStatusUi(remotePhase[id], s.status, remoteDetail[id])
+                    ? remoteStatusUi(
+                        // A restored on-focus pane in a tab not shown yet hasn't started: it's
+                        // waiting too (Connect all counts it), not idle.
+                        remotePhase[id] ??
+                          (s.restored && sshRestore === "on-focus" ? "waiting" : undefined),
+                        s.status,
+                        remoteDetail[id],
+                      )
                     : statusUi(s.status)
                   const isActive = active && tab.activeSessionId === id
                   return (

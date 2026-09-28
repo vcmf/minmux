@@ -36,6 +36,7 @@ export interface SshSettings {
   pinned: string[] // hostIds kept in the sidebar
   keepAliveSeconds: number // ServerAliveInterval smterm adds (0 = add none, the config decides)
   restore: "auto" | "on-focus" // after a relaunch: reconnect at once, or when the pane is used
+  autoReconnect: boolean // retry a dropped, established connection a few times (default on)
   colors: Record<string, string> // alias pattern ("prod-*") → a named colour or #rrggbb
 }
 
@@ -118,7 +119,8 @@ export function mergeSshSettings(input: unknown): SshSettings {
     if (!picked.has(key)) picked.set(key, v.toLowerCase())
   }
   const colors = Object.fromEntries(picked) // own data properties, even for "__proto__"
-  return { hidden, shown, pinned, keepAliveSeconds, restore, colors }
+  const autoReconnect = o.autoReconnect !== false
+  return { hidden, shown, pinned, keepAliveSeconds, restore, autoReconnect, colors }
 }
 
 const MAX_LABEL = 200

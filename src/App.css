@@ -2170,3 +2170,22 @@ body.resizing-col {
 .remote-empty code {
   color: var(--dim);
 }
+
+/* ── Connect all (ssh panes waiting after a relaunch) ── */
+.connect-all {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 24px;
+  padding: 0 9px;
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+.connect-all:hover {
+  background: var(--elev);
+}

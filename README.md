@@ -162,9 +162,13 @@ defaults, it doesn't replace them. Hiding is by alias, so it applies in every en
   pane survives NAT timeouts and a dead link ends in about two minutes instead of hanging.
   `"ssh": { "keepAliveSeconds": 0 }` leaves it to your config.
 - **Reconnect.** When `ssh` exits, the pane says why and Enter (or the **Reconnect** button)
-  connects again. After a relaunch SSH panes reconnect as they're shown; with
+  connects again. A connection that was up for 30 s and then drops reconnects on its own, up to
+  three times (after 2, 5 and 10 s), each a fresh login shell; a clean `exit`, a drop at a
+  password prompt, or one that fails straight away never does. `"ssh": { "autoReconnect":
+false }` turns it off. After a relaunch SSH panes reconnect as they're shown; with
   `"ssh": { "restore": "on-focus" }` they wait for Enter instead, which is handy for password
-  or 2FA hosts.
+  or 2FA hosts; **Connect all** (beside the bell, or in the palette) connects every waiting
+  one, including those in tabs you haven't opened yet.
 - **Prompt-free splits.** Each pane is its own `ssh`. For hosts that ask for a password, let
   OpenSSH share one connection by adding this to your `~/.ssh/config`:
 

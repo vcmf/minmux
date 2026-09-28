@@ -486,3 +486,118 @@ describe("TerminalManager — ssh prompts, closing, failures", () => {
     expect(st().remoteDetail[id]).toBeUndefined()
   })
 })
+
+describe("TerminalManager — automatic reconnect", () => {
+  const withSsh = (patch: Record<string, unknown>) =>
+    useStore.setState((s) => ({
+      settings: { ...s.settings, ssh: { ...s.settings.ssh, ...patch } },
+    }))
+
+  /** A live connection that's been up `ms`. */
+  const liveFor = async (ms: number) => {
+    const t = start({})
+    await vi.advanceTimersByTimeAsync(0)
+    out(t.id, "Welcome")
+    await vi.advanceTimersByTimeAsync(ms)
+    return t
+  }
+
+  it("a drop after 30 s retries at 2 s, 5 s, 10 s, then gives up and waits for Enter", async () => {
+    vi.useFakeTimers()
+    try {
+      const { id, term } = await liveFor(31_000)
+      exitHandlers[id]!({ code: 255, signal: 0 })
+      expect(term.written).toContain("Reconnecting in 2 s (1/3)")
+      expect(st().remoteDetail[id]).toBe("retrying")
+      await vi.advanceTimersByTimeAsync(2000)
+      expect(spawnCalls()).toHaveLength(2)
+      exitHandlers[id]!({ code: 255, signal: 0 }) // the retry can't reach it either
+      expect(term.written).toContain("Reconnecting in 5 s (2/3)")
+      await vi.advanceTimersByTimeAsync(5000)
+      exitHandlers[id]!({ code: 255, signal: 0 })
+      await vi.advanceTimersByTimeAsync(10_000)
+      expect(spawnCalls()).toHaveLength(4)
+      exitHandlers[id]!({ code: 255, signal: 0 })
+      expect(term.written).toContain("Couldn't reconnect to web after 3 tries")
+      expect(st().remoteDetail[id]).toBe("lost")
+      await vi.advanceTimersByTimeAsync(60_000)
+      expect(spawnCalls()).toHaveLength(4) // no more on its own
+      term.type("\r")
+      expect(spawnCalls()).toHaveLength(5) // Enter still does
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it("no retry for a short-lived connection, a clean exit, or with the setting off", async () => {
+    vi.useFakeTimers()
+    try {
+      const a = await liveFor(5_000)
+      exitHandlers[a.id]!({ code: 255, signal: 0 })
+      const b = await liveFor(60_000)
+      exitHandlers[b.id]!({ code: 0, signal: 0 })
+      withSsh({ autoReconnect: false })
+      const c = await liveFor(60_000)
+      exitHandlers[c.id]!({ code: 255, signal: 0 })
+      await vi.advanceTimersByTimeAsync(20_000)
+      expect(spawnCalls()).toHaveLength(3) // just the three first connects
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it("no retry for a drop at a password prompt", async () => {
+    vi.useFakeTimers()
+    try {
+      const { id, term } = await liveFor(31_000)
+      term.buffer.active.getLine = () => ({ translateToString: () => "Password: " })
+      out(id, "Password: ")
+      await vi.advanceTimersByTimeAsync(1300)
+      expect(st().remotePhase[id]).toBe("prompt")
+      exitHandlers[id]!({ code: 255, signal: 0 })
+      await vi.advanceTimersByTimeAsync(20_000)
+      expect(spawnCalls()).toHaveLength(1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it("Enter during the countdown reconnects now (once), and closing cancels it", async () => {
+    vi.useFakeTimers()
+    try {
+      const { id, term } = await liveFor(31_000)
+      exitHandlers[id]!({ code: 255, signal: 0 })
+      term.type("\r")
+      expect(spawnCalls()).toHaveLength(2)
+      await vi.advanceTimersByTimeAsync(5000)
+      expect(spawnCalls()).toHaveLength(2) // the scheduled one was cancelled
+      const other = await liveFor(31_000)
+      exitHandlers[other.id]!({ code: 255, signal: 0 })
+      TerminalManager.dispose(other.id)
+      await vi.advanceTimersByTimeAsync(5000)
+      expect(spawnCalls().filter((c) => c.id === other.id)).toHaveLength(1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})
+
+describe("TerminalManager — Connect all", () => {
+  it("connects waiting panes, and starts (and connects) restored ones not shown yet", async () => {
+    vi.mocked(ipc.ptySpawn).mockResolvedValue({ reattached: false, started: false })
+    const waiting = start({ restored: true, restore: "on-focus" })
+    await flush()
+    expect(st().remotePhase[waiting.id]).toBe("waiting")
+    // A restored pane in a tab that was never shown: a session, no terminal yet.
+    st().newTab(hostShellOption(testHost("db")))
+    const unstarted = st().tabs[st().tabs.length - 1]!.activeSessionId
+    useStore.setState((s) => ({
+      sessions: { ...s.sessions, [unstarted]: { ...s.sessions[unstarted]!, restored: true } },
+    }))
+    vi.mocked(ipc.ptySpawn).mockClear()
+    TerminalManager.connectAll()
+    const calls = spawnCalls()
+    expect(calls.map((c) => c.id).sort()).toEqual([waiting.id, unstarted].sort())
+    expect(calls.every((c) => c.attachOnly === undefined)).toBe(true) // a real connect
+  })
+})

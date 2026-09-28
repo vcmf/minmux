@@ -151,6 +151,17 @@ export function SettingsPanel() {
         </label>
 
         <label className="settings-row">
+          <span>Reconnect a dropped connection</span>
+          <input
+            type="checkbox"
+            checked={settings.ssh.autoReconnect}
+            onChange={(e) =>
+              update({ ...settings, ssh: { ...settings.ssh, autoReconnect: e.target.checked } })
+            }
+          />
+        </label>
+
+        <label className="settings-row">
           <span>Keepalive (seconds, 0 = off)</span>
           <KeepAliveInput
             value={settings.ssh.keepAliveSeconds}
