@@ -13,7 +13,15 @@ class FakeTerminal {
   written = ""
   dataHandlers: ((d: string) => void)[] = []
   parser = { registerOscHandler: () => ({ dispose() {} }) }
-  buffer = { active: { getLine: () => undefined } }
+  buffer = {
+    active: {
+      type: "normal" as "normal" | "alternate",
+      length: 0,
+      baseY: 0,
+      cursorY: 0,
+      getLine: (): { translateToString: (t: boolean) => string } | undefined => undefined,
+    },
+  }
   modes = { mouseTrackingMode: "none" }
   options = {}
   textarea = document.createElement("textarea")
@@ -235,24 +243,28 @@ describe("TerminalManager — ssh exit and reconnect", () => {
 })
 
 describe("TerminalManager — what a dropped connection leaves behind", () => {
-  it("resets the modes a TUI left on (alt screen, mouse, focus events, paste, cursor keys)", async () => {
+  it("resets the modes a TUI left on (mouse, focus events, paste, cursor keys)", async () => {
     const { id, term } = start({})
     await flush()
     exitHandlers[id]!({ code: 255, signal: 0 })
-    for (const m of [
-      "?1049l",
-      "?1000l",
-      "?1002l",
-      "?1003l",
-      "?1006l",
-      "?1004l",
-      "?2004l",
-      "?1l",
-      "?25h",
-    ]) {
+    for (const m of ["?1000l", "?1002l", "?1003l", "?1006l", "?1004l", "?2004l", "?1l", "?25h"]) {
       expect(term.written).toContain(`\x1b[${m}`)
     }
-    // …before the banner, so the banner lands on the normal screen.
+  })
+
+  it("on the normal screen, never sends ?1049l (it would move the banner into old scrollback)", async () => {
+    const { id, term } = start({})
+    await flush()
+    exitHandlers[id]!({ code: 255, signal: 0 })
+    expect(term.written).not.toContain("\x1b[?1049l")
+  })
+
+  it("in a TUI's alt screen, leaves it before the banner", async () => {
+    const { id, term } = start({})
+    await flush()
+    term.buffer.active.type = "alternate"
+    exitHandlers[id]!({ code: 255, signal: 0 })
+    expect(term.written).toContain("\x1b[?1049l")
     expect(term.written.indexOf("\x1b[?1049l")).toBeLessThan(term.written.indexOf("[smterm]"))
   })
 

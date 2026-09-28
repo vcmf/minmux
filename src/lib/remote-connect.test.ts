@@ -3,6 +3,7 @@ import {
   afterStart,
   banner,
   cleanError,
+  cursorBelowContent,
   firstStart,
   idleMessage,
   isIdle,
@@ -98,5 +99,22 @@ describe("cleanError", () => {
 describe("banner", () => {
   it("puts a dim [smterm] line on its own row", () => {
     expect(banner("hi")).toBe("\r\n\u001b[2m[smterm] hi\u001b[0m\r\n")
+  })
+})
+
+describe("cursorBelowContent", () => {
+  it("moves a cursor left above the output down to the last non-blank row", () => {
+    // A TUI homed the cursor (row 0) over 10 rows of output; screen top = buffer row 0.
+    expect(cursorBelowContent({ lastContentRow: 9, cursorRow: 0, baseY: 0 })).toBe("\u001b[10;1H")
+    // Scrolled: rows are absolute, the CSI is screen-relative.
+    expect(cursorBelowContent({ lastContentRow: 120, cursorRow: 101, baseY: 100 })).toBe(
+      "\u001b[21;1H",
+    )
+  })
+
+  it("leaves a cursor that's already on or below the output alone", () => {
+    expect(cursorBelowContent({ lastContentRow: 9, cursorRow: 9, baseY: 0 })).toBe("")
+    expect(cursorBelowContent({ lastContentRow: 9, cursorRow: 12, baseY: 0 })).toBe("")
+    expect(cursorBelowContent({ lastContentRow: -1, cursorRow: 0, baseY: 0 })).toBe("")
   })
 })
