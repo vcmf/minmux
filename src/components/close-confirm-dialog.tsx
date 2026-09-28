@@ -2,25 +2,22 @@ import { useEffect, useRef } from "react"
 import { useStore } from "../store"
 import { TerminalManager } from "../terminal/terminal-manager"
 import { closeConfirmText } from "../lib/close-confirm"
-import { findPaneById } from "../lib/pane-tree"
 
 /** "Are you sure?" before a close that would kill work: a pane of several terminals, a
  *  session, or a running terminal — rules + wording in lib/close-confirm. */
-export function ClosePaneDialog() {
+export function CloseConfirmDialog() {
   const pending = useStore((s) => s.closeConfirm)
-  // Its target closed some other way meanwhile (a direct close, an ssh drop…) → nothing to ask.
-  const gone = useStore((s) => {
-    const c = s.closeConfirm
-    if (!c) return false
-    const tab = s.tabs.find((t) => t.id === c.tabId)
-    if (!tab) return true
-    if (c.kind === "terminal") return !s.sessions[c.sessionId]
-    if (c.kind === "pane") return !findPaneById(tab.root, c.paneId)
-    return false
-  })
+  // However it goes away — a button, or the store dropping it because its target closed
+  // some other way — focus returns to the active terminal if it was left nowhere.
+  const wasOpen = useRef(false)
   useEffect(() => {
-    if (gone) useStore.getState().cancelClose()
-  }, [gone])
+    if (pending) wasOpen.current = true
+    else if (wasOpen.current) {
+      wasOpen.current = false
+      if (!document.activeElement || document.activeElement === document.body) refocus()
+    }
+     
+  }, [pending])
   const confirmRef = useRef<HTMLButtonElement>(null)
   const cancelRef = useRef<HTMLButtonElement>(null)
 
@@ -60,7 +57,7 @@ export function ClosePaneDialog() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pending])
 
-  if (!pending || gone) return null
+  if (!pending) return null
   const text = closeConfirmText(pending)
   return (
     <div className="settings-overlay" onMouseDown={cancel}>

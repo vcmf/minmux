@@ -481,6 +481,12 @@ function RowClose({ title, onClose }: { title: string; onClose: () => void }) {
       onClick={(e) => {
         e.stopPropagation()
         onClose()
+        // Closed at once (no dialog): keep typing where you were — or in the terminal that
+        // took over if you closed the focused one.
+        const s = useStore.getState()
+        if (s.closeConfirm) return
+        const sid = s.tabs.find((t) => t.id === s.activeTabId)?.activeSessionId
+        if (sid) requestAnimationFrame(() => TerminalManager.focus(sid))
       }}
     >
       <X size={12} />

@@ -28,6 +28,7 @@ import {
   terminalCloseConfirm,
   type CloseConfirm,
   type TerminalState,
+  confirmStillValid,
 } from "./lib/close-confirm"
 import { tabTitle, displaySessionTitle } from "./lib/session-label"
 import type { AgentEvent, AgentGraph } from "./lib/agent-graph"
@@ -177,6 +178,16 @@ interface AppState {
   signalSession: (sessionId: string, ev: SignalEvent) => void
   revealTab: (tabId: string) => void
 }
+
+/** A close's state update + dropping a pending confirm whose target it just removed. */
+const closing =
+  (fn: (state: AppState) => Partial<AppState>) =>
+  (state: AppState): Partial<AppState> => {
+    const next = fn(state)
+    const c = state.closeConfirm
+    if (!c || !next.tabs || confirmStillValid(c, next.tabs)) return next
+    return { ...next, closeConfirm: null }
+  }
 
 /** What closing needs to know about terminals: running a command, or a live Claude. */
 function terminalStates(state: AppState, ids: string[]): TerminalState[] {
@@ -526,11 +537,13 @@ export const useStore = create<AppState>((set, get) => ({
     }),
 
   closeTab: (tabId) =>
-    set((state) => {
-      const tab = state.tabs.find((t) => t.id === tabId)
-      if (!tab) return {}
-      return { ...dropSessions(state, allSessionIds(tab.root)), ...withoutTab(state, tabId) }
-    }),
+    set(
+      closing((state) => {
+        const tab = state.tabs.find((t) => t.id === tabId)
+        if (!tab) return {}
+        return { ...dropSessions(state, allSessionIds(tab.root)), ...withoutTab(state, tabId) }
+      }),
+    ),
 
   setActiveTab: (tabId) => {
     set({ activeTabId: tabId })
@@ -610,45 +623,49 @@ export const useStore = create<AppState>((set, get) => ({
     }),
 
   closeSurface: (tabId, sessionId) =>
-    set((state) => {
-      const tab = state.tabs.find((t) => t.id === tabId)
-      const pane = tab && findPane(tab.root, sessionId)
-      if (!tab || !pane) return {}
-      const dropped = dropSessions(state, [sessionId])
-      const root = removeNode(tab.root, sessionId)
-      if (root === null) return { ...dropped, ...withoutTab(state, tabId) }
-      // Closing the focused terminal: focus moves to the surface its pane now shows,
-      // or (the pane is gone) to the leftmost pane.
-      const survivor = findPaneById(root, pane.id)
-      const activeSessionId =
-        tab.activeSessionId === sessionId
-          ? (survivor?.activeSessionId ?? firstSessionId(root))
-          : tab.activeSessionId
-      return {
-        ...dropped,
-        // The surface revealed in its place is now being looked at.
-        sessions: markSeen(dropped.sessions, activeSessionId),
-        tabs: replaceTab(state.tabs, tabId, (t) => ({ ...t, root, activeSessionId })),
-      }
-    }),
+    set(
+      closing((state) => {
+        const tab = state.tabs.find((t) => t.id === tabId)
+        const pane = tab && findPane(tab.root, sessionId)
+        if (!tab || !pane) return {}
+        const dropped = dropSessions(state, [sessionId])
+        const root = removeNode(tab.root, sessionId)
+        if (root === null) return { ...dropped, ...withoutTab(state, tabId) }
+        // Closing the focused terminal: focus moves to the surface its pane now shows,
+        // or (the pane is gone) to the leftmost pane.
+        const survivor = findPaneById(root, pane.id)
+        const activeSessionId =
+          tab.activeSessionId === sessionId
+            ? (survivor?.activeSessionId ?? firstSessionId(root))
+            : tab.activeSessionId
+        return {
+          ...dropped,
+          // The surface revealed in its place is now being looked at.
+          sessions: markSeen(dropped.sessions, activeSessionId),
+          tabs: replaceTab(state.tabs, tabId, (t) => ({ ...t, root, activeSessionId })),
+        }
+      }),
+    ),
 
   closePane: (tabId, paneId) =>
-    set((state) => {
-      const tab = state.tabs.find((t) => t.id === tabId)
-      const pane = tab && findPaneById(tab.root, paneId)
-      if (!tab || !pane) return {}
-      const dropped = dropSessions(state, pane.sessionIds)
-      const root = removePane(tab.root, paneId)
-      if (root === null) return { ...dropped, ...withoutTab(state, tabId) }
-      const activeSessionId = pane.sessionIds.includes(tab.activeSessionId)
-        ? firstSessionId(root)
-        : tab.activeSessionId
-      return {
-        ...dropped,
-        sessions: markSeen(dropped.sessions, activeSessionId),
-        tabs: replaceTab(state.tabs, tabId, (t) => ({ ...t, root, activeSessionId })),
-      }
-    }),
+    set(
+      closing((state) => {
+        const tab = state.tabs.find((t) => t.id === tabId)
+        const pane = tab && findPaneById(tab.root, paneId)
+        if (!tab || !pane) return {}
+        const dropped = dropSessions(state, pane.sessionIds)
+        const root = removePane(tab.root, paneId)
+        if (root === null) return { ...dropped, ...withoutTab(state, tabId) }
+        const activeSessionId = pane.sessionIds.includes(tab.activeSessionId)
+          ? firstSessionId(root)
+          : tab.activeSessionId
+        return {
+          ...dropped,
+          sessions: markSeen(dropped.sessions, activeSessionId),
+          tabs: replaceTab(state.tabs, tabId, (t) => ({ ...t, root, activeSessionId })),
+        }
+      }),
+    ),
 
   requestClosePane: (tabId, paneId) => {
     const tab = get().tabs.find((t) => t.id === tabId)

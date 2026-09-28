@@ -1153,6 +1153,17 @@ describe("closing a session / a terminal asks first when it'd kill work", () => 
     expect(st().closeConfirm).toMatchObject({ kind: "terminal", claude: true })
   })
 
+  it("a pending confirm is dropped when its target closes some other way", () => {
+    st().newTab(shell)
+    st().splitActive("row")
+    const [a] = allSessionIds(firstTab().root)
+    running(a!)
+    st().requestCloseTerminal(firstTab().id, a!)
+    expect(st().closeConfirm).not.toBeNull()
+    st().closeSurface(firstTab().id, a!) // e.g. its shell exited
+    expect(st().closeConfirm).toBeNull()
+  })
+
   it("a single terminal that's running asks too; cancel keeps everything", () => {
     st().newTab(shell)
     running(firstTab().activeSessionId)

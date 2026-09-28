@@ -5,6 +5,9 @@
 //   · a pane holding several terminals → always ask (unchanged)
 // "Running" = a command in progress (OSC 133 C..D) or a live Claude in that terminal.
 
+import type { PaneNode } from "../types"
+import { allSessionIds, findPaneById } from "./pane-tree"
+
 /** A close awaiting the confirm dialog. */
 export type CloseConfirm =
   | { kind: "pane"; tabId: string; paneId: string; count: number }
@@ -19,6 +22,18 @@ export interface TerminalState {
 }
 
 const busy = (t: TerminalState) => t.running || t.claude
+
+/** Is the pending close's target still there (in `tabs`)? A close from elsewhere can beat it. */
+export function confirmStillValid(
+  c: CloseConfirm,
+  tabs: { id: string; root: PaneNode }[],
+): boolean {
+  const tab = tabs.find((t) => t.id === c.tabId)
+  if (!tab) return false
+  if (c.kind === "terminal") return allSessionIds(tab.root).includes(c.sessionId)
+  if (c.kind === "pane") return !!findPaneById(tab.root, c.paneId)
+  return true
+}
 
 /** Closing a session: the confirm to show, or null to close right away. */
 export function tabCloseConfirm(

@@ -12,7 +12,7 @@ import { FilesPanel } from "./components/files-panel"
 import { PaneLayout } from "./components/pane-layout"
 import { SettingsPanel } from "./components/settings-panel"
 import { FilePreview } from "./components/file-preview"
-import { ClosePaneDialog } from "./components/close-pane-dialog"
+import { CloseConfirmDialog } from "./components/close-confirm-dialog"
 import { RightPanelResizer } from "./components/right-panel-resizer"
 import { useActiveWorkCwd, getActiveWsl } from "./lib/use-active-cwd"
 import { claudeWorkDirs, keepPrs, planGitPoll, settleInAnswers } from "./lib/agent-dirs"
@@ -563,7 +563,7 @@ function App() {
       {hostPickerOpen && <HostPicker />}
       {settingsOpen && <SettingsPanel />}
       <FilePreview />
-      <ClosePaneDialog />
+      <CloseConfirmDialog />
     </div>
   )
 }

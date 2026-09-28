@@ -554,8 +554,8 @@ body {
   color: var(--amber);
 }
 /* Hover × on sidebar rows: replaces the meta (pane count / status word) in place — no layout
-   shift, no re-render. (Keyboard: ⌘K / the top bar close; the row's focused children would
-   otherwise pin it visible.) */
+   shift, no re-render. Hover-only (the top bar's close is the keyboard-reachable one); not on
+   :focus-within, which would pin it visible after clicking the row's caret. */
 .tree-close {
   display: none;
   align-items: center;

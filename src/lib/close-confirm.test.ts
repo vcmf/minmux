@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest"
-import { tabCloseConfirm, terminalCloseConfirm, closeConfirmText } from "./close-confirm"
+import {
+  tabCloseConfirm,
+  terminalCloseConfirm,
+  closeConfirmText,
+  confirmStillValid,
+} from "./close-confirm"
 
 const idle = (id: string) => ({ id, running: false, claude: false })
 
@@ -62,5 +67,35 @@ describe("closeConfirmText", () => {
     expect(term.body).toMatch(/Claude is running/)
     const pane = closeConfirmText({ kind: "pane", tabId: "t", paneId: "p", count: 2 })
     expect(pane.title).toBe("Close pane with 2 terminals?")
+  })
+})
+
+describe("confirmStillValid", () => {
+  const leaf = (id: string, sessionIds: string[]) => ({
+    type: "leaf" as const,
+    id,
+    sessionIds,
+    activeSessionId: sessionIds[0]!,
+    sessionId: sessionIds[0]!,
+  })
+  const tabs = [{ id: "t", root: leaf("p", ["a", "b"]) }]
+  it("valid while the target is there; not once it's gone or moved to another tab", () => {
+    expect(
+      confirmStillValid(
+        { kind: "terminal", tabId: "t", sessionId: "a", title: "", claude: false },
+        tabs,
+      ),
+    ).toBe(true)
+    expect(
+      confirmStillValid(
+        { kind: "terminal", tabId: "t", sessionId: "z", title: "", claude: false },
+        tabs,
+      ),
+    ).toBe(false)
+    expect(confirmStillValid({ kind: "pane", tabId: "t", paneId: "p", count: 2 }, tabs)).toBe(true)
+    expect(confirmStillValid({ kind: "pane", tabId: "t", paneId: "q", count: 2 }, tabs)).toBe(false)
+    expect(
+      confirmStillValid({ kind: "tab", tabId: "x", title: "", count: 2, claude: 0 }, tabs),
+    ).toBe(false)
   })
 })
