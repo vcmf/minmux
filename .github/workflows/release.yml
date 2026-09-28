@@ -44,6 +44,9 @@ jobs:
         with:
           ref: main
           fetch-depth: 0
+          # Don't persist GITHUB_TOKEN: checkout's http.extraheader would override the
+          # PAT in the push URL below, so the main push would go out as the bot → GH013.
+          persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -53,12 +56,27 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
       - name: Bump version, commit + tag, push
         id: bump
+        env:
+          RELEASE_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+          GH_ACTIONS_TOKEN: ${{ github.token }}
         run: |
+          if [ -z "$RELEASE_TOKEN" ]; then
+            echo "::error::RELEASE_TOKEN secret is not set — needed to push the release commit to main (bypasses the branch ruleset). See .github/workflows/release.yml." >&2
+            exit 1
+          fi
           npm version "${{ inputs.bump }}" -m "release: v%s"
           TAG="v$(node -p "require('./package.json').version")"
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-          git push origin HEAD:main
-          git push origin "$TAG"
+          REPO="${{ github.repository }}"
+          # main's ruleset requires status checks a fresh release commit never ran, and
+          # github-actions[bot] can't be a bypass actor. RELEASE_TOKEN is a classic PAT
+          # (scope `repo`) owned by an admin in the ruleset's bypass list. It goes in the
+          # USERNAME slot: `x-access-token:` would resolve the pusher as an App actor and
+          # the admin bypass wouldn't apply.
+          git push "https://${RELEASE_TOKEN}@github.com/${REPO}.git" HEAD:main
+          # Tag stays on GITHUB_TOKEN on purpose: a GITHUB_TOKEN-pushed tag doesn't fire
+          # this workflow's `push: tags` path, so the release isn't built twice.
+          git push "https://x-access-token:${GH_ACTIONS_TOKEN}@github.com/${REPO}.git" "$TAG"
 
   # Gate: don't ship from red code. Runs for both paths; on dispatch it waits for the
   # bump and checks out the newly-created tag.
