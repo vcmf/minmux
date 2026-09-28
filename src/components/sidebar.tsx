@@ -33,7 +33,7 @@ import { TerminalManager } from "../terminal/terminal-manager"
 import { allPanes } from "../lib/pane-tree"
 import { resolveDefaultShell } from "../lib/shells"
 import { statusUi } from "../lib/status-ui"
-import { detailUser, homeRelative, remoteCwdName, shortRemoteCwd } from "../lib/remote-cwd"
+import { detailUser, homeRelative, shortRemoteCwd } from "../lib/remote-cwd"
 import { isWaitingRemote, remoteStatusUi } from "../lib/remote-connect"
 import {
   connectedHostIds,
@@ -46,6 +46,7 @@ import type { SshHost } from "../types"
 import { hostMenuItems, sidebarHosts, visibleHosts, type HostActionId } from "../lib/ssh-host-list"
 import { runHostAction } from "../lib/ssh-host-actions"
 import {
+  remoteRowTitle,
   tabTitle,
   sessionSubline,
   branchLine,
@@ -242,6 +243,8 @@ export function Sidebar() {
                       )
                     : statusUi(s.status)
                   const isActive = active && tab.activeSessionId === id
+                  // The host's colour, looked up once for the icon and the host box.
+                  const rowColor = s.remote ? hostCss(s.remote.target) : undefined
                   return (
                     <div
                       key={id}
@@ -270,7 +273,7 @@ export function Sidebar() {
                               weight="fill"
                               // A host's colour (a safety cue) beats a Claude /color accent.
                               color={
-                                (s.remote ? hostCss(s.remote.target) : undefined) ??
+                                rowColor ??
                                 accentOf(id) ??
                                 (isActive ? "var(--accent)" : "var(--dim)")
                               }
@@ -283,18 +286,12 @@ export function Sidebar() {
                           {s.remote ? (
                             // Like a local row: the folder's name, then (boxed) where it is.
                             <>
-                              <span className="tree-primary">
-                                {s.remoteCwd
-                                  ? remoteCwdName(s.remoteCwd)
-                                  : displaySessionTitle(s, home)}
-                              </span>
+                              <span className="tree-primary">{remoteRowTitle(s, home)}</span>
                               <span
-                                className={`host-box${hostCss(s.remote.target) ? " colored" : ""}`}
+                                className={`host-box${rowColor ? " colored" : ""}`}
                                 style={
-                                  hostCss(s.remote.target)
-                                    ? ({
-                                        "--host": hostCss(s.remote.target),
-                                      } as React.CSSProperties)
+                                  rowColor
+                                    ? ({ "--host": rowColor } as React.CSSProperties)
                                     : undefined
                                 }
                                 title={remoteWhere(s.remote, sshHosts)}

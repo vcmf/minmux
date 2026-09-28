@@ -6,29 +6,44 @@ import { hasControlChar } from "./control-chars"
 
 const MAX_REMOTE_CWD = 1024
 
-/** A remote folder we'll show and `cd` to: absolute, `~` or `~/…`; no control characters, and
- *  no `!` (csh expands it even inside quotes). null otherwise. */
+/** A remote folder we'll show: absolute, `~` or `~/…`, no control characters, not a Windows
+ *  drive path (`/C:/…` from a PowerShell host), capped. null otherwise. */
 export function cleanRemoteCwd(v: unknown): string | null {
   if (typeof v !== "string") return null
   const p = v.trim()
-  if (!p || p.length > MAX_REMOTE_CWD || hasControlChar(p) || p.includes("!")) return null
+  if (!p || p.length > MAX_REMOTE_CWD || hasControlChar(p)) return null
+  if (/^\/[A-Za-z]:([/\\]|$)/.test(p)) return null
   if (p === "~" || p.startsWith("~/") || p.startsWith("/")) return p
   return null
 }
 
-/** The folder in an OSC 7 report (`file://host/path`, percent-encoded). */
-export function cwdFromOsc7(data: string): string | null {
+// Letters, digits, space and `._-/~+@,:=%#` only. Inside single quotes none of these is special
+// in any shell a host might log in with (sh, bash, zsh, fish, csh, even PowerShell), so the
+// quoting below can't be broken out of. Anything else (quotes, `\`, `$`, backticks, `;`, `|`,
+// `&`, `!`, brackets, globs) is shown but never sent: a reconnect then opens a plain login.
+const SAFE_CD = /^[\p{L}\p{N} ._\-/~+@,:=%#]+$/u
+
+/** Whether a (clean) remote folder may be `cd`'d to on reconnect. */
+export const safeForCd = (p: string): boolean => cleanRemoteCwd(p) === p && SAFE_CD.test(p)
+
+/** The folder in an OSC 7 report (`file://host/path`, percent-encoded), with the host it
+ *  names ("" when none). */
+export function cwdFromOsc7(data: string): { host: string; dir: string } | null {
   try {
-    return cleanRemoteCwd(decodeURIComponent(new URL(data).pathname))
+    const url = new URL(data)
+    const dir = cleanRemoteCwd(decodeURIComponent(url.pathname))
+    return dir ? { host: url.hostname.toLowerCase(), dir } : null
   } catch {
     return null
   }
 }
 
-/** The folder in a window title in the Debian / Ubuntu bash style `user@host: ~/dir`. */
-export function cwdFromTitle(title: string): string | null {
-  const m = /^[^\s@:]+@[^\s:]+:\s*(\S.*)$/.exec(title.trim())
-  return m ? cleanRemoteCwd(m[1]) : null
+/** The folder in a window title in the Debian / Ubuntu bash style `user@host: ~/dir`, with
+ *  the host. Only a path with no spaces: a title can carry more after it (`/var/log (tail)`). */
+export function cwdFromTitle(title: string): { host: string; dir: string } | null {
+  const m = /^[^\s@:]+@([^\s:]+):\s*(\S+)$/.exec(title.trim())
+  const dir = m ? cleanRemoteCwd(m[2]) : null
+  return dir ? { host: m![1]!.toLowerCase(), dir } : null
 }
 
 /** A remote folder for a subline: home-relative stays as is; a long path keeps its tail. */
@@ -70,10 +85,11 @@ const CD_SCRIPT =
   'case $1 in "~") d=$HOME;; "~/"*) d=$HOME/${1#"~/"};; *) d=$1;; esac; ' +
   'cd -- "$d" 2>/dev/null; exec "$SHELL" -l'
 
-/** The remote command that opens a login shell in `dir` (ssh hands it to the remote shell). */
-export function remoteCdCommand(dir: string): string {
-  const quoted = `'${dir.replace(/'/g, `'\\''`)}'`
-  return `exec sh -c '${CD_SCRIPT}' smterm ${quoted}`
+/** The remote command that opens a login shell in `dir` (ssh hands it to the remote shell);
+ *  null unless the folder is safeForCd, so it's quoted with nothing inside that could escape. */
+export function remoteCdCommand(dir: string): string | null {
+  if (!safeForCd(dir)) return null
+  return `exec sh -c '${CD_SCRIPT}' smterm '${dir}'`
 }
 
 /** What ssh says when the host's config already has a RemoteCommand (ours can't run too). */

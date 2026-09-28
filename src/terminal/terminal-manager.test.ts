@@ -107,6 +107,7 @@ beforeEach(() => {
     return () => delete exitHandlers[id]
   })
   vi.mocked(ipc.ptySpawn).mockResolvedValue({ reattached: false, integrated: false })
+  TerminalManager.resetHostMemory()
 })
 
 /** A remote session in the store (restored or not), started the way a pane starts it. */
@@ -781,5 +782,73 @@ describe("TerminalManager — the remote folder", () => {
     await flush()
     expect(spawnCalls()).toHaveLength(3)
     expect(spawnCalls()[2]!.remoteCwd).toBeUndefined()
+  })
+})
+
+describe("TerminalManager — the remote folder, the edges", () => {
+  it("a report from another host (an ssh inside the pane) doesn't move the folder", async () => {
+    const { id, term } = start({})
+    await flush()
+    term.osc[7]!("file://web/srv/app")
+    term.osc[7]!("file://db/var/lib/pg") // ssh db, from inside web's pane
+    term.titleHandlers.forEach((h) => h("root@db: /etc"))
+    expect(st().sessions[id]!.remoteCwd).toBe("/srv/app")
+  })
+
+  it("the RemoteCommand fallback only follows a start that sent a folder", async () => {
+    const { id, term } = start({}) // first connect: no folder known yet, none sent
+    await flush()
+    out(id, "Welcome")
+    term.buffer.active.getLine = () => ({
+      translateToString: () => "Cannot execute command-line and remote command.",
+    })
+    exitHandlers[id]!({ code: 0, signal: 0 })
+    await flush()
+    expect(spawnCalls()).toHaveLength(1) // no surprise reconnect
+  })
+
+  it("a start sent to a folder that ends at once: the next connect goes plain", async () => {
+    const { id, term } = start({})
+    await flush()
+    term.osc[7]!("file://web/srv/app")
+    exitHandlers[id]!({ code: 0, signal: 0 })
+    await flush()
+    term.type("\r") // reconnect: sent /srv/app…
+    await flush()
+    expect(spawnCalls()[1]!.remoteCwd).toBe("/srv/app")
+    exitHandlers[id]!({ code: 1, signal: 0 }) // …and it died straight away (no sh there?)
+    await flush()
+    term.type("\r")
+    expect(spawnCalls()[2]!.remoteCwd).toBeUndefined()
+  })
+})
+
+describe("TerminalManager — RemoteCommand learnt at runtime reaches the host's splits", () => {
+  it("after a conflict, a split of that host doesn't try the folder again", async () => {
+    const { id, term } = start({})
+    await flush()
+    term.osc[7]!("file://web/srv/app")
+    exitHandlers[id]!({ code: 0, signal: 0 })
+    await flush()
+    term.type("\r") // sent /srv/app
+    await flush()
+    term.buffer.active.getLine = () => ({
+      translateToString: () => "Cannot execute command-line and remote command.",
+    })
+    exitHandlers[id]!({ code: 255, signal: 0 })
+    await flush()
+    const split = start({}) // another pane on web, carrying a folder
+    useStore.setState((s) => ({
+      sessions: { ...s.sessions, [split.id]: { ...s.sessions[split.id]!, remoteCwd: "/srv/app" } },
+    }))
+    split.term.type("") // (already started) — reconnect it:
+    exitHandlers[split.id]!({ code: 0, signal: 0 })
+    await flush()
+    split.term.type("\r")
+    expect(
+      spawnCalls()
+        .filter((c) => c.id === split.id)
+        .every((c) => !c.remoteCwd),
+    ).toBe(true)
   })
 })

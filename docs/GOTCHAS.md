@@ -400,7 +400,10 @@ and `terminal-manager` types `claude --resume <id> [--permission-mode m]` at the
 - **`remoteCwd` is display + reconnect only.** It comes from what the host prints (OSC 7,
   else the Ubuntu-style title) and is never `cwd`, so no local panel reads a remote path. A
   reconnect / restore / split sends it to main, which re-validates it and appends a fixed
-  `sh -c` script with the folder as its argument (never spliced into code); skipped for a
+  `sh -c` script with the folder as its argument (never spliced into code). **Only folders
+  of letters, digits, space and `._-/~+@,:=%#` are ever sent** (`safeForCd`): inside single
+  quotes nothing there is special in any login shell (fish treats `\'` as an escaped quote,
+  csh expands `!`), so the quoting can't be escaped; others are shown, never sent; skipped for a
   host whose config sets `RemoteCommand`, and dropped for the pane if ssh still says
   "Cannot execute command-line and remote command".
 - **Reconnect reuses the session id.** terminal-manager wires xterm listeners once per

@@ -55,7 +55,9 @@ interface Entry {
   lastKey?: string // ssh panes: the last input sent (a prompt check skips a line being typed)
   escArmedAt?: number // an idle ssh pane's first Esc: a second within ESC_CLOSE_MS closes it
   osc7?: boolean // ssh panes: the host reports its folder via OSC 7 (the title is a fallback)
-  noCd?: boolean // ssh panes: the host's config runs a RemoteCommand; reconnect plainly
+  cwdHost?: string // ssh panes: the host its first folder report named (a nested ssh's differ)
+  sentCwd?: boolean // ssh panes: this connection was asked to open in a folder
+  noCd?: boolean // ssh panes: opening in a folder failed here; reconnect plainly
   liveSince?: number // when this connection went live (a drop after STABLE_MS may auto-retry)
   retryAttempt: number // the automatic reconnect this connection came from (0 = none)
   retryTotal: number // automatic reconnects since you last connected it yourself (capped)
@@ -369,9 +371,7 @@ function requestPty(id: string, entry: Entry, attachOnly: boolean, given?: Sessi
       ...(session.remote ? { remote: session.remote } : {}),
       ...(attachOnly ? { attachOnly: true } : {}),
       // Back in its remote folder (a reconnect, a restore, a split), when the host said where.
-      ...(session.remote && session.remoteCwd && !entry.noCd
-        ? { remoteCwd: session.remoteCwd }
-        : {}),
+      ...((dir) => (dir ? { remoteCwd: dir } : {}))(cwdToSend(session, entry)),
       // → COLORFGBG so agents detect light/dark (fallback when the OSC-11 bg query can't
       // complete, e.g. across the wsl.exe hop). Captured at spawn: a running shell's env
       // can't be rewritten, so a later theme switch — incl. appearance "system" following
@@ -529,6 +529,28 @@ function afterAuth(id: string, then: () => void) {
 // on the ~1.2 s output-idle timer).
 const AUTH_SETTLE_MS = 2000
 
+// Hosts where opening in a folder failed this launch (a RemoteCommand the config parse missed).
+const noCdHosts = new Set<string>()
+// A connection sent to a folder that ends sooner than this is taken as "the cd didn't work".
+const CD_TRIAL_MS = 10_000
+
+/** The folder to open a (re)started ssh pane in, if any; notes that it was sent. */
+function cwdToSend(session: Session, entry: Entry): string | undefined {
+  entry.sentCwd = false
+  const dir = session.remote && session.remoteCwd
+  if (!dir || entry.noCd || noCdHosts.has(session.remote!.hostId)) return undefined
+  entry.sentCwd = true
+  return dir
+}
+
+/** Folder reports name a host: keep the first one's, and ignore later ones from another host
+ *  (an ssh to a second machine, a container) — a pane's folder is its own host's. */
+function sameHostAsBefore(entry: Entry, host: string): boolean {
+  if (!host || host === "localhost") return true
+  entry.cwdHost ??= host
+  return entry.cwdHost === host
+}
+
 // Sessions Connect all is starting: their first spawn connects instead of only reattaching.
 const connectNow = new Set<string>()
 
@@ -626,11 +648,18 @@ function spawn(session: Session, entry: Entry) {
         // The host's config has a RemoteCommand, so ssh refused our `cd`: drop the folder for
         // this pane and connect again plainly, once.
         const tail = lastLines(entry.term, 4)
-        if (!entry.noCd && tail.includes(REMOTE_COMMAND_CONFLICT)) {
+        const sent = entry.sentCwd
+        entry.sentCwd = false
+        if (sent && tail.includes(REMOTE_COMMAND_CONFLICT)) {
+          // Remembered for the host: its splits and restores go plain too (this launch).
+          if (session.remote) noCdHosts.add(session.remote.hostId)
           entry.noCd = true
           setPhase(session.id, entry, "closed", "lost")
           return connectRemote(session.id, entry, true)
         }
+        // A start with a folder that ended at once (a host without `sh`, a restricted shell):
+        // the next connect of this pane goes plain.
+        if (sent && liveForMs < CD_TRIAL_MS) entry.noCd = true
         const ssh = useStore.getState().settings.ssh
         const why = {
           enabled: ssh.autoReconnect,
@@ -710,8 +739,9 @@ function spawn(session: Session, entry: Entry) {
     store.setSessionOscTitle(session.id, title)
     // An ssh pane that doesn't send OSC 7: the Debian / Ubuntu title `user@host: ~/dir`.
     if (session.remote && !entry.osc7) {
-      const dir = cwdFromTitle(title)
-      if (dir) useStore.getState().setRemoteCwd(session.id, dir)
+      const at = cwdFromTitle(title)
+      if (at && sameHostAsBefore(entry, at.host))
+        useStore.getState().setRemoteCwd(session.id, at.dir)
     }
   })
 
@@ -719,10 +749,10 @@ function spawn(session: Session, entry: Entry) {
   term.parser.registerOscHandler(7, (data) => {
     // An ssh pane's folder is on the host: shown (and reconnected to), never read locally.
     if (session.remote) {
-      const dir = cwdFromOsc7(data)
-      if (dir) {
+      const at = cwdFromOsc7(data)
+      if (at && sameHostAsBefore(entry, at.host)) {
         entry.osc7 = true // authoritative from now on: the title is only a fallback
-        useStore.getState().setRemoteCwd(session.id, dir)
+        useStore.getState().setRemoteCwd(session.id, at.dir)
       }
       return true
     }
@@ -1176,6 +1206,11 @@ export const TerminalManager = {
       connectOne(first!)
       if (rest.length) afterAuth(first!, () => rest.forEach(connectOne))
     }
+  },
+
+  /** Forget what this launch learnt about hosts (tests: each starts from a fresh launch). */
+  resetHostMemory() {
+    noCdHosts.clear()
   },
 
   dispose(id: string) {

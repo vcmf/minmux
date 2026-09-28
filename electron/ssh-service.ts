@@ -12,7 +12,7 @@ import {
   type SshSettings,
 } from "../src/lib/ssh-validate"
 import { SSH_ERRORS } from "../src/lib/ssh-errors"
-import { cleanRemoteCwd } from "../src/lib/remote-cwd"
+import { safeForCd } from "../src/lib/remote-cwd"
 import {
   globMatchesPath,
   loadSshConfig,
@@ -144,8 +144,6 @@ export class SshService {
 
   /** The command for a renderer's RemoteRef, from main's own host list (worked out again if
    *  the config changes meanwhile). */
-  /** `cwd`: the remote folder to open in (from the renderer: validated again here, and
-   *  dropped for a host whose config runs a RemoteCommand, which ssh won't combine). */
   async spawnPlan(ref: unknown, cwd?: unknown): Promise<SpawnPlan> {
     for (let attempt = 0; ; attempt++) {
       const gen = this.generation
@@ -172,7 +170,10 @@ export class SshService {
     const { platform } = this.deps
     const keepAliveSeconds = this.current.keepAliveSeconds
     const hasRemoteCommand = trust.hosts.find((h) => h.hostId === remote.hostId)?.remoteCommand
-    const cwd = hasRemoteCommand ? undefined : (cleanRemoteCwd(cwdIn) ?? undefined)
+    // The folder (from the renderer) is checked again here, and dropped for a host whose
+    // config runs a RemoteCommand: ssh won't run a command of ours on top of it.
+    const cwd =
+      !hasRemoteCommand && typeof cwdIn === "string" && safeForCd(cwdIn) ? cwdIn : undefined
     if (parseSshEnv(remote.env)?.kind === "wsl") {
       const plan = buildSshSpawn(remote, { platform, sshPath: "ssh", keepAliveSeconds }, cwd)
       return plan ?? { error: SSH_ERRORS.wslOffWindows }

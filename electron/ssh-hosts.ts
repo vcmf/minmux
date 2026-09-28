@@ -90,7 +90,7 @@ export function buildSshSpawn(
     "-t",
     "--",
     remote.target,
-    ...(cwd ? [remoteCdCommand(cwd)] : []),
+    ...(cwd && remoteCdCommand(cwd) ? [remoteCdCommand(cwd)!] : []),
   ]
   if (env.kind === "native") return { file: ctx.sshPath, args: tail }
   if (ctx.platform !== "win32") return null
