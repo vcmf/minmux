@@ -353,7 +353,7 @@ describe("Sidebar — Remote hosts", () => {
   it("a remote pane row shows the host, a globe and no local folder line or menu", () => {
     st().newTab(hostShellOption(testHost("gpu", "wsl:Ubuntu")))
     render(<Sidebar />)
-    const sub = screen.getByText("ssh · gpu · WSL: Ubuntu")
+    const sub = screen.getByText("gpu · WSL: Ubuntu")
     expect(screen.queryByText("shell")).not.toBeInTheDocument() // the no-cwd folder line
     fireEvent.contextMenu(sub)
     expect(screen.queryByText("Copy path")).not.toBeInTheDocument()
@@ -411,5 +411,16 @@ describe("Sidebar — ssh pane states", () => {
     act(() => st().setRemotePhase(id, "live"))
     rerender(<Sidebar />)
     expect(screen.getAllByText("idle").length).toBeGreaterThan(0)
+  })
+})
+
+describe("Sidebar — remote pane rows", () => {
+  it("the subline is where it runs (user@hostname), not the alias again", () => {
+    st().setSshHosts([testHost("web", "native", "me@10.0.0.1")])
+    st().newTab(hostShellOption(testHost("web")))
+    render(<Sidebar />)
+    const rows = screen.getAllByText("me@10.0.0.1")
+    expect(rows.some((el) => el.classList.contains("tree-sub"))).toBe(true)
+    expect(screen.queryByText("ssh · web")).not.toBeInTheDocument()
   })
 })

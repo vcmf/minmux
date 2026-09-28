@@ -113,16 +113,32 @@ describe("parseSettings", () => {
 
 describe("ssh settings", () => {
   it("defaults: nothing hidden, a 30 s keepalive, reconnect at once", () => {
-    expect(defaultSettings.ssh).toEqual({ hidden: [], keepAliveSeconds: 30, restore: "auto" })
+    expect(defaultSettings.ssh).toEqual({
+      hidden: [],
+      keepAliveSeconds: 30,
+      restore: "auto",
+      colors: {},
+    })
     expect(mergeSettings({}).ssh).toEqual(defaultSettings.ssh)
     expect(mergeSettings({ ssh: "nope" }).ssh).toEqual(defaultSettings.ssh)
   })
 
   it("reads the block through mergeSettings", () => {
     expect(
-      mergeSettings({ ssh: { hidden: ["github.com"], keepAliveSeconds: 0, restore: "on-focus" } })
-        .ssh,
-    ).toEqual({ hidden: ["github.com"], keepAliveSeconds: 0, restore: "on-focus" })
+      mergeSettings({
+        ssh: {
+          hidden: ["github.com"],
+          keepAliveSeconds: 0,
+          restore: "on-focus",
+          colors: { "prod-*": "red" },
+        },
+      }).ssh,
+    ).toEqual({
+      hidden: ["github.com"],
+      keepAliveSeconds: 0,
+      restore: "on-focus",
+      colors: { "prod-*": "red" },
+    })
   })
 
   it("defaultSettings.ssh has its own arrays (mutating it can't leak into later merges)", () => {

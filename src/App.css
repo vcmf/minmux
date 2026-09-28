@@ -192,6 +192,11 @@ body {
   text-overflow: ellipsis;
   max-width: 160px;
 }
+.tab-more {
+  flex: 0 0 auto;
+  font-size: 11px;
+  color: var(--dim);
+}
 .tab-count {
   font-size: 10.5px;
   color: var(--faint);
@@ -730,6 +735,7 @@ body {
   box-shadow: inset 0 2px 0 color-mix(in srgb, var(--pane-accent) 45%, transparent);
 }
 .pane-header {
+  container-type: inline-size; /* the host chip hides in a narrow pane (below) */
   height: 32px;
   flex: 0 0 auto;
   display: flex;
@@ -767,6 +773,30 @@ body {
   color: var(--amber);
   border-color: color-mix(in srgb, var(--amber) 40%, transparent);
 }
+/* Where a remote pane runs. Shrinks (and ellipsizes) before the pane title does; hidden
+   in a narrow pane, where the rail and the globe's colour still say which host it is. */
+@container (max-width: 520px) {
+  .host-chip {
+    display: none;
+  }
+}
+.host-chip {
+  flex: 0 1000 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 10.5px;
+  color: var(--dim);
+  border: 1px solid var(--border2);
+  border-radius: 4px;
+  padding: 1px 6px;
+}
+.host-chip.colored {
+  color: var(--host);
+  border-color: color-mix(in srgb, var(--host) 45%, transparent);
+  background: color-mix(in srgb, var(--host) 10%, transparent);
+}
 .pane-header-spacer {
   flex: 1 1 auto;
 }
@@ -794,6 +824,10 @@ body {
   padding: 0 6px;
   border-radius: 6px;
   cursor: default;
+}
+/* Icons keep their size; the title is what ellipsizes. */
+.surface-tab > svg {
+  flex-shrink: 0;
 }
 .surface-tab.multi {
   flex: 0 1 auto;

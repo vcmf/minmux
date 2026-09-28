@@ -22,7 +22,8 @@ import { ipc } from "../lib/ipc"
 import { allSessionIds } from "../lib/pane-tree"
 import { aggregateBadge } from "../lib/session-status"
 import { tabRemoteBadge } from "../lib/remote-connect"
-import { tabTitle } from "../lib/session-label"
+import { hostColor, hostColorCss } from "../lib/ssh-hosts-ui"
+import { tabTitleParts } from "../lib/session-label"
 import { resolveDefaultShell } from "../lib/shells"
 import { envTitle, hostShellOption } from "../lib/ssh-hosts-ui"
 import { TerminalManager } from "../terminal/terminal-manager"
@@ -38,6 +39,7 @@ export function TopBar() {
   const remotePhase = useStore((s) => s.remotePhase)
   const remoteDetail = useStore((s) => s.remoteDetail)
   const windowFocused = useStore((s) => s.windowFocused)
+  const hostColors = useStore((s) => s.settings.ssh.colors)
   const home = useStore((s) => s.home)
   const defaultShellPref = useStore((s) => s.settings.defaultShell)
   const rightView = useStore((s) => s.rightView)
@@ -156,8 +158,15 @@ export function TopBar() {
               <div
                 key={tab.id}
                 className={`tab${tab.id === activeTabId ? " active" : ""}`}
+                // The focused pane's host colour, as an underline (a prod tab reads as prod).
+                style={(() => {
+                  const r = sessions[tab.activeSessionId]?.remote
+                  const c = r ? hostColor(r.target, hostColors) : undefined
+                  return c ? { boxShadow: `inset 0 -2px 0 ${hostColorCss(c)}` } : undefined
+                })()}
                 onMouseDown={() => useStore.getState().setActiveTab(tab.id)}
-                onDoubleClick={() => startRename(tab.id, tabTitle(tab, sessions, home))}
+                // The name only: the live "+N" must not be pinned into a manual title.
+                onDoubleClick={() => startRename(tab.id, tabTitleParts(tab, sessions, home).base)}
               >
                 {(badge || remote) && (
                   <span
@@ -179,7 +188,19 @@ export function TopBar() {
                     }}
                   />
                 ) : (
-                  <span className="tab-title">{tabTitle(tab, sessions, home)}</span>
+                  (() => {
+                    const { base, more } = tabTitleParts(tab, sessions, home)
+                    return (
+                      <>
+                        <span className="tab-title">{base}</span>
+                        {more && (
+                          <span className="tab-more" title="Panes here run on other places too">
+                            {more}
+                          </span>
+                        )}
+                      </>
+                    )
+                  })()
                 )}
                 {ids.length > 1 && <span className="tab-count">{ids.length}</span>}
                 <button

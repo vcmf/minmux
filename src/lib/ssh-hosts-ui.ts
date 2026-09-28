@@ -62,14 +62,64 @@ export function sameHosts(a: SshHost[], b: SshHost[]): boolean {
   })
 }
 
-/** A remote session's subline: "ssh · web", plus the distro for a WSL host. */
-export function remoteSubline(r: RemoteRef): string {
-  return r.env === "native" ? `ssh · ${r.target}` : `ssh · ${r.target} · ${envTitle(r.env)}`
+/** Where a remote pane runs, for its chip and sidebar subline: the host's `user@hostname:port`
+ *  from the list (else its alias), plus the distro for a WSL host. */
+export function remoteWhere(r: RemoteRef, hosts: SshHost[]): string {
+  const detail = hosts.find((h) => h.hostId === r.hostId)?.detail ?? r.target
+  return r.env === "native" ? detail : `${detail} · ${envTitle(r.env)}`
 }
 
-/** A remote pane's badge: "ssh", plus the distro for a WSL host (the title is the host). */
-export function remoteBadge(r: RemoteRef): string {
-  return r.env === "native" ? "ssh" : `ssh · ${envTitle(r.env)}`
+/** `*` any run, `?` one character, case-insensitive, like ssh's Host patterns. Linear
+ *  (one backtrack point), so no pattern can stall a render the way a regex could. */
+export function globMatch(pattern: string, text: string): boolean {
+  const p = pattern.toLowerCase()
+  const t = text.toLowerCase()
+  let pi = 0
+  let ti = 0
+  let star = -1
+  let mark = 0
+  while (ti < t.length) {
+    if (pi < p.length && (p[pi] === "?" || p[pi] === t[ti])) {
+      pi++
+      ti++
+    } else if (pi < p.length && p[pi] === "*") {
+      star = pi++
+      mark = ti
+    } else if (star !== -1) {
+      pi = star + 1
+      ti = ++mark
+    } else return false
+  }
+  while (pi < p.length && p[pi] === "*") pi++
+  return pi === p.length
+}
+
+/** An ssh-style pattern list ("prod-*,db-*,!db-test"): some positive entry matches and no
+ *  negated one does. */
+export function patternListMatch(list: string, alias: string): boolean {
+  let hit = false
+  for (const raw of list.split(",")) {
+    const entry = raw.trim()
+    if (!entry) continue
+    if (entry.startsWith("!")) {
+      if (globMatch(entry.slice(1), alias)) return false
+    } else if (globMatch(entry, alias)) hit = true
+  }
+  return hit
+}
+
+/** The colour the user gave this host (first matching pattern in `ssh.colors`), if any. */
+export function hostColor(alias: string, colors: Record<string, string>): string | undefined {
+  for (const [pattern, color] of Object.entries(colors)) {
+    if (patternListMatch(pattern, alias)) return color
+  }
+  return undefined
+}
+
+/** CSS for a host colour: a theme token for the named ones, the hex as-is. (No named green:
+ *  the theme green is the focus / connected colour.) */
+export function hostColorCss(color: string): string {
+  return color.startsWith("#") ? color : `var(--${color})`
 }
 
 /** A host's palette subline: "web · me@10.0.0.1", with the distro for a WSL host. */

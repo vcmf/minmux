@@ -86,7 +86,12 @@ describe("parseSshEnv / isSshEnv", () => {
 describe("mergeSshSettings", () => {
   it("defaults: nothing hidden, a 30 s keepalive, reconnect at once", () => {
     for (const v of [undefined, null, {}, "nope", 3]) {
-      expect(mergeSshSettings(v)).toEqual({ hidden: [], keepAliveSeconds: 30, restore: "auto" })
+      expect(mergeSshSettings(v)).toEqual({
+        hidden: [],
+        keepAliveSeconds: 30,
+        restore: "auto",
+        colors: {},
+      })
     }
   })
 
@@ -155,5 +160,49 @@ describe("sshLabel", () => {
     expect(sshLabel("gpu box", "t")).toBe("gpu box")
     for (const bad of [undefined, "", "  ", "a\nb", 3]) expect(sshLabel(bad, "t")).toBe("t")
     expect(sshLabel("y".repeat(500), "t")).toHaveLength(200)
+  })
+})
+
+describe("mergeSshSettings — colors", () => {
+  it("keeps named colours and #rrggbb (lowercased), in order; drops the rest", () => {
+    const c = mergeSshSettings({
+      colors: {
+        "prod-*": "red",
+        " staging-* ": "AMBER",
+        lab: "#AA00FF",
+        bad1: "purple",
+        bad2: "#abc",
+        bad3: 3,
+        "": "red",
+        "a\u0007b": "red",
+      },
+    }).colors
+    expect(c).toEqual({ "prod-*": "red", "staging-*": "amber", lab: "#aa00ff" })
+    expect(Object.keys(c)).toEqual(["prod-*", "staging-*", "lab"])
+  })
+
+  it("isn't an object → none; capped at 100 patterns", () => {
+    expect(mergeSshSettings({ colors: "red" }).colors).toEqual({})
+    expect(mergeSshSettings({ colors: ["red"] }).colors).toEqual({})
+    const many = Object.fromEntries(Array.from({ length: 150 }, (_, i) => [`h${i}`, "red"]))
+    expect(Object.keys(mergeSshSettings({ colors: many }).colors)).toHaveLength(100)
+  })
+})
+
+describe("mergeSshSettings — colors, edge cases", () => {
+  it("colour names in any case; no named green (the focus / connected colour)", () => {
+    expect(mergeSshSettings({ colors: { a: "Red", b: "BLUE", c: "green" } }).colors).toEqual({
+      a: "red",
+      b: "blue",
+    })
+  })
+
+  it("patterns that look like object members are ordinary patterns", () => {
+    const c = mergeSshSettings({
+      colors: JSON.parse('{"constructor": "red", "toString": "amber", "__proto__": "blue"}'),
+    }).colors
+    expect(Object.keys(c).sort()).toEqual(["__proto__", "constructor", "toString"])
+    expect(c.constructor).toBe("red")
+    expect(Object.getPrototypeOf(c)).toBe(Object.prototype) // not replaced by "__proto__"
   })
 })

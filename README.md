@@ -126,7 +126,12 @@ in-app settings panel; a live watcher re-applies changes as you save.
   "appearance": "system", // dark | light | system (follow the OS)
   "cursorBlink": true,
   "scrollback": 5000,
-  "ssh": { "hidden": [], "keepAliveSeconds": 30, "restore": "auto" }, // restore: auto | on-focus
+  "ssh": {
+    "hidden": [],
+    "keepAliveSeconds": 30,
+    "restore": "auto", // auto | on-focus
+    "colors": { "prod-*": "red", "staging-*": "amber" }, // red | amber | blue | #rrggbb
+  },
 }
 ```
 
@@ -139,6 +144,11 @@ host`). It never keeps its own host list, passwords or keys: a click runs the sy
 in any terminal. Editing the config updates the list as you save. Wildcard patterns
 (`Host *.corp`) aren't listed; hide a host with `"ssh": { "hidden": ["github.com"] }`.
 
+- **Know where you are.** A remote pane's header shows where it runs (`user@hostname` from your
+  config, else the alias). Give hosts a colour with `ssh.colors`: ssh-style patterns such as
+  `prod-*` or `prod-*,db-*,!db-test`, first match wins (keep pattern keys non-numeric: JSON
+  orders number-like keys first). The header, its tab and the sidebar carry it, so a
+  production shell doesn't look like a scratch box.
 - **Splits stay on the host.** Splitting an SSH pane, or opening a new terminal in it, opens
   another `ssh` to the same host. "Open folder in split" stays local.
 - **Keepalive.** smterm adds `ServerAliveInterval=30` (with `ServerAliveCountMax=4`), so an idle

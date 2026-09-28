@@ -32,7 +32,14 @@ import { allPanes } from "../lib/pane-tree"
 import { resolveDefaultShell } from "../lib/shells"
 import { statusUi } from "../lib/status-ui"
 import { remoteStatusUi } from "../lib/remote-connect"
-import { connectedHostIds, groupHosts, hostShellOption, remoteSubline } from "../lib/ssh-hosts-ui"
+import {
+  connectedHostIds,
+  groupHosts,
+  hostColor,
+  hostColorCss,
+  hostShellOption,
+  remoteWhere,
+} from "../lib/ssh-hosts-ui"
 import type { SshHost } from "../types"
 import {
   tabTitle,
@@ -53,6 +60,12 @@ export function Sidebar() {
   // ssh panes: connecting / at a prompt / disconnected … (stable refs; change on a transition)
   const remotePhase = useStore((s) => s.remotePhase)
   const remoteDetail = useStore((s) => s.remoteDetail)
+  const sshHosts = useStore((s) => s.sshHosts)
+  const hostColors = useStore((s) => s.settings.ssh.colors)
+  const hostCss = (target: string) => {
+    const c = hostColor(target, hostColors)
+    return c ? hostColorCss(c) : undefined
+  }
   // Claude's last reply per pane (newest session root that ran in it), as a flat
   // [paneId, message, …] list of primitives: the shallow compare keeps the sidebar from
   // re-rendering on every agent hook event — only when a reply actually changes.
@@ -242,7 +255,12 @@ export function Sidebar() {
                             <Icon
                               size={14}
                               weight="fill"
-                              color={accentOf(id) ?? (isActive ? "var(--accent)" : "var(--dim)")}
+                              // A host's colour (a safety cue) beats a Claude /color accent.
+                              color={
+                                (s.remote ? hostCss(s.remote.target) : undefined) ??
+                                accentOf(id) ??
+                                (isActive ? "var(--accent)" : "var(--dim)")
+                              }
                             />
                           )
                         })()}
@@ -263,8 +281,8 @@ export function Sidebar() {
                         )}
                         {s.remote ? (
                           // Its folders are on the host: no local folder line or menu.
-                          <span className="tree-sub" title={s.remote.target}>
-                            {remoteSubline(s.remote)}
+                          <span className="tree-sub" title={`ssh ${s.remote.target}`}>
+                            {remoteWhere(s.remote, sshHosts)}
                           </span>
                         ) : (
                           <DirLines
@@ -433,6 +451,7 @@ function RemoteHosts() {
   const hosts = useStore((s) => s.sshHosts)
   const loaded = useStore((s) => s.sshHostsLoaded)
   const connected = useStore(useShallow((s) => connectedHostIds(s.sessions, s.remotePhase)))
+  const hostColors = useStore((s) => s.settings.ssh.colors)
   const [collapsed, setCollapsed] = useState(readCollapsed)
   const groups = useMemo(() => groupHosts(hosts), [hosts])
 
@@ -473,6 +492,8 @@ function RemoteHosts() {
               {groups.length > 1 && <div className="remote-group">{g.title}</div>}
               {g.hosts.map((h) => {
                 const on = connected.includes(h.hostId)
+                const c = hostColor(h.target, hostColors)
+                const color = c ? hostColorCss(c) : undefined
                 return (
                   // The row's label is its own button; the split buttons are siblings (a
                   // button can't hold buttons — assistive tech would flatten them).
@@ -483,7 +504,7 @@ function RemoteHosts() {
                       onClick={() => open(h)}
                     >
                       <span className="tree-icon">
-                        <Globe size={14} color={on ? "var(--accent)" : "var(--dim)"} />
+                        <Globe size={14} color={color ?? (on ? "var(--accent)" : "var(--dim)")} />
                       </span>
                       <span className="tree-labels">
                         <span className="tree-primary">{h.label}</span>

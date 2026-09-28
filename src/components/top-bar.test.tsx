@@ -168,3 +168,38 @@ describe("TopBar — ssh states on the tab dot and the bell", () => {
     expect(document.querySelector(".tab .dot.red, .tab .dot.amber")).toBeNull()
   })
 })
+
+describe("TopBar — host colour on the tab", () => {
+  it("a tab whose focused pane is on a coloured host is underlined in that colour", () => {
+    useStore.setState((s) => ({
+      settings: { ...s.settings, ssh: { ...s.settings.ssh, colors: { "prod-*": "red" } } },
+    }))
+    st().newTab(hostShellOption(testHost("prod-db")))
+    st().newTab(testShell)
+    render(<TopBar />)
+    const tabs = [...document.querySelectorAll(".tab")] as HTMLElement[]
+    expect(tabs[0]!.style.boxShadow).toContain("var(--red)")
+    expect(tabs[1]!.style.boxShadow).toBe("")
+  })
+})
+
+describe("TopBar — tabs spanning hosts", () => {
+  it("shows the +N in its own span (it survives the title's ellipsis)", () => {
+    st().newTab(hostShellOption(testHost("prod-db-replica-eu-west-1")))
+    st().splitWith("row", hostShellOption(testHost("staging")))
+    render(<TopBar />)
+    expect(document.querySelector(".tab-title")!.textContent).toBe("staging")
+    expect(document.querySelector(".tab-more")!.textContent).toBe("+1")
+  })
+})
+
+describe("TopBar — renaming a tab that spans hosts", () => {
+  it("pre-fills the name only, so a plain blur can't pin the live +N", () => {
+    st().newTab(hostShellOption(testHost("gpu")))
+    st().splitWith("row", testShell)
+    render(<TopBar />)
+    fireEvent.doubleClick(document.querySelector(".tab")!)
+    const input = document.querySelector(".tab-rename") as HTMLInputElement
+    expect(input.value).not.toContain("+1")
+  })
+})
