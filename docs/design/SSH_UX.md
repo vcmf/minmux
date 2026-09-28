@@ -310,5 +310,20 @@ prompt heuristic in S1, which runs on the existing throttled output-idle path.
       spanning places reads `focused +N` with the `+N` outside the ellipsis; the pane row's
       subline is `user@hostname`. Shots: [colours](ssh-ux/s2-colors.png),
       [narrow panes](ssh-ux/s2-narrow.png).
-- [ ] S3 host picker, pinned + connected sidebar, row menu, hidden git hosts, empty state
+- [x] **S3** host picker, pinned + open sidebar, row menu, hidden git hosts, empty state (F5,
+      F6, F8, F12, F15, F16). A host-first picker (store `hostPickerOpen`), opened from the sidebar's
+      search icon, the palette ("Connect to host…") and the new-tab menu ("All hosts…"): pinned,
+      recent, then config order; words match alias, detail and distro; ⏎ tab, ⌥⏎ split right, ⇧⏎
+      split down; right-click for the host menu (open, splits, copy `ssh` command, pin, hide, open
+      config for this machine's hosts). Pins live in `ssh.pinned` (settings), recents in local
+      storage. The sidebar lists pinned + hosts with a pane open, then "All hosts (N)…". Main lists
+      hidden hosts flagged (`hidden`) so the picker's "Hidden (N)" footer can show them again. The
+      common git hosts are hidden on top of `ssh.hidden` (your own list) unless brought back
+      (`ssh.shown`), so a saved settings.json never freezes the defaults; hiding is by alias, in
+      every environment. The
+      palette has one host-first row per host (no split duplicates); the new-tab menu shows six,
+      ellipsized. Shots: [picker](ssh-ux/s3-picker.png), [menu](ssh-ux/s3-picker-menu.png),
+      [sidebar, nothing pinned](ssh-ux/s3-sidebar-empty.png),
+      [sidebar, pinned + open](ssh-ux/s3-sidebar-after.png),
+      [new-tab menu](ssh-ux/s3-new-tab-menu.png).
 - [ ] S4 bounded auto-retry, "Connect all"

@@ -203,3 +203,20 @@ describe("TopBar — renaming a tab that spans hosts", () => {
     expect(input.value).not.toContain("+1")
   })
 })
+
+describe("TopBar — the new-tab menu's hosts", () => {
+  it("lists the first few (pinned, recent, then config order) and All hosts… for the rest", () => {
+    st().setSshHosts([
+      ...Array.from({ length: 9 }, (_, i) => testHost(`h${i}`)),
+      { ...testHost("github.com"), hidden: true },
+    ])
+    useStore.setState({ sshRecent: ["native:h8"] })
+    render(<TopBar />)
+    fireEvent.click(screen.getByTitle("New tab in…"))
+    const names = [...document.querySelectorAll(".shell-menu-host-name")].map((e) => e.textContent)
+    expect(names).toEqual(["h8", "h0", "h1", "h2", "h3", "h4"])
+    expect(screen.queryByText("github.com")).not.toBeInTheDocument()
+    fireEvent.mouseDown(screen.getByText("All hosts (9)…"))
+    expect(st().hostPickerOpen).toBe(true)
+  })
+})

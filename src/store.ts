@@ -15,7 +15,9 @@ import {
   visibleSessionIds,
 } from "./lib/pane-tree"
 import { inheritShell, resolveDefaultShell } from "./lib/shells"
-import { sameHosts } from "./lib/ssh-hosts-ui"
+import { hostShellOption, sameHosts } from "./lib/ssh-hosts-ui"
+import { pushRecent, toggleHidden, togglePinned } from "./lib/ssh-host-list"
+import { DEFAULT_HIDDEN_HOSTS } from "./lib/ssh-validate"
 import type { RemotePhase } from "./lib/remote-connect"
 import { reduceSignals } from "./lib/session-status"
 import type { SignalEvent } from "./lib/session-status"
@@ -94,6 +96,8 @@ interface AppState {
   settings: Settings
   settingsOpen: boolean
   paletteOpen: boolean
+  hostPickerOpen: boolean // the "Connect to host" picker
+  sshRecent: string[] // hostIds, newest first (a convenience: localStorage, last writer wins)
   searchOpen: boolean
   rightView: RightView // which view the single right-side panel shows (null = hidden)
   rightPanelWidth: number // px width of the right panel (drag-resizable, persisted)
@@ -128,6 +132,11 @@ interface AppState {
   setRightView: (view: RightView) => void
   setSessionCwd: (sessionId: string, cwd: string) => void
   setPaletteOpen: (open: boolean) => void
+  setHostPickerOpen: (open: boolean) => void
+  /** Open a host: a new tab, or a split of the active pane. Remembered as recent. */
+  openHost: (host: SshHost, how: "tab" | "row" | "column") => void
+  toggleHostPinned: (hostId: string) => void // settings.ssh.pinned
+  setHostHidden: (alias: string, hide: boolean) => void // settings.ssh.hidden
   setSearchOpen: (open: boolean) => void
   setSidebarCollapsed: (collapsed: boolean) => void
   setSettingsOpen: (open: boolean) => void
@@ -280,6 +289,25 @@ function withoutTab(state: AppState, tabId: string): Pick<AppState, "tabs" | "ac
   return { tabs, activeTabId }
 }
 
+const RECENT_KEY = "smterm.ssh.recent"
+
+// Recent hosts are a convenience: storage can be missing or throw (private mode, tests).
+function readRecent(): string[] {
+  try {
+    const v: unknown = JSON.parse(localStorage.getItem(RECENT_KEY) ?? "[]")
+    return Array.isArray(v) ? v.filter((x): x is string => typeof x === "string").slice(0, 10) : []
+  } catch {
+    return []
+  }
+}
+function writeRecent(ids: string[]) {
+  try {
+    localStorage.setItem(RECENT_KEY, JSON.stringify(ids))
+  } catch {
+    // not remembered: fine
+  }
+}
+
 export const useStore = create<AppState>((set, get) => ({
   sessions: {},
   tabs: [],
@@ -299,6 +327,8 @@ export const useStore = create<AppState>((set, get) => ({
   settingsLoaded: false,
   settingsOpen: false,
   paletteOpen: false,
+  hostPickerOpen: false,
+  sshRecent: readRecent(),
   searchOpen: false,
   rightView: null,
   rightPanelWidth: RIGHT_PANEL_DEFAULT,
@@ -365,7 +395,42 @@ export const useStore = create<AppState>((set, get) => ({
       if (!s || s.remote || s.cwd === cwd) return {}
       return { sessions: { ...state.sessions, [sessionId]: { ...s, cwd } } }
     }),
-  setPaletteOpen: (paletteOpen) => set({ paletteOpen }),
+  // One overlay at a time: opening either closes the other (⌘K over an open picker).
+  setPaletteOpen: (paletteOpen) =>
+    set(paletteOpen ? { paletteOpen, hostPickerOpen: false } : { paletteOpen }),
+  setHostPickerOpen: (hostPickerOpen) =>
+    set(hostPickerOpen ? { hostPickerOpen, paletteOpen: false } : { hostPickerOpen }),
+  openHost: (host, how) => {
+    if (host.hidden) return // listed only so it can be shown again
+    const shell = hostShellOption(host)
+    if (how === "tab") get().newTab(shell)
+    else get().splitWith(how, shell)
+    const sshRecent = pushRecent(get().sshRecent, host.hostId)
+    set({ sshRecent })
+    writeRecent(sshRecent)
+  },
+  toggleHostPinned: (hostId) => {
+    const st = get()
+    const ssh = st.settings.ssh
+    st.updateSettings({ ...st.settings, ssh: { ...ssh, pinned: togglePinned(ssh.pinned, hostId) } })
+  },
+  setHostHidden: (alias, hide) => {
+    const st = get()
+    const ssh = st.settings.ssh
+    const isDefault = DEFAULT_HIDDEN_HOSTS.some((a) => a.toLowerCase() === alias.toLowerCase())
+    st.updateSettings({
+      ...st.settings,
+      ssh: {
+        ...ssh,
+        hidden: toggleHidden(ssh.hidden, alias, hide),
+        // Showing a default-hidden git host is recorded as "shown"; hiding it again undoes that.
+        shown:
+          isDefault && !hide
+            ? toggleHidden(ssh.shown, alias, true)
+            : toggleHidden(ssh.shown, alias, false),
+      },
+    })
+  },
   setSearchOpen: (searchOpen) => set({ searchOpen }),
   setSidebarCollapsed: (sidebarCollapsed) => set({ sidebarCollapsed }),
   setSettingsOpen: (settingsOpen) => set({ settingsOpen }),

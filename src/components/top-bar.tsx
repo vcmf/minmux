@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import {
   Plus,
   CaretDown,
@@ -25,9 +25,13 @@ import { tabRemoteBadge } from "../lib/remote-connect"
 import { hostColor, hostColorCss } from "../lib/ssh-hosts-ui"
 import { tabTitleParts } from "../lib/session-label"
 import { resolveDefaultShell } from "../lib/shells"
-import { envTitle, hostShellOption } from "../lib/ssh-hosts-ui"
+import { envTitle } from "../lib/ssh-hosts-ui"
+import { hostSections, visibleHosts } from "../lib/ssh-host-list"
 import { TerminalManager } from "../terminal/terminal-manager"
 import brandIcon from "../assets/icon.png"
+
+/** How many hosts the new-tab menu lists before "All hosts…". */
+const QUICK_HOSTS = 6
 
 /** The mux top bar: brand · session tabs · search pill · window controls. */
 export function TopBar() {
@@ -35,6 +39,16 @@ export function TopBar() {
   const activeTabId = useStore((s) => s.activeTabId)
   const shells = useStore((s) => s.shells)
   const sshHosts = useStore((s) => s.sshHosts)
+  const sshPinned = useStore((s) => s.settings.ssh.pinned)
+  const sshRecent = useStore((s) => s.sshRecent)
+  // The new-tab menu's short list: the picker's order (pinned, recent, config), first few.
+  const quickHosts = useMemo(
+    () =>
+      hostSections(sshHosts, { pinned: sshPinned, recent: sshRecent })
+        .flatMap((s) => s.hosts)
+        .slice(0, QUICK_HOSTS),
+    [sshHosts, sshPinned, sshRecent],
+  )
   const sessions = useStore((s) => s.sessions)
   const remotePhase = useStore((s) => s.remotePhase)
   const remoteDetail = useStore((s) => s.remoteDetail)
@@ -229,7 +243,7 @@ export function TopBar() {
           <button
             className="iconbtn newtab-caret"
             title="New tab in…"
-            disabled={shells.length === 0 && sshHosts.length === 0}
+            disabled={shells.length === 0 && quickHosts.length === 0}
             onClick={() => setShellMenu((v) => !v)}
           >
             <CaretDown size={11} />
@@ -244,23 +258,38 @@ export function TopBar() {
                     {sh.id === defaultShell?.id && <span className="shell-menu-def">default</span>}
                   </button>
                 ))}
-                {sshHosts.length > 0 && <div className="shell-menu-group">SSH</div>}
-                {sshHosts.map((h) => (
+                {quickHosts.length > 0 && <div className="shell-menu-group">SSH</div>}
+                {quickHosts.map((h) => (
                   <button
                     key={h.hostId}
                     className="shell-menu-item"
                     title={h.detail}
-                    onMouseDown={() => openTab(hostShellOption(h))}
+                    onMouseDown={() => {
+                      setShellMenu(false)
+                      useStore.getState().openHost(h, "tab")
+                    }}
                   >
                     <span className="shell-menu-host">
                       <Globe size={12} />
-                      {h.label}
+                      <span className="shell-menu-host-name">{h.label}</span>
                     </span>
                     {h.env !== "native" && (
                       <span className="shell-menu-def">{envTitle(h.env)}</span>
                     )}
                   </button>
                 ))}
+                {visibleHosts(sshHosts).length > quickHosts.length && (
+                  <button
+                    className="shell-menu-item shell-menu-more"
+                    onMouseDown={(e) => {
+                      e.preventDefault() // the picker's input keeps the focus it takes
+                      setShellMenu(false)
+                      useStore.getState().setHostPickerOpen(true)
+                    }}
+                  >
+                    All hosts ({visibleHosts(sshHosts).length})…
+                  </button>
+                )}
               </div>
             </>
           )}

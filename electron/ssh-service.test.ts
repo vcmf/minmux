@@ -78,6 +78,9 @@ function harness(
 
 const web: RemoteRef = { hostId: "native:web", label: "web", target: "web", env: "native" }
 
+/** The hosts the UI offers: main lists hidden ones too, flagged (to show them again). */
+const shown = (hosts: { hostId: string; hidden?: true }[]) => hosts.filter((h) => !h.hidden)
+
 describe("SshService.hosts", () => {
   it("lists ~/.ssh/config hosts with their details", async () => {
     const { svc } = harness()
@@ -93,9 +96,11 @@ describe("SshService.hosts", () => {
     ])
   })
 
-  it("drops hidden hosts, case-insensitively", async () => {
+  it("flags hidden hosts, case-insensitively (listed, so they can be shown again)", async () => {
     const { svc } = harness({}, { settings: { ssh: { hidden: ["DB"] } } })
-    expect((await svc.hosts()).map((h) => h.hostId)).toEqual(["native:web"])
+    const hosts = await svc.hosts()
+    expect(shown(hosts).map((h) => h.hostId)).toEqual(["native:web"])
+    expect(hosts.find((h) => h.hostId === "native:db")?.hidden).toBe(true)
   })
 
   it("reads the config once until something changes", async () => {
@@ -417,7 +422,7 @@ describe("SshService watching", () => {
     h.svc.settingsChanged()
     await vi.advanceTimersByTimeAsync(250)
     expect(h.onChange).toHaveBeenCalledTimes(1)
-    expect((await h.svc.hosts()).map((x) => x.hostId)).toEqual(["native:web"])
+    expect(shown(await h.svc.hosts()).map((x) => x.hostId)).toEqual(["native:web"])
   })
 
   it("keeps the last good settings when settings.json doesn't parse (mid-save, a typo)", async () => {
@@ -427,7 +432,7 @@ describe("SshService watching", () => {
     h.svc.settingsChanged()
     await vi.advanceTimersByTimeAsync(250)
     expect(h.onChange).not.toHaveBeenCalled()
-    expect((await h.svc.hosts()).map((x) => x.hostId)).toEqual(["native:web"])
+    expect(shown(await h.svc.hosts()).map((x) => x.hostId)).toEqual(["native:web"])
     expect(await h.svc.spawnPlan(web)).toEqual({ file: SSH, args: ["-t", "--", "web"] })
   })
 
@@ -458,7 +463,7 @@ describe("SshService watching", () => {
     h.svc.settingsChanged()
     await vi.advanceTimersByTimeAsync(250)
     expect(h.onChange).toHaveBeenCalledTimes(1)
-    expect((await h.svc.hosts()).map((x) => x.hostId)).toEqual(["native:db"])
+    expect(shown(await h.svc.hosts()).map((x) => x.hostId)).toEqual(["native:db"])
   })
 
   it("keeps ~/.ssh/config watched while a distro reload finishes first", async () => {
@@ -543,7 +548,7 @@ describe("SshService.spawnPlan", () => {
 
   it("keeps a hidden host spawnable (a restored pane)", async () => {
     const h = harness({}, { settings: { ssh: { hidden: ["web"] } } })
-    expect(await h.svc.hosts()).toHaveLength(1)
+    expect(shown(await h.svc.hosts())).toHaveLength(1)
     expect(await h.svc.spawnPlan(web)).toHaveProperty("file", SSH)
   })
 
@@ -634,5 +639,30 @@ describe("SshService.spawnPlan", () => {
     h.svc.invalidate()
     release()
     expect(await planning).toEqual({ error: expect.stringContaining("ssh config") })
+  })
+})
+
+describe("SshService — settings main doesn't use", () => {
+  beforeEach(() => vi.useFakeTimers())
+  afterEach(() => vi.useRealTimers())
+
+  it("a pin or a colour change doesn't reload the configs", async () => {
+    let raw = JSON.stringify({})
+    const h = harness({ readSettings: () => raw })
+    await h.svc.hosts()
+    raw = JSON.stringify({ ssh: { pinned: ["native:web"], colors: { web: "red" } } })
+    h.svc.settingsChanged()
+    await vi.advanceTimersByTimeAsync(250)
+    expect(h.onChange).not.toHaveBeenCalled()
+  })
+
+  it("git hosts are hidden by default, even with a saved empty `hidden`", async () => {
+    const h = harness(
+      {},
+      { config: "Host web\nHost github.com\n", settings: { ssh: { hidden: [] } } },
+    )
+    const hosts = await h.svc.hosts()
+    expect(hosts.find((x) => x.hostId === "native:github.com")?.hidden).toBe(true)
+    expect(hosts.find((x) => x.hostId === "native:web")?.hidden).toBeUndefined()
   })
 })

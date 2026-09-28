@@ -57,7 +57,8 @@ export function sameHosts(a: SshHost[], b: SshHost[]): boolean {
       h.label === o.label &&
       h.target === o.target &&
       h.env === o.env &&
-      h.detail === o.detail
+      h.detail === o.detail &&
+      h.hidden === o.hidden
     )
   })
 }
@@ -122,9 +123,8 @@ export function hostColorCss(color: string): string {
   return color.startsWith("#") ? color : `var(--${color})`
 }
 
-/** A host's palette subline: "web · me@10.0.0.1", with the distro for a WSL host. */
+/** A host's palette subline (the row's label is the host): its distro for WSL, then
+ *  `user@hostname:port`; "" when neither. */
 export function hostSubline(h: SshHost): string {
-  return [h.label, h.env === "native" ? undefined : envTitle(h.env), h.detail]
-    .filter(Boolean)
-    .join(" · ")
+  return [h.env === "native" ? undefined : envTitle(h.env), h.detail].filter(Boolean).join(" · ")
 }

@@ -127,7 +127,9 @@ in-app settings panel; a live watcher re-applies changes as you save.
   "cursorBlink": true,
   "scrollback": 5000,
   "ssh": {
-    "hidden": [],
+    "hidden": ["bastion"], // your own; the common git hosts are hidden on top
+    "shown": [], // git hosts you brought back
+    "pinned": ["native:gpu-box"], // kept in the sidebar
     "keepAliveSeconds": 30,
     "restore": "auto", // auto | on-focus
     "colors": { "prod-*": "red", "staging-*": "amber" }, // red | amber | blue | #rrggbb
@@ -137,12 +139,17 @@ in-app settings panel; a live watcher re-applies changes as you save.
 
 ## SSH hosts
 
-smterm reads the hosts from your `~/.ssh/config` (including `Include`d files) and shows them in
-the sidebar's **Remote** section, the new-tab picker and the command palette (`SSH: Connect to
-host`). It never keeps its own host list, passwords or keys: a click runs the system `ssh
+smterm reads the hosts from your `~/.ssh/config` (including `Include`d files). **Connect to
+host…** (the sidebar's search icon, the palette, or the new-tab menu's "All hosts…") lists them:
+pinned first, then recent, then the rest. Enter opens a tab, ⌥Enter splits right, ⇧Enter
+splits down, and right-click pins, hides or copies the `ssh` command. The sidebar's **Remote**
+section keeps just the hosts you pinned or have open. It never keeps its own host list, passwords or keys: a click runs the system `ssh
 <alias>`, so keys, `ssh-agent`, 1Password, `ProxyJump` and password or 2FA prompts all work as
 in any terminal. Editing the config updates the list as you save. Wildcard patterns
-(`Host *.corp`) aren't listed; hide a host with `"ssh": { "hidden": ["github.com"] }`.
+(`Host *.corp`) aren't listed. Git hosts (`github.com`, `gitlab.com`, …) are hidden by default;
+show one again from the picker's "Hidden" footer (recorded in `ssh.shown`). Hide your own hosts
+with right-click → Hide host, or `"ssh": { "hidden": ["bastion"] }`; that list adds to the git
+defaults, it doesn't replace them. Hiding is by alias, so it applies in every environment.
 
 - **Know where you are.** A remote pane's header shows where it runs (`user@hostname` from your
   config, else the alias). Give hosts a colour with `ssh.colors`: ssh-style patterns such as

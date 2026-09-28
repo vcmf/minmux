@@ -7,6 +7,8 @@ import {
   FileText,
   GitMerge,
   Globe,
+  MagnifyingGlass,
+  PushPin,
   GitPullRequest,
   Plus,
   Rows,
@@ -37,10 +39,11 @@ import {
   groupHosts,
   hostColor,
   hostColorCss,
-  hostShellOption,
   remoteWhere,
 } from "../lib/ssh-hosts-ui"
 import type { SshHost } from "../types"
+import { hostMenuItems, sidebarHosts, visibleHosts, type HostActionId } from "../lib/ssh-host-list"
+import { runHostAction } from "../lib/ssh-host-actions"
 import {
   tabTitle,
   sessionSubline,
@@ -450,10 +453,20 @@ function writeCollapsed(v: boolean) {
 function RemoteHosts() {
   const hosts = useStore((s) => s.sshHosts)
   const loaded = useStore((s) => s.sshHostsLoaded)
+  const pinned = useStore((s) => s.settings.ssh.pinned)
   const connected = useStore(useShallow((s) => connectedHostIds(s.sessions, s.remotePhase)))
+  // Hosts with any pane open (live or not): they stay listed while you work with them.
+  const openIds = useStore(
+    useShallow((s) => [
+      ...new Set(Object.values(s.sessions).flatMap((x) => (x.remote ? [x.remote.hostId] : []))),
+    ]),
+  )
   const hostColors = useStore((s) => s.settings.ssh.colors)
   const [collapsed, setCollapsed] = useState(readCollapsed)
-  const groups = useMemo(() => groupHosts(hosts), [hosts])
+  const [menu, setMenu] = useState<{ x: number; y: number; host: SshHost } | null>(null)
+  const visibleCount = useMemo(() => visibleHosts(hosts).length, [hosts])
+  const shown = useMemo(() => sidebarHosts(hosts, pinned, openIds), [hosts, pinned, openIds])
+  const groups = useMemo(() => groupHosts(shown), [shown])
 
   const toggle = () => {
     setCollapsed((v) => {
@@ -461,9 +474,8 @@ function RemoteHosts() {
       return !v
     })
   }
-  const open = (h: SshHost) => useStore.getState().newTab(hostShellOption(h))
-  const split = (h: SshHost, direction: "row" | "column") =>
-    useStore.getState().splitWith(direction, hostShellOption(h))
+  const browse = () => useStore.getState().setHostPickerOpen(true)
+  const open = (h: SshHost, how: "tab" | "row" | "column") => useStore.getState().openHost(h, how)
 
   return (
     <div className="remote">
@@ -471,19 +483,45 @@ function RemoteHosts() {
         <button className="remote-toggle" onClick={toggle} aria-expanded={!collapsed}>
           {collapsed ? <CaretRight size={11} /> : <CaretDown size={11} />}
           <span className="section-label">Remote</span>
-          {hosts.length > 0 && <span className="status-faint remote-count">{hosts.length}</span>}
+          {visibleCount > 0 && <span className="status-faint remote-count">{visibleCount}</span>}
         </button>
-        <button className="iconbtn" title="Open ssh config" onClick={() => ipc.openSshConfig()}>
-          <FileText size={14} />
-        </button>
+        <span className="remote-header-actions">
+          <button className="iconbtn" title="Connect to host…" onClick={browse}>
+            <MagnifyingGlass size={14} />
+          </button>
+          <button className="iconbtn" title="Open ssh config" onClick={() => ipc.openSshConfig()}>
+            <FileText size={14} />
+          </button>
+        </span>
       </div>
       {!collapsed && (
         <div className="remote-list">
+          {loaded && visibleCount === 0 && hosts.length > 0 && (
+            <div className="remote-empty">
+              <span className="status-faint">All your hosts are hidden.</span>
+              <button className="remote-empty-btn" onClick={browse}>
+                Show hidden hosts
+              </button>
+            </div>
+          )}
           {loaded && hosts.length === 0 && (
             <div className="remote-empty">
-              <span className="status-faint">No hosts in ~/.ssh/config</span>
+              <span className="status-faint">
+                Hosts come from the <code>Host</code> entries in ~/.ssh/config. Add one there and it
+                shows up as you save.
+              </span>
               <button className="remote-empty-btn" onClick={() => ipc.openSshConfig()}>
                 Open ssh config
+              </button>
+            </div>
+          )}
+          {visibleCount > 0 && shown.length === 0 && (
+            <div className="remote-empty">
+              <span className="status-faint">
+                Pinned hosts and hosts you&apos;re using show here.
+              </span>
+              <button className="remote-empty-btn" onClick={browse}>
+                Browse hosts
               </button>
             </div>
           )}
@@ -497,11 +535,19 @@ function RemoteHosts() {
                 return (
                   // The row's label is its own button; the split buttons are siblings (a
                   // button can't hold buttons — assistive tech would flatten them).
-                  <div key={h.hostId} className="tree-row remote-row" style={{ paddingLeft: 12 }}>
+                  <div
+                    key={h.hostId}
+                    className="tree-row remote-row"
+                    style={{ paddingLeft: 12 }}
+                    onContextMenu={(e) => {
+                      e.preventDefault()
+                      setMenu({ x: e.clientX, y: e.clientY, host: h })
+                    }}
+                  >
                     <button
                       className="remote-open"
                       title={`Open a terminal on ${h.label}`}
-                      onClick={() => open(h)}
+                      onClick={() => open(h, "tab")}
                     >
                       <span className="tree-icon">
                         <Globe size={14} color={color ?? (on ? "var(--accent)" : "var(--dim)")} />
@@ -517,7 +563,7 @@ function RemoteHosts() {
                         title={`Split right on ${h.label}`}
                         onClick={(e) => {
                           e.stopPropagation()
-                          split(h, "row")
+                          open(h, "row")
                         }}
                       >
                         <Columns size={13} />
@@ -527,19 +573,39 @@ function RemoteHosts() {
                         title={`Split down on ${h.label}`}
                         onClick={(e) => {
                           e.stopPropagation()
-                          split(h, "column")
+                          open(h, "column")
                         }}
                       >
                         <Rows size={13} />
                       </button>
                     </span>
+                    {pinned.includes(h.hostId) && (
+                      <PushPin size={11} className="remote-pin" aria-label="Pinned" />
+                    )}
                     {on && <span className="dot accent" title="Connected" />}
                   </div>
                 )
               })}
             </div>
           ))}
+          {visibleCount > 0 && (
+            <button className="remote-all" onClick={browse}>
+              All hosts ({visibleCount})…
+            </button>
+          )}
         </div>
+      )}
+      {menu && (
+        <ContextMenu<HostActionId>
+          x={menu.x}
+          y={menu.y}
+          items={hostMenuItems({
+            pinned: pinned.includes(menu.host.hostId),
+            native: menu.host.env === "native",
+          })}
+          onSelect={(id) => runHostAction(menu.host, id)}
+          onClose={() => setMenu(null)}
+        />
       )}
     </div>
   )

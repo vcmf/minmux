@@ -3,6 +3,8 @@ import { hasControlChar } from "./control-chars"
 import {
   isSshEnv,
   isSshTarget,
+  DEFAULT_HIDDEN_HOSTS,
+  effectiveHidden,
   mergeSshSettings,
   parseRemoteRef,
   parseSshEnv,
@@ -84,10 +86,12 @@ describe("parseSshEnv / isSshEnv", () => {
 })
 
 describe("mergeSshSettings", () => {
-  it("defaults: nothing hidden, a 30 s keepalive, reconnect at once", () => {
+  it("defaults: nothing of your own hidden or shown, nothing pinned, 30 s keepalive, auto", () => {
     for (const v of [undefined, null, {}, "nope", 3]) {
       expect(mergeSshSettings(v)).toEqual({
         hidden: [],
+        shown: [],
+        pinned: [],
         keepAliveSeconds: 30,
         restore: "auto",
         colors: {},
@@ -122,7 +126,9 @@ describe("mergeSshSettings", () => {
   it("returns fresh arrays every call", () => {
     const a = mergeSshSettings({})
     a.hidden.push("x")
+    a.pinned.push("y")
     expect(mergeSshSettings({}).hidden).toEqual([])
+    expect(mergeSshSettings({}).pinned).toEqual([])
   })
 })
 
@@ -204,5 +210,27 @@ describe("mergeSshSettings — colors, edge cases", () => {
     expect(Object.keys(c).sort()).toEqual(["__proto__", "constructor", "toString"])
     expect(c.constructor).toBe("red")
     expect(Object.getPrototypeOf(c)).toBe(Object.prototype) // not replaced by "__proto__"
+  })
+})
+
+describe("mergeSshSettings — pinned", () => {
+  it("unique host ids, no control characters, capped", () => {
+    expect(
+      mergeSshSettings({ pinned: ["native:web", "native:web", "", 3, "a\u0007", "wsl:U:gpu"] })
+        .pinned,
+    ).toEqual(["native:web", "wsl:U:gpu"])
+    expect(mergeSshSettings({ pinned: "native:web" }).pinned).toEqual([])
+    const many = Array.from({ length: 300 }, (_, i) => `native:h${i}`)
+    expect(mergeSshSettings({ pinned: many }).pinned).toHaveLength(200)
+  })
+})
+
+describe("effectiveHidden", () => {
+  it("your list plus the git defaults you haven't shown — a saved [] never unhides them", () => {
+    expect(effectiveHidden({ hidden: [], shown: [] })).toEqual([...DEFAULT_HIDDEN_HOSTS])
+    expect(effectiveHidden({ hidden: ["bastion"], shown: ["GitHub.com"] })).toEqual([
+      "bastion",
+      ...DEFAULT_HIDDEN_HOSTS.filter((a) => a !== "github.com"),
+    ])
   })
 })
