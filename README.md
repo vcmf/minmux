@@ -133,6 +133,7 @@ in-app settings panel; a live watcher re-applies changes as you save.
     "keepAliveSeconds": 30,
     "restore": "auto", // auto | on-focus
     "colors": { "prod-*": "red", "staging-*": "amber" }, // red | amber | blue | #rrggbb
+    "integration": ["gpu-*"], // hosts whose shells report to smterm (opt-in)
   },
 }
 ```
@@ -177,6 +178,12 @@ defaults, it doesn't replace them. Hiding is by alias, so it applies in every en
   and in the palette) connects every waiting one, including those in tabs you haven't opened
   yet: the first pane per host, then the rest once it's past its password prompt, so they can
   share a ControlMaster.
+- **Shell integration (opt-in per host).** Right-click a host → Turn on shell integration (or
+  `"ssh": { "integration": ["gpu-*", "!gpu-old"] }`). Its next connection starts your bash or
+  zsh with smterm's prompt hooks, sent inline for that session: nothing is installed, your
+  dotfiles still load, and the temp files are gone once the shell has started. Other shells,
+  a `RemoteCommand` in your config, or a host without `sh` get the plain login shell.
+  Details and costs: `docs/design/SSH_REMOTES.md` §8.
 - **Prompt-free splits.** Each pane is its own `ssh`. For hosts that ask for a password, let
   OpenSSH share one connection by adding this to your `~/.ssh/config`:
 

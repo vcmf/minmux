@@ -96,6 +96,7 @@ describe("mergeSshSettings", () => {
         restore: "auto",
         autoReconnect: true,
         colors: {},
+        integration: [], // shell integration: opt-in per host
       })
     }
   })

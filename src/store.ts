@@ -17,6 +17,7 @@ import {
 import { inheritShell, resolveDefaultShell } from "./lib/shells"
 import { hostShellOption, sameHosts } from "./lib/ssh-hosts-ui"
 import { pushRecent, toggleHidden, togglePinned } from "./lib/ssh-host-list"
+import { integrationOn, setIntegration } from "./lib/ssh-integration"
 import { DEFAULT_HIDDEN_HOSTS } from "./lib/ssh-validate"
 import type { RemotePhase } from "./lib/remote-connect"
 import { reduceSignals } from "./lib/session-status"
@@ -138,6 +139,7 @@ interface AppState {
   openHost: (host: SshHost, how: "tab" | "row" | "column") => void
   toggleHostPinned: (hostId: string) => void // settings.ssh.pinned
   setHostHidden: (alias: string, hide: boolean) => void // settings.ssh.hidden
+  toggleHostIntegration: (alias: string) => void // settings.ssh.integration
   setSearchOpen: (open: boolean) => void
   setSidebarCollapsed: (collapsed: boolean) => void
   setSettingsOpen: (open: boolean) => void
@@ -423,6 +425,15 @@ export const useStore = create<AppState>((set, get) => ({
     const st = get()
     const ssh = st.settings.ssh
     st.updateSettings({ ...st.settings, ssh: { ...ssh, pinned: togglePinned(ssh.pinned, hostId) } })
+  },
+  toggleHostIntegration: (alias) => {
+    const st = get()
+    const ssh = st.settings.ssh
+    const on = !integrationOn(alias, ssh.integration)
+    st.updateSettings({
+      ...st.settings,
+      ssh: { ...ssh, integration: setIntegration(ssh.integration, alias, on) },
+    })
   },
   setHostHidden: (alias, hide) => {
     const st = get()

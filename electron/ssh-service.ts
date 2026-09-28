@@ -19,6 +19,8 @@ import {
   type MiniFs,
   type SshConfigHost,
 } from "./ssh-config"
+import { integrationOn } from "../src/lib/ssh-integration"
+import { hasRemoteCommand } from "./remote-bootstrap"
 import { buildSshSpawn, mergeHosts, trustedRemote } from "./ssh-hosts"
 
 /** Everything the service needs from the OS. */
@@ -32,6 +34,8 @@ export interface SshDeps {
   wslFs: (distro: string) => MiniFs // Linux paths → the distro's UNC share
   wslWatchPaths: (distro: string, linuxPath: string) => string[] // host paths to watch
   sshPath: () => Promise<string | null> // the native ssh's full path (null = not installed)
+  // `ssh -G …`'s output (the effective config), null on failure — asked only for opted-in hosts
+  sshEffectiveConfig: (file: string, args: string[]) => Promise<string | null>
   createWatcher: (onChange: (path: string) => void) => {
     set: (paths: string[]) => void
     close: () => void
@@ -39,7 +43,8 @@ export interface SshDeps {
   onChange: () => void // the host list changed (debounced)
 }
 
-export type SpawnPlan = { file: string; args: string[] } | { error: string }
+/** `integration`: the host opted in to smterm's shell integration (main adds the bootstrap). */
+export type SpawnPlan = { file: string; args: string[]; integration?: boolean } | { error: string }
 
 const RUNNING_DISTROS_TTL_MS = 5000 // `wsl -l --running` is a process spawn: not per call
 const LIST_WSL_WAIT_MS = 5000 // the sidebar stops waiting on a slow distro after this…
@@ -58,7 +63,11 @@ type DistroHosts = { hosts: SshConfigHost[]; watch: string[]; globs: string[] }
 
 /** The part of the ssh settings main acts on: a pin or a colour change needs no reload. */
 const mainKey = (s: SshSettings) =>
-  JSON.stringify([effectiveHidden(s).map((a) => a.toLowerCase()), s.keepAliveSeconds])
+  JSON.stringify([
+    effectiveHidden(s).map((a) => a.toLowerCase()),
+    s.keepAliveSeconds,
+    s.integration,
+  ])
 
 export class SshService {
   private native: Promise<LoadResult> | null = null
@@ -77,6 +86,7 @@ export class SshService {
   private current: SshSettings // the ssh block as of the last change (read once, not per spawn)
   private settingsKey: string
   private running: { at: number; list: Promise<string[]> } | null = null
+  private probes = new Map<string, Promise<boolean>>() // `ssh -G` verdicts, per generation
 
   constructor(private readonly deps: SshDeps) {
     this.current = this.readSettings() ?? mergeSshSettings({})
@@ -111,6 +121,7 @@ export class SshService {
     this.distros.clear()
     this.display = null
     this.running = null
+    this.probes.clear()
     // Distro paths are re-learned as distros reload; the native ones stay watched until its
     // reload replaces them (a distro load finishing first must not unwatch ~/.ssh/config).
     this.watched.wsl = new Map()
@@ -168,17 +179,41 @@ export class SshService {
     }
     const { platform } = this.deps
     const keepAliveSeconds = this.current.keepAliveSeconds
+    const integration = integrationOn(remote.label, this.current.integration)
     if (parseSshEnv(remote.env)?.kind === "wsl") {
       const plan = buildSshSpawn(remote, { platform, sshPath: "ssh", keepAliveSeconds })
-      return plan ?? { error: SSH_ERRORS.wslOffWindows }
+      return plan ? this.withIntegration(plan, integration) : { error: SSH_ERRORS.wslOffWindows }
     }
     const sshPath = await this.deps.sshPath()
     if (!sshPath) return { error: SSH_ERRORS.noSsh }
-    return (
-      buildSshSpawn(remote, { platform, sshPath, keepAliveSeconds }) ?? {
-        error: SSH_ERRORS.cantBuild,
-      }
-    )
+    const plan = buildSshSpawn(remote, { platform, sshPath, keepAliveSeconds })
+    return plan ? this.withIntegration(plan, integration) : { error: SSH_ERRORS.cantBuild }
+  }
+
+  // An opted-in host gets the bootstrap unless its config runs a command of its own
+  // (RemoteCommand: ssh refuses both, and the user's wins). Asked of ssh itself (`-G`, the
+  // same options), so Match blocks and Includes count; any doubt → a plain connection.
+  private async withIntegration(
+    plan: { file: string; args: string[] },
+    integration: boolean,
+  ): Promise<SpawnPlan> {
+    if (!integration) return plan
+    const tty = plan.args.lastIndexOf("--") - 1 // buildSshSpawn ends with `-t -- <target>`
+    if (plan.args[tty] !== "-t") return plan
+    const probe = plan.args.map((a, i) => (i === tty ? "-G" : a))
+    // Asked once per host until the config or settings change (a failure is asked again).
+    const key = JSON.stringify([plan.file, probe])
+    let ok = this.probes.get(key)
+    if (!ok) {
+      ok = this.deps
+        .sshEffectiveConfig(plan.file, probe)
+        .then((c) => c !== null && !hasRemoteCommand(c))
+        .catch(() => false)
+      this.probes.set(key, ok)
+      const p = ok
+      void p.then((yes) => !yes && this.probes.get(key) === p && this.probes.delete(key))
+    }
+    return (await ok) ? { ...plan, integration } : plan
   }
 
   // null = settings.json doesn't parse right now.
