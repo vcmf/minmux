@@ -22,9 +22,13 @@ const showHosts = (hosts: SshHost[]) => {
   }))
 }
 
+/** The Remote section's remembered choice: most tests look inside it, so they start it open. */
+const REMOTE_KEY = "smterm.sidebar.remoteCollapsed"
+
 beforeEach(() => {
   resetStore()
   vi.clearAllMocks()
+  localStorage.setItem(REMOTE_KEY, "0")
 })
 
 describe("Sidebar", () => {
@@ -282,11 +286,7 @@ describe("Sidebar — folder lines: full path + right-click menu", () => {
 
 describe("Sidebar — Remote hosts", () => {
   beforeEach(() => {
-    try {
-      localStorage.clear()
-    } catch {
-      // no storage in this environment
-    }
+    localStorage.setItem(REMOTE_KEY, "0")
   })
 
   it("lists saved hosts with their detail, without env headings for one env", () => {
@@ -489,5 +489,41 @@ describe("Sidebar — a restored ssh pane not started yet", () => {
     }))
     render(<Sidebar />)
     expect(screen.getByText("not connected")).toBeInTheDocument()
+  })
+})
+
+describe("Sidebar — Remote header", () => {
+  it("starts collapsed when you've never chosen", () => {
+    localStorage.removeItem(REMOTE_KEY)
+    showHosts([testHost("web")])
+    render(<Sidebar />)
+    expect(screen.getByText("Remote").closest("button")).toHaveAttribute("aria-expanded", "false")
+    expect(screen.queryByTitle("Open a terminal on web")).not.toBeInTheDocument()
+  })
+
+  it("shows connections, and whether one is connecting, needs you or is down", () => {
+    st().setSshHosts([testHost("web"), testHost("db"), testHost("pi"), testHost("x")])
+    for (const h of ["web", "db", "pi", "x"]) st().newTab(hostShellOption(testHost(h)))
+    const [a, b, c, d] = st().tabs.map((t) => t.activeSessionId)
+    st().setRemotePhase(a!, "live")
+    st().setRemotePhase(b!, "prompt", "password")
+    st().setRemotePhase(c!, "closed", "lost")
+    st().setRemotePhase(d!, "closed", "retrying") // reconnecting on its own: not "needs you"
+    render(<Sidebar />)
+    const status = document.querySelector(".remote-status") as HTMLElement
+    expect(status.querySelector(".remote-status-n")!.textContent).toBe("2") // web + db (prompt)
+    expect(status.querySelector(".dot.faint.pulse")).not.toBeNull()
+    expect(status.querySelectorAll(".dot.amber")).toHaveLength(1)
+    expect(status.querySelector(".dot.red")).not.toBeNull()
+    const text = "2 connections · 1 connecting · 1 needs you · 1 disconnected"
+    expect(status.title).toBe(text)
+    // Screen readers get it from the toggle's name (the dots themselves are aria-hidden).
+    expect(screen.getByRole("button", { name: `Remote: ${text}` })).toBeInTheDocument()
+  })
+
+  it("nothing remote: no status at all", () => {
+    st().setSshHosts([testHost("web")])
+    render(<Sidebar />)
+    expect(document.querySelector(".remote-status")).toBeNull()
   })
 })

@@ -7,6 +7,9 @@ import {
   onOutput,
   remoteStatusUi,
   retryPlan,
+  remoteSummary,
+  isDown,
+  summaryText,
   retryEligible,
   lostLink,
   isWaitingRemote,
@@ -399,5 +402,41 @@ describe("isWaitingRemote / countWaitingRemote", () => {
     expect(isWaitingRemote({}, "waiting", "on-focus")).toBe(false)
     const sessions = { a: { id: "a", remote: r }, b: { id: "b", remote: r, restored: true } }
     expect(countWaitingRemote(sessions, { a: "waiting" }, "on-focus")).toBe(2)
+  })
+})
+
+describe("remoteSummary / summaryText", () => {
+  it("connections (a prompt is live), connecting (incl. an automatic retry), needs you, down", () => {
+    const r = { hostId: "native:web" }
+    const ids = ["a", "b", "c", "d", "e", "g"]
+    const sessions: Record<string, { id: string; remote?: unknown }> = Object.fromEntries(
+      ids.map((id) => [id, { id, remote: r }]),
+    )
+    sessions.f = { id: "f" }
+    const phases = {
+      a: "live",
+      b: "prompt",
+      c: "closed",
+      d: "closed",
+      e: "failed",
+      f: "live",
+      g: "starting",
+    } as Record<string, RemotePhase>
+    const sum = remoteSummary(sessions, phases, { c: "retrying", d: "ended" })
+    expect(sum).toEqual({ live: 2, connecting: 2, needsYou: 1, down: 1 })
+    expect(summaryText(sum)).toBe("2 connections · 2 connecting · 1 needs you · 1 disconnected")
+    expect(summaryText({ live: 1, connecting: 0, needsYou: 0, down: 0 })).toBe("1 connection")
+    expect(summaryText({ live: 0, connecting: 0, needsYou: 0, down: 0 })).toBe("")
+  })
+})
+
+describe("isDown", () => {
+  it("lost or failed; never a clean exit or an automatic retry", () => {
+    expect(isDown("failed")).toBe(true)
+    expect(isDown("closed", "lost")).toBe(true)
+    expect(isDown("closed", "ended")).toBe(false)
+    expect(isDown("closed", "retrying")).toBe(false)
+    expect(isDown("live")).toBe(false)
+    expect(isDown(undefined)).toBe(false)
   })
 })

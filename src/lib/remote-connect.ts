@@ -199,11 +199,7 @@ export function tabRemoteBadge(
   panes: { phase?: RemotePhase; detail?: string }[],
 ): "prompt" | "down" | null {
   if (panes.some((p) => p.phase === "prompt")) return "prompt"
-  const down = panes.some(
-    (p) =>
-      p.phase === "failed" ||
-      (p.phase === "closed" && p.detail !== "ended" && p.detail !== "retrying"),
-  )
+  const down = panes.some((p) => isDown(p.phase, p.detail))
   return down ? "down" : null
 }
 
@@ -288,4 +284,48 @@ export function countWaitingRemote(
   let n = 0
   for (const s of Object.values(sessions)) if (isWaitingRemote(s, phases[s.id], restore)) n++
   return n
+}
+
+/** A connection that's down and waiting on you: lost or failed (a clean exit isn't, nor one
+ *  reconnecting on its own). One rule for the tab dot and the Remote header. */
+export const isDown = (phase: RemotePhase | undefined, detail?: string): boolean =>
+  phase === "failed" || (phase === "closed" && detail !== "ended" && detail !== "retrying")
+
+/** The Remote header's status: ssh connections (panes) by state. */
+export interface RemoteSummary {
+  live: number // ssh running (incl. one at a password prompt)
+  connecting: number // dialing, or reconnecting on its own: nothing for you to do
+  needsYou: number // at a password / host-key prompt
+  down: number // lost or failed, waiting on you
+}
+
+export function remoteSummary(
+  sessions: Record<string, { id: string; remote?: unknown }>,
+  phases: Record<string, RemotePhase>,
+  details: Record<string, string>,
+): RemoteSummary {
+  const out = { live: 0, connecting: 0, needsYou: 0, down: 0 }
+  for (const s of Object.values(sessions)) {
+    if (!s.remote) continue
+    const p = phases[s.id]
+    const d = details[s.id]
+    if (p === "live" || p === "prompt") out.live++
+    if (p === "starting" || (p === "closed" && d === "retrying")) out.connecting++
+    if (p === "prompt") out.needsYou++
+    if (isDown(p, d)) out.down++
+  }
+  return out
+}
+
+/** The summary in words, for the header's tooltip and accessible name ("" when nothing). */
+export function summaryText(s: RemoteSummary): string {
+  const n = (k: number, one: string, many = `${one}s`) => `${k} ${k === 1 ? one : many}`
+  return [
+    s.live && n(s.live, "connection"),
+    s.connecting && `${s.connecting} connecting`,
+    s.needsYou && `${s.needsYou} need${s.needsYou === 1 ? "s" : ""} you`,
+    s.down && `${s.down} disconnected`,
+  ]
+    .filter(Boolean)
+    .join(" · ")
 }
