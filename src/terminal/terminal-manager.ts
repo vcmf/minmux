@@ -389,11 +389,19 @@ function setPhase(id: string, entry: Entry, phase: RemotePhase) {
   useStore.getState().setRemotePhase(id, phase)
 }
 
-// Undo what a program on the dropped connection left on: alt screen, mouse tracking, focus
-// events, bracketed paste, application cursor keys; show the cursor. Otherwise the next
-// shell prints into a stale alt screen and clicks type escape codes into it.
+// Undo what a program on the dropped connection left on: mouse tracking, focus events,
+// bracketed paste, application cursor keys; show the cursor. Otherwise clicks type escape
+// codes into the next shell.
 const RESET_MODES =
-  "\x1b[?1049l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?1004l\x1b[?2004l\x1b[?1l\x1b[?25h\x1b[0m"
+  "\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?1004l\x1b[?2004l\x1b[?1l\x1b[?25h\x1b[0m"
+// Leave a TUI's alt screen. Only when in it: on the normal screen `?1049l` also restores a
+// cursor saved long ago, so the banner would overwrite old scrollback.
+const LEAVE_ALT_SCREEN = "\x1b[?1049l"
+
+/** The resets to write after a drop, for the buffer the terminal is on now. */
+export function resetAfterDrop(buffer: "normal" | "alternate"): string {
+  return (buffer === "alternate" ? LEAVE_ALT_SCREEN : "") + RESET_MODES
+}
 
 /** An ssh pane stops at a prompt: say why, and show Connect in its header. */
 function setIdle(
@@ -444,7 +452,7 @@ function spawn(session: Session, entry: Entry) {
       entry.startSeq = (entry.startSeq ?? 0) + 1 // an answer still in flight is stale now
       clearTimeout(entry.idleTimer)
       useStore.getState().signalSession(session.id, { type: "command-end" }) // nothing runs now
-      entry.term.write(RESET_MODES)
+      entry.term.write(resetAfterDrop(entry.term.buffer.active.type))
       setIdle(session.id, entry, "closed", e)
     })
     const restore = useStore.getState().settings.ssh.restore
