@@ -9,7 +9,7 @@ import { claudePaneIds } from "../lib/agent-graph"
 import { canMove, findPaneById, type MoveTarget } from "../lib/pane-tree"
 import { dropZone, insertIndex } from "../lib/drop-zone"
 import { displaySessionTitle, shellType } from "../lib/session-label"
-import { remoteBadge } from "../lib/ssh-hosts-ui"
+import { hostColor, hostColorCss, remoteWhere } from "../lib/ssh-hosts-ui"
 import { isIdle, remoteStatusUi } from "../lib/remote-connect"
 import { canRetry, type SshFailure } from "../lib/ssh-errors"
 import { statusUi } from "../lib/status-ui"
@@ -52,6 +52,14 @@ export function TerminalPane({ pane, tabId }: { pane: PaneLeaf; tabId: string })
   // The failure kind (phase failed) or "ended" / "lost" (phase closed).
   const remoteDetail = useStore((s) => s.remoteDetail[activeId])
   const failure = remoteDetail as SshFailure | undefined
+  const sshHosts = useStore((s) => s.sshHosts)
+  const hostColors = useStore((s) => s.settings.ssh.colors)
+  // A surface's host colour as CSS (undefined = none set, or a local shell).
+  const colorOf = (s: { remote?: { target: string } } | undefined) => {
+    const c = s?.remote ? hostColor(s.remote.target, hostColors) : undefined
+    return c ? hostColorCss(c) : undefined
+  }
+  const activeColor = colorOf(session)
   // Each surface's remote phase + detail, flat primitives (a surface tab shows its state dot).
   const remoteFlat = useStore(
     useShallow((s) =>
@@ -197,6 +205,8 @@ export function TerminalPane({ pane, tabId }: { pane: PaneLeaf; tabId: string })
     >
       <div
         className="pane-header"
+        // A host with a colour marks the whole header (left rail), not just its chip.
+        style={activeColor ? { boxShadow: `inset 3px 0 0 ${activeColor}` } : undefined}
         // The whole header is the strip's drop area: a slot between tabs reorders / joins
         // this pane there; past the last tab (incl. the empty header space) = the end.
         onDragOver={(e) => {
@@ -291,7 +301,11 @@ export function TerminalPane({ pane, tabId }: { pane: PaneLeaf; tabId: string })
                       size={13}
                       weight="fill"
                       // The session's colour when it has one (the tab "dot"), else focus/dim.
-                      color={accents[i] ?? (active && focused ? "var(--accent)" : "var(--dim)")}
+                      color={
+                        accents[i] ??
+                        colorOf(s) ??
+                        (active && focused ? "var(--accent)" : "var(--dim)")
+                      }
                     />
                   )
                 })()}
@@ -317,9 +331,18 @@ export function TerminalPane({ pane, tabId }: { pane: PaneLeaf; tabId: string })
             )
           })}
         </div>
-        <span className="pane-badge" title={session?.remote ? session.remote.target : undefined}>
-          {session?.remote ? remoteBadge(session.remote) : shellType(session?.command ?? "")}
-        </span>
+        {session?.remote ? (
+          // Where this pane runs: user@hostname (else the alias), in the host's colour if set.
+          <span
+            className={`host-chip${activeColor ? " colored" : ""}`}
+            style={activeColor ? ({ "--host": activeColor } as React.CSSProperties) : undefined}
+            title={`ssh ${session.remote.target}`}
+          >
+            {remoteWhere(session.remote, sshHosts)}
+          </span>
+        ) : (
+          <span className="pane-badge">{shellType(session?.command ?? "")}</span>
+        )}
         <div className="pane-header-spacer" />
         {remoteIdle === "failed" &&
           failure === "host-gone" &&

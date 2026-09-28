@@ -62,14 +62,33 @@ export function sameHosts(a: SshHost[], b: SshHost[]): boolean {
   })
 }
 
-/** A remote session's subline: "ssh · web", plus the distro for a WSL host. */
-export function remoteSubline(r: RemoteRef): string {
-  return r.env === "native" ? `ssh · ${r.target}` : `ssh · ${r.target} · ${envTitle(r.env)}`
+/** Where a remote pane runs, for its chip and sidebar subline: the host's `user@hostname:port`
+ *  from the list (else its alias), plus the distro for a WSL host. */
+export function remoteWhere(r: RemoteRef, hosts: SshHost[]): string {
+  const detail = hosts.find((h) => h.hostId === r.hostId)?.detail ?? r.target
+  return r.env === "native" ? detail : `${detail} · ${envTitle(r.env)}`
 }
 
-/** A remote pane's badge: "ssh", plus the distro for a WSL host (the title is the host). */
-export function remoteBadge(r: RemoteRef): string {
-  return r.env === "native" ? "ssh" : `ssh · ${envTitle(r.env)}`
+// `*` any run, `?` one character; case-insensitive, like ssh's own Host patterns.
+function globToRegExp(pattern: string): RegExp {
+  const body = pattern
+    .replace(/[.+^${}()|[\]\\]/g, "\\$&")
+    .replace(/\*/g, ".*")
+    .replace(/\?/g, ".")
+  return new RegExp(`^${body}$`, "i")
+}
+
+/** The colour the user gave this host (first matching pattern in `ssh.colors`), if any. */
+export function hostColor(alias: string, colors: Record<string, string>): string | undefined {
+  for (const [pattern, color] of Object.entries(colors)) {
+    if (globToRegExp(pattern).test(alias)) return color
+  }
+  return undefined
+}
+
+/** CSS for a host colour: a theme token for the named ones, the hex as-is. */
+export function hostColorCss(color: string): string {
+  return color === "green" ? "var(--accent)" : color.startsWith("#") ? color : `var(--${color})`
 }
 
 /** A host's palette subline: "web · me@10.0.0.1", with the distro for a WSL host. */

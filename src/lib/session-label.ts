@@ -1,3 +1,4 @@
+import { allSessionIds } from "./pane-tree"
 import type { Session, Tab } from "../types"
 
 /** Short shell-type label for the badge (zsh/bash/pwsh/wsl/…) from the command. */
@@ -38,10 +39,32 @@ export function displaySessionTitle(session: Session | undefined, home: string):
   return cwdBasename(session.cwd, home) || shellType(session.command) || session.title || "shell"
 }
 
-/** A tab's display title: the manual pin (tab.title) if set, else the focused
- *  pane's live display title. */
+/** A tab's display title: the manual pin (tab.title) if set, else the focused pane's live
+ *  title — and when its panes run on more than one place (hosts, or a host and this machine),
+ *  how many others: "gpu-box +1". */
 export function tabTitle(tab: Tab, sessions: Record<string, Session>, home: string): string {
-  return tab.title.trim() || displaySessionTitle(sessions[tab.activeSessionId], home)
+  const { base, more } = tabTitleParts(tab, sessions, home)
+  return more ? `${base} ${more}` : base
+}
+
+/** tabTitle in two parts, so a long title can ellipsize without losing its "+N". */
+export function tabTitleParts(
+  tab: Tab,
+  sessions: Record<string, Session>,
+  home: string,
+): { base: string; more?: string } {
+  const pinned = tab.title.trim()
+  if (pinned) return { base: pinned }
+  const base = displaySessionTitle(sessions[tab.activeSessionId], home)
+  const places = new Set<string>()
+  let remote = false
+  for (const id of allSessionIds(tab.root)) {
+    const s = sessions[id]
+    if (!s) continue
+    if (s.remote) remote = true
+    places.add(s.remote ? s.remote.hostId : "local")
+  }
+  return remote && places.size > 1 ? { base, more: `+${places.size - 1}` } : { base }
 }
 
 /** "branch • ~/dir" (branch optional) for a session's subline. */

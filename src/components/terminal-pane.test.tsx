@@ -401,3 +401,46 @@ describe("TerminalPane — WSL and clean exits", () => {
     expect(screen.getByText("Start again")).toBeInTheDocument()
   })
 })
+
+describe("TerminalPane — host chip and colour", () => {
+  const withColors = (colors: Record<string, string>) =>
+    useStore.setState((s) => ({ settings: { ...s.settings, ssh: { ...s.settings.ssh, colors } } }))
+
+  it("a remote pane shows where it runs (user@hostname) instead of an SSH badge", () => {
+    st().setSshHosts([testHost("web", "native", "me@10.0.0.1")])
+    st().newTab(hostShellOption(testHost("web")))
+    renderPane(st().tabs[0]!.id)
+    expect(screen.getByText("me@10.0.0.1")).toHaveClass("host-chip")
+    expect(screen.queryByText("SSH")).not.toBeInTheDocument()
+    expect(screen.queryByText("ssh")).not.toBeInTheDocument()
+  })
+
+  it("no colour set: a neutral chip and no rail", () => {
+    st().newTab(hostShellOption(testHost("web")))
+    renderPane(st().tabs[0]!.id)
+    const chip = document.querySelector(".host-chip")!
+    expect(chip.textContent).toBe("web")
+    expect(chip).not.toHaveClass("colored")
+    expect((document.querySelector(".pane-header") as HTMLElement).style.boxShadow).toBe("")
+  })
+
+  it("a matching colour pattern colours the chip and marks the header", () => {
+    withColors({ "prod-*": "red" })
+    st().newTab(hostShellOption(testHost("prod-db")))
+    renderPane(st().tabs[0]!.id)
+    const chip = document.querySelector(".host-chip") as HTMLElement
+    expect(chip.textContent).toBe("prod-db")
+    expect(chip).toHaveClass("colored")
+    expect(chip.style.getPropertyValue("--host")).toBe("var(--red)")
+    expect((document.querySelector(".pane-header") as HTMLElement).style.boxShadow).toContain(
+      "var(--red)",
+    )
+  })
+
+  it("a local pane keeps its shell badge", () => {
+    const { tabId } = mountPane()
+    renderPane(tabId)
+    expect(document.querySelector(".host-chip")).toBeNull()
+    expect(document.querySelector(".pane-badge")).not.toBeNull()
+  })
+})

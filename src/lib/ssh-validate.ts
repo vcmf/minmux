@@ -34,7 +34,18 @@ export interface SshSettings {
   hidden: string[] // aliases hidden from the list (e.g. "github.com")
   keepAliveSeconds: number // ServerAliveInterval smterm adds (0 = add none, the config decides)
   restore: "auto" | "on-focus" // after a relaunch: reconnect at once, or when the pane is used
+  colors: Record<string, string> // alias pattern ("prod-*") → a named colour or #rrggbb
 }
+
+/** Named host colours (theme tokens, so they follow light/dark). Anything else is #rrggbb. */
+export const HOST_COLOR_NAMES = ["red", "amber", "green", "blue"] as const
+const HEX_COLOR = /^#[0-9a-f]{6}$/i
+const MAX_SSH_COLORS = 100
+
+/** A usable host colour value: a named one or #rrggbb. */
+export const isHostColor = (v: unknown): v is string =>
+  typeof v === "string" &&
+  ((HOST_COLOR_NAMES as readonly string[]).includes(v) || HEX_COLOR.test(v))
 
 const DEFAULT_KEEPALIVE = 30
 const MAX_KEEPALIVE = 3600
@@ -62,7 +73,15 @@ export function mergeSshSettings(input: unknown): SshSettings {
       ? Math.min(MAX_KEEPALIVE, Math.max(0, Math.round(k)))
       : DEFAULT_KEEPALIVE
   const restore = o.restore === "on-focus" ? "on-focus" : "auto"
-  return { hidden, keepAliveSeconds, restore }
+  // Insertion order kept: the first matching pattern wins.
+  const colors: Record<string, string> = {}
+  for (const [k, v] of Object.entries(Array.isArray(o.colors) ? {} : asObject(o.colors))) {
+    const key = k.trim()
+    if (!key || key.length > 255 || hasControlChar(key) || !isHostColor(v)) continue
+    if (Object.keys(colors).length >= MAX_SSH_COLORS) break
+    if (!(key in colors)) colors[key] = v.toLowerCase()
+  }
+  return { hidden, keepAliveSeconds, restore, colors }
 }
 
 const MAX_HOST_ID = 300
