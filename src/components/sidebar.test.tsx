@@ -505,12 +505,22 @@ describe("Sidebar — an ssh pane's row", () => {
     expect(screen.getByText("~/projects/llm-train")).toHaveClass("tree-sub")
   })
 
-  it("folder unknown: the host's name, and user@hostname below", () => {
+  it("folder unknown: the host's name with the SSH badge (not the host twice), user@hostname below", () => {
     st().setSshHosts([testHost("gpu-box", "native", "quang@10.0.4.12")])
     st().newTab(hostShellOption(testHost("gpu-box")))
     render(<Sidebar />)
-    expect(document.querySelector(".host-box")!.textContent).toBe("gpu-box")
+    expect(document.querySelector(".tree .host-box")).toBeNull()
     const subs = [...document.querySelectorAll(".tree .tree-sub")].map((e) => e.textContent)
-    expect(subs).toContain("quang@10.0.4.12") // the pane row (the host list shows it too)
+    expect(subs).toContain("quang@10.0.4.12")
+  })
+
+  it("at the host user's home the headline is ~; a WSL pane keeps its distro", () => {
+    st().setSshHosts([testHost("gpu", "wsl:Ubuntu", "quang@10.0.4.12")])
+    st().newTab(hostShellOption(testHost("gpu", "wsl:Ubuntu")))
+    st().setRemoteCwd(st().tabs[0]!.activeSessionId, "/home/quang")
+    render(<Sidebar />)
+    expect(screen.getByText("~", { selector: ".tree-primary" })).toBeInTheDocument()
+    const subs = [...document.querySelectorAll(".tree .tree-sub")].map((e) => e.textContent)
+    expect(subs).toContain("~ · WSL: Ubuntu")
   })
 })

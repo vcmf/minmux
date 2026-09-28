@@ -372,7 +372,6 @@ function requestPty(id: string, entry: Entry, attachOnly: boolean, given?: Sessi
       // An ssh session: main rebuilds the command from its own host list (never ours).
       ...(session.remote ? { remote: session.remote } : {}),
       ...(attachOnly ? { attachOnly: true } : {}),
-      // Back in its remote folder (a reconnect, a restore, a split), when the host said where.
       // → COLORFGBG so agents detect light/dark (fallback when the OSC-11 bg query can't
       // complete, e.g. across the wsl.exe hop). Captured at spawn: a running shell's env
       // can't be rewritten, so a later theme switch — incl. appearance "system" following
@@ -530,11 +529,27 @@ function afterAuth(id: string, then: () => void) {
 // on the ~1.2 s output-idle timer).
 const AUTH_SETTLE_MS = 2000
 
-/** Folder reports name a host: keep the first one's, and ignore later ones from another host
- *  (an ssh to a second machine, a container) — a pane's folder is its own host's. */
-function sameHostAsBefore(entry: Entry, host: string): boolean {
+/** Whether a folder report (naming `host`) is this pane's own host's, not a machine reached
+ *  from inside it (an ssh to another box, a container). A report naming the configured
+ *  alias or HostName always is, and fixes the machine; otherwise the first one seen outside
+ *  a reload's replay does, and later ones must match it. */
+function sameHostAsBefore(entry: Entry, id: string, host: string): boolean {
   if (!host || host === "localhost") return true
-  entry.cwdHost ??= host
+  const remote = useStore.getState().sessions[id]?.remote
+  const hostName = useStore
+    .getState()
+    .sshHosts.find((h) => h.hostId === remote?.hostId)
+    ?.detail?.replace(/^[^@]*@/, "")
+    .replace(/:\d+$/, "")
+  const configured = [remote?.target, hostName].filter((x): x is string => !!x)
+  if (configured.some((c) => sameMachine(c.toLowerCase(), host))) {
+    entry.cwdHost = host
+    return true
+  }
+  if (entry.cwdHost === undefined) {
+    if (!entry.flow.replaying) entry.cwdHost = host // replayed history may be a nested shell's
+    return true
+  }
   return sameMachine(entry.cwdHost, host)
 }
 
@@ -632,16 +647,13 @@ function spawn(session: Session, entry: Entry) {
       entry.remote = "closed"
       entry.term.write("", () => {
         if (entries.get(session.id) !== entry || entry.remote !== "closed") return // Enter came first
-        // The host's config has a RemoteCommand, so ssh refused our `cd`: drop the folder for
-        // this pane and connect again plainly, once.
-        const tail = lastLines(entry.term, 4)
         const ssh = useStore.getState().settings.ssh
         const why = {
           enabled: ssh.autoReconnect,
           code: e.code,
           signal: e.signal,
           atPrompt,
-          dropped: lostLink(tail),
+          dropped: lostLink(lastLines(entry.term, 4)),
         }
         // A lost link of an established connection reconnects on its own, a few times.
         const plan = retryPlan({
@@ -715,17 +727,17 @@ function spawn(session: Session, entry: Entry) {
     // An ssh pane that doesn't send OSC 7: the Debian / Ubuntu title `user@host: ~/dir`.
     if (session.remote && !entry.osc7) {
       const at = cwdFromTitle(title)
-      if (at && sameHostAsBefore(entry, at.host))
+      if (at && sameHostAsBefore(entry, session.id, at.host))
         useStore.getState().setRemoteCwd(session.id, at.dir)
     }
   })
 
   // OSC 7 — the shell reports its working directory (file://host/path).
   term.parser.registerOscHandler(7, (data) => {
-    // An ssh pane's folder is on the host: shown (and reconnected to), never read locally.
+    // An ssh pane's folder is on the host: shown, never read locally, never sent back.
     if (session.remote) {
       const at = cwdFromOsc7(data)
-      if (at && sameHostAsBefore(entry, at.host)) {
+      if (at && sameHostAsBefore(entry, session.id, at.host)) {
         entry.osc7 = true // authoritative from now on: the title is only a fallback
         useStore.getState().setRemoteCwd(session.id, at.dir)
       }

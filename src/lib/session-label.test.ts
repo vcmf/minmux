@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest"
 import {
+  remoteRowTitle,
   tabTitle,
   tabTitleParts,
   shortCwd,
@@ -191,5 +192,33 @@ describe("tabTitleParts", () => {
       more: "+1",
     })
     expect(tabTitleParts({ ...tab, title: "pinned" }, sessions, "/h")).toEqual({ base: "pinned" })
+  })
+})
+
+describe("remoteRowTitle", () => {
+  const remote = { hostId: "native:web", label: "web", target: "web", env: "native" as const }
+  const base: Session = {
+    id: "a",
+    title: "",
+    command: "ssh",
+    args: [],
+    status: "idle",
+    unread: false,
+    remote,
+  }
+
+  it("a program's title, else the folder's name (~ at home), else the host", () => {
+    expect(remoteRowTitle({ ...base, oscTitle: "Fix auth bug", remoteCwd: "~/x" }, "/h")).toBe(
+      "Fix auth bug",
+    )
+    expect(remoteRowTitle({ ...base, remoteCwd: "/home/quang" }, "/h", "quang")).toBe("~")
+    expect(remoteRowTitle({ ...base, remoteCwd: "~/projects/llm" }, "/h")).toBe("llm")
+    expect(remoteRowTitle(base, "/h")).toBe("web")
+  })
+
+  it("a title carrying bidi / zero-width characters doesn't take the headline", () => {
+    expect(remoteRowTitle({ ...base, oscTitle: "llm\u202Etrain", remoteCwd: "~/real" }, "/h")).toBe(
+      "real",
+    )
   })
 })

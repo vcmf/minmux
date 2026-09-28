@@ -102,3 +102,11 @@ describe("homeRelative / detailUser", () => {
     expect(detailUser(undefined)).toBeUndefined()
   })
 })
+
+describe("sameMachine — addresses", () => {
+  it("IP literals compare whole (their first label says nothing)", () => {
+    expect(sameMachine("10.0.4.12", "10.0.9.9")).toBe(false)
+    expect(sameMachine("10.0.4.12", "10.0.4.12")).toBe(true)
+    expect(sameMachine("fe80::1", "fe80::2")).toBe(false)
+  })
+})

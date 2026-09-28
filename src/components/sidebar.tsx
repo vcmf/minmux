@@ -37,6 +37,7 @@ import { detailUser, homeRelative, shortRemoteCwd } from "../lib/remote-cwd"
 import { isWaitingRemote, remoteStatusUi } from "../lib/remote-connect"
 import {
   connectedHostIds,
+  envTitle,
   groupHosts,
   hostColor,
   hostColorCss,
@@ -245,6 +246,9 @@ export function Sidebar() {
                   const isActive = active && tab.activeSessionId === id
                   // The host's colour, looked up once for the icon and the host box.
                   const rowColor = s.remote ? hostCss(s.remote.target) : undefined
+                  const rowUser = s.remote
+                    ? detailUser(sshHosts.find((h) => h.hostId === s.remote!.hostId)?.detail)
+                    : undefined
                   return (
                     <div
                       key={id}
@@ -283,10 +287,12 @@ export function Sidebar() {
                       </span>
                       <div className="tree-labels">
                         <span className="tree-primary-row">
-                          {s.remote ? (
+                          {s.remote && s.remoteCwd ? (
                             // Like a local row: the folder's name, then (boxed) where it is.
                             <>
-                              <span className="tree-primary">{remoteRowTitle(s, home)}</span>
+                              <span className="tree-primary">
+                                {remoteRowTitle(s, home, rowUser)}
+                              </span>
                               <span
                                 className={`host-box${rowColor ? " colored" : ""}`}
                                 style={
@@ -323,15 +329,8 @@ export function Sidebar() {
                           >
                             {s.remoteCwd
                               ? // Front-shortened to fit: the folder at the end is what matters.
-                                shortRemoteCwd(
-                                  homeRelative(
-                                    s.remoteCwd,
-                                    detailUser(
-                                      sshHosts.find((h) => h.hostId === s.remote!.hostId)?.detail,
-                                    ),
-                                  ),
-                                  28,
-                                )
+                                shortRemoteCwd(homeRelative(s.remoteCwd, rowUser), 28) +
+                                (s.remote.env === "native" ? "" : ` · ${envTitle(s.remote.env)}`)
                               : remoteWhere(s.remote, sshHosts)}
                           </span>
                         ) : (

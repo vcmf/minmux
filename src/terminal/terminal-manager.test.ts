@@ -791,3 +791,16 @@ describe("TerminalManager — the remote folder, per connection", () => {
     expect(st().sessions[id]!.remoteCwd).toBe("/home/u/src")
   })
 })
+
+describe("TerminalManager — whose folder a report is", () => {
+  it("a report naming the configured host takes over from a nested one seen first", async () => {
+    st().setSshHosts([testHost("web", "native", "me@web.corp.example")])
+    const { id, term } = start({})
+    await flush()
+    term.osc[7]!("file://db/var/lib/pg") // an ssh db inside, reported first
+    term.osc[7]!("file://web.corp.example/srv/app") // then web's own shell
+    expect(st().sessions[id]!.remoteCwd).toBe("/srv/app")
+    term.osc[7]!("file://db/var/tmp") // db again: not this pane's host
+    expect(st().sessions[id]!.remoteCwd).toBe("/srv/app")
+  })
+})

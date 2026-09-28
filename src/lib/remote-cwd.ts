@@ -42,8 +42,13 @@ export function cwdFromTitle(title: string): { host: string; dir: string } | nul
 /** Whether two folder reports name the same machine: a title's `\h` is the short hostname,
  *  OSC 7 often the full one, so only the first label is compared. */
 export function sameMachine(a: string, b: string): boolean {
+  const ip = /^[\d.]+$|:/ // an IPv4 or IPv6 literal: its first "label" says nothing
+  if (ip.test(a) || ip.test(b)) return a === b
   return a.split(".")[0] === b.split(".")[0]
 }
+
+/** Whether text carries bidi / zero-width / format characters (a spoofed headline). */
+export const hasFormatChar = (t: string): boolean => FORMAT_CHARS.test(t)
 
 /** A remote folder for a subline: a long path keeps its tail (the folder is what matters). */
 export function shortRemoteCwd(p: string, max = 40): string {
