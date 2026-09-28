@@ -61,6 +61,7 @@ import {
   remoteBootstrapCommand,
   INTEGRATION_FAILED_NOTE,
 } from "./remote-bootstrap"
+import { parseReopen } from "../src/lib/remote-reports"
 import { createPathWatcher } from "./ssh-watcher"
 import { nodeMiniFs, wslMiniFs } from "./ssh-config"
 import type { PaneGitRequest } from "../src/lib/pane-git"
@@ -404,7 +405,7 @@ function writeSettings(contents: string): void {
 
 // The renderer's spawn request (src/lib/ipc.ts), with `remote` untrusted until SshService
 // rebuilds it from main's own list.
-type SpawnOpts = Omit<SpawnRequest, "remote"> & { remote?: unknown }
+type SpawnOpts = Omit<SpawnRequest, "remote" | "reopen"> & { remote?: unknown; reopen?: unknown }
 // remoteNonce: an integrated ssh pane's nonce, so the renderer trusts only its shell's reports.
 type SpawnResult = {
   reattached: boolean
@@ -568,7 +569,10 @@ async function spawnRemote(
     const challenge = randomBytes(8).toString("hex")
     const nonce = randomBytes(16).toString("hex")
     args = [...plan.args, remoteBootstrapCommand(challenge)]
-    remote = { hostId, nonce, hello: new HelloWatch(challenge, handshakeReply(nonce)) }
+    // The folder to reopen (a verified one the renderer kept), validated again here; it goes
+    // hex-encoded in the answer, never in the command, and only our own shell cds to it.
+    const reply = handshakeReply(nonce, parseReopen(opts.reopen))
+    remote = { hostId, nonce, hello: new HelloWatch(challenge, reply) }
   }
   // No local shell integration (and no claude hook env): the shell runs on the remote host.
   const result = startPty(

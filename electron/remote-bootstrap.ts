@@ -14,7 +14,7 @@
 
 import { BASH_HOOKS, ZSH_HOOKS } from "./shell-integration"
 
-import { SMTERM_OSC } from "../src/lib/remote-reports"
+import { parseReopen, SMTERM_OSC, type ReopenCwd } from "../src/lib/remote-reports"
 
 export { SMTERM_OSC }
 
@@ -68,6 +68,15 @@ export function remoteHooks(script: string, shell: "zsh" | "bash"): string {
   return [shell === "zsh" ? ZSH_CWD_FN : BASH_CWD_FN, out].join("\n")
 }
 
+// The builtin cd (not a user's cd function); ^C works while a hung mount blocks it. A folder
+// that's gone says so and leaves the shell where its startup files put it.
+const REOPEN_CD_FN = [
+  "__smterm_cd_to() {",
+  '  builtin cd -- "$1" 2>/dev/null ||',
+  "    printf '\\033[2m[smterm] can not reopen %s: it is gone\\033[0m\\n' \"$1\"",
+  "}",
+].join("\n")
+
 // zsh reads only this file of ours: it gives zsh back the user's own ZDOTDIR (as sshd's
 // `zsh -c` left it), removes our temp dir, and adds the hooks. zsh then reads the user's
 // .zprofile / .zshrc / .zlogin from there, as a plain login would — and nothing started from
@@ -79,8 +88,23 @@ export const REMOTE_ZSHENV = [
   'case "${SMTERM_ZDOTDIR-}" in */smterm.*) command rm -rf -- "$SMTERM_ZDOTDIR" 2>/dev/null ;; esac',
   'if [[ -n "${SMTERM_USER_ZDOTDIR-}" ]]; then ZDOTDIR=$SMTERM_USER_ZDOTDIR; else unset ZDOTDIR; fi',
   "unset SMTERM_ZDOTDIR SMTERM_USER_ZDOTDIR",
+  "__smterm_reopen=${__SMTERM_CD-}; unset __SMTERM_CD",
+  "typeset +x __smterm_reopen",
   'if [[ -f "${ZDOTDIR:-$HOME}/.zshenv" ]]; then source "${ZDOTDIR:-$HOME}/.zshenv"; fi',
   remoteHooks(ZSH_HOOKS, "zsh"),
+  "# Reopen the folder this pane was in, once the user's own files have run: the first",
+  "# prompt's hooks, first in line (so the folder they report is the new one).",
+  'if [[ -o interactive && -n "$__smterm_reopen" ]]; then',
+  "  __smterm_reopen_once() {",
+  "    local ret=$?",
+  "    add-zsh-hook -d precmd __smterm_reopen_once",
+  '    __smterm_cd_to "$__smterm_reopen"',
+  "    unset __smterm_reopen",
+  "    return $ret",
+  "  }",
+  "  precmd_functions=(__smterm_reopen_once $precmd_functions)",
+  "fi",
+  REOPEN_CD_FN,
 ].join("\n")
 
 // bash runs with --rcfile (never a login shell then): read the files a login bash would, in
@@ -88,6 +112,8 @@ export const REMOTE_ZSHENV = [
 export const REMOTE_BASHRC = [
   "# smterm remote integration — bash (loaded via bash --rcfile). Remove our temp dir.",
   "export -n __smterm_nonce 2>/dev/null",
+  "__smterm_reopen=${__SMTERM_CD-}; unset __SMTERM_CD",
+  "export -n __smterm_reopen 2>/dev/null",
   'case "${__SMTERM_TMP-}" in */smterm.*) command rm -rf -- "$__SMTERM_TMP" 2>/dev/null ;; esac',
   "unset __SMTERM_TMP",
   "SMTERM_SHARE_HISTORY=0 # the host's history settings are its own",
@@ -99,6 +125,10 @@ export const REMOTE_BASHRC = [
   'elif [[ -f "$HOME/.profile" ]]; then source "$HOME/.profile"; fi',
   "",
   remoteHooks(BASH_HOOKS, "bash"),
+  REOPEN_CD_FN,
+  "# Reopen the folder this pane was in, now that the user's own files have run.",
+  'if [[ -n "${__smterm_reopen-}" ]]; then __smterm_cd_to "$__smterm_reopen"; fi',
+  "unset __smterm_reopen",
 ].join("\n")
 
 const heredoc = (file: string, tag: string, body: string): string[] => {
@@ -116,6 +146,27 @@ export const PAYLOAD = [
   osc("boot"), // it ran (whatever it picks next)
   "# Writes stdin to stdout with builtins only (no cat: each process costs a few ms).",
   "__smterm_w() { while IFS= read -r __l; do printf '%s\\n' \"$__l\"; done; }",
+  "# The folder to reopen, from the answer: decoded with arithmetic only, and kept only on the",
+  "# machine that reported it (one alias can reach several: round-robin logins).",
+  "__smterm_where() {",
+  "  c=${1%%:*}; r=${1#*:}; __SMTERM_CD=",
+  '  case "$1" in -|*[!a-z0-9:.-]*) return ;; esac',
+  '  case "$r" in ""|*[!0-9a-f]*) return ;; esac',
+  "  [ $((${#r} % 2)) -eq 0 ] || return",
+  "  e=",
+  '  while [ -n "$r" ]; do',
+  '    b=${r%"${r#??}"}; r=${r#??}; v=$((0x$b))',
+  '    e="$e\\\\$((v / 64))$((v / 8 % 8))$((v % 8))"',
+  "  done",
+  "  h=$(uname -n 2>/dev/null); h=${h%%.*}",
+  '  [ "$h" = "$c" ] || h=$(printf %s "$h" | tr A-Z a-z)',
+  '  if [ "$h" != "$c" ]; then',
+  '    printf \'\\033[2m[smterm] not reopening the folder: this is %s, not %s\\033[0m\\n\' "$h" "$c"',
+  "    return",
+  "  fi",
+  '  __SMTERM_CD=$(printf "$e")',
+  "  export __SMTERM_CD",
+  "}",
   "__smterm_boot() {",
   "  s=${SHELL-}",
   '  case "${s##*/}" in bash|zsh) ;; *) return 1 ;; esac',
@@ -143,10 +194,12 @@ export const PAYLOAD = [
   '  if [ -z "$a" ]; then stty min 0 time 20 2>/dev/null; while IFS= read -r l; do :; done; fi',
   '  stty "$t" 2>/dev/null',
   '  case "$n" in *[!0-9a-f]*) n= ;; esac',
-  '  if [ ${#n} -ne 32 ] || [ "$l" != "$n:-" ]; then',
+  "  x=${l#*:} # `-`, or where to reopen: <host label>:<hex of the folder>",
+  '  if [ ${#n} -ne 32 ] || [ "$l" != "$n:$x" ]; then',
   '    command rm -rf -- "$d"; trap - HUP INT QUIT TERM; umask "$m"; return 1',
   "  fi",
   `  ${osc("ok")} # main hands the renderer the nonce only now`,
+  '  __smterm_where "$x"',
   '  case "${s##*/}" in',
   "  zsh)",
   `    printf '__smterm_nonce=%s\\n' "$n" > "$d/.zshenv"`,
@@ -190,10 +243,18 @@ export function remoteBootstrapCommand(challenge: string): string {
   return `exec sh -c '${body}'`
 }
 
-/** The line main types in answer to the hello (read with echo off). */
-export function handshakeReply(nonce: string): string {
+/** The line main types in answer to the hello (read with echo off): the nonce, and the folder
+ *  to reopen as `<host's first label>:<hex of its bytes>` (or `-`) — hex, so nothing in a
+ *  folder's name is ever read by a shell. */
+export function handshakeReply(nonce: string, reopen?: ReopenCwd): string {
   if (!HEX.test(nonce)) throw new Error("remote bootstrap: nonce must be hex")
-  return `smterm:${nonce}:-\r`
+  const at = reopen && parseReopen(reopen)
+  const label = at?.host.split(".")[0]
+  const where =
+    at && label && /^[a-z0-9-]+$/.test(label)
+      ? `${label}:${Buffer.from(at.dir, "utf8").toString("hex")}`
+      : "-"
+  return `smterm:${nonce}:${where}\r`
 }
 
 // A pane stops looking after this much output: the hello comes right after login, so a

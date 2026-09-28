@@ -18,6 +18,7 @@ import { inheritShell, resolveDefaultShell } from "./lib/shells"
 import { hostShellOption, sameHosts } from "./lib/ssh-hosts-ui"
 import { pushRecent, toggleHidden, togglePinned } from "./lib/ssh-host-list"
 import { integrationOn, setIntegration } from "./lib/ssh-integration"
+import { reopenFor, type ReopenCwd } from "./lib/remote-reports"
 import { DEFAULT_HIDDEN_HOSTS } from "./lib/ssh-validate"
 import type { RemotePhase } from "./lib/remote-connect"
 import { reduceSignals } from "./lib/session-status"
@@ -43,7 +44,7 @@ import { clampPanelWidth, RIGHT_PANEL_DEFAULT } from "./lib/right-panel"
 
 const newId = () => crypto.randomUUID()
 
-function makeSession(shell: ShellOption, initialCwd?: string): Session {
+function makeSession(shell: ShellOption, initialCwd?: string, reopen?: ReopenCwd): Session {
   return {
     id: newId(),
     title: shell.label,
@@ -54,6 +55,7 @@ function makeSession(shell: ShellOption, initialCwd?: string): Session {
     // A remote session's shell runs on the host: a local cwd would be meaningless there.
     ...(shell.remote ? { remote: { ...shell.remote } } : { cwd: initialCwd }),
     ...(shell.remote && shell.remoteSaved !== undefined ? { remoteSaved: shell.remoteSaved } : {}),
+    ...(shell.remote && reopen ? { reopenCwd: reopen } : {}),
   }
 }
 
@@ -132,8 +134,15 @@ interface AppState {
   claudeExited: (paneId: string) => void // the pane's shell prompt came back after Claude
   setRightView: (view: RightView) => void
   setSessionCwd: (sessionId: string, cwd: string) => void
-  // undefined = unknown again; verified = reported by our integrated shell (nonce-checked)
-  setRemoteCwd: (sessionId: string, cwd: string | undefined, verified?: boolean) => void
+  // undefined = unknown again; verified = reported by our integrated shell (nonce-checked), by
+  // `host`. A verified folder replaces the one to reopen (it's where the shell really is now).
+  setRemoteCwd: (
+    sessionId: string,
+    cwd: string | undefined,
+    verified?: boolean,
+    host?: string,
+  ) => void
+  setReopenCwd: (sessionId: string, reopen: ReopenCwd | undefined) => void // next connection's folder
   setPaletteOpen: (open: boolean) => void
   setHostPickerOpen: (open: boolean) => void
   /** Open a host: a new tab, or a split of the active pane. Remembered as recent. */
@@ -211,11 +220,11 @@ export const isSessionVisible = (sessionId: string): boolean =>
 // each caller resolves its own shell/cwd, this owns the pane-tree mechanics.
 function splitActivePane(
   state: AppState,
-  opts: { shell: ShellOption; cwd?: string; direction: "row" | "column" },
+  opts: { shell: ShellOption; cwd?: string; direction: "row" | "column"; reopen?: ReopenCwd },
 ): Partial<AppState> {
   const tab = state.tabs.find((t) => t.id === state.activeTabId)
   if (!tab) return {}
-  const session = makeSession(opts.shell, opts.cwd)
+  const session = makeSession(opts.shell, opts.cwd, opts.reopen)
   const root = splitNode(
     tab.root,
     tab.activeSessionId,
@@ -400,14 +409,31 @@ export const useStore = create<AppState>((set, get) => ({
       return { sessions: { ...state.sessions, [sessionId]: { ...s, cwd } } }
     }),
   // Display only: local panels read `cwd`, which a remote session never has.
-  setRemoteCwd: (sessionId, cwd, verified = false) =>
+  setRemoteCwd: (sessionId, cwd, verified = false, host) =>
     set((state) => {
       const s = state.sessions[sessionId]
-      const ok = verified && cwd !== undefined
-      if (!s?.remote || (s.remoteCwd === cwd && !!s.remoteCwdVerified === ok)) return state
-      const next: Session = { ...s, remoteCwd: cwd, remoteCwdVerified: ok }
+      const ok = verified && cwd !== undefined && !!host
+      if (!s?.remote) return state
+      const same =
+        s.remoteCwd === cwd &&
+        !!s.remoteCwdVerified === ok &&
+        s.remoteCwdHost === (ok ? host : undefined) &&
+        !(ok && s.reopenCwd)
+      if (same) return state
+      const next: Session = { ...s, remoteCwd: cwd, remoteCwdVerified: ok, remoteCwdHost: host }
       if (cwd === undefined) delete next.remoteCwd
-      if (!ok) delete next.remoteCwdVerified
+      if (!ok) {
+        delete next.remoteCwdVerified
+        delete next.remoteCwdHost
+      } else delete next.reopenCwd
+      return { sessions: { ...state.sessions, [sessionId]: next } }
+    }),
+  setReopenCwd: (sessionId, reopen) =>
+    set((state) => {
+      const s = state.sessions[sessionId]
+      if (!s?.remote || JSON.stringify(s.reopenCwd) === JSON.stringify(reopen)) return state
+      const next: Session = { ...s, reopenCwd: reopen }
+      if (!reopen) delete next.reopenCwd
       return { sessions: { ...state.sessions, [sessionId]: next } }
     }),
   // One overlay at a time: opening either closes the other (⌘K over an open picker).
@@ -557,7 +583,9 @@ export const useStore = create<AppState>((set, get) => ({
       const src = state.sessions[tab.activeSessionId]
       const shell = inheritShell(state.shells, src) ?? fallback
       if (!shell) return {}
-      return splitActivePane(state, { shell, cwd: src?.cwd, direction })
+      // An ssh pane's split opens where it verifiably is (its host's shell integration).
+      const reopen = shell.remote ? reopenFor(src) : undefined
+      return splitActivePane(state, { shell, cwd: src?.cwd, direction, reopen })
     }),
 
   // Open a folder (an agent's cwd / worktree from the board) as a split beside the active
@@ -602,7 +630,7 @@ export const useStore = create<AppState>((set, get) => ({
       const src = state.sessions[tab.activeSessionId]
       const shell = inheritShell(state.shells, src) ?? fallback
       if (!shell) return {}
-      const session = makeSession(shell, src?.cwd)
+      const session = makeSession(shell, src?.cwd, shell.remote ? reopenFor(src) : undefined)
       const root = addSurface(tab.root, pane.id, session.id)
       return {
         sessions: { ...state.sessions, [session.id]: session },

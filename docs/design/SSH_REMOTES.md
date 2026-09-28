@@ -406,6 +406,24 @@ Measured: a 300k-line firehose takes the same time on an integrated and a plain 
 and the local `SMTERM_PERF` suite shows no change against v0.1.39 (e2e ~22–24 MB/s either way,
 renderer ~50 MB/s).
 
+**Reopening the folder (P3c)**: only a verified folder, and only on an integrated host.
+
+- Where it comes from: `reopenFor(session)` — the folder the pane's shell verifiably reported
+  (a reconnect), else the pane's `reopenCwd`: its split source's verified folder (split, new
+  terminal in the pane) or the one saved in `workspace.json` (a relaunch; validated on load, as
+  the file is only as trusted as its writer). A host picked by hand opens at home.
+- How it travels: in `pty:spawn` to main, which validates it again (`parseReopen`) and puts it
+  in the handshake answer: `smterm:<nonce>:<host's first label>:<hex of the folder>`. Never on
+  the command line, and never read by the login shell: the bootstrap's `sh` decodes the hex
+  with arithmetic (`$((0x$b))` → octal escapes → one `printf`).
+- On the host: kept only if `uname -n` matches the reporting host's first label (one alias
+  can reach several machines: round-robin logins), else a dim note. The user's shell
+  `builtin cd`s after its own startup files (bash: the end of our rc; zsh: a one-shot first
+  `precmd`, ahead of our hooks so the reported folder is the new one). ^C works if a hung
+  mount blocks it; a folder that's gone gets a dim note, and the shell stays where its files
+  put it.
+- A plain host never gets it (the rule from #78 stands for anything unverified).
+
 Still to come: inside tmux (phase 2) the scripts wrap their reports in tmux passthrough
 (`allow-passthrough on`, §6b).
 

@@ -13,7 +13,7 @@ import { withAlpha } from "../settings/themes"
 import { displaySessionTitle } from "../lib/session-label"
 import { allPanes, allSessionIds, visibleSessionIds } from "../lib/pane-tree"
 import { canRetry, sshFailureKind, type SshFailure } from "../lib/ssh-errors"
-import { parseRemoteReport, SMTERM_OSC } from "../lib/remote-reports"
+import { parseRemoteReport, reopenFor, SMTERM_OSC } from "../lib/remote-reports"
 import { cwdFromOsc7, cwdFromTitle, sameMachine } from "../lib/remote-cwd"
 import { webglPanes, shouldRebuildAtlas } from "../lib/renderer-policy"
 import { appShortcut, keyAction } from "../lib/terminal-keys"
@@ -358,9 +358,13 @@ function requestPty(id: string, entry: Entry, attachOnly: boolean, given?: Sessi
   const { term } = entry
   const seq = (entry.startSeq ?? 0) + 1
   entry.startSeq = seq
+  // Where the new connection opens: the folder its shell verifiably reported (a reconnect), or
+  // the one it was given (a split, a relaunch). Kept as the pane's until the host says again.
+  const reopen = session.remote && !attachOnly ? reopenFor(session) : undefined
   if (session.remote) {
     entry.lastKey = undefined // a new ssh: nothing typed into it yet
-    // …and starts at home, not where the last one was: its folder is unknown until it says.
+    // Its folder is unknown until the host says (the reopen is a request, not a fact).
+    if (reopen) useStore.getState().setReopenCwd(id, reopen)
     entry.osc7 = false
     entry.cwdHost = undefined
     entry.nonce = undefined // this connection's own, when main says (never the last one's)
@@ -380,6 +384,7 @@ function requestPty(id: string, entry: Entry, attachOnly: boolean, given?: Sessi
       // An ssh session: main rebuilds the command from its own host list (never ours).
       ...(session.remote ? { remote: session.remote } : {}),
       ...(attachOnly ? { attachOnly: true } : {}),
+      ...(reopen ? { reopen } : {}), // used only by an integrated host (the handshake)
       // → COLORFGBG so agents detect light/dark (fallback when the OSC-11 bg query can't
       // complete, e.g. across the wsl.exe hop). Captured at spawn: a running shell's env
       // can't be rewritten, so a later theme switch — incl. appearance "system" following
@@ -806,8 +811,9 @@ function spawn(session: Session, entry: Entry) {
     entry.verified = true
     if (r.kind !== "cwd") entry.hostCmd = r.kind === "start"
     // A folder we can't take (or show) still means it moved: the old one goes, not reopened.
-    if (r.kind === "cwd") useStore.getState().setRemoteCwd(session.id, r.dir ?? undefined, true)
-    else if (r.kind === "start") store.signalSession(session.id, { type: "command-start" })
+    if (r.kind === "cwd") {
+      useStore.getState().setRemoteCwd(session.id, r.dir ?? undefined, true, r.host)
+    } else if (r.kind === "start") store.signalSession(session.id, { type: "command-start" })
     else {
       clearTimeout(entry.idleTimer) // precise idle: the heuristic mustn't flip it later
       store.signalSession(session.id, { type: "command-end" })

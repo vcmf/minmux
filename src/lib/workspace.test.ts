@@ -343,6 +343,38 @@ describe("workspace — ssh sessions", () => {
     expect(back.sessions.s1!.cwd).toBeUndefined()
   })
 
+  it("saves an ssh pane's verified folder (never an unverified one) and reopens it", () => {
+    const at = (extra: Partial<Session>) =>
+      JSON.parse(serializeToJson({ ...sshState, sessions: { s1: { ...sshSession, ...extra } } }))
+    const live = at({ remoteCwd: "/srv/app", remoteCwdVerified: true, remoteCwdHost: "gpu" })
+    expect(live.sessions[0].reopen).toEqual({ dir: "/srv/app", host: "gpu" })
+    expect(live.sessions[0]).not.toHaveProperty("remoteCwd") // runtime only
+    expect(at({ remoteCwd: "/srv/shown-only" }).sessions[0]).not.toHaveProperty("reopen")
+    const waiting = at({ reopenCwd: { dir: "/srv/next", host: "gpu" } }) // not reconnected yet
+    expect(waiting.sessions[0].reopen).toEqual({ dir: "/srv/next", host: "gpu" })
+    expect(deserializeWorkspace(live)!.sessions.s1!.reopenCwd).toEqual({
+      dir: "/srv/app",
+      host: "gpu",
+    })
+  })
+
+  it("drops a saved folder it wouldn't reopen (the file is only as trusted as its writer)", () => {
+    for (const bad of [
+      { dir: "/a/../etc", host: "gpu" },
+      { dir: "relative", host: "gpu" },
+      { dir: "/x\n", host: "gpu" },
+      { dir: "/ok", host: "bad host" },
+      "/string",
+    ]) {
+      const json = JSON.parse(serializeToJson(sshState))
+      json.sessions[0].reopen = bad
+      expect(deserializeWorkspace(json)!.sessions.s1).not.toHaveProperty("reopenCwd")
+    }
+    const local = JSON.parse(serializeToJson(state))
+    local.sessions[0].reopen = { dir: "/srv/app", host: "gpu" }
+    expect(Object.values(deserializeWorkspace(local)!.sessions)[0]).not.toHaveProperty("reopenCwd")
+  })
+
   it("never restores a local cwd onto a remote session", () => {
     const json = JSON.parse(serializeToJson(sshState))
     json.sessions[0].cwd = "/Users/me"

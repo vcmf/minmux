@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest"
+import { reopenFor } from "./lib/remote-reports"
 import { useStore, isVisibleIn, isSessionVisible } from "./store"
 import { allSessionIds, visibleSessionIds } from "./lib/pane-tree"
 import { resetStore, testHost, testShell as shell } from "./test/helpers"
@@ -1113,14 +1114,55 @@ describe("store — remote folder", () => {
     st().setShells([shell])
     st().newTab(hostShellOption(testHost("web")))
     const r = firstTab().activeSessionId
-    st().setRemoteCwd(r, "/srv/app", true)
-    expect(st().sessions[r]).toMatchObject({ remoteCwd: "/srv/app", remoteCwdVerified: true })
+    st().setRemoteCwd(r, "/srv/app", true, "web")
+    expect(st().sessions[r]).toMatchObject({
+      remoteCwd: "/srv/app",
+      remoteCwdVerified: true,
+      remoteCwdHost: "web",
+    })
     const before = useStore.getState()
-    st().setRemoteCwd(r, "/srv/app", true)
+    st().setRemoteCwd(r, "/srv/app", true, "web")
     expect(useStore.getState()).toBe(before)
     st().setRemoteCwd(r, "/srv/app") // same folder, but from an untagged report
     expect(st().sessions[r]).not.toHaveProperty("remoteCwdVerified")
-    st().setRemoteCwd(r, undefined, true) // nothing to vouch for
+    expect(st().sessions[r]).not.toHaveProperty("remoteCwdHost")
+    st().setRemoteCwd(r, "/srv/app", true) // no host: nothing to vouch for
     expect(st().sessions[r]).not.toHaveProperty("remoteCwdVerified")
+    st().setRemoteCwd(r, undefined, true, "web")
+    expect(st().sessions[r]).not.toHaveProperty("remoteCwdVerified")
+  })
+
+  it("the folder to reopen: kept until the shell verifiably reports, and inherited by splits", () => {
+    st().setShells([shell])
+    st().newTab(hostShellOption(testHost("web")))
+    const r = firstTab().activeSessionId
+    st().setReopenCwd(r, { dir: "/srv/app", host: "web" })
+    expect(reopenFor(st().sessions[r])).toEqual({ dir: "/srv/app", host: "web" })
+    st().setRemoteCwd(r, "/srv/unverified") // shown, but never where a split opens
+    expect(reopenFor(st().sessions[r])).toEqual({ dir: "/srv/app", host: "web" })
+    st().setRemoteCwd(r, "/srv/now", true, "web")
+    expect(st().sessions[r]).not.toHaveProperty("reopenCwd") // the live one wins now
+    expect(reopenFor(st().sessions[r])).toEqual({ dir: "/srv/now", host: "web" })
+    st().splitActive("row")
+    const split = firstTab().activeSessionId
+    expect(split).not.toBe(r)
+    expect(st().sessions[split]!.reopenCwd).toEqual({ dir: "/srv/now", host: "web" })
+    expect(st().sessions[split]).not.toHaveProperty("remoteCwd") // not known until it says
+    st().newSurface()
+    const surf = firstTab().activeSessionId
+    expect(st().sessions[surf]!.reopenCwd).toEqual({ dir: "/srv/now", host: "web" })
+  })
+
+  it("a host picked by hand (not a split) opens at home, and local panes never reopen", () => {
+    st().setShells([shell])
+    st().newTab(hostShellOption(testHost("web")))
+    const r = firstTab().activeSessionId
+    st().setRemoteCwd(r, "/srv/now", true, "web")
+    st().splitWith("row", hostShellOption(testHost("web")))
+    expect(st().sessions[firstTab().activeSessionId]).not.toHaveProperty("reopenCwd")
+    st().newTab(shell)
+    const l = st().tabs[1]!.activeSessionId
+    st().setReopenCwd(l, { dir: "/x", host: "h" })
+    expect(st().sessions[l]).not.toHaveProperty("reopenCwd")
   })
 })
