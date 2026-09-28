@@ -21,6 +21,7 @@ import { activeTheme, useStore } from "../store"
 import { ipc } from "../lib/ipc"
 import { allSessionIds } from "../lib/pane-tree"
 import { aggregateBadge } from "../lib/session-status"
+import { tabRemoteBadge } from "../lib/remote-connect"
 import { tabTitle } from "../lib/session-label"
 import { resolveDefaultShell } from "../lib/shells"
 import { envTitle, hostShellOption } from "../lib/ssh-hosts-ui"
@@ -34,6 +35,9 @@ export function TopBar() {
   const shells = useStore((s) => s.shells)
   const sshHosts = useStore((s) => s.sshHosts)
   const sessions = useStore((s) => s.sessions)
+  const remotePhase = useStore((s) => s.remotePhase)
+  const remoteDetail = useStore((s) => s.remoteDetail)
+  const windowFocused = useStore((s) => s.windowFocused)
   const home = useStore((s) => s.home)
   const defaultShellPref = useStore((s) => s.settings.defaultShell)
   const rightView = useStore((s) => s.rightView)
@@ -70,7 +74,12 @@ export function TopBar() {
   const waiting: { tabId: string; sessionId: string }[] = []
   for (const tab of tabs) {
     for (const id of allSessionIds(tab.root)) {
-      if (sessions[id]?.status === "attention") waiting.push({ tabId: tab.id, sessionId: id })
+      // Needs you: attention, or an ssh pane at a password / host-key prompt — unless it's the
+      // pane you're looking at (the attention rule: never nag the pane you're driving).
+      const driving = windowFocused && tab.id === activeTabId && tab.activeSessionId === id
+      if (sessions[id]?.status === "attention" || (remotePhase[id] === "prompt" && !driving)) {
+        waiting.push({ tabId: tab.id, sessionId: id })
+      }
     }
   }
 
@@ -130,9 +139,19 @@ export function TopBar() {
                 return s ? [{ status: s.status, unread: s.unread }] : []
               }),
             )
-            const pulse = badge === "working"
+            // An ssh pane at a prompt reads as needing input; a dropped one, red (after attention).
+            const remote = tabRemoteBadge(
+              ids.map((id) => ({ phase: remotePhase[id], detail: remoteDetail[id] })),
+            )
+            const pulse = badge === "working" && !remote
             const dotClass =
-              badge === "attention" ? "amber" : badge === "working" ? "accent" : "faint"
+              badge === "attention" || remote === "prompt"
+                ? "amber"
+                : remote === "down"
+                  ? "red"
+                  : badge === "working"
+                    ? "accent"
+                    : "faint"
             return (
               <div
                 key={tab.id}
@@ -140,7 +159,12 @@ export function TopBar() {
                 onMouseDown={() => useStore.getState().setActiveTab(tab.id)}
                 onDoubleClick={() => startRename(tab.id, tabTitle(tab, sessions, home))}
               >
-                {badge && <span className={`dot ${dotClass}${pulse ? " pulse" : ""}`} />}
+                {(badge || remote) && (
+                  <span
+                    className={`dot ${dotClass}${pulse ? " pulse" : ""}`}
+                    title={remote === "down" ? "An ssh session here is disconnected" : undefined}
+                  />
+                )}
                 {editingId === tab.id ? (
                   <input
                     ref={inputRef}

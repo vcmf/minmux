@@ -1,10 +1,11 @@
 import { describe, it, expect, beforeEach, vi } from "vitest"
-import { render, screen, fireEvent } from "@testing-library/react"
+import { act, render, screen, fireEvent } from "@testing-library/react"
 import { TopBar } from "./top-bar"
 import { useStore } from "../store"
 import { ipc } from "../lib/ipc"
 import { allSessionIds } from "../lib/pane-tree"
 import { resetStore, testHost, testShell } from "../test/helpers"
+import { hostShellOption } from "../lib/ssh-hosts-ui"
 
 const st = () => useStore.getState()
 
@@ -136,5 +137,34 @@ describe("TopBar — profile badge", () => {
     useStore.setState({ profile: "dev" })
     render(<TopBar />)
     expect(document.querySelector(".brand-profile")!.textContent).toBe("dev")
+  })
+})
+
+describe("TopBar — ssh states on the tab dot and the bell", () => {
+  it("a disconnected ssh pane turns its tab's dot red; a prompt, amber, and counts on the bell", () => {
+    st().newTab(hostShellOption(testHost("web")))
+    const id = st().tabs[0]!.activeSessionId
+    st().setRemotePhase(id, "closed", "lost")
+    st().newTab(testShell) // another tab in front: the ssh pane is off-screen
+    const { rerender } = render(<TopBar />)
+    expect(document.querySelector(".tab .dot.red")).not.toBeNull()
+    act(() => st().setRemotePhase(id, "prompt", "password"))
+    rerender(<TopBar />)
+    expect(document.querySelector(".tab .dot.amber")).not.toBeNull()
+    expect(screen.getByText("1")).toBeInTheDocument() // bell count
+  })
+
+  it("a clean exit on the host isn't a red tab", () => {
+    st().newTab(hostShellOption(testHost("web")))
+    st().setRemotePhase(st().tabs[0]!.activeSessionId, "closed", "ended")
+    render(<TopBar />)
+    expect(document.querySelector(".tab .dot.red")).toBeNull()
+  })
+
+  it("a live ssh pane leaves the tab dot to the ordinary status", () => {
+    st().newTab(hostShellOption(testHost("web")))
+    st().setRemotePhase(st().tabs[0]!.activeSessionId, "live")
+    render(<TopBar />)
+    expect(document.querySelector(".tab .dot.red, .tab .dot.amber")).toBeNull()
   })
 })

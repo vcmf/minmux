@@ -41,7 +41,8 @@ export function connectedHostIds(
 ): string[] {
   const ids = new Set<string>()
   for (const s of Object.values(sessions)) {
-    if (s.remote && phases[s.id] === "live") ids.add(s.remote.hostId)
+    const p = phases[s.id]
+    if (s.remote && (p === "live" || p === "prompt")) ids.add(s.remote.hostId) // ssh is running
   }
   return [...ids].sort()
 }

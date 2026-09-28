@@ -391,3 +391,25 @@ describe("Sidebar — a dropped connection", () => {
     expect(screen.queryByTitle("Connected")).not.toBeInTheDocument()
   })
 })
+
+describe("Sidebar — ssh pane states", () => {
+  it("each state reads as its own word on the pane row", () => {
+    st().newTab(hostShellOption(testHost("web")))
+    const id = st().tabs[0]!.activeSessionId
+    const { rerender } = render(<Sidebar />)
+    for (const [phase, detail, word] of [
+      ["starting", undefined, "connecting"],
+      ["prompt", "password", "password"],
+      ["closed", undefined, "disconnected"],
+      ["failed", "host-gone", "can't connect"],
+      ["waiting", undefined, "not connected"],
+    ] as const) {
+      act(() => st().setRemotePhase(id, phase, detail))
+      rerender(<Sidebar />)
+      expect(screen.getByText(word)).toBeInTheDocument()
+    }
+    act(() => st().setRemotePhase(id, "live"))
+    rerender(<Sidebar />)
+    expect(screen.getAllByText("idle").length).toBeGreaterThan(0)
+  })
+})

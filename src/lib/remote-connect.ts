@@ -2,11 +2,15 @@
 
 import type { SshSettings } from "./ssh-validate"
 import { hasControlChar } from "./control-chars"
+import { canRetry, sshFailureKind, type SshFailure } from "./ssh-errors"
+import type { SessionStatus } from "./session-status"
+import { statusUi, type StatusUi } from "./status-ui"
 
 /** Where an ssh pane's connection is. `waiting` / `closed` / `failed` wait for Enter. */
 export type RemotePhase =
-  | "starting" // spawn (or reattach) requested
+  | "starting" // requested, and ssh hasn't printed anything yet ("connecting")
   | "live" // ssh is running
+  | "prompt" // live, and ssh (or the host) is asking for a password, code or host key
   | "waiting" // restored with restore = on-focus: nothing started yet
   | "closed" // ssh exited (a dropped link, or `exit` on the host)
   | "failed" // main couldn't start it (host gone from the config, ssh missing, …)
@@ -23,34 +27,130 @@ export function firstStart(restored: boolean, restore: SshSettings["restore"]): 
   return restored && restore === "on-focus" ? "attach" : "spawn"
 }
 
-/** The phase once main answers a start; a later exit or error already moved it on. */
-export function afterStart(phase: RemotePhase, started: boolean | undefined): RemotePhase {
+/** The phase once main answers a start: nothing live to reattach → waiting; a reattached ssh
+ *  is live; a fresh one stays "connecting" until it prints (onOutput). A later exit or error
+ *  already moved it on. */
+export function afterStart(
+  phase: RemotePhase,
+  started: boolean | undefined,
+  reattached = false,
+): RemotePhase {
   if (phase !== "starting") return phase
-  return started === false ? "waiting" : "live"
+  if (started === false) return "waiting"
+  return reattached ? "live" : "starting"
 }
 
-/** A key typed into the pane: to the shell while it runs; Enter connects an idle pane; other
- *  keys are dropped (never sent to a host that isn't there, nor echoed ahead of a prompt). */
-export function onKey(phase: RemotePhase, data: string): "forward" | "connect" | "drop" {
+/** Output arrived: a connecting pane is now live, and a prompt that got its answer is over. */
+export function onOutput(phase: RemotePhase): RemotePhase {
+  return phase === "starting" || phase === "prompt" ? "live" : phase
+}
+
+/** A key typed into the pane: to the shell while it runs. In an idle pane Enter connects
+ *  (unless it never can) and Esc closes it — on the second press (`escArmed`), since a first
+ *  one is often vim habit right after a drop; anything else goes nowhere, never to a host that
+ *  isn't there nor echoed ahead of a password prompt. */
+export function onKey(
+  phase: RemotePhase,
+  data: string,
+  failure?: SshFailure,
+  escArmed = false,
+): "forward" | "connect" | "arm-close" | "close" | "drop" {
   if (!isIdle(phase)) return "forward"
-  return data === "\r" ? "connect" : "drop"
+  if (data === "\x1b") return escArmed ? "close" : "arm-close"
+  if (data === "\r") return phase === "failed" && failure && !canRetry(failure) ? "drop" : "connect"
+  return "drop"
 }
 
-/** What an idle pane says, after `[smterm]`. */
+/** Whether the cursor line may be an auth question at all: never in a full-screen program
+ *  (vim on a `password:` line), and not a line the user is typing (`if password:` in a REPL) —
+ *  only when nothing was typed since, or the last thing typed ended with Enter (sudo). */
+export function mayBePrompt(o: { alternateScreen: boolean; lastKey?: string }): boolean {
+  if (o.alternateScreen) return false
+  return o.lastKey === undefined || o.lastKey.endsWith("\r")
+}
+
+/** What ssh (or the host) is asking for, from the line the cursor sits on; null for none. */
+export type AuthPrompt = "password" | "passphrase" | "code" | "PIN" | "host key"
+
+export function authPrompt(line: string): AuthPrompt | null {
+  const l = line.trimEnd()
+  if (l.length > 300) return null
+  if (/are you sure you want to continue connecting \(yes\/no(\/\[fingerprint\])?\)\?$/i.test(l)) {
+    return "host key"
+  }
+  if (!/:$/.test(l)) return null
+  if (/passphrase for key\b/i.test(l)) return "passphrase"
+  if (/\bPIN\b/.test(l)) return "PIN"
+  if (/(verification code|one[- ]time|\botp\b|authenticator|\btoken\b|\bcode\b)/i.test(l))
+    return "code"
+  if (/password/i.test(l)) return "password"
+  return null
+}
+
+/** Why ssh exited, in words. */
+export function exitReason(code: number, signal: number): string {
+  if (signal) return `ssh was stopped (signal ${signal})`
+  if (code === 255) return "the connection dropped or was refused"
+  return `ssh exited with code ${code}`
+}
+
+/** What an idle pane says, after `[smterm]`: what happened, then the keys that act on it. */
 export function idleMessage(
   phase: RemoteIdle,
   label: string,
-  info?: { code?: number; signal?: number; error?: string },
+  info?: { code?: number; signal?: number; error?: string; wslDistro?: string },
 ): string {
-  if (phase === "waiting") return `${label} — press Enter to connect`
+  const close = "Esc twice to close"
+  if (phase === "waiting") return `${label} isn't connected yet. Enter to connect · ${close}`
   if (phase === "failed") {
-    return `couldn't connect to ${label}: ${cleanError(info?.error)} — press Enter to retry`
+    const error = cleanError(info?.error)
+    switch (sshFailureKind(error)) {
+      case "host-gone":
+        return info?.wslDistro
+          ? `${label} isn't in ${info.wslDistro}'s ssh config any more, or the distro was removed. Enter to retry · ${close}`
+          : `${label} isn't in your ssh config any more. Add it back, then Enter to retry · ${close}`
+      case "no-ssh":
+        return `ssh isn't installed or isn't on PATH. Install OpenSSH, then Enter to retry · ${close}`
+      case "not-here":
+        return `${label} can't be opened here: ${error}. ${close}`
+      case "wsl-down":
+        return `${error}. Enter to retry · ${close}`
+      default:
+        return `couldn't connect to ${label}: ${error}. Enter to retry · ${close}`
+    }
   }
   const code = info?.code ?? 0
   const signal = info?.signal ?? 0
-  if (code === 0 && !signal) return `session on ${label} ended — press Enter to start a new one`
-  const why = signal ? `signal ${signal}` : `code ${code}`
-  return `connection to ${label} closed (${why}) — press Enter to reconnect`
+  if (code === 0 && !signal) {
+    return `Session on ${label} ended. Enter to start a new one · ${close}`
+  }
+  return `Connection to ${label} lost (${exitReason(code, signal)}). Enter to reconnect · ${close}`
+}
+
+/** How a remote pane's state shows wherever a pane's status does (sidebar, tabs, header);
+ *  a live pane shows its ordinary status. */
+export function remoteStatusUi(
+  phase: RemotePhase | undefined,
+  status: SessionStatus,
+  detail?: string, // the prompt kind (phase "prompt") or "ended" / "lost" (phase "closed")
+): StatusUi {
+  const prompt = detail as AuthPrompt | undefined
+  switch (phase) {
+    case "starting":
+      return { dot: "faint", word: "connecting", pulse: true }
+    case "prompt":
+      return { dot: "amber", word: prompt ?? "needs input", pulse: false }
+    case "closed": // `detail` "ended" = a clean exit on the host: not a failure
+      return detail === "ended"
+        ? { dot: "hollow", word: "ended", pulse: false }
+        : { dot: "red", word: "disconnected", pulse: false }
+    case "failed":
+      return { dot: "red", word: "can't connect", pulse: false }
+    case "waiting":
+      return { dot: "hollow", word: "not connected", pulse: false }
+    default:
+      return statusUi(status)
+  }
 }
 
 /** A dim `[smterm] …` line on its own row, for xterm. */
@@ -77,4 +177,16 @@ export function cursorBelowContent(o: {
 }): string {
   if (o.cursorRow >= o.lastContentRow) return ""
   return `\x1b[${o.lastContentRow - o.baseY + 1};1H` // 1-based screen row; the banner's \r\n steps below
+}
+
+/** A tab's ssh summary: any pane at a prompt → "prompt"; else any lost or failed connection →
+ *  "down" (a clean `exit` isn't); else null (the tab's ordinary badge applies). */
+export function tabRemoteBadge(
+  panes: { phase?: RemotePhase; detail?: string }[],
+): "prompt" | "down" | null {
+  if (panes.some((p) => p.phase === "prompt")) return "prompt"
+  const down = panes.some(
+    (p) => p.phase === "failed" || (p.phase === "closed" && p.detail !== "ended"),
+  )
+  return down ? "down" : null
 }

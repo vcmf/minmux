@@ -286,7 +286,19 @@ prompt heuristic in S1, which runs on the existing throttled output-idle path.
       built app: a normal drop, a tmux detach (its own `?1049l` in the same chunk as the exit), a
       `?1047h` program with a homed cursor, and a drop inside a `?1049h` TUI: the line lands below
       all output each time ([shot](ssh-ux/s0-drop.png)).
-- [ ] S1 remote states, disconnect keys, failure actions
+- [x] **S1** remote states, disconnect keys, failure actions (F2, F3, F7, F13 message + keys).
+      An ssh pane is `connecting` until ssh prints; a password / passphrase / code / PIN / host-key
+      prompt (checked once per quiet spell on the cursor line) shows as amber `password` etc. and,
+      off-screen, raises attention (bell, status bar, OS notification). `disconnected` and
+      `can't connect` are red, `not connected` hollow, on the sidebar row, the surface tab and the
+      tab dot (a clean `exit` reads neutral `ended`). The message says what happened in words with
+      `Enter to reconnect · Esc twice to close` (one Esc only asks: it's often vim habit right
+      after a drop); prompts are only looked for outside full-screen programs and not on a line
+      the user is typing; the pane you're driving never counts on the bell;
+      failures carry their kind (shared `lib/ssh-errors.ts` with main): a host gone from the
+      config adds "Open ssh config", one that can never work here offers no Retry. Shots:
+      [connecting](ssh-ux/s1-connecting.png), [password](ssh-ux/s1-password.png),
+      [disconnected](ssh-ux/s1-disconnected.png), [host gone](ssh-ux/s1-host-gone.png).
 - [ ] S2 host chip, per-host colour, titles
 - [ ] S3 host picker, pinned + connected sidebar, row menu, hidden git hosts, empty state
 - [ ] S4 bounded auto-retry, "Connect all"

@@ -961,3 +961,38 @@ describe("store — remote connection state", () => {
     expect(s.restored).toBeUndefined()
   })
 })
+
+describe("store — remote detail", () => {
+  beforeEach(resetStore)
+
+  it("records the detail with the phase, clears it with the next phase, and drops it on close", () => {
+    st().newTab(hostShellOption(testHost("web")))
+    const id = firstTab().activeSessionId
+    st().setRemotePhase(id, "prompt", "password")
+    expect(st().remoteDetail[id]).toBe("password")
+    const before = useStore.getState()
+    st().setRemotePhase(id, "prompt", "password")
+    expect(useStore.getState()).toBe(before) // unchanged → no notify
+    st().setRemotePhase(id, "prompt", "host key")
+    expect(st().remoteDetail[id]).toBe("host key")
+    st().setRemotePhase(id, "live")
+    expect(st().remoteDetail[id]).toBeUndefined()
+    st().setRemotePhase(id, "failed", "host-gone")
+    st().closeTab(firstTab().id)
+    expect(st().remoteDetail).toEqual({})
+  })
+})
+
+describe("store — remote detail keeps its reference", () => {
+  beforeEach(resetStore)
+
+  it("a phase change with the same (no) detail doesn't reallocate remoteDetail", () => {
+    st().newTab(hostShellOption(testHost("web")))
+    const id = firstTab().activeSessionId
+    st().setRemotePhase(id, "starting")
+    const before = st().remoteDetail
+    st().setRemotePhase(id, "live")
+    expect(st().remoteDetail).toBe(before)
+    expect(st().remotePhase[id]).toBe("live")
+  })
+})

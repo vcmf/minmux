@@ -24,6 +24,7 @@ export function resetStore() {
     sshHosts: [],
     sshHostsLoaded: false,
     remotePhase: {},
+    remoteDetail: {},
     profile: "",
     windowFocused: true,
     systemDark: true,

@@ -31,6 +31,7 @@ import { TerminalManager } from "../terminal/terminal-manager"
 import { allPanes } from "../lib/pane-tree"
 import { resolveDefaultShell } from "../lib/shells"
 import { statusUi } from "../lib/status-ui"
+import { remoteStatusUi } from "../lib/remote-connect"
 import { connectedHostIds, groupHosts, hostShellOption, remoteSubline } from "../lib/ssh-hosts-ui"
 import type { SshHost } from "../types"
 import {
@@ -49,6 +50,9 @@ export function Sidebar() {
   const shells = useStore((s) => s.shells)
   const defaultShellPref = useStore((s) => s.settings.defaultShell)
   const paneGit = useStore((s) => s.paneGit) // branch + PR per terminal (polled in App)
+  // ssh panes: connecting / at a prompt / disconnected … (stable refs; change on a transition)
+  const remotePhase = useStore((s) => s.remotePhase)
+  const remoteDetail = useStore((s) => s.remoteDetail)
   // Claude's last reply per pane (newest session root that ran in it), as a flat
   // [paneId, message, …] list of primitives: the shallow compare keeps the sidebar from
   // re-rendering on every agent hook event — only when a reply actually changes.
@@ -208,7 +212,9 @@ export function Sidebar() {
                 ids.map((id) => {
                   const s = sessions[id]
                   if (!s) return null
-                  const ui = statusUi(s.status)
+                  const ui = s.remote
+                    ? remoteStatusUi(remotePhase[id], s.status, remoteDetail[id])
+                    : statusUi(s.status)
                   const isActive = active && tab.activeSessionId === id
                   return (
                     <div
@@ -271,8 +277,11 @@ export function Sidebar() {
                           />
                         )}
                       </div>
-                      {s.status !== "attention" && (
-                        <span className="tree-meta" style={{ color: `var(--${ui.dot})` }}>
+                      {(s.status !== "attention" || ui.word !== "needs input") && (
+                        <span
+                          className="tree-meta"
+                          style={{ color: `var(--${ui.dot === "hollow" ? "faint" : ui.dot})` }}
+                        >
                           {ui.word}
                         </span>
                       )}

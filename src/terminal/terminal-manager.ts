@@ -11,7 +11,8 @@ import type { Settings } from "../settings/schema"
 import { ligatureRanges } from "./ligatures"
 import { withAlpha } from "../settings/themes"
 import { displaySessionTitle } from "../lib/session-label"
-import { allPanes, visibleSessionIds } from "../lib/pane-tree"
+import { allPanes, allSessionIds, visibleSessionIds } from "../lib/pane-tree"
+import { canRetry, sshFailureKind, type SshFailure } from "../lib/ssh-errors"
 import { webglPanes, shouldRebuildAtlas } from "../lib/renderer-policy"
 import { appShortcut, keyAction } from "../lib/terminal-keys"
 import { gridChanged, type Grid } from "../lib/resize"
@@ -21,13 +22,16 @@ import { canType, newShellFlow, onMark, parseMark, type ShellFlow } from "../lib
 import { isMac, isWindows } from "../lib/platform"
 import {
   afterStart,
+  authPrompt,
   banner,
   cleanError,
   cursorBelowContent,
   firstStart,
   idleMessage,
   isIdle,
+  mayBePrompt,
   onKey,
+  onOutput,
   type RemoteIdle,
   type RemotePhase,
 } from "../lib/remote-connect"
@@ -42,6 +46,9 @@ interface Entry {
   offData?: () => void
   offExit?: () => void
   remote?: RemotePhase // ssh panes only: where the connection is (rules: lib/remote-connect)
+  failure?: SshFailure // with remote = "failed": why, so Enter / Retry only act when they can
+  lastKey?: string // ssh panes: the last input sent (a prompt check skips a line being typed)
+  escArmedAt?: number // an idle ssh pane's first Esc: a second within ESC_CLOSE_MS closes it
   startSeq?: number // bumps per PTY request: a stale answer never moves `remote`
   joinerId?: number
   idleTimer?: ReturnType<typeof setTimeout>
@@ -325,7 +332,10 @@ function requestPty(id: string, entry: Entry, attachOnly: boolean, given?: Sessi
   const { term } = entry
   const seq = (entry.startSeq ?? 0) + 1
   entry.startSeq = seq
-  if (session.remote) setPhase(id, entry, "starting")
+  if (session.remote) {
+    entry.lastKey = undefined // a new ssh: nothing typed into it yet
+    setPhase(id, entry, "starting")
+  }
   void ipc
     .ptySpawn({
       id: session.id,
@@ -352,7 +362,7 @@ function requestPty(id: string, entry: Entry, attachOnly: boolean, given?: Sessi
         return
       }
       if (entry.remote) {
-        const next = afterStart(entry.remote, started)
+        const next = afterStart(entry.remote, started, reattached)
         if (next === "waiting") setIdle(id, entry, "waiting")
         else setPhase(id, entry, next)
       }
@@ -385,9 +395,11 @@ function requestPty(id: string, entry: Entry, attachOnly: boolean, given?: Sessi
 }
 
 /** Record an ssh pane's phase here (keys) and in the store (header button, sidebar dot). */
-function setPhase(id: string, entry: Entry, phase: RemotePhase) {
+function setPhase(id: string, entry: Entry, phase: RemotePhase, detail?: string) {
   entry.remote = phase
-  useStore.getState().setRemotePhase(id, phase)
+  if (phase !== "failed") entry.failure = undefined
+  entry.escArmedAt = undefined
+  useStore.getState().setRemotePhase(id, phase, detail)
 }
 
 // Undo what a program on the dropped connection left on: mouse tracking, focus events,
@@ -427,16 +439,58 @@ function setIdle(
   phase: RemoteIdle,
   info?: { code?: number; signal?: number; error?: string },
 ) {
-  const label = useStore.getState().sessions[id]?.remote?.label ?? "the host"
-  const text = banner(idleMessage(phase, label, info))
+  const remote = useStore.getState().sessions[id]?.remote
+  const label = remote?.label ?? "the host"
+  const wslDistro = remote?.env.startsWith("wsl:") ? remote.env.slice(4) : undefined
+  const text = banner(idleMessage(phase, label, { ...info, wslDistro }))
   if (phase === "closed") writeAfterDrop(entry, text)
   else entry.term.write(text)
-  setPhase(id, entry, phase) // now: keys are gated before the banner is even drawn
+  const failure = phase === "failed" ? sshFailureKind(cleanError(info?.error)) : undefined
+  // closed: "ended" (a clean exit on the host) reads neutral, "lost" red
+  const ended = !info?.code && !info?.signal
+  const detail =
+    phase === "failed" ? failure : phase === "closed" ? (ended ? "ended" : "lost") : undefined
+  setPhase(id, entry, phase, detail) // now: keys are gated before the banner is even drawn
+  entry.failure = failure
+}
+
+// Two presses of Esc, this close together, close an idle ssh pane (one is often vim habit).
+const ESC_CLOSE_MS = 2000
+
+/** Esc twice on an idle ssh pane: close it (the surface; its pane goes when it was the last).
+ *  After this key event unwinds — closing disposes the xterm that's still handling it. */
+function closeRemote(id: string) {
+  setTimeout(() => {
+    const st = useStore.getState()
+    const tab = st.tabs.find((t) => allSessionIds(t.root).includes(id))
+    if (tab) st.closeSurface(tab.id, id)
+  }, 0)
+}
+
+/** Output went quiet on a live ssh pane: if the cursor line is a password / passphrase / code /
+ *  host-key question, show it ("prompt") and, off-screen, raise attention (bell + notification).
+ *  Runs on the idle timer, so once per quiet spell — never per output chunk. */
+function checkAuthPrompt(id: string, entry: Entry, raise: (detail?: string) => void) {
+  const b = entry.term.buffer.active
+  if (!mayBePrompt({ alternateScreen: b.type === "alternate", lastKey: entry.lastKey })) return
+  // The cursor row plus the rows it soft-wraps from (a long prompt in a narrow pane).
+  let row = b.baseY + b.cursorY
+  let line = b.getLine(row)?.translateToString(true) ?? ""
+  for (let n = 0; n < 4 && row > 0 && b.getLine(row)?.isWrapped; n++) {
+    row--
+    line = (b.getLine(row)?.translateToString(true) ?? "") + line
+  }
+  const kind = authPrompt(line)
+  if (!kind) return
+  setPhase(id, entry, "prompt", kind)
+  const label = useStore.getState().sessions[id]?.remote?.label ?? "the host"
+  raise(kind === "host key" ? `${label}: confirm the host key` : `${label} asks for a ${kind}`)
 }
 
 /** Enter (or Connect) on an idle ssh pane: start ssh again under the same session id. */
 function connectRemote(id: string, entry: Entry) {
   if (!isIdle(entry.remote)) return
+  if (entry.remote === "failed" && entry.failure && !canRetry(entry.failure)) return
   const label = useStore.getState().sessions[id]?.remote?.label ?? "the host"
   entry.term.write(banner(`connecting to ${label}…`))
   requestPty(id, entry, false)
@@ -450,6 +504,11 @@ function spawn(session: Session, entry: Entry) {
 
   entry.offData = ipc.onPtyData(session.id, (bytes) => {
     term.write(bytes)
+    // An ssh pane that was connecting (or at a prompt) and now prints is live. One compare
+    // per chunk; the store is only touched on the change.
+    if (entry.remote === "starting" || entry.remote === "prompt") {
+      setPhase(session.id, entry, onOutput(entry.remote))
+    }
     // Generic agent-status heuristic: throttled "output" signal + an idle timer.
     // While a command runs, streaming keeps it "working"; when output goes quiet
     // for IDLE_MS the timer flips it to "attention" (agent waiting for input).
@@ -461,6 +520,7 @@ function spawn(session: Session, entry: Entry) {
     clearTimeout(entry.idleTimer)
     entry.idleTimer = setTimeout(() => {
       useStore.getState().signalSession(session.id, { type: "output-idle" })
+      if (entry.remote === "live") checkAuthPrompt(session.id, entry, raiseAttention)
     }, IDLE_MS)
   })
 
@@ -488,11 +548,18 @@ function spawn(session: Session, entry: Entry) {
   }
 
   term.onData((data) => {
-    // An ssh pane that isn't connected: Enter connects, anything else goes nowhere.
+    // An ssh pane that isn't connected: Enter connects, Esc twice closes, the rest goes nowhere.
     if (entry.remote) {
-      const k = onKey(entry.remote, data)
+      const armed = entry.escArmedAt !== undefined && Date.now() - entry.escArmedAt < ESC_CLOSE_MS
+      const k = onKey(entry.remote, data, entry.failure, armed)
       if (k === "connect") return connectRemote(session.id, entry)
+      if (k === "close") return closeRemote(session.id)
+      if (k === "arm-close") {
+        entry.escArmedAt = Date.now()
+        return void entry.term.write(banner("Press Esc again to close this pane."))
+      }
       if (k === "drop") return
+      entry.lastKey = data
     }
     ipc.ptyWrite(session.id, data)
   })
