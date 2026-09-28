@@ -474,13 +474,13 @@ function RemoteHosts() {
   )
   const hostColors = useStore((s) => s.settings.ssh.colors)
   // Flattened to primitives for useShallow (a fresh object would re-render every update).
-  const [live, needsYou, down] = useStore(
+  const [live, connecting, needsYou, down] = useStore(
     useShallow((s) => {
       const r = remoteSummary(s.sessions, s.remotePhase, s.remoteDetail)
-      return [r.live, r.needsYou, r.down]
+      return [r.live, r.connecting, r.needsYou, r.down]
     }),
   )
-  const summary = { live, needsYou, down }
+  const status = summaryText({ live, connecting, needsYou, down })
   const [collapsed, setCollapsed] = useState(readCollapsed)
   const [menu, setMenu] = useState<{ x: number; y: number; host: SshHost } | null>(null)
   const visibleCount = useMemo(() => visibleHosts(hosts).length, [hosts])
@@ -488,10 +488,9 @@ function RemoteHosts() {
   const groups = useMemo(() => groupHosts(shown), [shown])
 
   const toggle = () => {
-    setCollapsed((v) => {
-      writeCollapsed(!v)
-      return !v
-    })
+    const next = !collapsed
+    setCollapsed(next)
+    writeCollapsed(next)
   }
   const browse = () => useStore.getState().setHostPickerOpen(true)
   const open = (h: SshHost, how: "tab" | "row" | "column") => useStore.getState().openHost(h, how)
@@ -499,19 +498,25 @@ function RemoteHosts() {
   return (
     <div className="remote">
       <div className="sidebar-header remote-header">
-        <button className="remote-toggle" onClick={toggle} aria-expanded={!collapsed}>
+        <button
+          className="remote-toggle"
+          onClick={toggle}
+          aria-expanded={!collapsed}
+          aria-label={status ? `Remote: ${status}` : "Remote"}
+        >
           {collapsed ? <CaretRight size={11} /> : <CaretDown size={11} />}
           <span className="section-label">Remote</span>
-          {summary.live + summary.needsYou + summary.down > 0 && (
-            <span className="remote-status" title={summaryText(summary)}>
-              {summary.live > 0 && (
+          {status && (
+            <span className="remote-status" title={status} aria-hidden>
+              {live > 0 && (
                 <>
                   <span className="dot accent" />
-                  <span className="remote-status-n">{summary.live}</span>
+                  <span className="remote-status-n">{live}</span>
                 </>
               )}
-              {summary.needsYou > 0 && <span className="dot amber" aria-label="needs you" />}
-              {summary.down > 0 && <span className="dot red" aria-label="disconnected" />}
+              {connecting > 0 && <span className="dot faint pulse" />}
+              {needsYou > 0 && <span className="dot amber" />}
+              {down > 0 && <span className="dot red" />}
             </span>
           )}
         </button>

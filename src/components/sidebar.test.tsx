@@ -501,21 +501,24 @@ describe("Sidebar — Remote header", () => {
     expect(screen.queryByTitle("Open a terminal on web")).not.toBeInTheDocument()
   })
 
-  it("shows live connections, and whether one needs you or is down, not the host count", () => {
-    st().setSshHosts([testHost("web"), testHost("db"), testHost("pi")])
-    st().newTab(hostShellOption(testHost("web")))
-    st().newTab(hostShellOption(testHost("db")))
-    st().newTab(hostShellOption(testHost("pi")))
-    const [a, b, c] = st().tabs.map((t) => t.activeSessionId)
+  it("shows connections, and whether one is connecting, needs you or is down", () => {
+    st().setSshHosts([testHost("web"), testHost("db"), testHost("pi"), testHost("x")])
+    for (const h of ["web", "db", "pi", "x"]) st().newTab(hostShellOption(testHost(h)))
+    const [a, b, c, d] = st().tabs.map((t) => t.activeSessionId)
     st().setRemotePhase(a!, "live")
     st().setRemotePhase(b!, "prompt", "password")
     st().setRemotePhase(c!, "closed", "lost")
+    st().setRemotePhase(d!, "closed", "retrying") // reconnecting on its own: not "needs you"
     render(<Sidebar />)
     const status = document.querySelector(".remote-status") as HTMLElement
-    expect(status.querySelector(".remote-status-n")!.textContent).toBe("2") // web + db (at a prompt)
-    expect(status.querySelector(".dot.amber")).not.toBeNull()
+    expect(status.querySelector(".remote-status-n")!.textContent).toBe("2") // web + db (prompt)
+    expect(status.querySelector(".dot.faint.pulse")).not.toBeNull()
+    expect(status.querySelectorAll(".dot.amber")).toHaveLength(1)
     expect(status.querySelector(".dot.red")).not.toBeNull()
-    expect(status.title).toBe("2 connected · 1 needs you · 1 disconnected")
+    const text = "2 connections · 1 connecting · 1 needs you · 1 disconnected"
+    expect(status.title).toBe(text)
+    // Screen readers get it from the toggle's name (the dots themselves are aria-hidden).
+    expect(screen.getByRole("button", { name: `Remote: ${text}` })).toBeInTheDocument()
   })
 
   it("nothing remote: no status at all", () => {
