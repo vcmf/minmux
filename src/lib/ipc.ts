@@ -1,4 +1,4 @@
-import type { ShellOption } from "../types"
+import type { ShellOption, SpawnOpts, SshHost } from "../types"
 import type { WslContext } from "./wsl"
 import type { AgentEvent } from "./agent-graph"
 import type { SessionMeta } from "./session-color"
@@ -12,24 +12,25 @@ import type { UpdateStatus } from "./version"
 // The typed surface the preload exposes on window.smterm. Every renderer→main
 // call goes through this one seam (keeps components portable + is the insulation
 // point for a future out-of-process session daemon — see ARCHITECTURE Appendix A).
-export interface SpawnOpts {
-  id: string
-  cols: number
-  rows: number
-  shell: string
-  args: string[]
-  cwd?: string // start directory; falls back to $HOME in main if unset
-  bg?: string // theme terminal background hex → COLORFGBG so agents detect light/dark
-}
+export type { SpawnOpts } from "../types"
 
 export interface Ipc {
   // Resolves { reattached: true } when the session was already live in main and we
   // reconnected the (reloaded) renderer to it, replaying history, instead of spawning.
-  ptySpawn: (opts: SpawnOpts) => Promise<{ reattached: boolean; integrated?: boolean }>
+  // started: false = attachOnly found nothing live to reattach, so nothing was started.
+  ptySpawn: (
+    opts: SpawnOpts,
+  ) => Promise<{ reattached: boolean; integrated?: boolean; started?: boolean }>
   onPtyData: (id: string, cb: (data: string) => void) => () => void
   ptyWrite: (id: string, data: string) => void
   ptyResize: (id: string, cols: number, rows: number) => void
   ptyKill: (id: string) => void
+  ptyLiveIds: () => Promise<string[]> // sessions with a live PTY in main (after a reload)
+  // The PTY's process exited on its own (not a pty:kill) — e.g. a dropped ssh connection.
+  onPtyExit: (id: string, cb: (e: { code: number; signal: number }) => void) => () => void
+  listSshHosts: () => Promise<SshHost[] | null> // null = main couldn't build it this time
+  onSshHostsChanged: (cb: () => void) => () => void
+  openSshConfig: () => void // opens ~/.ssh/config (creating an empty one if needed)
   listShells: () => Promise<ShellOption[]>
   readSettings: () => Promise<string>
   writeSettings: (contents: string) => Promise<void>

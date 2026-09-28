@@ -1,4 +1,5 @@
-import type { PaneNode, Session, Tab } from "../types"
+import type { PaneNode, RemoteRef, Session, Tab } from "../types"
+import { parseRemoteRef, sshLabel } from "./ssh-validate"
 import { clampPanelWidth } from "./right-panel"
 import { findPane, firstSessionId, selectSurface } from "./pane-tree"
 
@@ -19,6 +20,8 @@ interface PersistedSession {
   command: string
   args: string[]
   cwd?: string
+  // An ssh session's host. Older builds ignore it and run `ssh <target>` from command/args.
+  remote?: Pick<RemoteRef, "hostId" | "label" | "target" | "env">
 }
 
 interface PersistedTab {
@@ -67,6 +70,20 @@ export function serializeWorkspace(state: WorkspaceState): PersistedWorkspace {
       command: s.command,
       args: s.args,
       cwd: s.cwd,
+      // Only what identifies the host (main looks the rest up in its own list); a saved one we
+      // couldn't read goes back exactly as it was.
+      ...(s.remoteSaved !== undefined
+        ? { remote: s.remoteSaved as PersistedSession["remote"] }
+        : s.remote
+          ? {
+              remote: {
+                hostId: s.remote.hostId,
+                label: s.remote.label,
+                target: s.remote.target,
+                env: s.remote.env,
+              },
+            }
+          : {}),
     })),
     ...(state.rightPanelWidth !== undefined ? { rightPanelWidth: state.rightPanelWidth } : {}),
   }
@@ -118,6 +135,17 @@ export function migratePaneNode(
   return null
 }
 
+/** A persisted session's host, validated (undefined if it doesn't). */
+export const restoreRemote = (v: unknown): RemoteRef | undefined => parseRemoteRef(v) ?? undefined
+
+// A saved host we can't read: an id main never lists, so spawning it fails with a message.
+const UNAVAILABLE_REMOTE = (v: unknown): RemoteRef => ({
+  hostId: "unavailable",
+  label: sshLabel((v as { label?: unknown } | null)?.label, "ssh"),
+  target: "unavailable",
+  env: "native",
+})
+
 /** Rebuild store state from a parsed workspace; null if malformed/empty. */
 export function deserializeWorkspace(input: unknown): WorkspaceState | null {
   if (!input || typeof input !== "object") return null
@@ -136,6 +164,16 @@ export function deserializeWorkspace(input: unknown): WorkspaceState | null {
       status: "idle",
       unread: false,
       cwd: typeof p.cwd === "string" ? p.cwd : undefined,
+    }
+    if (p.remote !== undefined) {
+      // A remote that no longer validates (e.g. from a newer build) is still remote: main
+      // refuses it with a clear error. Never run its saved `ssh <target>` as a local command.
+      const remote = restoreRemote(p.remote)
+      sessions[p.id]!.remote = remote ?? UNAVAILABLE_REMOTE(p.remote)
+      // Kept verbatim so the next save doesn't overwrite it with the placeholder (a newer
+      // build that wrote it can still read it back).
+      if (!remote) sessions[p.id]!.remoteSaved = p.remote
+      delete sessions[p.id]!.cwd // a remote session never has a local cwd
     }
   }
 

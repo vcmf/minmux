@@ -20,6 +20,7 @@ Living document. Update status as we go. Companion to [ARCHITECTURE.md](./ARCHIT
 | **v0**     | **First public OSS release — free dev-channel install (curl/brew/scoop)** | 🚧 **current** (branch `v0`)       |
 | **M4**     | Notarized double-click installers (Apple $99/yr)                          | ⬜ → v0.1                          |
 | **M6**     | **Agent observability — live agents & worktrees board** (hooks → OTEL)    | ⬜ next feature                    |
+| **SSH**    | SSH remotes phase 1: `~/.ssh/config` hosts, one-click connect, reconnect  | 🚧 epic `epic/ssh-remotes` (A–D)   |
 | **M5**     | Later (approvals, orchestration, persistence daemon, auto-update)         | 🧊                                 |
 
 > **Direction (2026-07-07):**

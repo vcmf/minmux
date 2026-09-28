@@ -1,7 +1,8 @@
 import { describe, it, expect, beforeEach } from "vitest"
 import { useStore, isVisibleIn, isSessionVisible } from "./store"
 import { allSessionIds, visibleSessionIds } from "./lib/pane-tree"
-import { resetStore, testShell as shell } from "./test/helpers"
+import { resetStore, testHost, testShell as shell } from "./test/helpers"
+import { hostShellOption } from "./lib/ssh-hosts-ui"
 import { RIGHT_PANEL_MIN, RIGHT_PANEL_MAX } from "./lib/right-panel"
 import type { ShellOption } from "./types"
 
@@ -725,5 +726,364 @@ describe("splitPaneAt", () => {
     const before = st().tabs
     st().splitPaneAt("nope", "/x")
     expect(st().tabs).toBe(before)
+  })
+})
+
+describe("store — ssh remote sessions", () => {
+  beforeEach(resetStore)
+
+  const remote = { hostId: "native:web", label: "web", target: "web", env: "native" as const }
+  const sshShell: ShellOption = {
+    id: "native:web",
+    label: "web",
+    command: "ssh",
+    args: ["web"],
+    remote,
+  }
+  const focused = () => st().sessions[firstTab().activeSessionId]!
+
+  it("a tab opened on a host is a remote session with no local cwd", () => {
+    st().setShells([shell])
+    st().newTab(sshShell)
+    expect(focused().remote).toEqual(remote)
+    expect(focused().remote).not.toBe(remote) // copied, not aliased
+    expect(focused().cwd).toBeUndefined()
+  })
+
+  it("splits and new surfaces from an ssh pane stay on the same host", () => {
+    st().setShells([shell])
+    st().newTab(sshShell)
+    st().splitActive("row", shell)
+    expect(focused().remote?.hostId).toBe("native:web")
+    st().newSurface(shell)
+    expect(focused().remote?.hostId).toBe("native:web")
+    expect(Object.values(st().sessions).every((x) => x.remote?.hostId === "native:web")).toBe(true)
+  })
+
+  it("ignores OSC 7 cwd reports from a remote shell (the path is on the host)", () => {
+    st().newTab(sshShell)
+    const id = focused().id
+    st().setSessionCwd(id, "/home/remote/project")
+    expect(st().sessions[id]!.cwd).toBeUndefined()
+  })
+
+  it("opening a local folder beside an ssh pane uses a local shell", () => {
+    st().setShells([shell])
+    st().newTab(sshShell)
+    const sshId = focused().id
+    st().openFolderInSplit("/Users/me/proj")
+    expect(focused().remote).toBeUndefined()
+    expect(focused().command).toBe(shell.command)
+    expect(focused().cwd).toBe("/Users/me/proj")
+    st().splitPaneAt(sshId, "/Users/me/other")
+    expect(focused().remote).toBeUndefined()
+    expect(focused().cwd).toBe("/Users/me/other")
+  })
+
+  it("local panes still split into their own shell", () => {
+    st().setShells([shell, wslShell])
+    st().newTab(wslShell)
+    st().openFolderInSplit("/home/me")
+    expect(focused().command).toBe("wsl.exe")
+  })
+})
+
+describe("store — an unreadable saved host", () => {
+  beforeEach(resetStore)
+
+  it("a split keeps the saved original", () => {
+    const remote = {
+      hostId: "unavailable",
+      label: "ssh",
+      target: "unavailable",
+      env: "native" as const,
+    }
+    const saved = { hostId: "wsl2:x:y", env: "new-kind" }
+    st().setShells([shell])
+    st().newTab({
+      id: "unavailable",
+      label: "ssh",
+      command: "ssh",
+      args: [],
+      remote,
+      remoteSaved: saved,
+    })
+    st().splitActive("row", shell)
+    const s = st().sessions[firstTab().activeSessionId]!
+    expect(s.remote?.hostId).toBe("unavailable")
+    expect(s.remoteSaved).toEqual(saved)
+  })
+})
+
+describe("store — ssh hosts", () => {
+  beforeEach(resetStore)
+
+  it("setSshHosts keeps the same reference when the list didn't change", () => {
+    st().setSshHosts([testHost("web")])
+    const before = st().sshHosts
+    st().setSshHosts([testHost("web")])
+    expect(st().sshHosts).toBe(before)
+    st().setSshHosts([testHost("web"), testHost("db")])
+    expect(st().sshHosts.map((h) => h.label)).toEqual(["web", "db"])
+  })
+
+  it("a new tab on a host is a remote session with no local cwd", () => {
+    st().setShells([shell])
+    st().newTab(shell)
+    const local = st().tabs[0]!.activeSessionId
+    st().setSessionCwd(local, "/repo")
+    st().newTab(hostShellOption(testHost("web")))
+    const s = st().sessions[st().tabs[1]!.activeSessionId]!
+    expect(s.remote).toEqual({ hostId: "native:web", label: "web", target: "web", env: "native" })
+    expect(s.cwd).toBeUndefined()
+  })
+
+  it("splitWith splits a local pane onto the host (not the source's shell or cwd)", () => {
+    st().setShells([shell])
+    st().newTab(shell)
+    const local = st().tabs[0]!.activeSessionId
+    st().setSessionCwd(local, "/repo")
+    st().splitWith("row", hostShellOption(testHost("web")))
+    const tab = firstTab()
+    expect(allSessionIds(tab.root)).toHaveLength(2)
+    const s = st().sessions[tab.activeSessionId]!
+    expect(s.remote?.hostId).toBe("native:web")
+    expect(s.cwd).toBeUndefined()
+    expect(st().sessions[local]!.remote).toBeUndefined()
+  })
+
+  it("splitWith a local shell from an ssh pane stays local", () => {
+    st().setShells([shell])
+    st().newTab(hostShellOption(testHost("web")))
+    st().splitWith("column", shell)
+    expect(st().sessions[firstTab().activeSessionId]!.remote).toBeUndefined()
+  })
+
+  it("splitWith with no tab opens one", () => {
+    st().splitWith("row", hostShellOption(testHost("web")))
+    expect(st().tabs).toHaveLength(1)
+    expect(st().sessions[firstTab().activeSessionId]!.remote?.hostId).toBe("native:web")
+  })
+})
+
+describe("store — setSshHosts notifies only on a change", () => {
+  beforeEach(resetStore)
+
+  it("the first answer marks the list loaded, even an empty one", () => {
+    expect(st().sshHostsLoaded).toBe(false)
+    st().setSshHosts([])
+    expect(st().sshHostsLoaded).toBe(true)
+  })
+
+  it("an identical list doesn't notify subscribers", () => {
+    st().setSshHosts([testHost("web")])
+    let calls = 0
+    const off = useStore.subscribe(() => calls++)
+    st().setSshHosts([testHost("web")])
+    expect(calls).toBe(0)
+    st().setSshHosts([testHost("db")])
+    expect(calls).toBe(1)
+    off()
+  })
+})
+
+describe("store — remote connection state", () => {
+  beforeEach(resetStore)
+
+  it("setRemotePhase records the phase and keeps the same state when unchanged", () => {
+    st().newTab(hostShellOption(testHost("web")))
+    const id = firstTab().activeSessionId
+    st().setRemotePhase(id, "closed")
+    expect(st().remotePhase[id]).toBe("closed")
+    const before = useStore.getState()
+    st().setRemotePhase(id, "closed")
+    expect(useStore.getState()).toBe(before)
+    st().setRemotePhase(id, "live")
+    expect(st().remotePhase[id]).toBe("live")
+  })
+
+  it("never records a phase for a session that's gone (a late answer after a close)", () => {
+    st().setRemotePhase("gone", "failed")
+    expect(st().remotePhase).toEqual({})
+  })
+
+  it("closing the pane drops its state", () => {
+    st().newTab(hostShellOption(testHost("web")))
+    const id = firstTab().activeSessionId
+    st().setRemotePhase(id, "waiting")
+    st().closeTab(firstTab().id)
+    expect(st().remotePhase).toEqual({})
+  })
+
+  it("restoreWorkspace marks remote sessions restored (only those) and resets idle state", () => {
+    st().newTab(hostShellOption(testHost("web")))
+    st().setRemotePhase(firstTab().activeSessionId, "closed")
+    const remote = { ...hostShellOption(testHost("db")).remote! }
+    st().restoreWorkspace({
+      sessions: {
+        r: { id: "r", title: "", command: "ssh", args: [], status: "idle", unread: false, remote },
+        l: { id: "l", title: "", command: "/bin/sh", args: [], status: "idle", unread: false },
+      },
+      tabs: [
+        {
+          id: "t",
+          title: "",
+          root: { type: "leaf", id: "p", sessionIds: ["r", "l"], activeSessionId: "r" },
+          activeSessionId: "r",
+        },
+      ],
+      activeTabId: "t",
+    })
+    expect(st().sessions.r!.restored).toBe(true)
+    expect(st().sessions.l!.restored).toBeUndefined()
+    expect(st().remotePhase).toEqual({})
+  })
+
+  it("a split from a restored pane is not itself restored", () => {
+    const remote = { ...hostShellOption(testHost("db")).remote! }
+    st().restoreWorkspace({
+      sessions: {
+        r: { id: "r", title: "", command: "ssh", args: [], status: "idle", unread: false, remote },
+      },
+      tabs: [
+        {
+          id: "t",
+          title: "",
+          root: { type: "leaf", id: "p", sessionIds: ["r"], activeSessionId: "r" },
+          activeSessionId: "r",
+        },
+      ],
+      activeTabId: "t",
+    })
+    st().splitActive("row", shell)
+    const s = st().sessions[firstTab().activeSessionId]!
+    expect(s.remote?.hostId).toBe("native:db")
+    expect(s.restored).toBeUndefined()
+  })
+})
+
+describe("store — remote detail", () => {
+  beforeEach(resetStore)
+
+  it("records the detail with the phase, clears it with the next phase, and drops it on close", () => {
+    st().newTab(hostShellOption(testHost("web")))
+    const id = firstTab().activeSessionId
+    st().setRemotePhase(id, "prompt", "password")
+    expect(st().remoteDetail[id]).toBe("password")
+    const before = useStore.getState()
+    st().setRemotePhase(id, "prompt", "password")
+    expect(useStore.getState()).toBe(before) // unchanged → no notify
+    st().setRemotePhase(id, "prompt", "host key")
+    expect(st().remoteDetail[id]).toBe("host key")
+    st().setRemotePhase(id, "live")
+    expect(st().remoteDetail[id]).toBeUndefined()
+    st().setRemotePhase(id, "failed", "host-gone")
+    st().closeTab(firstTab().id)
+    expect(st().remoteDetail).toEqual({})
+  })
+})
+
+describe("store — remote detail keeps its reference", () => {
+  beforeEach(resetStore)
+
+  it("a phase change with the same (no) detail doesn't reallocate remoteDetail", () => {
+    st().newTab(hostShellOption(testHost("web")))
+    const id = firstTab().activeSessionId
+    st().setRemotePhase(id, "starting")
+    const before = st().remoteDetail
+    st().setRemotePhase(id, "live")
+    expect(st().remoteDetail).toBe(before)
+    expect(st().remotePhase[id]).toBe("live")
+  })
+})
+
+describe("store — opening, pinning and hiding hosts", () => {
+  beforeEach(resetStore)
+
+  it("openHost opens a tab or a split and remembers the host as recent", () => {
+    st().setShells([shell])
+    const web = testHost("web")
+    st().openHost(web, "tab")
+    expect(st().sessions[firstTab().activeSessionId]!.remote?.hostId).toBe("native:web")
+    st().openHost(testHost("db"), "row")
+    expect(allSessionIds(firstTab().root)).toHaveLength(2)
+    expect(st().sshRecent).toEqual(["native:db", "native:web"])
+  })
+
+  it("openHost never opens a hidden host", () => {
+    st().openHost({ ...testHost("github.com"), hidden: true }, "tab")
+    expect(st().tabs).toHaveLength(0)
+  })
+
+  it("pin and hide write the ssh settings", () => {
+    st().toggleHostPinned("native:web")
+    expect(st().settings.ssh.pinned).toEqual(["native:web"])
+    st().toggleHostPinned("native:web")
+    expect(st().settings.ssh.pinned).toEqual([])
+    st().setHostHidden("github.com", false) // a default-hidden git host, shown again
+    expect(st().settings.ssh.hidden).not.toContain("github.com")
+    st().setHostHidden("web", true)
+    expect(st().settings.ssh.hidden).toContain("web")
+  })
+})
+
+describe("store — overlays and default-hidden hosts", () => {
+  beforeEach(resetStore)
+
+  it("the palette and the host picker never stack", () => {
+    st().setHostPickerOpen(true)
+    st().setPaletteOpen(true)
+    expect(st().hostPickerOpen).toBe(false)
+    st().setHostPickerOpen(true)
+    expect(st().paletteOpen).toBe(false)
+  })
+
+  it("showing a default-hidden git host records it in `shown`; hiding it again undoes that", () => {
+    st().setHostHidden("GitHub.com", false)
+    expect(st().settings.ssh.shown).toEqual(["GitHub.com"])
+    st().setHostHidden("github.com", true)
+    expect(st().settings.ssh.shown).toEqual([])
+    expect(st().settings.ssh.hidden).toEqual(["github.com"])
+  })
+
+  it("hiding and showing your own host touches only `hidden`", () => {
+    st().setHostHidden("web", true)
+    st().setHostHidden("web", false)
+    expect(st().settings.ssh.hidden).toEqual([])
+    expect(st().settings.ssh.shown).toEqual([])
+  })
+})
+
+describe("store — restore after a renderer reload", () => {
+  beforeEach(resetStore)
+
+  it("an ssh pane still live in main isn't marked restored (nothing is waiting)", () => {
+    const remote = { ...hostShellOption(testHost("db")).remote! }
+    const ses = (id: string) => ({
+      id,
+      title: "",
+      command: "ssh",
+      args: [],
+      status: "idle" as const,
+      unread: false,
+      remote,
+    })
+    st().restoreWorkspace(
+      {
+        sessions: { r: ses("r"), l: ses("l") },
+        tabs: [
+          {
+            id: "t",
+            title: "",
+            root: { type: "leaf", id: "p", sessionIds: ["r", "l"], activeSessionId: "r" },
+            activeSessionId: "r",
+          },
+        ],
+        activeTabId: "t",
+      },
+      ["l"],
+    )
+    expect(st().sessions.r!.restored).toBe(true)
+    expect(st().sessions.l!.restored).toBeUndefined()
   })
 })

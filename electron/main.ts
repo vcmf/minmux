@@ -13,7 +13,7 @@ import { fileURLToPath } from "node:url"
 import path from "node:path"
 import fs from "node:fs"
 import os from "node:os"
-import { spawn } from "node:child_process"
+import { execFile, spawn } from "node:child_process"
 import { randomUUID } from "node:crypto"
 import { StringDecoder } from "node:string_decoder"
 import * as pty from "node-pty"
@@ -27,6 +27,7 @@ import {
   buildWslInjection,
   defaultWslDistro,
   parseWslDistroArg,
+  parseWslDistros,
   setIntegrationDirName,
 } from "./shell-integration"
 import { gitStatus, gitDiff } from "./git"
@@ -51,8 +52,13 @@ import { AgentMetaTracker } from "./agent-meta"
 import { SessionLedger } from "./agent-sessions"
 import { displayName, profileNames, resolveProfile, scrubParentInstanceEnv } from "./profile"
 import { PaneGitService } from "./pane-git"
+import { SshService } from "./ssh-service"
+import { PendingSpawns, type PendingOutcome } from "./pending-spawns"
+import { createPathWatcher } from "./ssh-watcher"
+import { nodeMiniFs, wslMiniFs } from "./ssh-config"
 import type { PaneGitRequest } from "../src/lib/pane-git"
 import type { WslContext } from "../src/lib/wsl"
+import type { SpawnOpts as SpawnRequest } from "../src/types"
 import {
   classifyPreview,
   PREVIEW_READ_CAP,
@@ -138,6 +144,10 @@ let quitConfirmed = false
 let quitPhase: QuitPhase = "running" // running → draining (PTYs ending) → drained (quit through)
 let osEnding = false // the OS is logging out / restarting — don't hold its quit
 const draining = () => quitPhase !== "running"
+// Remote spawns in flight (the ssh probe is async): a second pty:spawn for the same id waits,
+// and resizes / input / a close that arrive meanwhile are held for it (pending-spawns.ts).
+const pendingSpawns = new PendingSpawns<Electron.WebContents>()
+let sshService: SshService | null = null
 
 // PTY output batching (see electron/coalescer.ts + docs/PERF.md).
 const PTY_FLUSH_MS = 4
@@ -253,6 +263,7 @@ function startSettingsWatcher() {
   fs.mkdirSync(path.dirname(p), { recursive: true })
   watch(p, { ignoreInitial: true }).on("all", () => {
     mainWindow?.webContents.send("settings-changed")
+    sshService?.settingsChanged() // reloads only if the ssh block itself changed
   })
 }
 
@@ -381,118 +392,313 @@ function writeSettings(contents: string): void {
   fs.writeFileSync(p, contents)
 }
 
+// The renderer's spawn request (src/lib/ipc.ts), with `remote` untrusted until SshService
+// rebuilds it from main's own list.
+type SpawnOpts = Omit<SpawnRequest, "remote"> & { remote?: unknown }
+type SpawnResult = { reattached: boolean; integrated: boolean; started?: boolean }
+
+/** A reloaded renderer asking for a live session: rebind output, resize, replay history. */
+function reattach(rec: PtySession, sender: Electron.WebContents, opts: SpawnOpts): SpawnResult {
+  // Point output at the new renderer, drop stale in-flight bytes (they're in the buffer),
+  // resize to the new xterm, then replay history.
+  rec.sender = sender
+  rec.coalescer?.reset()
+  try {
+    rec.proc.resize(opts.cols || 80, opts.rows || 24)
+  } catch {
+    // transient 0-size during layout — a later resize settles it
+  }
+  emit(rec, rec.buffer.dump())
+  diag("pty-reattach", { id: opts.id, pid: rec.proc.pid })
+  return { reattached: true, integrated: rec.integrated }
+}
+
+/** The env every spawned PTY starts from (process env + injection + our opt-outs). */
+function baseSpawnEnv(opts: SpawnOpts, injEnv?: Record<string, string>): Record<string, string> {
+  // Shared-history opt-out: the injected scripts default SHARE_HISTORY on; pass
+  // SMTERM_SHARE_HISTORY=0 to disable. (For WSL, wslInjection lists it in $WSLENV
+  // so it crosses the boundary.)
+  const env = { ...process.env, ...(injEnv ?? {}) } as Record<string, string>
+  if (!shareHistoryEnabled()) env.SMTERM_SHARE_HISTORY = "0"
+  // Tell agents (Claude Code, vim, …) our light/dark background via COLORFGBG — the
+  // fallback when the OSC-11 background query can't complete in time (notably across
+  // the wsl.exe hop). WSL forwards it over $WSLENV (listed in wslInjection).
+  const fgbg = opts.bg ? colorfgbg(opts.bg) : null
+  if (fgbg) env.COLORFGBG = fgbg
+  return env
+}
+
+interface StartSpec {
+  file: string
+  args: string[]
+  cwd: string
+  env: Record<string, string>
+  wslDistro?: string
+  integrated: boolean
+}
+
+/** Spawn a node-pty for a session and wire it (buffer, coalescer, exit, drain registry). */
+function startPty(sender: Electron.WebContents, opts: SpawnOpts, spec: StartSpec): SpawnResult {
+  const proc = pty.spawn(spec.file, spec.args, {
+    name: "xterm-256color",
+    cols: opts.cols || 80,
+    rows: opts.rows || 24,
+    cwd: spec.cwd,
+    env: spec.env,
+  })
+  const coalesce = process.env.SMTERM_NO_COALESCE !== "1"
+  let markExited!: () => void
+  const exited = new Promise<void>((res) => (markExited = res))
+  const live: Drainable = { kill: (sig) => proc.kill(sig), exited }
+  livePtys.add(live)
+  const rec: PtySession = {
+    id: opts.id,
+    proc,
+    buffer: new OutputBuffer(PTY_REPLAY_BYTES),
+    sender,
+    shell: spec.file,
+    wslDistro: spec.wslDistro,
+    integrated: spec.integrated,
+    live,
+  }
+  if (coalesce) {
+    rec.coalescer = new OutputCoalescer(PTY_FLUSH_MS, PTY_MAX_FLUSH_BYTES, (d) => emit(rec, d))
+  }
+  proc.onData((data) => {
+    rec.buffer.push(data) // keep for replay on reattach
+    if (rec.coalescer) rec.coalescer.push(data)
+    else emit(rec, data) // A/B baseline: one IPC message per node-pty chunk
+  })
+  proc.onExit((e) => {
+    diag("pty-exit", { id: opts.id, code: e.exitCode, signal: e.signal ?? 0 })
+    rec.coalescer?.flush() // don't lose the final output
+    // Only a session that's still ours (not closed on purpose — pty:kill already cleaned up —
+    // nor replaced by a newer PTY for the same id) tells its pane and drops its state.
+    if (sessions.get(opts.id) === rec) {
+      if (!draining() && !rec.sender.isDestroyed()) {
+        rec.sender.send(`pty:exit:${opts.id}`, { code: e.exitCode, signal: e.signal ?? 0 })
+      }
+      sessions.delete(opts.id)
+      agentMeta.untrack(opts.id) // shell (and any claude in it) gone — drop the accent
+      sessionLedger().drop(opts.id) // …and nothing to resume there (no-op during a quit)
+    }
+    livePtys.delete(live)
+    markExited()
+  })
+  sessions.set(opts.id, rec)
+  diag("pty-spawn", { id: opts.id, pid: proc.pid, shell: path.basename(spec.file) })
+  return { reattached: false, integrated: spec.integrated }
+}
+
+/** A remote (ssh) session: main rebuilds the command from its own host list. */
+async function spawnRemote(
+  opts: SpawnOpts,
+  outcome: () => PendingOutcome<Electron.WebContents>,
+): Promise<SpawnResult> {
+  const plan = await ssh().spawnPlan(opts.remote)
+  // What arrived while we waited: the pane may be gone, resized, typed into, or taken over
+  // by a reloaded renderer.
+  const meanwhile = outcome()
+  if (meanwhile.killed) throw new Error("the pane was closed") // never an ssh with no pane
+  if (draining()) throw new Error("smterm is quitting")
+  if ("error" in plan) throw new Error(plan.error)
+  // No local shell integration (and no claude hook env): the shell runs on the remote host.
+  const result = startPty(
+    meanwhile.sender,
+    { ...opts, cols: meanwhile.cols, rows: meanwhile.rows },
+    {
+      file: plan.file,
+      args: plan.args,
+      cwd: os.homedir(),
+      env: baseSpawnEnv(opts),
+      integrated: false,
+    },
+  )
+  // Keys typed before ssh existed are dropped, not replayed: they'd land before ssh turns
+  // echo off for its password prompt and show (and sit in the replay buffer) in clear text.
+  return result
+}
+
+// ── ssh remotes ─────────────────────────────────────────────────────
+interface ExecResult {
+  code: number // 0 = ran fine; anything else failed (a timeout included)
+  stdout: string
+}
+
+// Run a command, never rejecting: failures (a timeout included) come back as a non-zero code.
+function execQuiet(
+  file: string,
+  args: string[],
+  timeoutMs: number,
+  encoding: BufferEncoding = "utf8",
+) {
+  return new Promise<ExecResult>((resolve) => {
+    execFile(
+      file,
+      args,
+      { timeout: timeoutMs, maxBuffer: 1024 * 1024, encoding, windowsHide: true },
+      (err, stdout) => {
+        const e = err as NodeJS.ErrnoException | null
+        const code = !e ? 0 : typeof e.code === "number" ? e.code : -1
+        resolve({ code, stdout: String(stdout ?? "") })
+      },
+    )
+  })
+}
+
+// Where `cmd` could be on PATH (PATHEXT on Windows), in lookup order.
+function pathCandidates(cmd: string): string[] {
+  if (path.isAbsolute(cmd)) return [cmd]
+  const exts =
+    process.platform === "win32" ? (process.env.PATHEXT ?? ".EXE;.CMD;.BAT").split(";") : [""]
+  const dirs = (process.env.PATH ?? "").split(path.delimiter).filter(Boolean)
+  return dirs.flatMap((d) => exts.map((ext) => path.join(d, cmd + ext)))
+}
+
+// A file's full path on PATH, or null (sync: for the editor detection's quick checks).
+function findOnPath(cmd: string): string | null {
+  return (
+    pathCandidates(cmd).find((p) => {
+      try {
+        return fs.statSync(p).isFile()
+      } catch {
+        return false
+      }
+    }) ?? null
+  )
+}
+
+// The native ssh's full path (on Windows: PATH, else OpenSSH's standard System32 location).
+// The PATH scan (async stats — never blocking main): a hit is kept a minute (re-checked with
+// one stat, in case ssh is removed), a miss 30 s (ssh installed later is then found).
+let sshPathCache: { path: string | null; at: number } | null = null
+const SSH_MISS_TTL_MS = 30_000
+const SSH_HIT_TTL_MS = 60_000
+async function nativeSshPath(): Promise<string | null> {
+  const c = sshPathCache
+  const age = c ? Date.now() - c.at : Infinity
+  // A hit is re-resolved after a minute: PATH can change (the login env import, a new ssh).
+  if (c?.path && age < SSH_HIT_TTL_MS && (await isFileAsync(c.path))) return c.path
+  if (c && !c.path && age < SSH_MISS_TTL_MS) return null
+  const found = await resolveNativeSsh()
+  sshPathCache = { path: found, at: Date.now() }
+  return found
+}
+async function isFileAsync(p: string): Promise<boolean> {
+  try {
+    return (await fs.promises.stat(p)).isFile()
+  } catch {
+    return false
+  }
+}
+async function findOnPathAsync(cmd: string): Promise<string | null> {
+  for (const candidate of pathCandidates(cmd)) if (await isFileAsync(candidate)) return candidate
+  return null
+}
+async function resolveNativeSsh(): Promise<string | null> {
+  if (process.platform !== "win32") return findOnPathAsync("ssh")
+  const builtIn = path.join(
+    process.env.SystemRoot ?? "C:\\Windows",
+    "System32",
+    "OpenSSH",
+    "ssh.exe",
+  )
+  return (await findOnPathAsync("ssh")) ?? ((await isFileAsync(builtIn)) ? builtIn : null)
+}
+
+/** The ssh remotes service, created on first use (so startup never pays for it). */
+function ssh(): SshService {
+  if (sshService) return sshService
+  sshService = new SshService({
+    platform: process.platform,
+    home: os.homedir(),
+    readSettings,
+    fs: nodeMiniFs,
+    // Only running distros: listing hosts must never boot a WSL VM (a restored pane boots
+    // just its own, on demand).
+    wslRunningDistros: async () => {
+      if (process.platform !== "win32") return []
+      const r = await execQuiet("wsl.exe", ["-l", "--running", "-q"], 5000, "utf16le")
+      return r.code === 0 ? parseWslDistros(r.stdout) : []
+    },
+    wslHome: async (distro, timeoutMs) => {
+      const r = await execQuiet(
+        "wsl.exe",
+        ["-d", distro, "-e", "sh", "-c", 'printf %s "$HOME"'],
+        timeoutMs,
+      )
+      const home = r.stdout.trim()
+      return r.code === 0 && home.startsWith("/") ? home : null
+    },
+    wslFs: (distro) => wslMiniFs(distro),
+    wslWatchPaths: (distro, linuxPath) => wslUncCandidates(distro, linuxPath),
+    sshPath: nativeSshPath,
+    createWatcher: (onChange) =>
+      createPathWatcher(onChange, (err) => diag("ssh-watch-error", { err: String(err) })),
+    onChange: () => mainWindow?.webContents.send("ssh-hosts-changed"),
+  })
+  return sshService
+}
+
 function registerIpc() {
   // PTY — one node-pty per session; stream output back over pty:data:<id>. When a
   // reloaded renderer asks to spawn a session that's already live, REATTACH: rebind
   // output to the new renderer and replay recent history, rather than respawn.
-  ipcMain.handle(
-    "pty:spawn",
-    (
-      event,
-      opts: {
-        id: string
-        cols: number
-        rows: number
-        shell: string
-        args: string[]
-        cwd?: string
-        bg?: string
-      },
-    ): { reattached: boolean; integrated: boolean } => {
-      if (draining()) throw new Error("smterm is quitting") // nothing new may outlive the drain
-      const existing = sessions.get(opts.id)
-      if (existing) {
-        // Reattach: point output at the new renderer, drop stale in-flight bytes
-        // (they're in the buffer), resize to the new xterm, then replay history.
-        existing.sender = event.sender
-        existing.coalescer?.reset()
-        try {
-          existing.proc.resize(opts.cols || 80, opts.rows || 24)
-        } catch {
-          // transient 0-size during layout — a later resize settles it
-        }
-        emit(existing, existing.buffer.dump())
-        diag("pty-reattach", { id: opts.id, pid: existing.proc.pid })
-        return { reattached: true, integrated: existing.integrated }
-      }
+  ipcMain.handle("pty:spawn", async (event, opts: SpawnOpts): Promise<SpawnResult> => {
+    // nothing new may outlive the drain (or start once a quit is under way)
+    if (draining()) throw new Error("smterm is quitting")
+    // Still preparing (a reloaded renderer asking again): join that spawn — this renderer
+    // takes over its output and size, and shares its result. Never a second spawn.
+    const joined = pendingSpawns.join(opts.id, event.sender, opts.cols, opts.rows)
+    if (joined) return joined as Promise<SpawnResult>
+    const existing = sessions.get(opts.id)
+    if (existing) return reattach(existing, event.sender, opts)
+    // Reattach only (a restored ssh pane waiting for Enter): nothing live → start nothing.
+    if (opts.attachOnly === true) return { reattached: false, integrated: false, started: false }
+    if (opts.remote !== undefined) {
+      return pendingSpawns.start(opts.id, event.sender, opts.cols, opts.rows, (outcome) =>
+        spawnRemote(opts, outcome),
+      )
+    }
 
-      const shellCmd = opts.shell || defaultShell()
-      // WSL: the Linux shell runs inside wsl.exe. Drive the Linux start dir via wsl's
-      // own --cd (home unless we have a tracked Linux path); inject our integration
-      // INSIDE WSL (best-effort → OSC-133 status + OSC-7 cwd); launch wsl.exe from a
-      // valid Windows dir. Local shells inject the usual way.
-      const wsl = isWslShell(shellCmd)
-      const inj = wsl ? buildWslInjection(opts.args ?? []) : buildInjection(shellCmd)
-      const wslArgs = wsl ? wslCdArgs(opts.cwd) : []
-      const startCwd = !wsl && opts.cwd && fs.existsSync(opts.cwd) ? opts.cwd : os.homedir()
-      // Shared-history opt-out: the injected scripts default SHARE_HISTORY on; pass
-      // SMTERM_SHARE_HISTORY=0 to disable. (For WSL, wslInjection lists it in $WSLENV
-      // so it crosses the boundary.)
-      const spawnEnv = { ...process.env, ...(inj?.env ?? {}) } as Record<string, string>
-      if (!shareHistoryEnabled()) spawnEnv.SMTERM_SHARE_HISTORY = "0"
-      // Tell agents (Claude Code, vim, …) our light/dark background via COLORFGBG — the
-      // fallback when the OSC-11 background query can't complete in time (notably across
-      // the wsl.exe hop). WSL forwards it over $WSLENV (listed in wslInjection).
-      const fgbg = opts.bg ? colorfgbg(opts.bg) : null
-      if (fgbg) spawnEnv.COLORFGBG = fgbg
-      // Let the injected `claude` wrapper route through our scoped hook settings, and tag
-      // this pane so the agents board knows which pane each session runs in (M6). WSL panes
-      // use the /mnt/c-addressed variant; wslInjection forwards both vars over WSLENV (the
-      // settings path with /p so its Windows form is translated for claude inside WSL).
-      if (hookSettingsPath) {
-        spawnEnv.SMTERM_CLAUDE_SETTINGS = wsl
-          ? (hookSettingsPathWsl ?? hookSettingsPath)
-          : hookSettingsPath
-        spawnEnv.SMTERM_PANE_ID = opts.id
-      }
-      const proc = pty.spawn(shellCmd, [...(opts.args ?? []), ...wslArgs, ...(inj?.args ?? [])], {
-        name: "xterm-256color",
-        cols: opts.cols || 80,
-        rows: opts.rows || 24,
-        cwd: startCwd,
-        env: spawnEnv,
-      })
-      const coalesce = process.env.SMTERM_NO_COALESCE !== "1"
-      let markExited!: () => void
-      const exited = new Promise<void>((res) => (markExited = res))
-      const live: Drainable = { kill: (sig) => proc.kill(sig), exited }
-      livePtys.add(live)
-      const rec: PtySession = {
-        id: opts.id,
-        proc,
-        buffer: new OutputBuffer(PTY_REPLAY_BYTES),
-        sender: event.sender,
-        shell: shellCmd,
-        // Remember a WSL pane's distro so a hook event tagged with this pane resolves its
-        // Linux transcript path against the right distro's UNC share (not just the default).
-        wslDistro: wsl ? (parseWslDistroArg(opts.args ?? []) ?? defaultWslDistro()) : undefined,
-        integrated: !!inj,
-        live,
-      }
-      if (coalesce) {
-        rec.coalescer = new OutputCoalescer(PTY_FLUSH_MS, PTY_MAX_FLUSH_BYTES, (d) => emit(rec, d))
-      }
-      proc.onData((data) => {
-        rec.buffer.push(data) // keep for replay on reattach
-        if (rec.coalescer) rec.coalescer.push(data)
-        else emit(rec, data) // A/B baseline: one IPC message per node-pty chunk
-      })
-      proc.onExit((e) => {
-        diag("pty-exit", { id: opts.id, code: e.exitCode, signal: e.signal ?? 0 })
-        rec.coalescer?.flush() // don't lose the final output
-        sessions.delete(opts.id)
-        agentMeta.untrack(opts.id) // shell (and any claude in it) gone — drop the accent
-        sessionLedger().drop(opts.id) // …and nothing to resume there (no-op during a quit)
-        livePtys.delete(live)
-        markExited()
-      })
-      sessions.set(opts.id, rec)
-      diag("pty-spawn", { id: opts.id, pid: proc.pid, shell: path.basename(shellCmd) })
-      return { reattached: false, integrated: !!inj }
-    },
-  )
-  ipcMain.on("pty:write", (_e, id: string, data: string) => sessions.get(id)?.proc.write(data))
+    const shellCmd = opts.shell || defaultShell()
+    // WSL: the Linux shell runs inside wsl.exe. Drive the Linux start dir via wsl's
+    // own --cd (home unless we have a tracked Linux path); inject our integration
+    // INSIDE WSL (best-effort → OSC-133 status + OSC-7 cwd); launch wsl.exe from a
+    // valid Windows dir. Local shells inject the usual way.
+    const wsl = isWslShell(shellCmd)
+    const inj = wsl ? buildWslInjection(opts.args ?? []) : buildInjection(shellCmd)
+    const wslArgs = wsl ? wslCdArgs(opts.cwd) : []
+    const startCwd = !wsl && opts.cwd && fs.existsSync(opts.cwd) ? opts.cwd : os.homedir()
+    const env = baseSpawnEnv(opts, inj?.env)
+    // Let the injected `claude` wrapper route through our scoped hook settings, and tag
+    // this pane so the agents board knows which pane each session runs in (M6). WSL panes
+    // use the /mnt/c-addressed variant; wslInjection forwards both vars over WSLENV (the
+    // settings path with /p so its Windows form is translated for claude inside WSL).
+    if (hookSettingsPath) {
+      env.SMTERM_CLAUDE_SETTINGS = wsl
+        ? (hookSettingsPathWsl ?? hookSettingsPath)
+        : hookSettingsPath
+      env.SMTERM_PANE_ID = opts.id
+    }
+    return startPty(event.sender, opts, {
+      file: shellCmd,
+      args: [...(opts.args ?? []), ...wslArgs, ...(inj?.args ?? [])],
+      cwd: startCwd,
+      env,
+      // Remember a WSL pane's distro so a hook event tagged with this pane resolves its
+      // Linux transcript path against the right distro's UNC share (not just the default).
+      wslDistro: wsl ? (parseWslDistroArg(opts.args ?? []) ?? defaultWslDistro()) : undefined,
+      integrated: !!inj,
+    })
+  })
+  ipcMain.on("pty:write", (_e, id: string, data: string) => {
+    // Still preparing: swallowed (see pending-spawns.ts), never replayed into the new ssh.
+    if (typeof data !== "string" || pendingSpawns.pending(id)) return
+    sessions.get(id)?.proc.write(data)
+  })
   ipcMain.on("pty:resize", (_e, id: string, cols: number, rows: number) => {
+    if (pendingSpawns.resize(id, cols, rows)) return // applied when it starts
     try {
       sessions.get(id)?.proc.resize(cols, rows)
     } catch {
@@ -500,9 +706,12 @@ function registerIpc() {
     }
   })
   // Explicit kill (pane/tab closed) — really terminate + free the replay buffer.
+  // Which sessions have a live PTY here (a renderer reload restores its layout over them).
+  ipcMain.handle("pty:live-ids", async () => [...sessions.keys()])
   ipcMain.on("pty:kill", (_e, id: string) => {
     agentMeta.untrack(id, false) // the pane is gone — nothing left to accent
     sessionLedger().drop(id) // closed on purpose — don't resume its Claude session
+    pendingSpawns.kill(id) // still preparing: it must not start at all
     const rec = sessions.get(id)
     if (!rec) return
     rec.coalescer?.dispose()
@@ -518,6 +727,31 @@ function registerIpc() {
 
   // Shells — per-OS defaults + WSL distro enumeration.
   ipcMain.handle("shells:list", async () => listShells())
+
+  // SSH remotes — the saved-host list (lazy: first asked by the sidebar) + its config file.
+  // null = the list couldn't be built (the renderer keeps what it has), never "no hosts".
+  ipcMain.handle("ssh:list-hosts", async () => {
+    try {
+      return await ssh().hosts()
+    } catch {
+      return null
+    }
+  })
+  ipcMain.on("ssh:open-config", () => {
+    // Create an empty ~/.ssh/config (0600, in a 0700 ~/.ssh) if there's none, so it opens.
+    // `wx` never writes through an existing path — a dangling symlink included.
+    const dirPath = path.join(os.homedir(), ".ssh")
+    const file = path.join(dirPath, "config")
+    void (async () => {
+      try {
+        await fs.promises.mkdir(dirPath, { recursive: true, mode: 0o700 })
+        await fs.promises.writeFile(file, "", { mode: 0o600, flag: "wx" }).catch(() => undefined)
+        openFile(dirPath, file)
+      } catch {
+        // best-effort
+      }
+    })()
+  })
 
   // Frameless window controls.
   ipcMain.on("window:minimize", () => mainWindow?.minimize())
@@ -804,21 +1038,7 @@ function openPathTemplate(): string {
 // Is `cmd` an executable on the current PATH? (absolute paths checked directly).
 // process.env carries the login-shell PATH imported at startup (shell-env.ts).
 function commandOnPath(cmd: string): boolean {
-  const test = (p: string) => {
-    try {
-      return fs.statSync(p).isFile()
-    } catch {
-      return false
-    }
-  }
-  if (path.isAbsolute(cmd)) return test(cmd)
-  const exts =
-    process.platform === "win32" ? (process.env.PATHEXT ?? ".EXE;.CMD;.BAT").split(";") : [""]
-  for (const d of (process.env.PATH ?? "").split(path.delimiter)) {
-    if (!d) continue
-    for (const ext of exts) if (test(path.join(d, cmd + ext))) return true
-  }
-  return false
+  return findOnPath(cmd) !== null
 }
 
 // macOS only: the best installed editor .app to `open -a`, checking both the
@@ -976,6 +1196,7 @@ app.on("window-all-closed", () => {
 app.on("will-quit", () => {
   diag("will-quit", { ptys: sessions.size })
   agentMeta.dispose() // close transcript watchers
+  sshService?.dispose() // close the ssh config watchers
   void hookWatcher?.close() // stop the file-drop watcher
 })
 app.on("quit", () => diag("quit"))
@@ -1048,13 +1269,23 @@ app.on("before-quit", (e) => {
   const step = quitStep({
     phase: quitPhase,
     confirmed: quitConfirmed,
-    needsConfirm: sessions.size > 0 && confirmQuitEnabled() && !!mainWindow,
+    // Spawns still preparing (an ssh probe) are about to be sessions: count them too.
+    needsConfirm: sessions.size + pendingSpawns.live > 0 && confirmQuitEnabled() && !!mainWindow,
     livePtys: livePtys.size,
     osEnding,
   })
   diag("before-quit", { ptys: livePtys.size, step })
-  if (step === "proceed") return
-  if (step === "killNow") return killNow()
+  // Quitting with no PTY to drain (or on an OS logout): spawns still preparing are closed —
+  // one resolving after this must not start an ssh in an exiting app. (No global flag: a
+  // cancelled logout leaves new panes free to start.)
+  if (step === "proceed") {
+    pendingSpawns.killAll()
+    return
+  }
+  if (step === "killNow") {
+    pendingSpawns.killAll()
+    return killNow()
+  }
   e.preventDefault()
   if (step === "hold") return
   if (step === "drain") {
@@ -1068,7 +1299,7 @@ app.on("before-quit", (e) => {
     return
   }
   if (!mainWindow) return
-  const n = sessions.size
+  const n = sessions.size + pendingSpawns.live
   void dialog
     .showMessageBox(mainWindow, {
       type: "warning",

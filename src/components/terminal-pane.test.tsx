@@ -3,7 +3,10 @@ import { render, screen, fireEvent, createEvent } from "@testing-library/react"
 import { TerminalPane } from "./terminal-pane"
 import { useStore } from "../store"
 import { allSessionIds } from "../lib/pane-tree"
-import { resetStore, testShell } from "../test/helpers"
+import { resetStore, testHost, testShell } from "../test/helpers"
+import { hostShellOption } from "../lib/ssh-hosts-ui"
+import { TerminalManager } from "../terminal/terminal-manager"
+import { ipc } from "../lib/ipc"
 import type { PaneLeaf } from "../types"
 
 vi.mock("../terminal/terminal-manager", () => ({
@@ -15,6 +18,7 @@ vi.mock("../terminal/terminal-manager", () => ({
     fit: vi.fn(),
     focus: vi.fn(),
     dispose: vi.fn(),
+    connect: vi.fn(),
   },
 }))
 
@@ -307,5 +311,150 @@ describe("TerminalPane — Claude session colour", () => {
     const pane = container.querySelector(".terminal-pane")!
     expect(pane).toHaveClass("waiting")
     expect(pane).not.toHaveClass("tinted")
+  })
+})
+
+describe("TerminalPane — ssh Connect button", () => {
+  const mountRemote = () => {
+    st().newTab(hostShellOption(testHost("web")))
+    const tab = st().tabs[0]!
+    return { tabId: tab.id, id: tab.activeSessionId }
+  }
+
+  it("hidden while connected", () => {
+    const { tabId } = mountRemote()
+    renderPane(tabId)
+    expect(screen.queryByText("Connect")).not.toBeInTheDocument()
+    expect(screen.queryByText("Reconnect")).not.toBeInTheDocument()
+  })
+
+  it("names what it does per phase, and connects + focuses the pane", () => {
+    const { tabId, id } = mountRemote()
+    st().setRemotePhase(id, "waiting")
+    const view = renderPane(tabId)
+    fireEvent.click(screen.getByText("Connect"))
+    expect(TerminalManager.connect).toHaveBeenCalledWith(id)
+    expect(TerminalManager.focus).toHaveBeenCalledWith(id)
+    st().setRemotePhase(id, "closed")
+    view.rerender()
+    expect(screen.getByText("Reconnect")).toBeInTheDocument()
+    st().setRemotePhase(id, "failed")
+    view.rerender()
+    expect(screen.getByText("Retry")).toBeInTheDocument()
+  })
+
+  it("never shows for a local pane", () => {
+    const { tabId } = mountPane()
+    renderPane(tabId)
+    expect(screen.queryByTitle(/Connect|Reconnect/)).not.toBeInTheDocument()
+  })
+})
+
+describe("TerminalPane — ssh failure actions", () => {
+  const mountRemote = () => {
+    st().newTab(hostShellOption(testHost("web")))
+    const tab = st().tabs[0]!
+    return { tabId: tab.id, id: tab.activeSessionId }
+  }
+
+  it("a host gone from the config: Open ssh config and Retry", () => {
+    const { tabId, id } = mountRemote()
+    st().setRemotePhase(id, "failed", "host-gone")
+    renderPane(tabId)
+    fireEvent.click(screen.getByText("Open ssh config"))
+    expect(ipc.openSshConfig).toHaveBeenCalled()
+    expect(screen.getByText("Retry")).toBeInTheDocument()
+  })
+
+  it("a failure no retry can fix offers no Retry", () => {
+    const { tabId, id } = mountRemote()
+    st().setRemotePhase(id, "failed", "not-here")
+    renderPane(tabId)
+    expect(screen.queryByText("Retry")).not.toBeInTheDocument()
+    expect(screen.queryByText("Open ssh config")).not.toBeInTheDocument()
+  })
+
+  it("other failures offer Retry only", () => {
+    const { tabId, id } = mountRemote()
+    st().setRemotePhase(id, "failed", "other")
+    renderPane(tabId)
+    expect(screen.getByText("Retry")).toBeInTheDocument()
+    expect(screen.queryByText("Open ssh config")).not.toBeInTheDocument()
+  })
+})
+
+describe("TerminalPane — WSL and clean exits", () => {
+  it("a WSL host gone from its distro's config gets no Open ssh config (it'd open the wrong one)", () => {
+    st().newTab(hostShellOption(testHost("gpu", "wsl:Ubuntu")))
+    const tab = st().tabs[0]!
+    st().setRemotePhase(tab.activeSessionId, "failed", "host-gone")
+    renderPane(tab.id)
+    expect(screen.queryByText("Open ssh config")).not.toBeInTheDocument()
+    expect(screen.getByText("Retry")).toBeInTheDocument()
+  })
+
+  it("after a clean exit the button says Start again", () => {
+    st().newTab(hostShellOption(testHost("web")))
+    const tab = st().tabs[0]!
+    st().setRemotePhase(tab.activeSessionId, "closed", "ended")
+    renderPane(tab.id)
+    expect(screen.getByText("Start again")).toBeInTheDocument()
+  })
+})
+
+describe("TerminalPane — host chip and colour", () => {
+  const withColors = (colors: Record<string, string>) =>
+    useStore.setState((s) => ({ settings: { ...s.settings, ssh: { ...s.settings.ssh, colors } } }))
+
+  it("a remote pane shows where it runs (user@hostname) instead of an SSH badge", () => {
+    st().setSshHosts([testHost("web", "native", "me@10.0.0.1")])
+    st().newTab(hostShellOption(testHost("web")))
+    renderPane(st().tabs[0]!.id)
+    expect(screen.getByText("me@10.0.0.1")).toHaveClass("host-chip")
+    expect(screen.queryByText("SSH")).not.toBeInTheDocument()
+    expect(screen.queryByText("ssh")).not.toBeInTheDocument()
+  })
+
+  it("no colour set: a neutral chip and no rail", () => {
+    st().newTab(hostShellOption(testHost("web")))
+    renderPane(st().tabs[0]!.id)
+    const chip = document.querySelector(".host-chip")!
+    expect(chip.textContent).toBe("web")
+    expect(chip).not.toHaveClass("colored")
+    expect((document.querySelector(".pane-header") as HTMLElement).style.boxShadow).toBe("")
+  })
+
+  it("a matching colour pattern colours the chip and marks the header", () => {
+    withColors({ "prod-*": "red" })
+    st().newTab(hostShellOption(testHost("prod-db")))
+    renderPane(st().tabs[0]!.id)
+    const chip = document.querySelector(".host-chip") as HTMLElement
+    expect(chip.textContent).toBe("prod-db")
+    expect(chip).toHaveClass("colored")
+    expect(chip.style.getPropertyValue("--host")).toBe("var(--red)")
+    expect((document.querySelector(".pane-header") as HTMLElement).style.boxShadow).toContain(
+      "var(--red)",
+    )
+  })
+
+  it("a local pane keeps its shell badge", () => {
+    const { tabId } = mountPane()
+    renderPane(tabId)
+    expect(document.querySelector(".host-chip")).toBeNull()
+    expect(document.querySelector(".pane-badge")).not.toBeNull()
+  })
+})
+
+describe("TerminalPane — a host colour beats a Claude accent", () => {
+  it("the globe keeps the host's colour when the pane's Claude set /color", () => {
+    useStore.setState((s) => ({
+      settings: { ...s.settings, ssh: { ...s.settings.ssh, colors: { "prod-*": "red" } } },
+    }))
+    st().newTab(hostShellOption(testHost("prod-db")))
+    const tab = st().tabs[0]!
+    st().setAgentMeta(tab.activeSessionId, { color: "green" } as never)
+    renderPane(tab.id)
+    const icon = document.querySelector(".surface-tab svg")!
+    expect(icon.getAttribute("color") ?? icon.getAttribute("fill")).toContain("var(--red)")
   })
 })

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import {
   Plus,
   CaretDown,
@@ -15,22 +15,50 @@ import {
   SidebarSimple,
   Sun,
   Moon,
+  Globe,
+  Plugs,
 } from "@phosphor-icons/react"
 import { activeTheme, useStore } from "../store"
 import { ipc } from "../lib/ipc"
 import { allSessionIds } from "../lib/pane-tree"
 import { aggregateBadge } from "../lib/session-status"
-import { tabTitle } from "../lib/session-label"
+import { countWaitingRemote, tabRemoteBadge } from "../lib/remote-connect"
+import { hostColor, hostColorCss } from "../lib/ssh-hosts-ui"
+import { tabTitleParts } from "../lib/session-label"
 import { resolveDefaultShell } from "../lib/shells"
+import { envTitle } from "../lib/ssh-hosts-ui"
+import { hostSections, visibleHosts } from "../lib/ssh-host-list"
 import { TerminalManager } from "../terminal/terminal-manager"
 import brandIcon from "../assets/icon.png"
+
+/** How many hosts the new-tab menu lists before "All hosts…". */
+const QUICK_HOSTS = 6
 
 /** The mux top bar: brand · session tabs · search pill · window controls. */
 export function TopBar() {
   const tabs = useStore((s) => s.tabs)
   const activeTabId = useStore((s) => s.activeTabId)
   const shells = useStore((s) => s.shells)
+  const sshHosts = useStore((s) => s.sshHosts)
+  const sshPinned = useStore((s) => s.settings.ssh.pinned)
+  const sshRecent = useStore((s) => s.sshRecent)
+  // The new-tab menu's short list: the picker's order (pinned, recent, config), first few.
+  const quickHosts = useMemo(
+    () =>
+      hostSections(sshHosts, { pinned: sshPinned, recent: sshRecent })
+        .flatMap((s) => s.hosts)
+        .slice(0, QUICK_HOSTS),
+    [sshHosts, sshPinned, sshRecent],
+  )
   const sessions = useStore((s) => s.sessions)
+  const remotePhase = useStore((s) => s.remotePhase)
+  const remoteDetail = useStore((s) => s.remoteDetail)
+  const windowFocused = useStore((s) => s.windowFocused)
+  const hostColors = useStore((s) => s.settings.ssh.colors)
+  // ssh panes waiting at a Connect prompt (a relaunch under on-focus): one click connects all.
+  const waitingSsh = useStore((s) =>
+    countWaitingRemote(s.sessions, s.remotePhase, s.settings.ssh.restore),
+  )
   const home = useStore((s) => s.home)
   const defaultShellPref = useStore((s) => s.settings.defaultShell)
   const rightView = useStore((s) => s.rightView)
@@ -67,7 +95,12 @@ export function TopBar() {
   const waiting: { tabId: string; sessionId: string }[] = []
   for (const tab of tabs) {
     for (const id of allSessionIds(tab.root)) {
-      if (sessions[id]?.status === "attention") waiting.push({ tabId: tab.id, sessionId: id })
+      // Needs you: attention, or an ssh pane at a password / host-key prompt — unless it's the
+      // pane you're looking at (the attention rule: never nag the pane you're driving).
+      const driving = windowFocused && tab.id === activeTabId && tab.activeSessionId === id
+      if (sessions[id]?.status === "attention" || (remotePhase[id] === "prompt" && !driving)) {
+        waiting.push({ tabId: tab.id, sessionId: id })
+      }
     }
   }
 
@@ -127,17 +160,39 @@ export function TopBar() {
                 return s ? [{ status: s.status, unread: s.unread }] : []
               }),
             )
-            const pulse = badge === "working"
+            // An ssh pane at a prompt reads as needing input; a dropped one, red (after attention).
+            const remote = tabRemoteBadge(
+              ids.map((id) => ({ phase: remotePhase[id], detail: remoteDetail[id] })),
+            )
+            const pulse = badge === "working" && !remote
             const dotClass =
-              badge === "attention" ? "amber" : badge === "working" ? "accent" : "faint"
+              badge === "attention" || remote === "prompt"
+                ? "amber"
+                : remote === "down"
+                  ? "red"
+                  : badge === "working"
+                    ? "accent"
+                    : "faint"
             return (
               <div
                 key={tab.id}
                 className={`tab${tab.id === activeTabId ? " active" : ""}`}
+                // The focused pane's host colour, as an underline (a prod tab reads as prod).
+                style={(() => {
+                  const r = sessions[tab.activeSessionId]?.remote
+                  const c = r ? hostColor(r.target, hostColors) : undefined
+                  return c ? { boxShadow: `inset 0 -2px 0 ${hostColorCss(c)}` } : undefined
+                })()}
                 onMouseDown={() => useStore.getState().setActiveTab(tab.id)}
-                onDoubleClick={() => startRename(tab.id, tabTitle(tab, sessions, home))}
+                // The name only: the live "+N" must not be pinned into a manual title.
+                onDoubleClick={() => startRename(tab.id, tabTitleParts(tab, sessions, home).base)}
               >
-                {badge && <span className={`dot ${dotClass}${pulse ? " pulse" : ""}`} />}
+                {(badge || remote) && (
+                  <span
+                    className={`dot ${dotClass}${pulse ? " pulse" : ""}`}
+                    title={remote === "down" ? "An ssh session here is disconnected" : undefined}
+                  />
+                )}
                 {editingId === tab.id ? (
                   <input
                     ref={inputRef}
@@ -152,7 +207,19 @@ export function TopBar() {
                     }}
                   />
                 ) : (
-                  <span className="tab-title">{tabTitle(tab, sessions, home)}</span>
+                  (() => {
+                    const { base, more } = tabTitleParts(tab, sessions, home)
+                    return (
+                      <>
+                        <span className="tab-title">{base}</span>
+                        {more && (
+                          <span className="tab-more" title="Panes here run on other places too">
+                            {more}
+                          </span>
+                        )}
+                      </>
+                    )
+                  })()
                 )}
                 {ids.length > 1 && <span className="tab-count">{ids.length}</span>}
                 <button
@@ -181,7 +248,7 @@ export function TopBar() {
           <button
             className="iconbtn newtab-caret"
             title="New tab in…"
-            disabled={shells.length === 0}
+            disabled={shells.length === 0 && quickHosts.length === 0}
             onClick={() => setShellMenu((v) => !v)}
           >
             <CaretDown size={11} />
@@ -196,6 +263,38 @@ export function TopBar() {
                     {sh.id === defaultShell?.id && <span className="shell-menu-def">default</span>}
                   </button>
                 ))}
+                {quickHosts.length > 0 && <div className="shell-menu-group">SSH</div>}
+                {quickHosts.map((h) => (
+                  <button
+                    key={h.hostId}
+                    className="shell-menu-item"
+                    title={h.detail}
+                    onMouseDown={() => {
+                      setShellMenu(false)
+                      useStore.getState().openHost(h, "tab")
+                    }}
+                  >
+                    <span className="shell-menu-host">
+                      <Globe size={12} />
+                      <span className="shell-menu-host-name">{h.label}</span>
+                    </span>
+                    {h.env !== "native" && (
+                      <span className="shell-menu-def">{envTitle(h.env)}</span>
+                    )}
+                  </button>
+                ))}
+                {visibleHosts(sshHosts).length > quickHosts.length && (
+                  <button
+                    className="shell-menu-item shell-menu-more"
+                    onMouseDown={(e) => {
+                      e.preventDefault() // the picker's input keeps the focus it takes
+                      setShellMenu(false)
+                      useStore.getState().setHostPickerOpen(true)
+                    }}
+                  >
+                    All hosts ({visibleHosts(sshHosts).length})…
+                  </button>
+                )}
               </div>
             </>
           )}
@@ -203,6 +302,16 @@ export function TopBar() {
       </div>
 
       <div className="topbar-right">
+        {waitingSsh >= 2 && (
+          <button
+            className="connect-all"
+            title="Connect every ssh pane that's waiting"
+            onClick={() => TerminalManager.connectAll()}
+          >
+            <Plugs size={13} />
+            Connect all ({waitingSsh})
+          </button>
+        )}
         <button
           className={`iconbtn bell${waiting.length ? " has" : ""}`}
           title={waiting.length ? `${waiting.length} waiting — jump` : "No sessions waiting"}

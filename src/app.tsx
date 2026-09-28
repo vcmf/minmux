@@ -4,6 +4,7 @@ import { TopBar } from "./components/top-bar"
 import { Sidebar } from "./components/sidebar"
 import { StatusBar } from "./components/status-bar"
 import { CommandPalette } from "./components/command-palette"
+import { HostPicker } from "./components/host-picker"
 import { SearchBar } from "./components/search-bar"
 import { DiffPanel } from "./components/diff-panel"
 import { AgentsPanel } from "./components/agents-panel"
@@ -34,6 +35,9 @@ import "./App.css"
 // overwrite it either (a downgrade would otherwise wipe the saved layout).
 let persistBlocked = false
 
+/** How long after mount the host list is first fetched (the first tab spawns before). */
+const SSH_HOSTS_DELAY_MS = 800
+
 function App() {
   const tabs = useStore((s) => s.tabs)
   const activeTabId = useStore((s) => s.activeTabId)
@@ -42,6 +46,7 @@ function App() {
   const theme = useStore(activeTheme) // stable object per variant — changes only on a real switch
   const settingsOpen = useStore((s) => s.settingsOpen)
   const paletteOpen = useStore((s) => s.paletteOpen)
+  const hostPickerOpen = useStore((s) => s.hostPickerOpen)
   const searchOpen = useStore((s) => s.searchOpen)
   const rightView = useStore((s) => s.rightView)
   const rightPanelWidth = useStore((s) => s.rightPanelWidth)
@@ -106,7 +111,10 @@ function App() {
             // Non-POSIX shells can't take the typed cd, so they spawn there even in ask mode.
             if (!wsl && (!ask || !isPosixShell(s.command))) s.cwd = plan.cwd
           }
-          store.restoreWorkspace(restored)
+          // After a renderer reload main still runs some of these: those aren't "restored".
+          const livePtys = await ipc.ptyLiveIds().catch(() => [] as string[])
+          if (cancelled) return
+          store.restoreWorkspace(restored, livePtys)
           for (const [id, plan] of Object.entries(plans)) {
             if (plan.status === "skip") ipc.resumeConsume(id, plan.sessionId) // can't succeed — tell
             store.setResume(
@@ -129,6 +137,39 @@ function App() {
     })()
     return () => {
       cancelled = true
+    }
+  }, [])
+
+  // Saved ssh hosts: fetched off the startup path (the first tab never waits on it), then
+  // re-fetched whenever main sees ~/.ssh/config change. A late answer never overwrites a newer.
+  useEffect(() => {
+    let seq = 0
+    let disposed = false
+    const refresh = () => {
+      const mine = ++seq
+      try {
+        void ipc
+          .listSshHosts()
+          .then((hosts) => {
+            if (!disposed && mine === seq && hosts) useStore.getState().setSshHosts(hosts)
+          })
+          .catch(() => undefined) // main failed: keep the last list
+      } catch {
+        // no backend
+      }
+    }
+    // After the startup spawns are under way: main builds its host list lazily.
+    const first = setTimeout(refresh, SSH_HOSTS_DELAY_MS)
+    let off: (() => void) | undefined
+    try {
+      off = ipc.onSshHostsChanged(refresh)
+    } catch {
+      // no backend
+    }
+    return () => {
+      disposed = true
+      clearTimeout(first)
+      off?.()
     }
   }, [])
 
@@ -519,6 +560,7 @@ function App() {
       </div>
       <StatusBar />
       {paletteOpen && <CommandPalette />}
+      {hostPickerOpen && <HostPicker />}
       {settingsOpen && <SettingsPanel />}
       <FilePreview />
       <ClosePaneDialog />

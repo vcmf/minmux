@@ -4,7 +4,8 @@ import { StatusBar } from "./status-bar"
 import { useStore } from "../store"
 import { allSessionIds } from "../lib/pane-tree"
 import { ipc } from "../lib/ipc"
-import { resetStore, testShell } from "../test/helpers"
+import { resetStore, testHost, testShell } from "../test/helpers"
+import { hostShellOption } from "../lib/ssh-hosts-ui"
 
 const st = () => useStore.getState()
 
@@ -98,4 +99,21 @@ describe("StatusBar version badge", () => {
 
   // The "a failed re-check must not clear an existing ping" invariant is covered purely by
   // applyUpdateResult in version.test.ts (avoids flaky fake-timers + findBy interplay).
+})
+
+describe("StatusBar — ssh prompts count as waiting", () => {
+  it("an off-screen ssh pane at a password prompt counts, like the bell", () => {
+    st().newTab(hostShellOption(testHost("web")))
+    st().setRemotePhase(st().tabs[0]!.activeSessionId, "prompt", "password")
+    st().newTab(testShell) // another tab in front
+    render(<StatusBar />)
+    expect(screen.getByText(/1 waiting/)).toBeInTheDocument()
+  })
+
+  it("the pane you're driving never counts (you're the one answering it)", () => {
+    st().newTab(hostShellOption(testHost("web")))
+    st().setRemotePhase(st().tabs[0]!.activeSessionId, "prompt", "password")
+    render(<StatusBar />)
+    expect(screen.getByText(/0 waiting/)).toBeInTheDocument()
+  })
 })
