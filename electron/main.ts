@@ -706,6 +706,8 @@ function registerIpc() {
     }
   })
   // Explicit kill (pane/tab closed) — really terminate + free the replay buffer.
+  // Which sessions have a live PTY here (a renderer reload restores its layout over them).
+  ipcMain.handle("pty:live-ids", async () => [...sessions.keys()])
   ipcMain.on("pty:kill", (_e, id: string) => {
     agentMeta.untrack(id, false) // the pane is gone — nothing left to accent
     sessionLedger().drop(id) // closed on purpose — don't resume its Claude session

@@ -13,6 +13,7 @@ import {
   Moon,
   CircleHalf,
   Globe,
+  Plugs,
   X,
 } from "@phosphor-icons/react"
 import { useStore } from "../store"
@@ -23,6 +24,8 @@ import { newSurfaceKey } from "../lib/platform"
 import { ipc } from "../lib/ipc"
 import { hostSubline } from "../lib/ssh-hosts-ui"
 import { visibleHosts } from "../lib/ssh-host-list"
+import { waitingRemoteIds } from "../lib/remote-connect"
+import { TerminalManager } from "../terminal/terminal-manager"
 
 interface Command {
   id?: string // a stable identity (tab id, host id) when the text alone isn't one
@@ -107,6 +110,15 @@ export function CommandPalette() {
       )
     }
 
+    const waiting = waitingRemoteIds(store.sessions, store.remotePhase, settings.ssh.restore)
+    if (waiting.length > 0) {
+      list.push({
+        group: "SSH",
+        label: `Connect all waiting (${waiting.length})`,
+        icon: <Plugs size={16} />,
+        run: () => TerminalManager.connectAll(),
+      })
+    }
     list.push({
       group: "SSH",
       label: "Connect to host…",

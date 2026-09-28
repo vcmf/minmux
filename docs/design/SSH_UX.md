@@ -6,7 +6,7 @@ the approaches we could take, and what we decide. Design background lives in
 [`SSH_REMOTES.md`](./SSH_REMOTES.md); build history in
 [`SSH_IMPLEMENTATION_PLAN.md`](./SSH_IMPLEMENTATION_PLAN.md).
 
-Status: **decisions made (2026-09-28)**; S0 done. The recommendations in §3 were accepted with the §6 overrides: per-host colour only when set (no hash), no new picker shortcut, no "Add host…". §5 is the record; build from it. Screenshots are in
+Status: **done (2026-09-28)**: decisions made, S0–S4 built. The recommendations in §3 were accepted with the §6 overrides: per-host colour only when set (no hash), no new picker shortcut, no "Add host…". §5 is the record; build from it. Screenshots are in
 [`ssh-ux/`](./ssh-ux/), taken from the built app with a throwaway HOME, a
 `~/.ssh/config` (nine `Host` entries, eight listable: `*.corp` is a pattern) and a stub `ssh` that prints a login banner and a prompt.
 
@@ -326,4 +326,16 @@ prompt heuristic in S1, which runs on the existing throttled output-idle path.
       [sidebar, nothing pinned](ssh-ux/s3-sidebar-empty.png),
       [sidebar, pinned + open](ssh-ux/s3-sidebar-after.png),
       [new-tab menu](ssh-ux/s3-new-tab-menu.png).
-- [ ] S4 bounded auto-retry, "Connect all"
+- [x] **S4** bounded auto-retry, "Connect all" (F13 auto-retry, F14). `retryPlan` (pure):
+      only a lost link (exit 255 and ssh saying so on its last lines: "closed by remote host",
+      "Broken pipe", …; read from xterm's buffer at exit, never the output stream), no signal, not
+      at a prompt, of a connection live ≥ 30 s since its last prompt; retries at 2 / 5 / 10 s, a
+      retry that dies at once continues the sequence, one that holds starts a fresh budget, and
+      six automatic reconnects in all until you reconnect yourself. Enter reconnects now (and
+      resets the budget), closing cancels it, turning `ssh.autoReconnect` off stops a countdown.
+      Each try is a fresh login (a `RemoteCommand` runs again). **Connect all (N)** beside the bell
+      (from 2 waiting panes) and in the palette connects every waiting ssh pane, starting restored
+      ones in tabs not shown yet (sized like the visible pane), one pane per host first and the
+      rest once it's past its prompt, so a ControlMaster is shared. A renderer reload asks main
+      which ssh panes are still live (`pty:live-ids`), so those never read as waiting. Shots:
+      [reconnecting](ssh-ux/s4-reconnecting.png), [connect all](ssh-ux/s4-connect-all.png).

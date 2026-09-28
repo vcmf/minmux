@@ -120,6 +120,7 @@ describe("ssh settings", () => {
       pinned: [],
       keepAliveSeconds: 30,
       restore: "auto",
+      autoReconnect: true,
       colors: {},
     })
     expect(mergeSettings({}).ssh).toEqual(defaultSettings.ssh)
@@ -142,6 +143,7 @@ describe("ssh settings", () => {
       pinned: [],
       keepAliveSeconds: 0,
       restore: "on-focus",
+      autoReconnect: true,
       colors: { "prod-*": "red" },
     })
   })

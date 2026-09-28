@@ -95,3 +95,13 @@ describe("SettingsPanel — SSH", () => {
     expect(st().settings.ssh.keepAliveSeconds).toBe(60)
   })
 })
+
+describe("SettingsPanel — auto-reconnect", () => {
+  it("turns automatic reconnects off and on", () => {
+    render(<SettingsPanel />)
+    const box = screen.getByLabelText("Reconnect a dropped connection") as HTMLInputElement
+    expect(box.checked).toBe(true)
+    fireEvent.click(box)
+    expect(st().settings.ssh.autoReconnect).toBe(false)
+  })
+})

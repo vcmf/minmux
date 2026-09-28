@@ -6,7 +6,14 @@ import {
   exitReason,
   onOutput,
   remoteStatusUi,
+  retryPlan,
+  retryEligible,
+  lostLink,
+  isWaitingRemote,
+  countWaitingRemote,
+  MAX_AUTO_RECONNECTS,
   tabRemoteBadge,
+  waitingRemoteIds,
   banner,
   cleanError,
   cursorBelowContent,
@@ -266,5 +273,131 @@ describe("idleMessage — WSL hosts", () => {
     expect(idleMessage("failed", "gpu", { error: SSH_ERRORS.hostGone, wslDistro: "Ubuntu" })).toBe(
       "gpu isn't in Ubuntu's ssh config any more, or the distro was removed. Enter to retry · Esc twice to close",
     )
+  })
+})
+
+describe("retryPlan", () => {
+  const base = {
+    enabled: true,
+    code: 255,
+    signal: 0,
+    atPrompt: false,
+    dropped: true,
+    liveForMs: 60_000,
+    attempt: 0,
+    total: 0,
+  }
+
+  it("an established connection that drops: retry 1 after 2 s", () => {
+    expect(retryPlan(base)).toEqual({ attempt: 1, delayMs: 2000 })
+  })
+
+  it("a retry that dies straight away continues the sequence, then gives up", () => {
+    expect(retryPlan({ ...base, liveForMs: 0, attempt: 1 })).toEqual({ attempt: 2, delayMs: 5000 })
+    expect(retryPlan({ ...base, liveForMs: 0, attempt: 2 })).toEqual({ attempt: 3, delayMs: 10000 })
+    expect(retryPlan({ ...base, liveForMs: 0, attempt: 3 })).toBeNull()
+  })
+
+  it("a retried connection that holds, then drops, gets a fresh budget", () => {
+    expect(retryPlan({ ...base, attempt: 3 })).toEqual({ attempt: 1, delayMs: 2000 })
+  })
+
+  it("never: turned off, a clean exit, a remote command's code, a signal, at a prompt, or short-lived", () => {
+    expect(retryPlan({ ...base, enabled: false })).toBeNull()
+    expect(retryPlan({ ...base, code: 0 })).toBeNull()
+    expect(retryPlan({ ...base, code: 1 })).toBeNull()
+    expect(retryPlan({ ...base, signal: 9 })).toBeNull()
+    expect(retryPlan({ ...base, atPrompt: true })).toBeNull()
+    expect(retryPlan({ ...base, liveForMs: 5_000 })).toBeNull() // usually an auth failure
+  })
+
+  it("never for a 255 ssh didn't call a lost link (a logout whose last status was 255)", () => {
+    expect(retryPlan({ ...base, dropped: false })).toBeNull()
+  })
+
+  it("stops after MAX_AUTO_RECONNECTS in all, however well each retry held", () => {
+    expect(retryPlan({ ...base, total: MAX_AUTO_RECONNECTS - 1 })).not.toBeNull()
+    expect(retryPlan({ ...base, total: MAX_AUTO_RECONNECTS })).toBeNull()
+  })
+})
+
+describe("idleMessage — automatic reconnects", () => {
+  it("says when the next try is, and when they ran out", () => {
+    expect(idleMessage("closed", "gpu", { code: 255, retry: { attempt: 2, delayMs: 5000 } })).toBe(
+      "Connection to gpu lost (the connection dropped or was refused). Reconnecting in 5 s (2/3) · Enter to reconnect now · Esc twice to close",
+    )
+    expect(idleMessage("closed", "gpu", { code: 255, gaveUp: 3 })).toBe(
+      "Couldn't reconnect to gpu after 3 tries. Enter to try again · Esc twice to close",
+    )
+  })
+})
+
+describe("reconnecting status", () => {
+  it("reads as reconnecting (amber, pulsing), and isn't a red tab", () => {
+    expect(remoteStatusUi("closed", "idle", "retrying")).toEqual({
+      dot: "amber",
+      word: "reconnecting",
+      pulse: true,
+    })
+    expect(tabRemoteBadge([{ phase: "closed", detail: "retrying" }])).toBeNull()
+  })
+})
+
+describe("waitingRemoteIds", () => {
+  const remote = { hostId: "native:web" }
+  it("waiting panes, and restored on-focus ones not started yet; never local or live ones", () => {
+    const sessions = {
+      a: { id: "a", remote },
+      b: { id: "b", remote, restored: true },
+      c: { id: "c", remote, restored: true },
+      d: { id: "d" },
+      e: { id: "e", remote },
+    }
+    const phases = { a: "waiting", c: "live", e: "closed" } as Record<string, RemotePhase>
+    expect(waitingRemoteIds(sessions, phases, "on-focus")).toEqual(["a", "b"])
+    expect(waitingRemoteIds(sessions, phases, "auto")).toEqual(["a"])
+  })
+})
+
+describe("lostLink", () => {
+  it("recognises ssh's words for a lost link", () => {
+    for (const l of [
+      "Connection to gpu closed by remote host.",
+      "client_loop: send disconnect: Broken pipe",
+      "Read from remote host gpu: Connection reset by peer",
+      "Timeout, server gpu not responding.",
+      "ssh: connect to host gpu port 22: Network is unreachable",
+      "ssh: connect to host gpu port 22: Connection timed out",
+    ]) {
+      expect(lostLink(`quang@gpu:~$\n${l}`)).toBe(true)
+    }
+  })
+
+  it("not a normal close or a failed command's output", () => {
+    expect(lostLink("Connection to gpu closed.")).toBe(false)
+    expect(lostLink("logout")).toBe(false)
+    expect(lostLink("Permission denied (publickey,password).")).toBe(false)
+  })
+})
+
+describe("retryEligible", () => {
+  it("a lost link only", () => {
+    const ok = { enabled: true, code: 255, signal: 0, atPrompt: false, dropped: true }
+    expect(retryEligible(ok)).toBe(true)
+    expect(retryEligible({ ...ok, dropped: false })).toBe(false)
+    expect(retryEligible({ ...ok, code: 0 })).toBe(false)
+  })
+})
+
+describe("isWaitingRemote / countWaitingRemote", () => {
+  it("one rule for the sidebar, the button and Connect all", () => {
+    const r = { hostId: "native:web" }
+    expect(isWaitingRemote({ remote: r }, "waiting", "auto")).toBe(true)
+    expect(isWaitingRemote({ remote: r, restored: true }, undefined, "on-focus")).toBe(true)
+    expect(isWaitingRemote({ remote: r, restored: true }, undefined, "auto")).toBe(false)
+    expect(isWaitingRemote({ remote: r, restored: true }, "live", "on-focus")).toBe(false)
+    expect(isWaitingRemote({}, "waiting", "on-focus")).toBe(false)
+    const sessions = { a: { id: "a", remote: r }, b: { id: "b", remote: r, restored: true } }
+    expect(countWaitingRemote(sessions, { a: "waiting" }, "on-focus")).toBe(2)
   })
 })

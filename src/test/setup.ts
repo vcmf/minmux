@@ -15,6 +15,7 @@ const smtermStub = {
   ptyWrite: vi.fn(),
   ptyResize: vi.fn(),
   ptyKill: vi.fn(),
+  ptyLiveIds: vi.fn(async () => []),
   onPtyExit: vi.fn(unsub),
   listSshHosts: vi.fn(async () => []),
   onSshHostsChanged: vi.fn(unsub),

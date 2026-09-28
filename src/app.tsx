@@ -111,7 +111,10 @@ function App() {
             // Non-POSIX shells can't take the typed cd, so they spawn there even in ask mode.
             if (!wsl && (!ask || !isPosixShell(s.command))) s.cwd = plan.cwd
           }
-          store.restoreWorkspace(restored)
+          // After a renderer reload main still runs some of these: those aren't "restored".
+          const livePtys = await ipc.ptyLiveIds().catch(() => [] as string[])
+          if (cancelled) return
+          store.restoreWorkspace(restored, livePtys)
           for (const [id, plan] of Object.entries(plans)) {
             if (plan.status === "skip") ipc.resumeConsume(id, plan.sessionId) // can't succeed — tell
             store.setResume(

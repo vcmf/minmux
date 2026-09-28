@@ -478,3 +478,16 @@ describe("Sidebar — Remote shows pinned and open hosts", () => {
     expect(st().hostPickerOpen).toBe(true)
   })
 })
+
+describe("Sidebar — a restored ssh pane not started yet", () => {
+  it("reads as not connected under on-focus (it's waiting, like the started ones)", () => {
+    st().newTab(hostShellOption(testHost("web")))
+    const id = st().tabs[0]!.activeSessionId
+    useStore.setState((s) => ({
+      sessions: { ...s.sessions, [id]: { ...s.sessions[id]!, restored: true } },
+      settings: { ...s.settings, ssh: { ...s.settings.ssh, restore: "on-focus" } },
+    }))
+    render(<Sidebar />)
+    expect(screen.getByText("not connected")).toBeInTheDocument()
+  })
+})

@@ -3,6 +3,7 @@ import { act, render, screen, fireEvent } from "@testing-library/react"
 import { TopBar } from "./top-bar"
 import { useStore } from "../store"
 import { ipc } from "../lib/ipc"
+import { TerminalManager } from "../terminal/terminal-manager"
 import { allSessionIds } from "../lib/pane-tree"
 import { resetStore, testHost, testShell } from "../test/helpers"
 import { hostShellOption } from "../lib/ssh-hosts-ui"
@@ -218,5 +219,22 @@ describe("TopBar — the new-tab menu's hosts", () => {
     expect(screen.queryByText("github.com")).not.toBeInTheDocument()
     fireEvent.mouseDown(screen.getByText("All hosts (9)…"))
     expect(st().hostPickerOpen).toBe(true)
+  })
+})
+
+describe("TopBar — Connect all", () => {
+  it("shows with two or more waiting ssh panes, and connects them", () => {
+    const spy = vi.spyOn(TerminalManager, "connectAll").mockImplementation(() => {})
+    st().newTab(hostShellOption(testHost("a")))
+    st().newTab(hostShellOption(testHost("b")))
+    const [x, y] = st().tabs.map((t) => t.activeSessionId)
+    st().setRemotePhase(x!, "waiting")
+    const { rerender } = render(<TopBar />)
+    expect(screen.queryByText(/Connect all/)).not.toBeInTheDocument() // one: its own button will do
+    act(() => st().setRemotePhase(y!, "waiting"))
+    rerender(<TopBar />)
+    fireEvent.click(screen.getByText("Connect all (2)"))
+    expect(spy).toHaveBeenCalled()
+    spy.mockRestore()
   })
 })
