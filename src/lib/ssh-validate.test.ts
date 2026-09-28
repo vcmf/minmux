@@ -3,6 +3,7 @@ import { hasControlChar } from "./control-chars"
 import {
   isSshEnv,
   isSshTarget,
+  DEFAULT_HIDDEN_HOSTS,
   mergeSshSettings,
   parseRemoteRef,
   parseSshEnv,
@@ -84,10 +85,11 @@ describe("parseSshEnv / isSshEnv", () => {
 })
 
 describe("mergeSshSettings", () => {
-  it("defaults: nothing hidden, a 30 s keepalive, reconnect at once", () => {
+  it("defaults: git hosts hidden, nothing pinned, a 30 s keepalive, reconnect at once", () => {
     for (const v of [undefined, null, {}, "nope", 3]) {
       expect(mergeSshSettings(v)).toEqual({
-        hidden: [],
+        hidden: DEFAULT_HIDDEN_HOSTS,
+        pinned: [],
         keepAliveSeconds: 30,
         restore: "auto",
         colors: {},
@@ -99,7 +101,8 @@ describe("mergeSshSettings", () => {
     expect(
       mergeSshSettings({ hidden: ["a", "a", "", " ", 3, null, "b", " prod "] }).hidden,
     ).toEqual(["a", "b", "prod"])
-    expect(mergeSshSettings({ hidden: "a" }).hidden).toEqual([])
+    expect(mergeSshSettings({ hidden: "a" }).hidden).toEqual(DEFAULT_HIDDEN_HOSTS) // not a list
+    expect(mergeSshSettings({ hidden: [] }).hidden).toEqual([]) // an explicit [] shows them all
     expect(mergeSshSettings({ hidden: ["x".repeat(256), "ok", "a\u0007b"] }).hidden).toEqual(["ok"])
     const many = Array.from({ length: 1500 }, (_, i) => `h${i}`)
     expect(mergeSshSettings({ hidden: many }).hidden).toHaveLength(1000)
@@ -122,7 +125,9 @@ describe("mergeSshSettings", () => {
   it("returns fresh arrays every call", () => {
     const a = mergeSshSettings({})
     a.hidden.push("x")
-    expect(mergeSshSettings({}).hidden).toEqual([])
+    a.pinned.push("y")
+    expect(mergeSshSettings({}).hidden).toEqual(DEFAULT_HIDDEN_HOSTS)
+    expect(mergeSshSettings({}).pinned).toEqual([])
   })
 })
 
@@ -204,5 +209,17 @@ describe("mergeSshSettings — colors, edge cases", () => {
     expect(Object.keys(c).sort()).toEqual(["__proto__", "constructor", "toString"])
     expect(c.constructor).toBe("red")
     expect(Object.getPrototypeOf(c)).toBe(Object.prototype) // not replaced by "__proto__"
+  })
+})
+
+describe("mergeSshSettings — pinned", () => {
+  it("unique host ids, no control characters, capped", () => {
+    expect(
+      mergeSshSettings({ pinned: ["native:web", "native:web", "", 3, "a\u0007", "wsl:U:gpu"] })
+        .pinned,
+    ).toEqual(["native:web", "wsl:U:gpu"])
+    expect(mergeSshSettings({ pinned: "native:web" }).pinned).toEqual([])
+    const many = Array.from({ length: 300 }, (_, i) => `native:h${i}`)
+    expect(mergeSshSettings({ pinned: many }).pinned).toHaveLength(200)
   })
 })

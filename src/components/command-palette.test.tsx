@@ -73,20 +73,28 @@ describe("CommandPalette — SSH", () => {
     render(<CommandPalette />)
     // Matches on the host detail too (the sub line).
     fireEvent.change(screen.getByRole("textbox"), { target: { value: "10.0.0.1" } })
-    expect(screen.getByText("Connect to host")).toBeInTheDocument()
+    expect(document.querySelector(".palette-item.selected")!.textContent).toContain("web")
     fireEvent.keyDown(screen.getByRole("textbox"), { key: "Enter" })
     expect(st().tabs).toHaveLength(1)
     expect(st().sessions[st().tabs[0]!.activeSessionId]!.remote?.hostId).toBe("native:web")
   })
 
-  it("splits right on a host", () => {
-    st().newTab(testShell)
+  it("lists each host once, by name (no duplicate split rows), and never a hidden one", () => {
+    st().setSshHosts([testHost("web"), { ...testHost("github.com"), hidden: true }])
+    render(<CommandPalette />)
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "ssh" } })
+    const rows = [...document.querySelectorAll(".palette-item")].map((r) => r.textContent ?? "")
+    expect(rows.filter((t) => t.includes("web"))).toHaveLength(1)
+    expect(rows.some((t) => t.includes("github.com"))).toBe(false)
+    expect(rows.some((t) => /split right/i.test(t))).toBe(false)
+  })
+
+  it("Connect to host… opens the host picker", () => {
     st().setSshHosts([testHost("web")])
     render(<CommandPalette />)
-    fireEvent.change(screen.getByRole("textbox"), { target: { value: "split right on host" } })
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "connect to host" } })
     fireEvent.keyDown(screen.getByRole("textbox"), { key: "Enter" })
-    expect(allSessionIds(st().tabs[0]!.root)).toHaveLength(2)
-    expect(st().sessions[st().tabs[0]!.activeSessionId]!.remote?.hostId).toBe("native:web")
+    expect(st().hostPickerOpen).toBe(true)
   })
 
   it("opens the ssh config, even with no hosts", () => {
@@ -102,7 +110,8 @@ describe("CommandPalette — a host list that changes while it's open", () => {
     st().setSshHosts([testHost("alpha"), testHost("prod")])
     render(<CommandPalette />)
     const input = screen.getByRole("textbox")
-    fireEvent.change(input, { target: { value: "connect to host" } })
+    fireEvent.change(input, { target: { value: "ssh" } }) // Connect to host…, alpha, prod, …
+    fireEvent.keyDown(input, { key: "ArrowDown" })
     fireEvent.keyDown(input, { key: "ArrowDown" }) // → prod
     expect(document.querySelector(".palette-item.selected")!.textContent).toContain("prod")
     act(() => st().setSshHosts([testHost("alpha"), testHost("beta"), testHost("prod")]))
@@ -115,12 +124,17 @@ describe("CommandPalette — a host list that changes while it's open", () => {
     st().setSshHosts([testHost("alpha"), testHost("prod")])
     render(<CommandPalette />)
     const input = screen.getByRole("textbox")
-    fireEvent.change(input, { target: { value: "connect to host" } })
+    fireEvent.change(input, { target: { value: "ssh" } })
     fireEvent.keyDown(input, { key: "ArrowDown" })
+    fireEvent.keyDown(input, { key: "ArrowDown" }) // → prod
     act(() => st().setSshHosts([testHost("alpha")]))
-    expect(document.querySelector(".palette-item.selected")!.textContent).toContain("alpha")
+    // prod is gone: the first row is highlighted, and Enter runs exactly that one.
+    expect(document.querySelector(".palette-item.selected")!.textContent).toContain(
+      "Connect to host",
+    )
     fireEvent.keyDown(input, { key: "Enter" })
-    expect(st().sessions[st().tabs[0]!.activeSessionId]!.remote?.hostId).toBe("native:alpha")
+    expect(st().tabs).toHaveLength(0)
+    expect(st().hostPickerOpen).toBe(true)
   })
 
   it("two commands that read the same keep separate selections", () => {
@@ -142,8 +156,9 @@ describe("CommandPalette — selection follows identity, not text", () => {
     st().setSshHosts([testHost("alpha"), testHost("web", "native", "me@10.0.0.1")])
     render(<CommandPalette />)
     const input = screen.getByRole("textbox")
-    fireEvent.change(input, { target: { value: "connect to host" } })
+    fireEvent.change(input, { target: { value: "ssh" } })
     fireEvent.keyDown(input, { key: "ArrowDown" })
+    fireEvent.keyDown(input, { key: "ArrowDown" }) // → web
     act(() => st().setSshHosts([testHost("alpha"), testHost("web", "native", "me@10.9.9.9")]))
     fireEvent.keyDown(input, { key: "Enter" })
     expect(st().sessions[st().tabs[0]!.activeSessionId]!.remote?.hostId).toBe("native:web")

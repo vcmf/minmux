@@ -21,6 +21,7 @@ export interface RemoteRef {
 /** A ~/.ssh/config host as the sidebar lists it. */
 export interface SshHost extends RemoteRef {
   detail?: string // "user@hostname:port" subline
+  hidden?: true // in `ssh.hidden`: listed so it can be shown again, never offered to open
 }
 
 import type { SessionStatus } from "./lib/session-status"

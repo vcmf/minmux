@@ -1,18 +1,24 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react"
 import { clampMenuPosition, type MenuItemSpec } from "../lib/file-actions"
 
-interface Props {
+interface Props<Id extends string> {
   x: number
   y: number
-  items: MenuItemSpec[]
-  onSelect: (id: MenuItemSpec["id"]) => void
+  items: MenuItemSpec<Id>[]
+  onSelect: (id: Id) => void
   onClose: () => void
 }
 
 /** A styled right-click menu anchored at (x, y). Closes on outside click, Escape,
  *  or after a selection; clamps itself into the viewport once measured. Reuses the
  *  `.shell-menu` chrome from the new-tab dropdown. */
-export function ContextMenu({ x, y, items, onSelect, onClose }: Props) {
+export function ContextMenu<Id extends string = MenuItemSpec["id"]>({
+  x,
+  y,
+  items,
+  onSelect,
+  onClose,
+}: Props<Id>) {
   const ref = useRef<HTMLDivElement>(null)
   const [pos, setPos] = useState({ x, y })
 

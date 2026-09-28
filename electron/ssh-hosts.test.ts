@@ -14,7 +14,7 @@ import {
 // Windows by default, so WSL hosts are listed; tests override platform where it matters.
 const merge = (
   i: Partial<Omit<MergeInput, "platform">> & { platform?: NodeJS.Platform },
-  o?: { all?: boolean },
+  o?: { all?: boolean; markHidden?: boolean },
 ) => mergeHosts({ native: [], wsl: [], settings: { hidden: [] }, platform: "win32", ...i }, o)
 
 describe("hostDetail", () => {
@@ -209,5 +209,18 @@ describe("trustedRemote", () => {
     for (const bad of [null, undefined, "native:web", 3, {}, { hostId: 1 }]) {
       expect(trustedRemote(bad, listed)).toBeNull()
     }
+  })
+})
+
+describe("mergeHosts — markHidden", () => {
+  it("lists hidden hosts too, flagged, instead of dropping them", () => {
+    const hosts = merge(
+      { native: [{ alias: "web" }, { alias: "github.com" }], settings: { hidden: ["GitHub.com"] } },
+      { markHidden: true },
+    )
+    expect(hosts.map((h) => [h.hostId, h.hidden ?? false])).toEqual([
+      ["native:web", false],
+      ["native:github.com", true],
+    ])
   })
 })

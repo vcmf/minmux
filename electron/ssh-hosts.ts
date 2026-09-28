@@ -27,12 +27,14 @@ export interface MergeInput {
 /** Config hosts (native, then per WSL distro), ids unique; `all` keeps hidden ones. */
 export function mergeHosts(
   { native, wsl, settings, platform }: MergeInput,
-  { all = false }: { all?: boolean } = {},
+  { all = false, markHidden = false }: { all?: boolean; markHidden?: boolean } = {},
 ): SshHost[] {
   // ssh matches aliases case-insensitively, so hiding does too.
   const hidden = new Set(all ? [] : settings.hidden.map((h) => h.toLowerCase()))
-  // A config alias is only listed if it's safe as an ssh argv destination.
-  const listable = (h: SshConfigHost) => !hidden.has(h.alias.toLowerCase()) && isSshTarget(h.alias)
+  const isHidden = (h: SshConfigHost) => hidden.has(h.alias.toLowerCase())
+  // A config alias is only listed if it's safe as an ssh argv destination. With markHidden,
+  // hidden ones are listed too, flagged (the renderer can offer to show them again).
+  const listable = (h: SshConfigHost) => (markHidden || !isHidden(h)) && isSshTarget(h.alias)
   const out: SshHost[] = []
   const ids = new Set<string>()
   const add = (h: SshConfigHost, env: SshEnv, idPrefix: string) => {
@@ -40,7 +42,14 @@ export function mergeHosts(
     if (ids.has(hostId) || !listable(h)) return
     ids.add(hostId)
     const detail = hostDetail(h)
-    out.push({ hostId, label: h.alias, target: h.alias, env, ...(detail ? { detail } : {}) })
+    out.push({
+      hostId,
+      label: h.alias,
+      target: h.alias,
+      env,
+      ...(detail ? { detail } : {}),
+      ...(markHidden && isHidden(h) ? { hidden: true as const } : {}),
+    })
   }
   for (const h of native) add(h, "native", "native")
   if (platform === "win32") {

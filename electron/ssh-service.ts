@@ -200,7 +200,10 @@ export class SshService {
       settings: this.current,
       platform: this.deps.platform,
     }
-    return { hosts: mergeHosts(input), partial: loaded.some((r) => r === null) }
+    return {
+      hosts: mergeHosts(input, { markHidden: true }),
+      partial: loaded.some((r) => r === null),
+    }
   }
 
   // The hosts a ref may resolve against (hidden ones included, so restored panes keep

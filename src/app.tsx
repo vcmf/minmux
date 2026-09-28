@@ -4,6 +4,7 @@ import { TopBar } from "./components/top-bar"
 import { Sidebar } from "./components/sidebar"
 import { StatusBar } from "./components/status-bar"
 import { CommandPalette } from "./components/command-palette"
+import { HostPicker } from "./components/host-picker"
 import { SearchBar } from "./components/search-bar"
 import { DiffPanel } from "./components/diff-panel"
 import { AgentsPanel } from "./components/agents-panel"
@@ -45,6 +46,7 @@ function App() {
   const theme = useStore(activeTheme) // stable object per variant — changes only on a real switch
   const settingsOpen = useStore((s) => s.settingsOpen)
   const paletteOpen = useStore((s) => s.paletteOpen)
+  const hostPickerOpen = useStore((s) => s.hostPickerOpen)
   const searchOpen = useStore((s) => s.searchOpen)
   const rightView = useStore((s) => s.rightView)
   const rightPanelWidth = useStore((s) => s.rightPanelWidth)
@@ -555,6 +557,7 @@ function App() {
       </div>
       <StatusBar />
       {paletteOpen && <CommandPalette />}
+      {hostPickerOpen && <HostPicker />}
       {settingsOpen && <SettingsPanel />}
       <FilePreview />
       <ClosePaneDialog />

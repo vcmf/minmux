@@ -1,3 +1,4 @@
+import { DEFAULT_HIDDEN_HOSTS } from "../lib/ssh-validate"
 import { describe, it, expect } from "vitest"
 import {
   defaultSettings,
@@ -114,7 +115,8 @@ describe("parseSettings", () => {
 describe("ssh settings", () => {
   it("defaults: nothing hidden, a 30 s keepalive, reconnect at once", () => {
     expect(defaultSettings.ssh).toEqual({
-      hidden: [],
+      hidden: DEFAULT_HIDDEN_HOSTS,
+      pinned: [],
       keepAliveSeconds: 30,
       restore: "auto",
       colors: {},
@@ -135,6 +137,7 @@ describe("ssh settings", () => {
       }).ssh,
     ).toEqual({
       hidden: ["github.com"],
+      pinned: [],
       keepAliveSeconds: 0,
       restore: "on-focus",
       colors: { "prod-*": "red" },
@@ -145,8 +148,9 @@ describe("ssh settings", () => {
     const hidden = defaultSettings.ssh.hidden
     hidden.push("leak")
     try {
-      expect(mergeSettings({}).ssh.hidden).toEqual([])
-      expect(mergeSshSettings({}).hidden).toEqual([])
+      expect(mergeSettings({}).ssh.hidden).toEqual(DEFAULT_HIDDEN_HOSTS)
+      expect(mergeSshSettings({}).hidden).toEqual(DEFAULT_HIDDEN_HOSTS)
+      expect(DEFAULT_HIDDEN_HOSTS).not.toContain("leak")
     } finally {
       hidden.pop()
     }

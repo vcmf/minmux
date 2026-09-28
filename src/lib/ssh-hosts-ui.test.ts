@@ -119,12 +119,10 @@ describe("remote labels", () => {
     expect(remoteWhere(wsl, [])).toBe("gpu · WSL: Ubuntu")
   })
 
-  it("hostSubline joins label, distro and detail, skipping what's unset", () => {
-    expect(hostSubline(testHost("web"))).toBe("web")
-    expect(hostSubline(testHost("web", "native", "me@h"))).toBe("web · me@h")
-    expect(hostSubline(testHost("gpu", "wsl:Ubuntu", "u@g:2222"))).toBe(
-      "gpu · WSL: Ubuntu · u@g:2222",
-    )
+  it("hostSubline is the distro and detail (the row's label is the host), skipping what's unset", () => {
+    expect(hostSubline(testHost("web"))).toBe("")
+    expect(hostSubline(testHost("web", "native", "me@h"))).toBe("me@h")
+    expect(hostSubline(testHost("gpu", "wsl:Ubuntu", "u@g:2222"))).toBe("WSL: Ubuntu · u@g:2222")
   })
 })
 

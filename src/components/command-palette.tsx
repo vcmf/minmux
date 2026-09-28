@@ -21,7 +21,8 @@ import { openSettingsFile } from "../settings/io"
 import { resolveDefaultShell } from "../lib/shells"
 import { newSurfaceKey } from "../lib/platform"
 import { ipc } from "../lib/ipc"
-import { hostShellOption, hostSubline } from "../lib/ssh-hosts-ui"
+import { hostSubline } from "../lib/ssh-hosts-ui"
+import { visibleHosts } from "../lib/ssh-host-list"
 
 interface Command {
   id?: string // a stable identity (tab id, host id) when the text alone isn't one
@@ -106,26 +107,23 @@ export function CommandPalette() {
       )
     }
 
-    for (const h of sshHosts) {
-      const sub = hostSubline(h)
-      list.push(
-        {
-          group: "SSH",
-          id: h.hostId,
-          label: "Connect to host",
-          sub,
-          icon: <Globe size={16} />,
-          run: () => store.newTab(hostShellOption(h)),
-        },
-        {
-          group: "SSH",
-          id: h.hostId,
-          label: "Split right on host",
-          sub,
-          icon: <Columns size={16} />,
-          run: () => store.splitWith("row", hostShellOption(h)),
-        },
-      )
+    list.push({
+      group: "SSH",
+      label: "Connect to host…",
+      sub: "pinned, recent and all saved hosts",
+      icon: <Globe size={16} />,
+      run: () => store.setHostPickerOpen(true),
+    })
+    // Host first: typing a host's name finds it; the picker (⌥⏎ / ⇧⏎) opens splits.
+    for (const h of visibleHosts(sshHosts)) {
+      list.push({
+        group: "SSH",
+        id: h.hostId,
+        label: h.label,
+        sub: hostSubline(h) || undefined,
+        icon: <Globe size={16} />,
+        run: () => store.openHost(h, "tab"),
+      })
     }
     list.push({
       group: "SSH",

@@ -31,7 +31,8 @@ export const isSshEnv = (v: unknown): v is SshEnv => parseSshEnv(v) !== null
 /** The `ssh` settings block. Hosts come from ~/.ssh/config only: these are presentation
  *  and session-keeping preferences, never how to connect. */
 export interface SshSettings {
-  hidden: string[] // aliases hidden from the list (e.g. "github.com")
+  hidden: string[] // aliases hidden from the list (default: the git hosts, DEFAULT_HIDDEN_HOSTS)
+  pinned: string[] // hostIds kept in the sidebar
   keepAliveSeconds: number // ServerAliveInterval smterm adds (0 = add none, the config decides)
   restore: "auto" | "on-focus" // after a relaunch: reconnect at once, or when the pane is used
   colors: Record<string, string> // alias pattern ("prod-*") → a named colour or #rrggbb
@@ -46,6 +47,19 @@ const MAX_SSH_COLORS = 100
 export const isHostColor = (v: unknown): v is string =>
   typeof v === "string" &&
   ((HOST_COLOR_NAMES as readonly string[]).includes(v.toLowerCase()) || HEX_COLOR.test(v))
+
+/** Hidden until you show them: git forges live in ssh configs but aren't places to open a
+ *  shell. Only the default: an explicit `ssh.hidden` (even []) replaces it. */
+export const DEFAULT_HIDDEN_HOSTS: readonly string[] = Object.freeze([
+  "github.com",
+  "gitlab.com",
+  "bitbucket.org",
+  "ssh.dev.azure.com",
+  "vs-ssh.visualstudio.com",
+  "codeberg.org",
+])
+const MAX_SSH_PINNED = 200
+const MAX_HOST_ID_LEN = 300
 
 const DEFAULT_KEEPALIVE = 30
 const MAX_KEEPALIVE = 3600
@@ -66,6 +80,19 @@ export function mergeSshSettings(input: unknown): SshSettings {
             .filter((x) => x !== "" && x.length <= 255 && !hasControlChar(x)),
         ),
       ].slice(0, MAX_SSH_HIDDEN)
+    : [...DEFAULT_HIDDEN_HOSTS]
+  const pinned = Array.isArray(o.pinned)
+    ? [
+        ...new Set(
+          o.pinned.filter(
+            (x): x is string =>
+              typeof x === "string" &&
+              x !== "" &&
+              x.length <= MAX_HOST_ID_LEN &&
+              !hasControlChar(x),
+          ),
+        ),
+      ].slice(0, MAX_SSH_PINNED)
     : []
   const k = o.keepAliveSeconds
   const keepAliveSeconds =
@@ -83,7 +110,7 @@ export function mergeSshSettings(input: unknown): SshSettings {
     if (!picked.has(key)) picked.set(key, v.toLowerCase())
   }
   const colors = Object.fromEntries(picked) // own data properties, even for "__proto__"
-  return { hidden, keepAliveSeconds, restore, colors }
+  return { hidden, pinned, keepAliveSeconds, restore, colors }
 }
 
 const MAX_HOST_ID = 300

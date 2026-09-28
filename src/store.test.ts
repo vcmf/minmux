@@ -996,3 +996,33 @@ describe("store — remote detail keeps its reference", () => {
     expect(st().remotePhase[id]).toBe("live")
   })
 })
+
+describe("store — opening, pinning and hiding hosts", () => {
+  beforeEach(resetStore)
+
+  it("openHost opens a tab or a split and remembers the host as recent", () => {
+    st().setShells([shell])
+    const web = testHost("web")
+    st().openHost(web, "tab")
+    expect(st().sessions[firstTab().activeSessionId]!.remote?.hostId).toBe("native:web")
+    st().openHost(testHost("db"), "row")
+    expect(allSessionIds(firstTab().root)).toHaveLength(2)
+    expect(st().sshRecent).toEqual(["native:db", "native:web"])
+  })
+
+  it("openHost never opens a hidden host", () => {
+    st().openHost({ ...testHost("github.com"), hidden: true }, "tab")
+    expect(st().tabs).toHaveLength(0)
+  })
+
+  it("pin and hide write the ssh settings", () => {
+    st().toggleHostPinned("native:web")
+    expect(st().settings.ssh.pinned).toEqual(["native:web"])
+    st().toggleHostPinned("native:web")
+    expect(st().settings.ssh.pinned).toEqual([])
+    st().setHostHidden("github.com", false) // a default-hidden git host, shown again
+    expect(st().settings.ssh.hidden).not.toContain("github.com")
+    st().setHostHidden("web", true)
+    expect(st().settings.ssh.hidden).toContain("web")
+  })
+})

@@ -32,6 +32,8 @@ export function resetStore() {
     settings: defaultSettings,
     settingsOpen: false,
     paletteOpen: false,
+    hostPickerOpen: false,
+    sshRecent: [],
     searchOpen: false,
     rightView: null,
     sidebarCollapsed: false,

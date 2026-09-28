@@ -6,12 +6,21 @@ import { allSessionIds } from "../lib/pane-tree"
 import { resetStore, testHost, testShell } from "../test/helpers"
 import { ipc } from "../lib/ipc"
 import { hostShellOption } from "../lib/ssh-hosts-ui"
+import type { SshHost } from "../types"
 
 vi.mock("../terminal/terminal-manager", () => ({
   TerminalManager: { attach: vi.fn(), fit: vi.fn(), focus: vi.fn(), dispose: vi.fn() },
 }))
 
 const st = () => useStore.getState()
+
+/** Hosts from main, pinned so the sidebar lists them (it shows pinned + open ones). */
+const showHosts = (hosts: SshHost[]) => {
+  st().setSshHosts(hosts)
+  useStore.setState((s) => ({
+    settings: { ...s.settings, ssh: { ...s.settings.ssh, pinned: hosts.map((h) => h.hostId) } },
+  }))
+}
 
 beforeEach(() => {
   resetStore()
@@ -281,7 +290,7 @@ describe("Sidebar — Remote hosts", () => {
   })
 
   it("lists saved hosts with their detail, without env headings for one env", () => {
-    st().setSshHosts([testHost("web", "native", "me@10.0.0.1"), testHost("db")])
+    showHosts([testHost("web", "native", "me@10.0.0.1"), testHost("db")])
     render(<Sidebar />)
     expect(screen.getByText("Remote")).toBeInTheDocument()
     expect(screen.getByText("web")).toBeInTheDocument()
@@ -291,14 +300,14 @@ describe("Sidebar — Remote hosts", () => {
   })
 
   it("groups by environment when there's more than one", () => {
-    st().setSshHosts([testHost("web"), testHost("gpu", "wsl:Ubuntu")])
+    showHosts([testHost("web"), testHost("gpu", "wsl:Ubuntu")])
     render(<Sidebar />)
     expect(screen.getByText("This machine")).toBeInTheDocument()
     expect(screen.getByText("WSL: Ubuntu")).toBeInTheDocument()
   })
 
   it("clicking a host opens a new tab on it", () => {
-    st().setSshHosts([testHost("web")])
+    showHosts([testHost("web")])
     render(<Sidebar />)
     fireEvent.click(screen.getByTitle("Open a terminal on web"))
     expect(st().tabs).toHaveLength(1)
@@ -307,7 +316,7 @@ describe("Sidebar — Remote hosts", () => {
 
   it("the hover split buttons split the active pane onto the host, not a new tab", () => {
     st().newTab(testShell)
-    st().setSshHosts([testHost("web")])
+    showHosts([testHost("web")])
     render(<Sidebar />)
     fireEvent.click(screen.getByTitle("Split right on web"))
     expect(st().tabs).toHaveLength(1)
@@ -319,7 +328,7 @@ describe("Sidebar — Remote hosts", () => {
   })
 
   it("marks hosts with a live session as connected", () => {
-    st().setSshHosts([testHost("web"), testHost("db")])
+    showHosts([testHost("web"), testHost("db")])
     st().newTab(hostShellOption(testHost("web")))
     st().setRemotePhase(st().tabs[0]!.activeSessionId, "live")
     render(<Sidebar />)
@@ -329,9 +338,9 @@ describe("Sidebar — Remote hosts", () => {
   })
 
   it("an empty list says so and offers to open the ssh config", () => {
-    st().setSshHosts([])
+    showHosts([])
     render(<Sidebar />)
-    expect(screen.getByText("No hosts in ~/.ssh/config")).toBeInTheDocument()
+    expect(screen.getByText(/Hosts come from the/)).toBeInTheDocument()
     fireEvent.click(screen.getByText("Open ssh config"))
     expect(ipc.openSshConfig).toHaveBeenCalledTimes(1)
     fireEvent.click(screen.getByTitle("Open ssh config"))
@@ -339,7 +348,7 @@ describe("Sidebar — Remote hosts", () => {
   })
 
   it("collapses, and remembers it", () => {
-    st().setSshHosts([testHost("web")])
+    showHosts([testHost("web")])
     const { unmount } = render(<Sidebar />)
     fireEvent.click(screen.getByText("Remote"))
     expect(screen.queryByTitle("Open a terminal on web")).not.toBeInTheDocument()
@@ -362,7 +371,7 @@ describe("Sidebar — Remote hosts", () => {
 
 describe("Sidebar — Remote hosts, accessibly", () => {
   it("a host's label is a real button (Enter/Space for free); the splits are its siblings", () => {
-    st().setSshHosts([testHost("web")])
+    showHosts([testHost("web")])
     render(<Sidebar />)
     const open = screen.getByTitle("Open a terminal on web")
     expect(open.tagName).toBe("BUTTON")
@@ -374,15 +383,15 @@ describe("Sidebar — Remote hosts, accessibly", () => {
 describe("Sidebar — before the first host list arrives", () => {
   it("shows no empty state until main has answered", () => {
     render(<Sidebar />)
-    expect(screen.queryByText("No hosts in ~/.ssh/config")).not.toBeInTheDocument()
+    expect(screen.queryByText(/Hosts come from the/)).not.toBeInTheDocument()
     act(() => st().setSshHosts([]))
-    expect(screen.getByText("No hosts in ~/.ssh/config")).toBeInTheDocument()
+    expect(screen.getByText(/Hosts come from the/)).toBeInTheDocument()
   })
 })
 
 describe("Sidebar — a dropped connection", () => {
   it("the host's connected dot goes away while its only pane is closed", () => {
-    st().setSshHosts([testHost("web")])
+    showHosts([testHost("web")])
     st().newTab(hostShellOption(testHost("web")))
     st().setRemotePhase(st().tabs[0]!.activeSessionId, "live")
     render(<Sidebar />)
@@ -416,11 +425,56 @@ describe("Sidebar — ssh pane states", () => {
 
 describe("Sidebar — remote pane rows", () => {
   it("the subline is where it runs (user@hostname), not the alias again", () => {
-    st().setSshHosts([testHost("web", "native", "me@10.0.0.1")])
+    showHosts([testHost("web", "native", "me@10.0.0.1")])
     st().newTab(hostShellOption(testHost("web")))
     render(<Sidebar />)
     const rows = screen.getAllByText("me@10.0.0.1")
     expect(rows.some((el) => el.classList.contains("tree-sub"))).toBe(true)
     expect(screen.queryByText("ssh · web")).not.toBeInTheDocument()
+  })
+})
+
+describe("Sidebar — Remote shows pinned and open hosts", () => {
+  it("unpinned hosts with nothing open stay in the picker; All hosts (N)… opens it", () => {
+    st().setSshHosts([testHost("web"), testHost("db"), { ...testHost("github.com"), hidden: true }])
+    render(<Sidebar />)
+    expect(screen.queryByTitle("Open a terminal on web")).not.toBeInTheDocument()
+    expect(screen.getByText(/Pinned hosts and hosts you/)).toBeInTheDocument()
+    fireEvent.click(screen.getByText("All hosts (2)…"))
+    expect(st().hostPickerOpen).toBe(true)
+  })
+
+  it("a host with a pane open is listed; a pinned one is marked", () => {
+    st().setSshHosts([testHost("web"), testHost("db")])
+    useStore.setState((s) => ({
+      settings: { ...s.settings, ssh: { ...s.settings.ssh, pinned: ["native:db"] } },
+    }))
+    st().newTab(hostShellOption(testHost("web")))
+    render(<Sidebar />)
+    const rows = [...document.querySelectorAll(".remote-row .tree-primary")].map(
+      (e) => e.textContent,
+    )
+    expect(rows).toEqual(["db", "web"]) // pinned first
+    expect(screen.getAllByLabelText("Pinned")).toHaveLength(1)
+  })
+
+  it("right-click a host row: unpin, or hide it", () => {
+    st().setSshHosts([testHost("db")])
+    useStore.setState((s) => ({
+      settings: { ...s.settings, ssh: { ...s.settings.ssh, pinned: ["native:db"] } },
+    }))
+    render(<Sidebar />)
+    fireEvent.contextMenu(document.querySelector(".remote-row")!)
+    fireEvent.mouseDown(screen.getByText("Hide host"))
+    expect(st().settings.ssh.hidden).toContain("db")
+    fireEvent.contextMenu(document.querySelector(".remote-row")!)
+    fireEvent.mouseDown(screen.getByText("Unpin from sidebar"))
+    expect(st().settings.ssh.pinned).toEqual([])
+  })
+
+  it("the search button opens the host picker", () => {
+    render(<Sidebar />)
+    fireEvent.click(screen.getByTitle("Connect to host…"))
+    expect(st().hostPickerOpen).toBe(true)
   })
 })
