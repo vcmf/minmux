@@ -165,7 +165,9 @@ defaults, it doesn't replace them. Hiding is by alias, so it applies in every en
 - **Where you are.** If the host reports its folder (OSC 7, or the Debian/Ubuntu title
   `user@host: ~/dir`), the sidebar row shows it, with the host boxed beside it. It's display
   only: a reconnect or a relaunch opens a fresh login at home (keeping your place across drops
-  is what tmux persistence will do).
+  is what tmux persistence will do). With shell integration on, the folder and the pane's
+  running / idle status come from smterm's own hooks on the host, and text a program prints
+  can't fake them.
 - **Reconnect.** When `ssh` exits, the pane says why and Enter (or the **Reconnect** button)
   connects again. A connection that was up for 30 s (after its last password prompt) and then
   loses its link (ssh says so: "closed by remote host", "Broken pipe", …) reconnects on its

@@ -40,6 +40,7 @@ export interface Session {
   remote?: RemoteRef // runs on an ssh host: no local cwd, files or git (splits stay on it)
   remoteSaved?: unknown // a saved host this build couldn't read: written back as-is on save
   remoteCwd?: string // runtime only: where its remote shell reports it is (display, never read locally)
+  remoteCwdVerified?: boolean // runtime only: remoteCwd came from our integrated shell (nonce-checked)
   restored?: boolean // runtime only (never saved): came from workspace.json this launch/reload
 }
 

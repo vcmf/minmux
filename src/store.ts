@@ -132,7 +132,8 @@ interface AppState {
   claudeExited: (paneId: string) => void // the pane's shell prompt came back after Claude
   setRightView: (view: RightView) => void
   setSessionCwd: (sessionId: string, cwd: string) => void
-  setRemoteCwd: (sessionId: string, cwd: string | undefined) => void // undefined = unknown again
+  // undefined = unknown again; verified = reported by our integrated shell (nonce-checked)
+  setRemoteCwd: (sessionId: string, cwd: string | undefined, verified?: boolean) => void
   setPaletteOpen: (open: boolean) => void
   setHostPickerOpen: (open: boolean) => void
   /** Open a host: a new tab, or a split of the active pane. Remembered as recent. */
@@ -399,12 +400,14 @@ export const useStore = create<AppState>((set, get) => ({
       return { sessions: { ...state.sessions, [sessionId]: { ...s, cwd } } }
     }),
   // Display only: local panels read `cwd`, which a remote session never has.
-  setRemoteCwd: (sessionId, cwd) =>
+  setRemoteCwd: (sessionId, cwd, verified = false) =>
     set((state) => {
       const s = state.sessions[sessionId]
-      if (!s?.remote || s.remoteCwd === cwd) return state
-      const next = { ...s, remoteCwd: cwd }
+      const ok = verified && cwd !== undefined
+      if (!s?.remote || (s.remoteCwd === cwd && !!s.remoteCwdVerified === ok)) return state
+      const next: Session = { ...s, remoteCwd: cwd, remoteCwdVerified: ok }
       if (cwd === undefined) delete next.remoteCwd
+      if (!ok) delete next.remoteCwdVerified
       return { sessions: { ...state.sessions, [sessionId]: next } }
     }),
   // One overlay at a time: opening either closes the other (⌘K over an open picker).

@@ -14,34 +14,58 @@
 
 import { BASH_HOOKS, ZSH_HOOKS } from "./shell-integration"
 
-/** The private OSC code the remote hooks and the hello use (xterm ignores unknown codes). */
-export const SMTERM_OSC = 6973
+import { SMTERM_OSC } from "../src/lib/remote-reports"
+
+export { SMTERM_OSC }
 
 const HEX = /^[0-9a-f]{16,64}$/
 
 // The standard OSC 133 / OSC 7 emits in the local hooks, and their nonce-tagged remote form.
 // Each must appear in the scripts (checked in remoteHooks), or the remote shell would report
-// untagged — and then nothing it says counts.
+// untagged — and then nothing it says counts. The folder goes as `P;<host>;<hex of $PWD's
+// bytes>` (__smterm_cwd): a file:// URL would be re-parsed (`#`, `?`, `\`, `..`, `%2F`), and
+// the folder must arrive exactly as the shell has it.
 const EMITS: [string, string][] = [
   ["printf '\\033]133;C\\007'", `printf '\\033]${SMTERM_OSC};%s;C\\007' "$__smterm_nonce"`],
   [
     "printf '\\033]133;D;%s\\007' \"$ret\"",
     `printf '\\033]${SMTERM_OSC};%s;D;%s\\007' "$__smterm_nonce" "$ret"`,
   ],
-  [
-    "printf '\\033]7;file://%s%s\\007'",
-    `printf '\\033]${SMTERM_OSC};%s;7;file://%s%s\\007' "$__smterm_nonce"`,
-  ],
 ]
+const ZSH_CWD_EMIT = `printf '\\033]7;file://%s%s\\007' "\${HOST:-localhost}" "$PWD"`
+const BASH_CWD_EMIT = `printf '\\033]7;file://%s%s\\007' "\${HOSTNAME:-localhost}" "$PWD"`
+
+// Builtins only (a prompt must start no process): each byte of $PWD as two hex digits.
+const ZSH_CWD_FN = [
+  "__smterm_cwd() {",
+  "  emulate -L zsh",
+  "  setopt nomultibyte",
+  "  local p=$PWD h= c i v",
+  "  for ((i = 1; i <= $#p; i++)); do",
+  "    c=$p[i]",
+  "    (( v = #c & 255 ))",
+  "    h+=${(l:2::0:)$(( [##16] v ))}",
+  "  done",
+  `  printf '\\033]${SMTERM_OSC};%s;P;%s;%s\\007' "$__smterm_nonce" "\${HOST:-localhost}" "\${(L)h}"`,
+  "}",
+].join("\n")
+const BASH_CWD_FN = [
+  "__smterm_cwd() {",
+  "  local LC_ALL=C p=$PWD h= i c",
+  "  for ((i = 0; i < ${#p}; i++)); do printf -v c '%02x' \"'${p:i:1}\"; h+=${c: -2}; done",
+  `  printf '\\033]${SMTERM_OSC};%s;P;%s;%s\\007' "$__smterm_nonce" "\${HOSTNAME:-localhost}" "$h"`,
+  "}",
+].join("\n")
 
 /** A local hook script with every report tagged with the nonce (throws if one is missing). */
-export function remoteHooks(script: string): string {
+export function remoteHooks(script: string, shell: "zsh" | "bash"): string {
+  const cwd: [string, string] = [shell === "zsh" ? ZSH_CWD_EMIT : BASH_CWD_EMIT, "__smterm_cwd"]
   let out = script
-  for (const [from, to] of EMITS) {
+  for (const [from, to] of [...EMITS, cwd]) {
     if (!out.includes(from)) throw new Error(`remote hooks: missing ${from}`)
     out = out.split(from).join(to)
   }
-  return out
+  return [shell === "zsh" ? ZSH_CWD_FN : BASH_CWD_FN, out].join("\n")
 }
 
 // zsh reads only this file of ours: it gives zsh back the user's own ZDOTDIR (as sshd's
@@ -56,7 +80,7 @@ export const REMOTE_ZSHENV = [
   'if [[ -n "${SMTERM_USER_ZDOTDIR-}" ]]; then ZDOTDIR=$SMTERM_USER_ZDOTDIR; else unset ZDOTDIR; fi',
   "unset SMTERM_ZDOTDIR SMTERM_USER_ZDOTDIR",
   'if [[ -f "${ZDOTDIR:-$HOME}/.zshenv" ]]; then source "${ZDOTDIR:-$HOME}/.zshenv"; fi',
-  remoteHooks(ZSH_HOOKS),
+  remoteHooks(ZSH_HOOKS, "zsh"),
 ].join("\n")
 
 // bash runs with --rcfile (never a login shell then): read the files a login bash would, in
@@ -74,7 +98,7 @@ export const REMOTE_BASHRC = [
   'elif [[ -f "$HOME/.bash_login" ]]; then source "$HOME/.bash_login"',
   'elif [[ -f "$HOME/.profile" ]]; then source "$HOME/.profile"; fi',
   "",
-  remoteHooks(BASH_HOOKS),
+  remoteHooks(BASH_HOOKS, "bash"),
 ].join("\n")
 
 const heredoc = (file: string, tag: string, body: string): string[] => {
@@ -122,6 +146,7 @@ export const PAYLOAD = [
   '  if [ ${#n} -ne 32 ] || [ "$l" != "$n:-" ]; then',
   '    command rm -rf -- "$d"; trap - HUP INT QUIT TERM; umask "$m"; return 1',
   "  fi",
+  `  ${osc("ok")} # main hands the renderer the nonce only now`,
   '  case "${s##*/}" in',
   "  zsh)",
   `    printf '__smterm_nonce=%s\\n' "$n" > "$d/.zshenv"`,
@@ -177,48 +202,67 @@ export function handshakeReply(nonce: string): string {
 const HELLO_SCAN_LIMIT = 1 << 20
 const AFTER_BOOT_LIMIT = 64 << 10
 
-/** Watches a pane's output for its bootstrap: `booted` once the script runs on the host, and
- *  the answer to its hello, once. Done after the hello, a skip (the plain shell), or a budget. */
+/** What main does with a chunk of an integrated pane's output. */
+export interface HelloStep {
+  write?: string // the answer to the hello, for the pty
+  armed?: boolean // the host took the nonce (ok): hand it to the renderer now
+}
+
+/** Watches a pane's output for its bootstrap: `booted` once the script runs on the host, the
+ *  answer to its hello (once), then whether the host took it — `ok` arms the nonce, `skip`
+ *  (the plain shell: a late answer, an unsupported shell) or a budget ends the watch. The
+ *  renderer never trusts a nonce the host didn't confirm. */
 export class HelloWatch {
   private readonly bootMark: string
   private readonly helloMark: string
+  private readonly okMark: string
   private readonly skipMark: string
   private tail = ""
   private scanned = 0
   private sinceBoot = 0
   booted = false
+  answered = false
+  armed = false
   done = false
 
   constructor(
     challenge: string,
     private readonly reply: string,
   ) {
-    this.bootMark = `\x1b]${SMTERM_OSC};boot;${challenge}\x07`
-    this.helloMark = `\x1b]${SMTERM_OSC};hello;${challenge}\x07`
-    this.skipMark = `\x1b]${SMTERM_OSC};skip;${challenge}\x07`
+    const mark = (kind: string) => `\x1b]${SMTERM_OSC};${kind};${challenge}\x07`
+    this.bootMark = mark("boot")
+    this.helloMark = mark("hello")
+    this.okMark = mark("ok")
+    this.skipMark = mark("skip")
   }
 
-  /** The answer to write, the first time the hello shows up in `data`; else null. */
-  feed(data: string): string | null {
+  feed(data: string): HelloStep | null {
     if (this.done) return null
     const text = this.tail + data
+    let step: HelloStep | null = null
     if (!this.booted && text.includes(this.bootMark)) this.booted = true
     if (this.booted) {
-      if (text.includes(this.helloMark)) return this.finish(this.reply)
-      if (text.includes(this.skipMark)) return this.finish(null)
+      if (text.includes(this.skipMark)) return this.finish(step)
+      if (!this.answered && text.includes(this.helloMark)) {
+        this.answered = true
+        step = { write: this.reply }
+      } else if (this.answered && text.includes(this.okMark)) {
+        this.armed = true
+        return this.finish({ armed: true })
+      }
       this.sinceBoot += data.length
-      if (this.sinceBoot > AFTER_BOOT_LIMIT) return this.finish(null)
+      if (this.sinceBoot > AFTER_BOOT_LIMIT) return this.finish(step)
     }
     this.scanned += data.length
-    if (this.scanned > HELLO_SCAN_LIMIT) return this.finish(null)
+    if (this.scanned > HELLO_SCAN_LIMIT) return this.finish(step)
     this.tail = text.slice(-(this.helloMark.length - 1))
-    return null
+    return step
   }
 
-  private finish(reply: string | null): string | null {
+  private finish(step: HelloStep | null): HelloStep | null {
     this.done = true
     this.tail = ""
-    return reply
+    return step
   }
 }
 

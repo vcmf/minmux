@@ -72,15 +72,17 @@ describe("the remote scripts", () => {
     for (const rc of [REMOTE_ZSHENV, REMOTE_BASHRC]) {
       expect(rc).not.toContain("\\033]133;")
       expect(rc).not.toContain("\\033]7;")
-      for (const kind of ["C", "D;%s", "7;file://%s%s"]) {
+      expect(rc).toContain(`\\033]${SMTERM_OSC};%s;P;%s;%s\\007' "$__smterm_nonce"`) // the folder
+      for (const kind of ["C", "D;%s"]) {
         expect(rc).toContain(`\\033]${SMTERM_OSC};%s;${kind}\\007' "$__smterm_nonce"`)
       }
     }
   })
 
   it("remoteHooks refuses a script whose emits it doesn't recognise", () => {
-    expect(() => remoteHooks(ZSH_HOOKS.replace("133;C", "133;X"))).toThrow()
-    expect(remoteHooks(BASH_HOOKS)).toContain(`]${SMTERM_OSC};%s;D;%s`)
+    expect(() => remoteHooks(ZSH_HOOKS.replace("133;C", "133;X"), "zsh")).toThrow()
+    expect(() => remoteHooks(ZSH_HOOKS, "bash")).toThrow() // bash's OSC 7 names $HOSTNAME
+    expect(remoteHooks(BASH_HOOKS, "bash")).toContain(`]${SMTERM_OSC};%s;D;%s`)
   })
 
   it("leave the host's history alone and remove their temp dir first thing", () => {
@@ -120,11 +122,11 @@ describe("the remote scripts", () => {
 
   it("start no process at a prompt (the hooks use printf and builtins only)", () => {
     for (const rc of [REMOTE_ZSHENV, REMOTE_BASHRC]) {
-      for (const fn of ["__smterm_precmd", "__smterm_preexec"]) {
+      for (const fn of ["__smterm_precmd", "__smterm_preexec", "__smterm_cwd"]) {
         const start = rc.indexOf(`${fn}() {`)
         expect(start).toBeGreaterThan(0)
         const body = rc.slice(start, rc.indexOf("\n}", start) + 2)
-        expect(body).not.toMatch(/\$\(|`/)
+        expect(body).not.toMatch(/\$\((?!\()|`/) // $( … ) forks; $(( … )) is arithmetic
       }
     }
   })
@@ -142,6 +144,12 @@ describe("the handshake (payload)", () => {
     expect(PAYLOAD).toContain("stty -echo -icanon -isig") // ^C is data while it waits
   })
 
+  it("says ok only once it took a valid answer", () => {
+    const at = (t: string) => PAYLOAD.indexOf(t)
+    expect(at(`;ok;%s`)).toBeGreaterThan(at('[ "$l" != "$n:-" ]'))
+    expect(at(`;ok;%s`)).toBeLessThan(at('case "${s##*/}" in\n  zsh)'))
+  })
+
   it("drains a late answer before the plain shell, and says it skipped", () => {
     expect(PAYLOAD).toMatch(/if \[ -z "\$a" \]; then stty min 0 time 20/)
     expect(PAYLOAD).toContain(`__smterm_boot || printf '\\033]${SMTERM_OSC};skip;%s`)
@@ -156,40 +164,55 @@ describe("handshakeReply", () => {
 })
 
 describe("HelloWatch", () => {
-  it("answers the hello once, after the bootstrap booted", () => {
+  const ok = `\x1b]${SMTERM_OSC};ok;${C}\x07`
+  const skip = `\x1b]${SMTERM_OSC};skip;${C}\x07`
+
+  it("answers the hello once, after the bootstrap booted, and arms on the host's ok", () => {
     const w = new HelloWatch(C, "R")
     expect(w.feed("Welcome to Ubuntu\r\n")).toBeNull()
-    expect(w.feed(boot + hello)).toBe("R")
+    expect(w.feed(boot + hello)).toEqual({ write: "R" })
     expect(w.booted).toBe(true)
-    expect(w.feed(hello)).toBeNull()
+    expect(w.feed(hello)).toBeNull() // never twice
+    expect(w.armed).toBe(false) // not until the host took it
+    expect(w.feed("x" + ok + "prompt")).toEqual({ armed: true })
+    expect(w.done).toBe(true)
   })
 
-  it("finds markers split across chunks", () => {
+  it("never arms on an ok before its answer, or after a skip (a late answer, a plain shell)", () => {
+    const early = new HelloWatch(C, "R")
+    expect(early.feed(boot + ok)).toBeNull()
+    expect(early.armed).toBe(false)
+    const late = new HelloWatch(C, "R")
+    late.feed(boot + hello)
+    expect(late.feed(skip + ok)).toBeNull()
+    expect(late.armed).toBe(false)
+    expect(late.done).toBe(true)
+  })
+
+  it("finds marks split across chunks", () => {
     const w = new HelloWatch(C, "R")
-    const all = "motd…" + boot + "x" + hello + "prompt"
-    const got = [...all].map((ch) => w.feed(ch)).filter(Boolean)
-    expect(got).toEqual(["R"])
+    const steps = [...("motd…" + boot + "x" + hello)].map((ch) => w.feed(ch)).filter(Boolean)
+    expect(steps).toEqual([{ write: "R" }])
+    const armed = [...("\r\n" + ok)].map((ch) => w.feed(ch)).filter(Boolean)
+    expect(armed).toEqual([{ armed: true }])
   })
 
-  it("ignores a hello with another challenge, or before boot (a banner can't trigger it)", () => {
+  it("ignores marks with another challenge, or before boot (a banner can't trigger it)", () => {
     const w = new HelloWatch(C, "R")
     expect(w.feed(`\x1b]${SMTERM_OSC};boot;0000000000000000\x07`)).toBeNull()
     expect(w.feed(hello)).toBeNull()
     expect(w.booted).toBe(false)
   })
 
-  it("stops at a skip (the plain shell), or soon after boot", () => {
-    const skip = new HelloWatch(C, "R")
-    skip.feed(boot + `\x1b]${SMTERM_OSC};skip;${C}\x07`)
-    expect(skip.done).toBe(true)
-    expect(skip.feed(hello)).toBeNull()
+  it("stops at a skip, or soon after boot, or after a lot of output", () => {
+    const s1 = new HelloWatch(C, "R")
+    s1.feed(boot + skip)
+    expect(s1.done).toBe(true)
+    expect(s1.feed(hello)).toBeNull()
     const quiet = new HelloWatch(C, "R")
     quiet.feed(boot)
     quiet.feed("x".repeat(70 << 10))
     expect(quiet.done).toBe(true)
-  })
-
-  it("stops looking after a lot of output", () => {
     const w = new HelloWatch(C, "R")
     w.feed("x".repeat(2 << 20))
     expect(w.done).toBe(true)

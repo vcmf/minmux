@@ -89,6 +89,7 @@ const flush = () => new Promise((r) => setTimeout(r, 0))
 
 let exitHandlers: Record<string, (e: { code: number; signal: number }) => void>
 let dataHandlers: Record<string, (d: string) => void>
+let nonceHandlers: Record<string, (nonce: string) => void> = {}
 /** PTY output for a session (what main would send on pty:data:<id>). */
 const out = (id: string, d: string) => dataHandlers[id]?.(d)
 
@@ -105,6 +106,11 @@ beforeEach(() => {
   vi.mocked(ipc.onPtyExit).mockImplementation((id, cb) => {
     exitHandlers[id] = cb
     return () => delete exitHandlers[id]
+  })
+  nonceHandlers = {}
+  vi.mocked(ipc.onPtyNonce).mockImplementation((id, cb) => {
+    nonceHandlers[id] = cb
+    return () => delete nonceHandlers[id]
   })
   vi.mocked(ipc.ptySpawn).mockResolvedValue({ reattached: false, integrated: false })
 })
@@ -754,6 +760,100 @@ describe("TerminalManager — the remote folder", () => {
     expect(st().sessions[id]!.cwd).toBeUndefined()
     term.titleHandlers.forEach((h) => h("quang@web: ~/ignored"))
     expect(st().sessions[id]!.remoteCwd).toBe("/srv/app") // OSC 7 is authoritative now
+  })
+})
+
+describe("TerminalManager — an integrated host's reports (nonce-checked)", () => {
+  const N = "0123456789abcdef".repeat(2)
+  const hex = (d: string) => Buffer.from(d, "utf8").toString("hex")
+  const P = (d: string, nonce = N) => `${nonce};P;web;${hex(d)}`
+  const integrated = async () => {
+    const started = start({})
+    await flush()
+    nonceHandlers[started.id]!(N) // main saw the host's ok
+    return started
+  }
+
+  it("its folder and command marks, tagged with the confirmed nonce, count", async () => {
+    const { id, term } = await integrated()
+    term.osc[6973]!(P("/srv/llm train#2"))
+    expect(st().sessions[id]!.remoteCwd).toBe("/srv/llm train#2")
+    expect(st().sessions[id]!.remoteCwdVerified).toBe(true)
+    term.osc[6973]!(`${N};C`)
+    expect(st().sessions[id]!.status).toBe("working")
+    term.osc[6973]!(`${N};D;0`)
+    expect(st().sessions[id]!.status).toBe("idle")
+  })
+
+  it("nothing counts before the host confirmed the nonce", async () => {
+    const { id, term } = start({})
+    await flush()
+    term.osc[6973]!(P("/srv/early"))
+    expect(st().sessions[id]!.remoteCwd).toBeUndefined()
+  })
+
+  it("at our shell's prompt, untagged reports and titles are ignored (PS1, a framework, a fake)", async () => {
+    const { id, term } = await integrated()
+    term.osc[6973]!(`${"f".repeat(32)};P;web;${hex("/tmp/fake")}`) // a nested integrated shell
+    expect(st().sessions[id]!.remoteCwd).toBeUndefined()
+    term.osc[6973]!(P("/srv/app"))
+    term.osc[6973]!(`${N};D;0`)
+    term.osc[7]!("file://web/tmp/printed")
+    term.titleHandlers.forEach((h) => h("u@web: ~/printed"))
+    expect(st().sessions[id]).toMatchObject({ remoteCwd: "/srv/app", remoteCwdVerified: true })
+    term.osc[133]!("C")
+    expect(st().sessions[id]!.status).not.toBe("working")
+  })
+
+  it("while a command runs (`exec zsh`, `sudo -i`), its reports are shown but never verified", async () => {
+    const { id, term } = await integrated()
+    term.osc[6973]!(P("/srv/app"))
+    term.osc[6973]!(`${N};C`) // exec zsh: the new shell has no hooks
+    term.titleHandlers.forEach((h) => h("root@web: /etc"))
+    expect(st().sessions[id]!.remoteCwd).toBe("/etc")
+    expect(st().sessions[id]!.remoteCwdVerified).toBeUndefined()
+    term.osc[6973]!(`${N};D;0`) // back in our shell: it reports again
+    term.osc[6973]!(P("/srv/app"))
+    expect(st().sessions[id]).toMatchObject({ remoteCwd: "/srv/app", remoteCwdVerified: true })
+  })
+
+  it("a tagged folder it can't take clears the old one (it moved; where is unknown)", async () => {
+    const { id, term } = await integrated()
+    term.osc[6973]!(P("/srv/app"))
+    term.osc[6973]!(P("/srv/a/../b"))
+    expect(st().sessions[id]!.remoteCwd).toBeUndefined()
+    expect(st().sessions[id]!.remoteCwdVerified).toBeUndefined()
+  })
+
+  it("a new connection starts over: the old nonce and folder are gone", async () => {
+    const { id, term } = await integrated()
+    term.osc[6973]!(P("/srv/app"))
+    exitHandlers[id]!({ code: 0, signal: 0 })
+    await flush()
+    term.type("\r") // reconnect (a plain one this time: no ok)
+    await flush()
+    expect(st().sessions[id]!.remoteCwd).toBeUndefined()
+    term.osc[6973]!(P("/srv/stale")) // the last connection's nonce
+    expect(st().sessions[id]!.remoteCwd).toBeUndefined()
+    term.osc[7]!("file://web/srv/plain") // untagged counts again on a plain connection
+    expect(st().sessions[id]!.remoteCwd).toBe("/srv/plain")
+    expect(st().sessions[id]!.remoteCwdVerified).toBeUndefined()
+  })
+
+  it("a reattach's nonce (sent ahead of the replay, and in the result) counts", async () => {
+    vi.mocked(ipc.ptySpawn).mockResolvedValueOnce({ reattached: true, remoteNonce: N })
+    const { id, term } = start({})
+    await flush()
+    term.osc[6973]!(P("/srv/app"))
+    expect(st().sessions[id]!.remoteCwdVerified).toBe(true)
+  })
+
+  it("a local pane ignores the private code", async () => {
+    const { id, term } = start({ local: true })
+    await flush()
+    nonceHandlers[id]?.(N)
+    term.osc[6973]!(`${N};C`)
+    expect(st().sessions[id]!.status).not.toBe("working")
   })
 })
 

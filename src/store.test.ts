@@ -1108,4 +1108,19 @@ describe("store — remote folder", () => {
     st().setRemoteCwd(r, undefined) // unknown again (a new connection)
     expect(st().sessions[r]).not.toHaveProperty("remoteCwd")
   })
+
+  it("setRemoteCwd marks a folder our integrated shell reported, and unmarks one that isn't", () => {
+    st().setShells([shell])
+    st().newTab(hostShellOption(testHost("web")))
+    const r = firstTab().activeSessionId
+    st().setRemoteCwd(r, "/srv/app", true)
+    expect(st().sessions[r]).toMatchObject({ remoteCwd: "/srv/app", remoteCwdVerified: true })
+    const before = useStore.getState()
+    st().setRemoteCwd(r, "/srv/app", true)
+    expect(useStore.getState()).toBe(before)
+    st().setRemoteCwd(r, "/srv/app") // same folder, but from an untagged report
+    expect(st().sessions[r]).not.toHaveProperty("remoteCwdVerified")
+    st().setRemoteCwd(r, undefined, true) // nothing to vouch for
+    expect(st().sessions[r]).not.toHaveProperty("remoteCwdVerified")
+  })
 })
