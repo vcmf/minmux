@@ -6,9 +6,9 @@ the approaches we could take, and what we decide. Design background lives in
 [`SSH_REMOTES.md`](./SSH_REMOTES.md); build history in
 [`SSH_IMPLEMENTATION_PLAN.md`](./SSH_IMPLEMENTATION_PLAN.md).
 
-Status: **decisions made (2026-09-28)**: every recommendation below was accepted; S0 done. Screenshots are in
-[`ssh-ux/`](./ssh-ux/), taken from the built app with a throwaway HOME, a nine-host
-`~/.ssh/config` and a stub `ssh` that prints a login banner and a prompt.
+Status: **decisions made (2026-09-28)**; S0 done. The recommendations in §3 were accepted with the §6 overrides: per-host colour only when set (no hash), no new picker shortcut, no "Add host…". §5 is the record; build from it. Screenshots are in
+[`ssh-ux/`](./ssh-ux/), taken from the built app with a throwaway HOME, a
+`~/.ssh/config` (nine `Host` entries, eight listable: `*.corp` is a pattern) and a stub `ssh` that prints a login banner and a prompt.
 
 ---
 
@@ -43,7 +43,7 @@ Severity: **P0** broken, **P1** confusing or slow in daily use, **P2** polish.
 | F3  | P1  | A pane sitting at a password prompt reads `idle`, and the host row shows a green "connected" dot. Nothing says "this one is waiting for you", which is the state smterm is otherwise good at surfacing.                                                                                                               | 08         |
 | F4  | P1  | Remote panes look like local ones. The terminal area is identical; the only cues are a 14 px globe and a small `SSH` badge. With a local and a remote pane side by side it is easy to type into the wrong one.                                                                                                        | 04, 05     |
 | F5  | P1  | The Remote list is squeezed into the bottom 40% of the sidebar while the session tree above is mostly empty. Five of eight hosts fit; the sixth is cut off under the legend. There is no search, so a long config means scrolling.                                                                                    | 01         |
-| F6  | P1  | The palette puts the verb first and the host second, and lists every host twice (Connect, Split right). Nine hosts become 18 rows, and long details wrap the label onto two lines ("Connect to / host").                                                                                                              | 03         |
+| F6  | P1  | The palette puts the verb first and the host second, and lists every host twice (Connect, Split right). Eight hosts become 16 rows, and long details wrap the label onto two lines ("Connect to / host").                                                                                                             | 03         |
 | F7  | P1  | "Retry" on a host that is gone from the config can never succeed. The useful actions there are "Open ssh config" and "Close pane".                                                                                                                                                                                    | 10         |
 | F8  | P2  | The picker wraps long aliases mid-word (`prod-db-replica-eu-` / `west-1`) and shows no user@host, so two similar hosts are hard to tell apart.                                                                                                                                                                        | 02         |
 | F9  | P2  | In narrow panes the header truncates the host to one letter (`g…`, `s…`) while the `SSH` badge and four icon buttons keep their space.                                                                                                                                                                                | 06         |
@@ -239,13 +239,13 @@ Match the action to the reason:
 
 ## 4. Proposed phasing
 
-| Step   | Scope                                                                                                                                                                                           | Fixes                     |
-| ------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------- |
-| **S0** | Only send `ESC[?1049l` when the alt buffer is active; test with a normal-screen drop.                                                                                                           | F1                        |
-| **S1** | Remote states on sidebar row, tab and header (Q2-A); plain disconnect message with Enter / Esc (Q4-A); reason-specific actions on failure (Q5).                                                 | F2, F3, F7, F13           |
-| **S2** | Host chip + per-host colour (Q3 A+B); tab title and subline rules (Q7); narrow-header truncation order (chip shrinks last).                                                                     | F4, F9, F10, F11          |
-| **S3** | Host picker: host-first rows, split via modifier, recents and pins; sidebar shows pinned + connected (Q1-C); row context menu; git hosts hidden by default; better empty state and "Add host…". | F5, F6, F8, F12, F15, F16 |
-| **S4** | Bounded auto-retry (Q4-B); "Connect all" on restore (Q6).                                                                                                                                       | F13, F14                  |
+| Step   | Scope                                                                                                                                                                                           | Fixes                            |
+| ------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------- |
+| **S0** | Only send `ESC[?1049l` when the alt buffer is active; test with a normal-screen drop.                                                                                                           | F1                               |
+| **S1** | Remote states on sidebar row, tab and header (Q2-A); plain disconnect message with Enter / Esc (Q4-A); reason-specific actions on failure (Q5).                                                 | F2, F3, F7, F13 (message + keys) |
+| **S2** | Host chip + per-host colour (Q3 A+B); tab title and subline rules (Q7); narrow-header truncation order (chip shrinks last).                                                                     | F4, F9, F10, F11                 |
+| **S3** | Host picker: host-first rows, split via modifier, recents and pins; sidebar shows pinned + connected (Q1-C); row context menu; git hosts hidden by default; better empty state and "Add host…". | F5, F6, F8, F12, F15, F16        |
+| **S4** | Bounded auto-retry (Q4-B); "Connect all" on restore (Q6).                                                                                                                                       | F13 (auto-retry), F14            |
 
 S0 is a bug fix and can go straight onto the epic. S1 and S2 are the ones that change daily
 use. Perf note for every step: all of this is chrome; nothing reads terminal output except the
@@ -280,9 +280,12 @@ prompt heuristic in S1, which runs on the existing throttled output-idle path.
 
 ## 7. Progress
 
-- [x] **S0** banner position after a drop (F1): `ESC[?1049l` only from the alt screen.
-      Checked in the built app on both screens: [normal screen](ssh-ux/s0-drop.png),
-      [inside a TUI](ssh-ux/s0-drop-in-tui.png).
+- [x] **S0** banner position after a drop (F1). After xterm has parsed what's queued (the exit
+      arrives with the last output), leave the alt screen only if still in it, reset input modes,
+      and move the cursor below the last non-blank row if a program left it above. Checked in the
+      built app: a normal drop, a tmux detach (its own `?1049l` in the same chunk as the exit), a
+      `?1047h` program with a homed cursor, and a drop inside a `?1049h` TUI: the line lands below
+      all output each time ([shot](ssh-ux/s0-drop.png)).
 - [ ] S1 remote states, disconnect keys, failure actions
 - [ ] S2 host chip, per-host colour, titles
 - [ ] S3 host picker, pinned + connected sidebar, row menu, hidden git hosts, empty state

@@ -66,3 +66,15 @@ export function cleanError(e: unknown): string {
   s = s.trim() || "unknown error"
   return s.length > MAX_ERROR ? `${s.slice(0, MAX_ERROR)}…` : s
 }
+
+/** A CSI that moves the cursor to the last non-blank row when it sits above it (a program left
+ *  it there), so a banner written next can't overwrite output; "" when it's already below.
+ *  Rows are absolute buffer lines; `baseY` is the top of the screen. */
+export function cursorBelowContent(o: {
+  lastContentRow: number // -1 = nothing written
+  cursorRow: number
+  baseY: number
+}): string {
+  if (o.cursorRow >= o.lastContentRow) return ""
+  return `\x1b[${o.lastContentRow - o.baseY + 1};1H` // 1-based screen row; the banner's \r\n steps below
+}

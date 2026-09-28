@@ -13,7 +13,15 @@ class FakeTerminal {
   written = ""
   dataHandlers: ((d: string) => void)[] = []
   parser = { registerOscHandler: () => ({ dispose() {} }) }
-  buffer = { active: { type: "normal" as "normal" | "alternate", getLine: () => undefined } }
+  buffer = {
+    active: {
+      type: "normal" as "normal" | "alternate",
+      length: 0,
+      baseY: 0,
+      cursorY: 0,
+      getLine: (): { translateToString: (t: boolean) => string } | undefined => undefined,
+    },
+  }
   modes = { mouseTrackingMode: "none" }
   options = {}
   textarea = document.createElement("textarea")
