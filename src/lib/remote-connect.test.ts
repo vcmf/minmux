@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest"
+import { SSH_ERRORS } from "./ssh-errors"
 import {
   afterStart,
+  authPrompt,
+  exitReason,
+  onOutput,
+  remoteStatusUi,
+  tabRemoteBadge,
   banner,
   cleanError,
   cursorBelowContent,
@@ -21,14 +27,15 @@ describe("firstStart", () => {
 })
 
 describe("afterStart", () => {
-  it("started: false means nothing was live → waiting; otherwise live", () => {
+  it("started: false means nothing was live → waiting; otherwise still connecting", () => {
     expect(afterStart("starting", false)).toBe("waiting")
-    expect(afterStart("starting", true)).toBe("live")
-    expect(afterStart("starting", undefined)).toBe("live") // older main / local shape
+    expect(afterStart("starting", true)).toBe("starting") // "connecting" until ssh prints
+    expect(afterStart("starting", undefined)).toBe("starting") // older main / local shape
+    expect(afterStart("starting", true, true)).toBe("live") // a reattached ssh is running
   })
 
   it("never overrides a phase something else already moved it to", () => {
-    for (const p of ["live", "waiting", "closed", "failed"] as RemotePhase[]) {
+    for (const p of ["live", "prompt", "waiting", "closed", "failed"] as RemotePhase[]) {
       expect(afterStart(p, true)).toBe(p)
       expect(afterStart(p, false)).toBe(p)
     }
@@ -61,20 +68,133 @@ describe("isIdle", () => {
 })
 
 describe("idleMessage", () => {
-  it("names the host and what Enter does", () => {
-    expect(idleMessage("waiting", "gpu")).toBe("gpu — press Enter to connect")
+  it("says what happened, then the keys: Enter acts, Esc closes", () => {
+    expect(idleMessage("waiting", "gpu")).toBe(
+      "gpu isn't connected yet. Enter to connect · Esc to close",
+    )
     expect(idleMessage("closed", "gpu", { code: 0, signal: 0 })).toBe(
-      "session on gpu ended — press Enter to start a new one",
+      "Session on gpu ended. Enter to start a new one · Esc to close",
     )
     expect(idleMessage("closed", "gpu", { code: 255, signal: 0 })).toBe(
-      "connection to gpu closed (code 255) — press Enter to reconnect",
+      "Connection to gpu lost (the connection dropped or was refused). Enter to reconnect · Esc to close",
     )
     expect(idleMessage("closed", "gpu", { code: 0, signal: 9 })).toBe(
-      "connection to gpu closed (signal 9) — press Enter to reconnect",
+      "Connection to gpu lost (ssh was stopped (signal 9)). Enter to reconnect · Esc to close",
+    )
+  })
+
+  it("matches a failure to what can fix it", () => {
+    expect(idleMessage("failed", "gpu", { error: SSH_ERRORS.hostGone })).toBe(
+      "gpu isn't in your ssh config any more. Add it back, then Enter to retry · Esc to close",
+    )
+    expect(idleMessage("failed", "gpu", { error: SSH_ERRORS.noSsh })).toBe(
+      "ssh isn't installed or isn't on PATH. Install OpenSSH, then Enter to retry · Esc to close",
+    )
+    expect(idleMessage("failed", "gpu", { error: SSH_ERRORS.newerBuild })).toBe(
+      `gpu can't be opened here: ${SSH_ERRORS.newerBuild}. Esc to close`, // no Enter: it can't work
+    )
+    expect(idleMessage("failed", "gpu", { error: SSH_ERRORS.wslDown("Ubuntu") })).toBe(
+      `${SSH_ERRORS.wslDown("Ubuntu")}. Enter to retry · Esc to close`,
     )
     expect(idleMessage("failed", "gpu", { error: "host not listed" })).toBe(
-      "couldn't connect to gpu: host not listed — press Enter to retry",
+      "couldn't connect to gpu: host not listed. Enter to retry · Esc to close",
     )
+  })
+})
+
+describe("exitReason", () => {
+  it("puts ssh's exit in words", () => {
+    expect(exitReason(255, 0)).toBe("the connection dropped or was refused")
+    expect(exitReason(1, 0)).toBe("ssh exited with code 1")
+    expect(exitReason(0, 15)).toBe("ssh was stopped (signal 15)")
+  })
+})
+
+describe("onOutput", () => {
+  it("output makes a connecting pane live and ends a prompt; nothing else moves", () => {
+    expect(onOutput("starting")).toBe("live")
+    expect(onOutput("prompt")).toBe("live")
+    for (const p of ["live", "waiting", "closed", "failed"] as RemotePhase[]) {
+      expect(onOutput(p)).toBe(p)
+    }
+  })
+})
+
+describe("onKey — Esc and failures that can't be retried", () => {
+  it("Esc closes an idle pane; it's an ordinary key in a live one", () => {
+    for (const p of ["waiting", "closed", "failed"] as RemotePhase[]) {
+      expect(onKey(p, "\u001b")).toBe("close")
+    }
+    expect(onKey("live", "\u001b")).toBe("forward")
+    expect(onKey("prompt", "\u001b")).toBe("forward")
+    expect(onKey("closed", "\u001b[A")).toBe("drop") // an arrow key isn't Esc
+  })
+
+  it("Enter does nothing on a failure no retry can fix", () => {
+    expect(onKey("failed", "\r", "not-here")).toBe("drop")
+    expect(onKey("failed", "\r", "host-gone")).toBe("connect")
+    expect(onKey("failed", "\r", "other")).toBe("connect")
+  })
+})
+
+describe("authPrompt", () => {
+  it("recognises what ssh and common hosts ask for", () => {
+    expect(authPrompt("quang@10.0.4.12's password: ")).toBe("password")
+    expect(authPrompt("Password:")).toBe("password")
+    expect(authPrompt("[sudo] password for quang:")).toBe("password")
+    expect(authPrompt("Enter passphrase for key '/Users/me/.ssh/id_ed25519': ")).toBe("passphrase")
+    expect(authPrompt("Verification code: ")).toBe("code")
+    expect(authPrompt("One-time password (OATH) for `me': ")).toBe("code")
+    expect(authPrompt("Enter PIN for ECDSA-SK key /Users/me/.ssh/id_ecdsa_sk:")).toBe("PIN")
+    expect(
+      authPrompt("Are you sure you want to continue connecting (yes/no/[fingerprint])? "),
+    ).toBe("host key")
+  })
+
+  it("ignores ordinary lines, including ones that merely mention a password", () => {
+    for (const l of [
+      "quang@gpu-box:~$ ",
+      "password reset email sent",
+      "Last login: Sat Sep 27 21:14:02 2026 from 10.0.0.5",
+      "",
+      "x".repeat(400) + "password:",
+    ]) {
+      expect(authPrompt(l)).toBeNull()
+    }
+  })
+})
+
+describe("remoteStatusUi", () => {
+  it("each state has its own dot and word; live shows the ordinary status", () => {
+    expect(remoteStatusUi("starting", "idle")).toEqual({
+      dot: "faint",
+      word: "connecting",
+      pulse: true,
+    })
+    expect(remoteStatusUi("prompt", "idle", "password").word).toBe("password")
+    expect(remoteStatusUi("prompt", "idle").dot).toBe("amber")
+    expect(remoteStatusUi("closed", "idle")).toEqual({
+      dot: "red",
+      word: "disconnected",
+      pulse: false,
+    })
+    expect(remoteStatusUi("failed", "idle").word).toBe("can't connect")
+    expect(remoteStatusUi("waiting", "idle")).toEqual({
+      dot: "hollow",
+      word: "not connected",
+      pulse: false,
+    })
+    expect(remoteStatusUi("live", "working").word).toBe("running")
+    expect(remoteStatusUi(undefined, "idle").word).toBe("idle")
+  })
+})
+
+describe("tabRemoteBadge", () => {
+  it("a prompt beats a drop; nothing remote-wrong → null", () => {
+    expect(tabRemoteBadge(["live", "closed", "prompt"])).toBe("prompt")
+    expect(tabRemoteBadge(["live", "failed"])).toBe("down")
+    expect(tabRemoteBadge(["live", undefined, "starting", "waiting"])).toBeNull()
+    expect(tabRemoteBadge([])).toBeNull()
   })
 })
 

@@ -11,7 +11,8 @@ import type { Settings } from "../settings/schema"
 import { ligatureRanges } from "./ligatures"
 import { withAlpha } from "../settings/themes"
 import { displaySessionTitle } from "../lib/session-label"
-import { allPanes, visibleSessionIds } from "../lib/pane-tree"
+import { allPanes, allSessionIds, visibleSessionIds } from "../lib/pane-tree"
+import { canRetry, sshFailureKind, type SshFailure } from "../lib/ssh-errors"
 import { webglPanes, shouldRebuildAtlas } from "../lib/renderer-policy"
 import { appShortcut, keyAction } from "../lib/terminal-keys"
 import { gridChanged, type Grid } from "../lib/resize"
@@ -21,6 +22,7 @@ import { canType, newShellFlow, onMark, parseMark, type ShellFlow } from "../lib
 import { isMac, isWindows } from "../lib/platform"
 import {
   afterStart,
+  authPrompt,
   banner,
   cleanError,
   cursorBelowContent,
@@ -28,6 +30,7 @@ import {
   idleMessage,
   isIdle,
   onKey,
+  onOutput,
   type RemoteIdle,
   type RemotePhase,
 } from "../lib/remote-connect"
@@ -42,6 +45,7 @@ interface Entry {
   offData?: () => void
   offExit?: () => void
   remote?: RemotePhase // ssh panes only: where the connection is (rules: lib/remote-connect)
+  failure?: SshFailure // with remote = "failed": why, so Enter / Retry only act when they can
   startSeq?: number // bumps per PTY request: a stale answer never moves `remote`
   joinerId?: number
   idleTimer?: ReturnType<typeof setTimeout>
@@ -352,7 +356,7 @@ function requestPty(id: string, entry: Entry, attachOnly: boolean, given?: Sessi
         return
       }
       if (entry.remote) {
-        const next = afterStart(entry.remote, started)
+        const next = afterStart(entry.remote, started, reattached)
         if (next === "waiting") setIdle(id, entry, "waiting")
         else setPhase(id, entry, next)
       }
@@ -385,9 +389,10 @@ function requestPty(id: string, entry: Entry, attachOnly: boolean, given?: Sessi
 }
 
 /** Record an ssh pane's phase here (keys) and in the store (header button, sidebar dot). */
-function setPhase(id: string, entry: Entry, phase: RemotePhase) {
+function setPhase(id: string, entry: Entry, phase: RemotePhase, detail?: string) {
   entry.remote = phase
-  useStore.getState().setRemotePhase(id, phase)
+  if (phase !== "failed") entry.failure = undefined
+  useStore.getState().setRemotePhase(id, phase, detail)
 }
 
 // Undo what a program on the dropped connection left on: mouse tracking, focus events,
@@ -431,12 +436,35 @@ function setIdle(
   const text = banner(idleMessage(phase, label, info))
   if (phase === "closed") writeAfterDrop(entry, text)
   else entry.term.write(text)
-  setPhase(id, entry, phase) // now: keys are gated before the banner is even drawn
+  const failure = phase === "failed" ? sshFailureKind(cleanError(info?.error)) : undefined
+  setPhase(id, entry, phase, failure) // now: keys are gated before the banner is even drawn
+  entry.failure = failure
+}
+
+/** Esc on an idle ssh pane: close it (the surface; its pane goes when it was the last). */
+function closeRemote(id: string) {
+  const st = useStore.getState()
+  const tab = st.tabs.find((t) => allSessionIds(t.root).includes(id))
+  if (tab) st.closeSurface(tab.id, id)
+}
+
+/** Output went quiet on a live ssh pane: if the cursor line is a password / passphrase / code /
+ *  host-key question, show it ("prompt") and, off-screen, raise attention (bell + notification).
+ *  Runs on the idle timer, so once per quiet spell — never per output chunk. */
+function checkAuthPrompt(id: string, entry: Entry, raise: (detail?: string) => void) {
+  const b = entry.term.buffer.active
+  const line = b.getLine(b.baseY + b.cursorY)?.translateToString(true) ?? ""
+  const kind = authPrompt(line)
+  if (!kind) return
+  setPhase(id, entry, "prompt", kind)
+  const label = useStore.getState().sessions[id]?.remote?.label ?? "the host"
+  raise(kind === "host key" ? `${label}: confirm the host key` : `${label} asks for a ${kind}`)
 }
 
 /** Enter (or Connect) on an idle ssh pane: start ssh again under the same session id. */
 function connectRemote(id: string, entry: Entry) {
   if (!isIdle(entry.remote)) return
+  if (entry.remote === "failed" && entry.failure && !canRetry(entry.failure)) return
   const label = useStore.getState().sessions[id]?.remote?.label ?? "the host"
   entry.term.write(banner(`connecting to ${label}…`))
   requestPty(id, entry, false)
@@ -450,6 +478,11 @@ function spawn(session: Session, entry: Entry) {
 
   entry.offData = ipc.onPtyData(session.id, (bytes) => {
     term.write(bytes)
+    // An ssh pane that was connecting (or at a prompt) and now prints is live. One compare
+    // per chunk; the store is only touched on the change.
+    if (entry.remote === "starting" || entry.remote === "prompt") {
+      setPhase(session.id, entry, onOutput(entry.remote))
+    }
     // Generic agent-status heuristic: throttled "output" signal + an idle timer.
     // While a command runs, streaming keeps it "working"; when output goes quiet
     // for IDLE_MS the timer flips it to "attention" (agent waiting for input).
@@ -461,6 +494,7 @@ function spawn(session: Session, entry: Entry) {
     clearTimeout(entry.idleTimer)
     entry.idleTimer = setTimeout(() => {
       useStore.getState().signalSession(session.id, { type: "output-idle" })
+      if (entry.remote === "live") checkAuthPrompt(session.id, entry, raiseAttention)
     }, IDLE_MS)
   })
 
@@ -490,8 +524,9 @@ function spawn(session: Session, entry: Entry) {
   term.onData((data) => {
     // An ssh pane that isn't connected: Enter connects, anything else goes nowhere.
     if (entry.remote) {
-      const k = onKey(entry.remote, data)
+      const k = onKey(entry.remote, data, entry.failure)
       if (k === "connect") return connectRemote(session.id, entry)
+      if (k === "close") return closeRemote(session.id)
       if (k === "drop") return
     }
     ipc.ptyWrite(session.id, data)

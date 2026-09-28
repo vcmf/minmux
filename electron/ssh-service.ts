@@ -6,6 +6,7 @@
 import path from "node:path"
 import type { SshHost } from "../src/types"
 import { mergeSshSettings, parseSshEnv, type SshSettings } from "../src/lib/ssh-validate"
+import { SSH_ERRORS } from "../src/lib/ssh-errors"
 import {
   globMatchesPath,
   loadSshConfig,
@@ -144,31 +145,29 @@ export class SshService {
   private async planOnce(ref: unknown): Promise<SpawnPlan> {
     const hostId = ref && typeof ref === "object" ? (ref as { hostId?: unknown }).hostId : undefined
     if (hostId === "unavailable") {
-      return { error: "this pane's host was saved by a newer smterm and can't be opened here" }
+      return { error: SSH_ERRORS.newerBuild }
     }
     if (typeof hostId === "string" && hostId.startsWith("wsl:") && this.deps.platform !== "win32") {
-      return { error: "WSL hosts can only be opened on Windows" }
+      return { error: SSH_ERRORS.wslOffWindows }
     }
     const trust = await this.trustFor(ref)
     const remote = trustedRemote(ref, trust.hosts)
     if (!remote) {
       return {
-        error: trust.distroDown
-          ? `WSL (${trust.distroDown}) didn't answer — try again once it's running`
-          : "this host is no longer in your ssh config",
+        error: trust.distroDown ? SSH_ERRORS.wslDown(trust.distroDown) : SSH_ERRORS.hostGone,
       }
     }
     const { platform } = this.deps
     const keepAliveSeconds = this.current.keepAliveSeconds
     if (parseSshEnv(remote.env)?.kind === "wsl") {
       const plan = buildSshSpawn(remote, { platform, sshPath: "ssh", keepAliveSeconds })
-      return plan ?? { error: "WSL hosts can only be opened on Windows" }
+      return plan ?? { error: SSH_ERRORS.wslOffWindows }
     }
     const sshPath = await this.deps.sshPath()
-    if (!sshPath) return { error: "ssh isn't installed (or isn't on PATH)" }
+    if (!sshPath) return { error: SSH_ERRORS.noSsh }
     return (
       buildSshSpawn(remote, { platform, sshPath, keepAliveSeconds }) ?? {
-        error: "can't build the ssh command",
+        error: SSH_ERRORS.cantBuild,
       }
     )
   }

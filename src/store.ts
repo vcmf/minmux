@@ -87,6 +87,7 @@ interface AppState {
   shells: ShellOption[]
   sshHosts: SshHost[] // saved ssh hosts (main's list, refreshed when ~/.ssh/config changes)
   remotePhase: Record<string, RemotePhase> // ssh panes started here: where each connection is
+  remoteDetail: Record<string, string> // with it: the prompt ("password") or failure kind
   sshHostsLoaded: boolean // main has answered once (before that, "no hosts" isn't known)
   windowFocused: boolean
   systemDark: boolean // OS prefers a dark colour scheme (drives appearance: "system")
@@ -135,7 +136,7 @@ interface AppState {
   settingsLoaded: boolean // settings.json read at least once (gates theming + first spawns)
   setShells: (shells: ShellOption[]) => void
   setSshHosts: (hosts: SshHost[]) => void
-  setRemotePhase: (sessionId: string, phase: RemotePhase) => void
+  setRemotePhase: (sessionId: string, phase: RemotePhase, detail?: string) => void
   restoreWorkspace: (ws: WorkspaceState) => void
   setRightPanelWidth: (px: number, maxAvail?: number) => void
   newTab: (shell: ShellOption) => void
@@ -247,15 +248,20 @@ function markSeen(sessions: Record<string, Session>, sessionId: string): Record<
 function dropSessions(
   state: AppState,
   ids: string[],
-): Pick<AppState, "sessions" | "paneRoot" | "agentMeta" | "paneGit" | "resume" | "remotePhase"> {
+): Pick<
+  AppState,
+  "sessions" | "paneRoot" | "agentMeta" | "paneGit" | "resume" | "remotePhase" | "remoteDetail"
+> {
   const sessions = { ...state.sessions }
   const paneRoot = { ...state.paneRoot }
   const agentMeta = { ...state.agentMeta }
   const paneGit = { ...state.paneGit }
   const resume = { ...state.resume }
   const remotePhase = { ...state.remotePhase }
+  const remoteDetail = { ...state.remoteDetail }
   for (const id of ids) {
     delete remotePhase[id]
+    delete remoteDetail[id]
     delete resume[id]
     delete paneGit[id]
     delete paneGit[inGitKey(id)] // …and its Claude `in` folder's
@@ -263,7 +269,7 @@ function dropSessions(
     delete paneRoot[id] // don't leak the pane's root override
     delete agentMeta[id] // …or its Claude accent
   }
-  return { sessions, paneRoot, agentMeta, paneGit, resume, remotePhase }
+  return { sessions, paneRoot, agentMeta, paneGit, resume, remotePhase, remoteDetail }
 }
 
 /** Remove a tab; if it was active, the last remaining tab takes over. */
@@ -282,6 +288,7 @@ export const useStore = create<AppState>((set, get) => ({
   sshHosts: [],
   sshHostsLoaded: false,
   remotePhase: {},
+  remoteDetail: {},
   windowFocused: true,
   // Seeded from the OS now (not after an effect) so "system" never starts on the wrong scheme.
   systemDark:
@@ -370,12 +377,19 @@ export const useStore = create<AppState>((set, get) => ({
   },
   setShells: (shells) => set({ shells }),
   // Unchanged, or the session is gone (a late answer after a close) → the same state.
-  setRemotePhase: (sessionId, phase) =>
-    set((state) =>
-      state.remotePhase[sessionId] === phase || !state.sessions[sessionId]
-        ? state
-        : { remotePhase: { ...state.remotePhase, [sessionId]: phase } },
-    ),
+  setRemotePhase: (sessionId, phase, detail) =>
+    set((state) => {
+      if (!state.sessions[sessionId]) return state
+      const samePhase = state.remotePhase[sessionId] === phase
+      if (samePhase && state.remoteDetail[sessionId] === detail) return state
+      const remoteDetail = { ...state.remoteDetail }
+      if (detail === undefined) delete remoteDetail[sessionId]
+      else remoteDetail[sessionId] = detail
+      return {
+        remotePhase: samePhase ? state.remotePhase : { ...state.remotePhase, [sessionId]: phase },
+        remoteDetail,
+      }
+    }),
 
   // Unchanged → the same state object, so nothing is notified.
   setSshHosts: (hosts) =>
@@ -392,6 +406,7 @@ export const useStore = create<AppState>((set, get) => ({
         Object.entries(ws.sessions).map(([id, s]) => [id, s.remote ? { ...s, restored: true } : s]),
       ),
       remotePhase: {},
+      remoteDetail: {},
       tabs: ws.tabs,
       activeTabId: ws.activeTabId,
       ...(ws.rightPanelWidth !== undefined ? { rightPanelWidth: ws.rightPanelWidth } : {}),

@@ -3,6 +3,7 @@ import { useStore } from "../store"
 import { ipc } from "../lib/ipc"
 import { resetStore, testHost, testShell } from "../test/helpers"
 import { hostShellOption } from "../lib/ssh-hosts-ui"
+import { SSH_ERRORS } from "../lib/ssh-errors"
 import type { Session } from "../types"
 
 // A stand-in xterm: records writes and exposes the onData handler (jsdom has no canvas).
@@ -79,12 +80,20 @@ const st = () => useStore.getState()
 const flush = () => new Promise((r) => setTimeout(r, 0))
 
 let exitHandlers: Record<string, (e: { code: number; signal: number }) => void>
+let dataHandlers: Record<string, (d: string) => void>
+/** PTY output for a session (what main would send on pty:data:<id>). */
+const out = (id: string, d: string) => dataHandlers[id]?.(d)
 
 beforeEach(() => {
   resetStore()
   vi.clearAllMocks()
   terms.length = 0
   exitHandlers = {}
+  dataHandlers = {}
+  vi.mocked(ipc.onPtyData).mockImplementation((id, cb) => {
+    dataHandlers[id] = cb as (d: string) => void
+    return () => delete dataHandlers[id]
+  })
   vi.mocked(ipc.onPtyExit).mockImplementation((id, cb) => {
     exitHandlers[id] = cb
     return () => delete exitHandlers[id]
@@ -127,7 +136,7 @@ describe("TerminalManager — ssh restore", () => {
     const { id, term } = start({ restored: true, restore: "on-focus" })
     expect(spawnCalls()[0]!.attachOnly).toBe(true)
     await flush()
-    expect(term.written).toContain("web — press Enter to connect")
+    expect(term.written).toContain("web isn't connected yet. Enter to connect · Esc to close")
     expect(st().remotePhase[id]).toBe("waiting")
 
     term.type("ls\r") // not a bare Enter: dropped, never sent to a host that isn't there
@@ -173,7 +182,9 @@ describe("TerminalManager — ssh exit and reconnect", () => {
     const { id, term } = start({})
     await flush()
     exitHandlers[id]!({ code: 255, signal: 0 })
-    expect(term.written).toContain("connection to web closed (code 255) — press Enter to reconnect")
+    expect(term.written).toContain(
+      "Connection to web lost (the connection dropped or was refused). Enter to reconnect · Esc to close",
+    )
     expect(st().remotePhase[id]).toBe("closed")
     term.type("q")
     expect(ipc.ptyWrite).not.toHaveBeenCalled()
@@ -192,7 +203,7 @@ describe("TerminalManager — ssh exit and reconnect", () => {
     const { id, term } = start({})
     await flush()
     exitHandlers[id]!({ code: 0, signal: 0 })
-    expect(term.written).toContain("session on web ended — press Enter to start a new one")
+    expect(term.written).toContain("Session on web ended. Enter to start a new one · Esc to close")
   })
 
   it("a refused spawn shows why, and Enter (or Connect) retries", async () => {
@@ -281,6 +292,8 @@ describe("TerminalManager — what a dropped connection leaves behind", () => {
     const { id, term } = start({})
     expect(st().remotePhase[id]).toBe("starting")
     await flush()
+    expect(st().remotePhase[id]).toBe("starting") // spawned, but ssh hasn't printed: connecting
+    out(id, "Welcome")
     expect(st().remotePhase[id]).toBe("live")
     exitHandlers[id]!({ code: 255, signal: 0 })
     expect(st().remotePhase[id]).toBe("closed")
@@ -298,5 +311,97 @@ describe("TerminalManager — what a dropped connection leaves behind", () => {
       unread: false,
     })
     expect(spawnCalls().map((c) => c.id)).toContain("not-in-store")
+  })
+})
+
+describe("TerminalManager — ssh prompts, closing, failures", () => {
+  /** Make the fake terminal's cursor line read `text`. */
+  const cursorLine = (term: FakeTerminal, text: string) => {
+    term.buffer.active.getLine = () => ({ translateToString: () => text })
+  }
+
+  it("a password prompt after output goes quiet shows as a prompt; the next output ends it", async () => {
+    vi.useFakeTimers()
+    try {
+      const { id, term } = start({})
+      await vi.advanceTimersByTimeAsync(0)
+      out(id, "quang@10.0.4.12's password: ")
+      cursorLine(term, "quang@10.0.4.12's password: ")
+      expect(st().remotePhase[id]).toBe("live")
+      await vi.advanceTimersByTimeAsync(1300) // the output-idle timer
+      expect(st().remotePhase[id]).toBe("prompt")
+      expect(st().remoteDetail[id]).toBe("password")
+      term.type("hunter2\r") // still goes to ssh: a prompt is live
+      expect(ipc.ptyWrite).toHaveBeenCalledWith(id, "hunter2\r")
+      out(id, "\r\nWelcome to Ubuntu")
+      expect(st().remotePhase[id]).toBe("live")
+      expect(st().remoteDetail[id]).toBeUndefined()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it("an off-screen prompt raises attention (the bell and the background notification)", async () => {
+    vi.useFakeTimers()
+    try {
+      const { id, term } = start({})
+      st().newTab(testShell) // another tab in front: the ssh pane is off-screen
+      await vi.advanceTimersByTimeAsync(0)
+      out(id, "Verification code: ")
+      cursorLine(term, "Verification code: ")
+      await vi.advanceTimersByTimeAsync(1300)
+      expect(st().remoteDetail[id]).toBe("code")
+      expect(st().sessions[id]!.status).toBe("attention")
+      expect(st().sessions[id]!.detail).toBe("web asks for a code")
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it("an ordinary shell prompt going quiet is not a prompt", async () => {
+    vi.useFakeTimers()
+    try {
+      const { id, term } = start({})
+      await vi.advanceTimersByTimeAsync(0)
+      out(id, "quang@gpu-box:~$ ")
+      cursorLine(term, "quang@gpu-box:~$ ")
+      await vi.advanceTimersByTimeAsync(1300)
+      expect(st().remotePhase[id]).toBe("live")
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it("Esc closes a disconnected pane (its surface), keys otherwise go nowhere", async () => {
+    const { id, term } = start({})
+    await flush()
+    out(id, "hi")
+    exitHandlers[id]!({ code: 255, signal: 0 })
+    term.type("\u001b")
+    expect(st().sessions[id]).toBeUndefined() // App then disposes its terminal (kills the PTY)
+  })
+
+  it("a failure that can never work here: no retry by Enter or by Connect", async () => {
+    vi.mocked(ipc.ptySpawn).mockRejectedValueOnce(new Error(SSH_ERRORS.newerBuild))
+    const { id, term } = start({})
+    await flush()
+    expect(st().remotePhase[id]).toBe("failed")
+    expect(st().remoteDetail[id]).toBe("not-here")
+    term.type("\r")
+    TerminalManager.connect(id)
+    expect(spawnCalls()).toHaveLength(1)
+    expect(term.written).toContain("Esc to close")
+    expect(term.written).not.toContain("Enter to retry")
+  })
+
+  it("a host gone from the config records why (the header offers Open ssh config); Enter retries", async () => {
+    vi.mocked(ipc.ptySpawn).mockRejectedValueOnce(new Error(SSH_ERRORS.hostGone))
+    const { id, term } = start({})
+    await flush()
+    expect(st().remoteDetail[id]).toBe("host-gone")
+    term.type("\r")
+    expect(spawnCalls()).toHaveLength(2)
+    expect(st().remotePhase[id]).toBe("starting")
+    expect(st().remoteDetail[id]).toBeUndefined()
   })
 })

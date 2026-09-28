@@ -2,7 +2,7 @@ import type { SessionStatus } from "./session-status"
 
 /** Maps a session status to its mux visual treatment (dot color + word). */
 export interface StatusUi {
-  dot: "accent" | "amber" | "faint"
+  dot: "accent" | "amber" | "faint" | "red" | "hollow"
   word: string
   pulse: boolean
 }

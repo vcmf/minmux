@@ -672,6 +672,13 @@ body {
 .dot.faint {
   background: var(--faint);
 }
+.dot.red {
+  background: var(--red);
+}
+.dot.hollow {
+  background: transparent;
+  box-shadow: inset 0 0 0 1px var(--faint);
+}
 .dot.blue {
   background: var(--blue);
 }

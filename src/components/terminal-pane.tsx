@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react"
 import { useShallow } from "zustand/react/shallow"
 import { Globe, Plugs, Terminal, TerminalWindow, X, Columns, Rows } from "@phosphor-icons/react"
 import { TerminalManager } from "../terminal/terminal-manager"
+import { ipc } from "../lib/ipc"
 import { activeTheme, useStore } from "../store"
 import { sessionColor } from "../lib/session-color"
 import { claudePaneIds } from "../lib/agent-graph"
@@ -9,7 +10,8 @@ import { canMove, findPaneById, type MoveTarget } from "../lib/pane-tree"
 import { dropZone, insertIndex } from "../lib/drop-zone"
 import { displaySessionTitle, shellType } from "../lib/session-label"
 import { remoteBadge } from "../lib/ssh-hosts-ui"
-import { isIdle } from "../lib/remote-connect"
+import { isIdle, remoteStatusUi, type AuthPrompt } from "../lib/remote-connect"
+import { canRetry, type SshFailure } from "../lib/ssh-errors"
 import { statusUi } from "../lib/status-ui"
 import { newSurfaceKey } from "../lib/platform"
 import { resolveDefaultShell } from "../lib/shells"
@@ -47,6 +49,13 @@ export function TerminalPane({ pane, tabId }: { pane: PaneLeaf; tabId: string })
     const p = s.remotePhase[activeId]
     return isIdle(p) ? p : undefined
   })
+  const failure = useStore((s) => s.remoteDetail[activeId]) as SshFailure | undefined
+  // Each surface's remote phase + detail, flat primitives (a surface tab shows its state dot).
+  const remoteFlat = useStore(
+    useShallow((s) =>
+      pane.sessionIds.flatMap((id) => [s.remotePhase[id] ?? "", s.remoteDetail[id] ?? ""]),
+    ),
+  )
   // The focus/attention top rail only disambiguates between panes — pointless when
   // the tab has a single pane, so suppress it there.
   const isSplit = useStore((s) => {
@@ -230,7 +239,13 @@ export function TerminalPane({ pane, tabId }: { pane: PaneLeaf; tabId: string })
           {pane.sessionIds.map((id, i) => {
             const s = surfaces[i]
             const active = id === activeId
-            const ui = statusUi(s?.status ?? "idle")
+            const ui = s?.remote
+              ? remoteStatusUi(
+                  (remoteFlat[i * 2] || undefined) as Parameters<typeof remoteStatusUi>[0],
+                  s.status,
+                  (remoteFlat[i * 2 + 1] || undefined) as AuthPrompt | undefined,
+                )
+              : statusUi(s?.status ?? "idle")
             return (
               <div
                 key={id}
@@ -281,7 +296,9 @@ export function TerminalPane({ pane, tabId }: { pane: PaneLeaf; tabId: string })
                 <span className="pane-title">{displaySessionTitle(s, home)}</span>
                 {/* Hidden surfaces surface their state on the tab (you can't see the pane). */}
                 {/* Static dot (no pulse): don't animate compositing next to a WebGL canvas. */}
-                {!active && s && s.status !== "idle" && <span className={`dot ${ui.dot}`} />}
+                {!active && s && (ui.dot !== "faint" || s.status !== "idle") && (
+                  <span className={`dot ${ui.dot}`} />
+                )}
                 {multi && (
                   <button
                     className="surface-close"
@@ -302,7 +319,17 @@ export function TerminalPane({ pane, tabId }: { pane: PaneLeaf; tabId: string })
           {session?.remote ? remoteBadge(session.remote) : shellType(session?.command ?? "")}
         </span>
         <div className="pane-header-spacer" />
-        {remoteIdle && (
+        {remoteIdle === "failed" && failure === "host-gone" && (
+          <button
+            className="pane-connect"
+            title="Open ~/.ssh/config"
+            onMouseDown={(e) => e.stopPropagation()}
+            onClick={() => ipc.openSshConfig()}
+          >
+            Open ssh config
+          </button>
+        )}
+        {remoteIdle && !(remoteIdle === "failed" && failure && !canRetry(failure)) && (
           <button
             className="pane-connect"
             title={remoteIdle === "waiting" ? "Connect (Enter)" : "Reconnect (Enter)"}

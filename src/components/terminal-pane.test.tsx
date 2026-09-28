@@ -6,6 +6,7 @@ import { allSessionIds } from "../lib/pane-tree"
 import { resetStore, testHost, testShell } from "../test/helpers"
 import { hostShellOption } from "../lib/ssh-hosts-ui"
 import { TerminalManager } from "../terminal/terminal-manager"
+import { ipc } from "../lib/ipc"
 import type { PaneLeaf } from "../types"
 
 vi.mock("../terminal/terminal-manager", () => ({
@@ -346,5 +347,38 @@ describe("TerminalPane — ssh Connect button", () => {
     const { tabId } = mountPane()
     renderPane(tabId)
     expect(screen.queryByTitle(/Connect|Reconnect/)).not.toBeInTheDocument()
+  })
+})
+
+describe("TerminalPane — ssh failure actions", () => {
+  const mountRemote = () => {
+    st().newTab(hostShellOption(testHost("web")))
+    const tab = st().tabs[0]!
+    return { tabId: tab.id, id: tab.activeSessionId }
+  }
+
+  it("a host gone from the config: Open ssh config and Retry", () => {
+    const { tabId, id } = mountRemote()
+    st().setRemotePhase(id, "failed", "host-gone")
+    renderPane(tabId)
+    fireEvent.click(screen.getByText("Open ssh config"))
+    expect(ipc.openSshConfig).toHaveBeenCalled()
+    expect(screen.getByText("Retry")).toBeInTheDocument()
+  })
+
+  it("a failure no retry can fix offers no Retry", () => {
+    const { tabId, id } = mountRemote()
+    st().setRemotePhase(id, "failed", "not-here")
+    renderPane(tabId)
+    expect(screen.queryByText("Retry")).not.toBeInTheDocument()
+    expect(screen.queryByText("Open ssh config")).not.toBeInTheDocument()
+  })
+
+  it("other failures offer Retry only", () => {
+    const { tabId, id } = mountRemote()
+    st().setRemotePhase(id, "failed", "other")
+    renderPane(tabId)
+    expect(screen.getByText("Retry")).toBeInTheDocument()
+    expect(screen.queryByText("Open ssh config")).not.toBeInTheDocument()
   })
 })
