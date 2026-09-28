@@ -328,22 +328,33 @@ other users on the host can read a command line with `ps`:
   quotes: no quote, backslash, `!` or newline, so bash, zsh, fish and csh pass it to `sh`
   unchanged. The only variable part is a hex challenge. It holds no secret and no folder.
 - **The nonce goes through the terminal**: the bootstrap prints `OSC 6973;boot;<challenge>`,
-  turns echo off, prints `OSC 6973;hello;<challenge>` and reads one line for up to 5 s. Main
-  answers it straight from the pty output (`HelloWatch`, a bounded scan that stops once
-  answered): `smterm:<nonce>:-`. A pre-login banner can't trigger it: it doesn't know the
-  challenge. Keys typed early land before the `smterm:` marker and are dropped.
+  turns echo off (raw, `-isig`: ^C is just data meanwhile), prints `OSC 6973;hello;<challenge>`
+  and reads lines, 5 s each. Main answers straight from the pty output (`HelloWatch`, a bounded
+  scan that stops once answered, skipped, or 64 KB after boot): `smterm:<nonce>:-`. A pre-login
+  banner can't trigger it: it doesn't know the challenge. Lines typed during the login (an
+  Enter while the banner scrolls) are read past: only the line with the `smterm:` marker and a
+  32-hex nonce counts. With no answer at all, it waits out a late one (until 2 s of quiet) so
+  it can never be typed into the shell, then prints `skip` and runs the plain shell.
 
 **On the host** the bootstrap (POSIX sh) takes the login shell from `$SHELL`:
 
 - bash: `--rcfile` a temp file that reads what a login bash would (`/etc/profile`, then the
-  first of `.bash_profile` / `.bash_login` / `.profile`), then our hooks.
-- zsh: a temp `ZDOTDIR` (the same `.zshenv` / `.zprofile` wrappers as local), `zsh -l`; our
-  `.zshrc` restores `ZDOTDIR` and sources the user's.
-- The temp dir (`mktemp -d`, 0700, in `$TMPDIR`) is removed by the rc as soon as the shell
-  has read it; the nonce lives in an unexported shell variable. The host's history settings
-  are left alone (`SMTERM_SHARE_HISTORY=0`), and no `claude` wrapper is set up.
+  first of `.bash_profile` / `.bash_login` / `.profile`), then our hooks; `logout` and
+  `~/.bash_logout` work as in a login shell. (`$0` isn't `-bash`, and `shopt login_shell` is
+  off.)
+- zsh: `zsh -l` with a temp `ZDOTDIR` holding only a `.zshenv`. It puts the user's own
+  `ZDOTDIR` back first (as sshd's `zsh -c` left it, so an XDG `~/.config/zsh` works), removes
+  the temp dir, sources the user's `.zshenv` and adds the hooks; zsh then reads the user's
+  `.zprofile` / `.zshrc` / `.zlogin` itself. Nothing started from them (tmux…) inherits our
+  `ZDOTDIR`.
+- The temp dir (`mktemp -d`, 0700, in `$TMPDIR`) is gone as soon as the shell has read it. The
+  nonce is assigned before any user file runs and explicitly unexported (`allexport` can't leak
+  it). The host's history settings are left alone, and no `claude` wrapper is set up.
 - Anything else (fish, dash, no `mktemp` / `stty`, no answer) → `exec $SHELL -l`, the plain
   login shell.
+- Known gaps: a `/etc/zsh/zshenv` that forces `ZDOTDIR` skips our file (no integration, and the
+  0700 temp dir stays until the host clears `$TMPDIR`). sshd prints no MOTD / "Last login"
+  when a command is given, so opted-in hosts don't show them.
 
 **The hooks** are the local ones with every report tagged: `OSC 6973;<nonce>;C`, `;D;<exit>`
 and `;7;file://host/path`, and no standard OSC 7 / 133 at all, so nothing untagged can pass for
@@ -354,8 +365,10 @@ them. At a prompt they use `printf` and builtins only (a test checks for `$(` or
 - A `RemoteCommand` in the config (ssh refuses a command beside it, and the user's wins):
   main asks `ssh -G` with the same options (Match and Include count), for opted-in hosts only,
   cached until the config or settings change. Any doubt → a plain connection.
-- The host has no `sh` (a Windows host, a `ForceCommand`): the pane ends before `boot` and not
-  with ssh's own 255, so it prints a note and connects that host plainly for the rest of the run.
+- The host has no `sh` (a Windows host, a `ForceCommand`): the pane ends on its own before
+  `boot`, within two minutes, not by a signal (closing a pane or ^C at a password prompt
+  doesn't count) and not with ssh's own 255. It prints a note, and main connects that host
+  plainly until its integration setting or the ssh config changes.
 
 **Cost** (local, stub host): the first prompt comes about 30 ms later (bash 9 → 37 ms, zsh
 17 → 51 ms), plus one round trip on a real link; nothing per keystroke or per output byte.

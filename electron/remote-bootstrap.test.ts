@@ -8,12 +8,12 @@ import {
   integrationFailed,
   PAYLOAD,
   REMOTE_BASHRC,
-  REMOTE_ZSHRC,
+  REMOTE_ZSHENV,
   remoteBootstrapCommand,
   remoteHooks,
   SMTERM_OSC,
 } from "./remote-bootstrap"
-import { BASH_HOOKS, ZSH_ZSHRC } from "./shell-integration"
+import { BASH_HOOKS, ZSH_HOOKS } from "./shell-integration"
 
 const C = "c0ffee00c0ffee00"
 const N = "ab".repeat(16)
@@ -69,7 +69,7 @@ describe("remoteBootstrapCommand", () => {
 
 describe("the remote scripts", () => {
   it("tag every report with the nonce, and send no standard (untagged) one", () => {
-    for (const rc of [REMOTE_ZSHRC, REMOTE_BASHRC]) {
+    for (const rc of [REMOTE_ZSHENV, REMOTE_BASHRC]) {
       expect(rc).not.toContain("\\033]133;")
       expect(rc).not.toContain("\\033]7;")
       for (const kind of ["C", "D;%s", "7;file://%s%s"]) {
@@ -79,16 +79,36 @@ describe("the remote scripts", () => {
   })
 
   it("remoteHooks refuses a script whose emits it doesn't recognise", () => {
-    expect(() => remoteHooks(ZSH_ZSHRC.replace("133;C", "133;X"))).toThrow()
+    expect(() => remoteHooks(ZSH_HOOKS.replace("133;C", "133;X"))).toThrow()
     expect(remoteHooks(BASH_HOOKS)).toContain(`]${SMTERM_OSC};%s;D;%s`)
   })
 
   it("leave the host's history alone and remove their temp dir first thing", () => {
-    for (const rc of [REMOTE_ZSHRC, REMOTE_BASHRC]) {
-      expect(rc).toContain("SMTERM_SHARE_HISTORY=0")
+    expect(REMOTE_BASHRC).toContain("SMTERM_SHARE_HISTORY=0")
+    expect(REMOTE_ZSHENV).not.toMatch(/HISTFILE|SHARE_HISTORY/) // zsh gets the user's own files
+    for (const rc of [REMOTE_ZSHENV, REMOTE_BASHRC]) {
       expect(rc.indexOf("rm -rf")).toBeLessThan(rc.indexOf("__smterm_precmd"))
       expect(rc).toMatch(/case "\$\{\w+-\}" in \*\/smterm\.\*\) command rm -rf/) // only ours
     }
+  })
+
+  it("zsh: the user's ZDOTDIR is back before any of their files run, and the nonce stays unexported", () => {
+    const at = (t: string) => REMOTE_ZSHENV.indexOf(t)
+    expect(at("typeset +x __smterm_nonce")).toBeGreaterThan(0)
+    expect(at("ZDOTDIR=$SMTERM_USER_ZDOTDIR")).toBeLessThan(
+      at('source "${ZDOTDIR:-$HOME}/.zshenv"'),
+    )
+    expect(at("typeset +x")).toBeLessThan(at("source"))
+    expect(PAYLOAD).toContain("SMTERM_USER_ZDOTDIR=${ZDOTDIR-}")
+    expect(PAYLOAD).not.toMatch(/\.zshrc|\.zprofile/) // only .zshenv is ours
+  })
+
+  it("bash: the nonce stays unexported, and it leaves like a login shell", () => {
+    expect(REMOTE_BASHRC.indexOf("export -n __smterm_nonce")).toBeLessThan(
+      REMOTE_BASHRC.indexOf("/etc/profile"),
+    )
+    expect(REMOTE_BASHRC).toContain("logout() {")
+    expect(REMOTE_BASHRC).toContain(".bash_logout")
   })
 
   it("bash reads the files a login bash would", () => {
@@ -99,7 +119,7 @@ describe("the remote scripts", () => {
   })
 
   it("start no process at a prompt (the hooks use printf and builtins only)", () => {
-    for (const rc of [REMOTE_ZSHRC, REMOTE_BASHRC]) {
+    for (const rc of [REMOTE_ZSHENV, REMOTE_BASHRC]) {
       for (const fn of ["__smterm_precmd", "__smterm_preexec"]) {
         const start = rc.indexOf(`${fn}() {`)
         expect(start).toBeGreaterThan(0)
@@ -111,7 +131,20 @@ describe("the remote scripts", () => {
 
   it("are valid bash / zsh", () => {
     expect(syntaxOk("bash", REMOTE_BASHRC)).not.toBe(false)
-    expect(syntaxOk("zsh", REMOTE_ZSHRC)).not.toBe(false)
+    expect(syntaxOk("zsh", REMOTE_ZSHENV)).not.toBe(false)
+  })
+})
+
+describe("the handshake (payload)", () => {
+  it("reads past lines typed early and only takes the marked, full-length answer", () => {
+    expect(PAYLOAD).toContain('case "$l" in *smterm:*)')
+    expect(PAYLOAD).toContain('[ ${#n} -ne 32 ] || [ "$l" != "$n:-" ]')
+    expect(PAYLOAD).toContain("stty -echo -icanon -isig") // ^C is data while it waits
+  })
+
+  it("drains a late answer before the plain shell, and says it skipped", () => {
+    expect(PAYLOAD).toMatch(/if \[ -z "\$a" \]; then stty min 0 time 20/)
+    expect(PAYLOAD).toContain(`__smterm_boot || printf '\\033]${SMTERM_OSC};skip;%s`)
   })
 })
 
@@ -145,6 +178,17 @@ describe("HelloWatch", () => {
     expect(w.booted).toBe(false)
   })
 
+  it("stops at a skip (the plain shell), or soon after boot", () => {
+    const skip = new HelloWatch(C, "R")
+    skip.feed(boot + `\x1b]${SMTERM_OSC};skip;${C}\x07`)
+    expect(skip.done).toBe(true)
+    expect(skip.feed(hello)).toBeNull()
+    const quiet = new HelloWatch(C, "R")
+    quiet.feed(boot)
+    quiet.feed("x".repeat(70 << 10))
+    expect(quiet.done).toBe(true)
+  })
+
   it("stops looking after a lot of output", () => {
     const w = new HelloWatch(C, "R")
     w.feed("x".repeat(2 << 20))
@@ -154,10 +198,18 @@ describe("HelloWatch", () => {
 })
 
 describe("integrationFailed", () => {
-  it("only when the bootstrap never ran and ssh itself didn't fail", () => {
-    expect(integrationFailed(false, 1)).toBe(true) // e.g. cmd.exe: 'exec' is not recognized
-    expect(integrationFailed(false, 255)).toBe(false) // auth / connection
-    expect(integrationFailed(true, 0)).toBe(false) // ran (even if it chose a plain shell)
+  const end = { booted: false, exitCode: 1, signal: 0, closedBySmterm: false, livedMs: 3000 }
+  it("a pane that ended on its own, soon, before the bootstrap booted", () => {
+    expect(integrationFailed(end)).toBe(true) // e.g. cmd.exe: 'exec' is not recognized
+  })
+
+  it("never for ssh's own failure, a signal, a pane smterm closed, a boot, or a long session", () => {
+    expect(integrationFailed({ ...end, exitCode: 255 })).toBe(false) // auth / connection
+    expect(integrationFailed({ ...end, exitCode: 0, signal: 1 })).toBe(false) // SIGHUP: closed
+    expect(integrationFailed({ ...end, exitCode: 0, signal: 2 })).toBe(false) // ^C at a prompt
+    expect(integrationFailed({ ...end, closedBySmterm: true })).toBe(false)
+    expect(integrationFailed({ ...end, booted: true })).toBe(false)
+    expect(integrationFailed({ ...end, livedMs: 10 * 60_000 })).toBe(false)
   })
 })
 

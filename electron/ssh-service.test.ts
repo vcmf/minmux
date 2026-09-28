@@ -483,9 +483,13 @@ describe("SshService watching", () => {
         a === "-t" ? "-G" : a,
       ),
     ])
-    expect(probes).toHaveLength(2) // a "no" isn't kept: asked again
-    config = null // ssh -G failed: never guess
+    expect(probes).toHaveLength(1) // a RemoteCommand "no" is kept
+    h.svc.invalidate()
+    config = null // ssh -G failed: never guess, and ask again next time
     expect(await h.svc.spawnPlan(web)).not.toHaveProperty("integration")
+    expect(await h.svc.spawnPlan(web)).not.toHaveProperty("integration")
+    expect(probes).toHaveLength(3)
+    h.svc.invalidate()
     config = "remotecommand none\n"
     expect(await h.svc.spawnPlan(web)).toHaveProperty("integration", true)
     const asked = probes.length
@@ -494,6 +498,32 @@ describe("SshService watching", () => {
     h.svc.invalidate()
     await h.svc.spawnPlan(web)
     expect(probes).toHaveLength(asked + 1) // …like the config
+  })
+
+  it("a host marked plain connects plainly until its setting or the config changes", async () => {
+    let raw = JSON.stringify({ ssh: { integration: ["web"] } })
+    const h = harness({ readSettings: () => raw })
+    h.svc.markPlain("native:web")
+    expect(await h.svc.spawnPlan(web)).not.toHaveProperty("integration")
+    raw = JSON.stringify({ ssh: { integration: [] } })
+    h.svc.settingsChanged()
+    raw = JSON.stringify({ ssh: { integration: ["web"] } })
+    h.svc.settingsChanged() // switched off and on: try again
+    expect(await h.svc.spawnPlan(web)).toHaveProperty("integration", true)
+    h.svc.markPlain("native:web")
+    h.svc.invalidate() // e.g. the ssh config was edited
+    expect(await h.svc.spawnPlan(web)).toHaveProperty("integration", true)
+  })
+
+  it("toggling integration doesn't reload the host list", async () => {
+    let raw = "{}"
+    const h = harness({ readSettings: () => raw })
+    await h.svc.hosts()
+    raw = JSON.stringify({ ssh: { integration: ["web"] } })
+    h.svc.settingsChanged()
+    await vi.advanceTimersByTimeAsync(250)
+    expect(h.onChange).not.toHaveBeenCalled()
+    expect(await h.svc.spawnPlan(web)).toHaveProperty("integration", true)
   })
 
   it("settingsChanged with nothing changed is a no-op", async () => {

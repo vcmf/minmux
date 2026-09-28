@@ -23,6 +23,25 @@ export const ZSH_ZSHENV = [
   "",
 ].join("\n")
 
+/** zsh's prompt hooks (OSC 133 marks, OSC 7, mouse reset): shared by local and remote rcs. */
+export const ZSH_HOOKS = [
+  "# Emit OSC 133 marks so smterm can track command start/finish.",
+  'if [[ -o interactive && -z "${__SMTERM_ZSH_HOOKS-}" ]]; then',
+  "  __SMTERM_ZSH_HOOKS=1",
+  "  autoload -Uz add-zsh-hook 2>/dev/null",
+  "  __smterm_preexec() { printf '\\033]133;C\\007'; }",
+  "  __smterm_precmd() {",
+  "    local ret=$?",
+  "    printf '\\033]133;D;%s\\007' \"$ret\"",
+  '    printf \'\\033]7;file://%s%s\\007\' "${HOST:-localhost}" "$PWD"',
+  "    printf '" + MOUSE_RESET + "' # heal a crashed TUI's leftover mouse mode",
+  "  }",
+  "  add-zsh-hook preexec __smterm_preexec 2>/dev/null",
+  "  add-zsh-hook precmd __smterm_precmd 2>/dev/null",
+  "fi",
+  "",
+].join("\n")
+
 export const ZSH_ZSHRC = [
   "# smterm shell integration — zsh .zshrc",
   "# Restore the user's ZDOTDIR and load their real interactive config first.",
@@ -52,21 +71,7 @@ export const ZSH_ZSHRC = [
   "  setopt SHARE_HISTORY",
   "fi",
   "",
-  "# Emit OSC 133 marks so smterm can track command start/finish.",
-  'if [[ -o interactive && -z "${__SMTERM_ZSH_HOOKS-}" ]]; then',
-  "  __SMTERM_ZSH_HOOKS=1",
-  "  autoload -Uz add-zsh-hook 2>/dev/null",
-  "  __smterm_preexec() { printf '\\033]133;C\\007'; }",
-  "  __smterm_precmd() {",
-  "    local ret=$?",
-  "    printf '\\033]133;D;%s\\007' \"$ret\"",
-  '    printf \'\\033]7;file://%s%s\\007\' "${HOST:-localhost}" "$PWD"',
-  "    printf '" + MOUSE_RESET + "' # heal a crashed TUI's leftover mouse mode",
-  "  }",
-  "  add-zsh-hook preexec __smterm_preexec 2>/dev/null",
-  "  add-zsh-hook precmd __smterm_precmd 2>/dev/null",
-  "fi",
-  "",
+  ZSH_HOOKS,
   "# Route `claude` through smterm's scoped hook settings so the agents board can",
   "# observe its sessions/sub-agents. Only when smterm provides the file; the user's",
   "# global ~/.claude config is untouched. (M6 — docs/design/AGENT_OBSERVABILITY.md)",

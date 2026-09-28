@@ -449,6 +449,7 @@ interface StartSpec {
 
 /** Spawn a node-pty for a session and wire it (buffer, coalescer, exit, drain registry). */
 function startPty(sender: Electron.WebContents, opts: SpawnOpts, spec: StartSpec): SpawnResult {
+  const startedAt = Date.now()
   const proc = pty.spawn(spec.file, spec.args, {
     name: "xterm-256color",
     cols: opts.cols || 80,
@@ -491,9 +492,18 @@ function startPty(sender: Electron.WebContents, opts: SpawnOpts, spec: StartSpec
     diag("pty-exit", { id: opts.id, code: e.exitCode, signal: e.signal ?? 0 })
     rec.coalescer?.flush() // don't lose the final output
     // The host couldn't even start the bootstrap (no sh: a Windows host, a ForceCommand):
-    // say so, and connect plainly from now on (for this run of smterm).
-    if (spec.remote && integrationFailed(spec.remote.hello.booted, e.exitCode)) {
-      noIntegrationHosts.add(spec.remote.hostId)
+    // say so, and connect it plainly until the ssh config or settings change.
+    if (
+      spec.remote &&
+      integrationFailed({
+        booted: spec.remote.hello.booted,
+        exitCode: e.exitCode,
+        signal: e.signal ?? 0,
+        closedBySmterm: sessions.get(opts.id) !== rec || draining(),
+        livedMs: Date.now() - startedAt,
+      })
+    ) {
+      ssh().markPlain(spec.remote.hostId)
       rec.buffer.push(INTEGRATION_FAILED_NOTE)
       emit(rec, INTEGRATION_FAILED_NOTE)
     }
@@ -516,8 +526,6 @@ function startPty(sender: Electron.WebContents, opts: SpawnOpts, spec: StartSpec
 }
 
 const SSH_PROBE_TIMEOUT_MS = 5000 // `ssh -G` reads config only, but WSL may be waking up
-// Hosts whose bootstrap couldn't start this run (see integrationFailed): connect plainly.
-const noIntegrationHosts = new Set<string>()
 
 /** A remote (ssh) session: main rebuilds the command from its own host list. */
 async function spawnRemote(
@@ -536,7 +544,7 @@ async function spawnRemote(
   const hostId = (opts.remote as { hostId: string }).hostId
   let remote: StartSpec["remote"]
   let args = plan.args
-  if (plan.integration && !noIntegrationHosts.has(hostId)) {
+  if (plan.integration) {
     const challenge = randomBytes(8).toString("hex")
     const nonce = randomBytes(16).toString("hex")
     args = [...plan.args, remoteBootstrapCommand(challenge)]

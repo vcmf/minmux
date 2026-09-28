@@ -61,13 +61,10 @@ function orNullAfter<T>(p: Promise<T | null>, ms: number): Promise<T | null> {
 
 type DistroHosts = { hosts: SshConfigHost[]; watch: string[]; globs: string[] }
 
-/** The part of the ssh settings main acts on: a pin or a colour change needs no reload. */
+/** The part of the ssh settings the host list depends on: a pin, a colour or the integration
+ *  list needs no reload (spawns read the current block). */
 const mainKey = (s: SshSettings) =>
-  JSON.stringify([
-    effectiveHidden(s).map((a) => a.toLowerCase()),
-    s.keepAliveSeconds,
-    s.integration,
-  ])
+  JSON.stringify([effectiveHidden(s).map((a) => a.toLowerCase()), s.keepAliveSeconds])
 
 export class SshService {
   private native: Promise<LoadResult> | null = null
@@ -87,6 +84,7 @@ export class SshService {
   private settingsKey: string
   private running: { at: number; list: Promise<string[]> } | null = null
   private probes = new Map<string, Promise<boolean>>() // `ssh -G` verdicts, per generation
+  private plain = new Set<string>() // hostIds whose bootstrap couldn't start (see markPlain)
 
   constructor(private readonly deps: SshDeps) {
     this.current = this.readSettings() ?? mergeSshSettings({})
@@ -122,6 +120,7 @@ export class SshService {
     this.display = null
     this.running = null
     this.probes.clear()
+    this.plain.clear() // the config changed: a fixed host gets integration again
     // Distro paths are re-learned as distros reload; the native ones stay watched until its
     // reload replaces them (a distro load finishing first must not unwatch ~/.ssh/config).
     this.watched.wsl = new Map()
@@ -138,8 +137,11 @@ export class SshService {
     const next = this.readSettings()
     if (!next) return
     const key = mainKey(next)
-    if (key === this.settingsKey) return
+    if (JSON.stringify(next.integration) !== JSON.stringify(this.current.integration)) {
+      this.plain.clear() // switched off and on again: try again
+    }
     this.current = next
+    if (key === this.settingsKey) return
     this.settingsKey = key
     this.invalidate()
   }
@@ -179,7 +181,8 @@ export class SshService {
     }
     const { platform } = this.deps
     const keepAliveSeconds = this.current.keepAliveSeconds
-    const integration = integrationOn(remote.label, this.current.integration)
+    const integration =
+      integrationOn(remote.label, this.current.integration) && !this.plain.has(remote.hostId)
     if (parseSshEnv(remote.env)?.kind === "wsl") {
       const plan = buildSshSpawn(remote, { platform, sshPath: "ssh", keepAliveSeconds })
       return plan ? this.withIntegration(plan, integration) : { error: SSH_ERRORS.wslOffWindows }
@@ -205,15 +208,23 @@ export class SshService {
     const key = JSON.stringify([plan.file, probe])
     let ok = this.probes.get(key)
     if (!ok) {
-      ok = this.deps
+      // null = ssh -G failed (asked again next time); a RemoteCommand is a kept "no".
+      const verdict = this.deps
         .sshEffectiveConfig(plan.file, probe)
-        .then((c) => c !== null && !hasRemoteCommand(c))
-        .catch(() => false)
+        .catch(() => null)
+        .then((c) => (c === null ? null : !hasRemoteCommand(c)))
+      ok = verdict.then((v) => v === true)
       this.probes.set(key, ok)
       const p = ok
-      void p.then((yes) => !yes && this.probes.get(key) === p && this.probes.delete(key))
+      void verdict.then((v) => v === null && this.probes.get(key) === p && this.probes.delete(key))
     }
     return (await ok) ? { ...plan, integration } : plan
+  }
+
+  /** The host couldn't run the bootstrap (no sh): connect it plainly until the ssh config or
+   *  its integration setting changes. */
+  markPlain(hostId: string): void {
+    this.plain.add(hostId)
   }
 
   // null = settings.json doesn't parse right now.

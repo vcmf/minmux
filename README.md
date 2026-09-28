@@ -182,7 +182,8 @@ defaults, it doesn't replace them. Hiding is by alias, so it applies in every en
   `"ssh": { "integration": ["gpu-*", "!gpu-old"] }`). Its next connection starts your bash or
   zsh with smterm's prompt hooks, sent inline for that session: nothing is installed, your
   dotfiles still load, and the temp files are gone once the shell has started. Other shells,
-  a `RemoteCommand` in your config, or a host without `sh` get the plain login shell.
+  a `RemoteCommand` in your config, or a host without `sh` get the plain login shell. (sshd
+  skips the MOTD / "Last login" lines when smterm sends its command.)
   Details and costs: `docs/design/SSH_REMOTES.md` §8.
 - **Prompt-free splits.** Each pane is its own `ssh`. For hosts that ask for a password, let
   OpenSSH share one connection by adding this to your `~/.ssh/config`:

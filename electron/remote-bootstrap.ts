@@ -12,7 +12,7 @@
 //
 // Anything unexpected (not bash or zsh, no mktemp / stty, no answer) → the plain login shell.
 
-import { BASH_HOOKS, ZSH_ZPROFILE, ZSH_ZSHENV, ZSH_ZSHRC } from "./shell-integration"
+import { BASH_HOOKS, ZSH_HOOKS } from "./shell-integration"
 
 /** The private OSC code the remote hooks and the hello use (xterm ignores unknown codes). */
 export const SMTERM_OSC = 6973
@@ -44,24 +44,31 @@ export function remoteHooks(script: string): string {
   return out
 }
 
-// The history and `claude` blocks stay: with SMTERM_SHARE_HISTORY=0 and no
-// SMTERM_CLAUDE_SETTINGS on the host they do nothing — the remote shell's history is its own.
-export const REMOTE_ZSHRC = [
-  "# smterm remote integration — zsh .zshrc. Our temp dir has done its job: remove it.",
+// zsh reads only this file of ours: it gives zsh back the user's own ZDOTDIR (as sshd's
+// `zsh -c` left it), removes our temp dir, and adds the hooks. zsh then reads the user's
+// .zprofile / .zshrc / .zlogin from there, as a plain login would — and nothing started from
+// them (tmux…) inherits a ZDOTDIR pointing at a dir that's gone. The nonce is assigned
+// before any user file runs (so `allexport` there can't export it) and never exported.
+export const REMOTE_ZSHENV = [
+  "# smterm remote integration — zsh .zshenv (the only file of ours zsh reads).",
+  "typeset +x __smterm_nonce",
   'case "${SMTERM_ZDOTDIR-}" in */smterm.*) command rm -rf -- "$SMTERM_ZDOTDIR" 2>/dev/null ;; esac',
-  "SMTERM_SHARE_HISTORY=0",
-  remoteHooks(ZSH_ZSHRC),
-  "unset SMTERM_ZDOTDIR SMTERM_SHELL_INTEGRATION",
-  "",
+  'if [[ -n "${SMTERM_USER_ZDOTDIR-}" ]]; then ZDOTDIR=$SMTERM_USER_ZDOTDIR; else unset ZDOTDIR; fi',
+  "unset SMTERM_ZDOTDIR SMTERM_USER_ZDOTDIR",
+  'if [[ -f "${ZDOTDIR:-$HOME}/.zshenv" ]]; then source "${ZDOTDIR:-$HOME}/.zshenv"; fi',
+  remoteHooks(ZSH_HOOKS),
 ].join("\n")
 
 // bash runs with --rcfile (never a login shell then): read the files a login bash would, in
-// its order. Those usually source ~/.bashrc themselves.
+// its order (those usually source ~/.bashrc themselves), and behave like one on the way out.
 export const REMOTE_BASHRC = [
   "# smterm remote integration — bash (loaded via bash --rcfile). Remove our temp dir.",
+  "export -n __smterm_nonce 2>/dev/null",
   'case "${__SMTERM_TMP-}" in */smterm.*) command rm -rf -- "$__SMTERM_TMP" 2>/dev/null ;; esac',
   "unset __SMTERM_TMP",
-  "SMTERM_SHARE_HISTORY=0",
+  "SMTERM_SHARE_HISTORY=0 # the host's history settings are its own",
+  'logout() { exit "$@"; }',
+  'trap \'[[ -f "$HOME/.bash_logout" ]] && . "$HOME/.bash_logout"\' EXIT',
   "if [[ -f /etc/profile ]]; then source /etc/profile; fi",
   'if [[ -f "$HOME/.bash_profile" ]]; then source "$HOME/.bash_profile"',
   'elif [[ -f "$HOME/.bash_login" ]]; then source "$HOME/.bash_login"',
@@ -75,12 +82,14 @@ const heredoc = (file: string, tag: string, body: string): string[] => {
   return [`__smterm_w <<'${tag}' >> "$d/${file}"`, body, tag]
 }
 
+const osc = (kind: string) => `printf '\\033]${SMTERM_OSC};${kind};%s\\007' "$S"`
+
 // Runs under sh (POSIX: dash, busybox, bash-as-sh). `S` is the challenge (set by the command).
 // Returns only on failure — the command then execs the plain login shell.
 export const PAYLOAD = [
   ": smterm", // the command only evals a decoded payload that starts with this
   "set +f; unset IFS",
-  `printf '\\033]${SMTERM_OSC};boot;%s\\007' "$S"`, // it ran (whatever it picks next)
+  osc("boot"), // it ran (whatever it picks next)
   "# Writes stdin to stdout with builtins only (no cat: each process costs a few ms).",
   "__smterm_w() { while IFS= read -r __l; do printf '%s\\n' \"$__l\"; done; }",
   "__smterm_boot() {",
@@ -90,41 +99,49 @@ export const PAYLOAD = [
   "  m=$(umask); umask 077",
   '  d=$(mktemp -d "${TMPDIR:-/tmp}/smterm.XXXXXXXX" 2>/dev/null) || { umask "$m"; return 1; }',
   '  [ -d "$d" ] || { umask "$m"; return 1; }',
-  "  trap 'command rm -rf -- \"$d\"; exit 1' HUP INT TERM",
-  "  # The handshake: echo off (the answer must never show), raw with a 5 s wait for it.",
+  "  trap 'command rm -rf -- \"$d\"; exit 1' HUP INT QUIT TERM",
+  "  # The handshake: echo off (the answer must never show), raw, keys like ^C read as data,",
+  "  # 5 s for each line. Lines typed before the answer came (an Enter during the login) are",
+  "  # read past: only the one carrying our marker counts.",
   "  t=$(stty -g 2>/dev/null) || t=",
-  '  if [ -z "$t" ] || ! stty -echo -icanon min 0 time 50 2>/dev/null; then',
-  '    command rm -rf -- "$d"; trap - HUP INT TERM; umask "$m"; return 1',
+  '  if [ -z "$t" ] || ! stty -echo -icanon -isig min 0 time 50 2>/dev/null; then',
+  '    command rm -rf -- "$d"; trap - HUP INT QUIT TERM; umask "$m"; return 1',
   "  fi",
-  `  printf '\\033]${SMTERM_OSC};hello;%s\\007' "$S"`,
-  "  l=",
-  "  IFS= read -r l",
+  `  ${osc("hello")}`,
+  "  n= a= k=0",
+  "  while [ $k -lt 32 ]; do",
+  "    k=$((k + 1)); l=",
+  "    IFS= read -r l; r=$?",
+  '    case "$l" in *smterm:*) a=1; l=${l##*smterm:}; n=${l%%:*}; break ;; esac',
+  "    [ $r -eq 0 ] || break # nothing for 5 s",
+  "  done",
+  "  # No answer yet (a very slow link): wait out a late one, so it never lands in the shell.",
+  '  if [ -z "$a" ]; then stty min 0 time 20 2>/dev/null; while IFS= read -r l; do :; done; fi',
   '  stty "$t" 2>/dev/null',
-  "  l=${l##*smterm:} # keys typed before the answer arrived come first: drop them",
-  "  n=${l%%:*}",
-  '  case "$n" in ""|*[!0-9a-f]*) command rm -rf -- "$d"; trap - HUP INT TERM; umask "$m"; return 1 ;; esac',
+  '  case "$n" in *[!0-9a-f]*) n= ;; esac',
+  '  if [ ${#n} -ne 32 ] || [ "$l" != "$n:-" ]; then',
+  '    command rm -rf -- "$d"; trap - HUP INT QUIT TERM; umask "$m"; return 1',
+  "  fi",
   '  case "${s##*/}" in',
   "  zsh)",
-  `    printf '__smterm_nonce=%s\\n' "$n" > "$d/.zshrc"`,
-  ...heredoc(".zshrc", "__SMTERM_ZSHRC__", REMOTE_ZSHRC),
-  ...heredoc(".zshenv", "__SMTERM_ZSHENV__", ZSH_ZSHENV),
-  ...heredoc(".zprofile", "__SMTERM_ZPROFILE__", ZSH_ZPROFILE),
-  '    trap - HUP INT TERM; umask "$m"',
-  "    ZDOTDIR=$d SMTERM_ZDOTDIR=$d SMTERM_SHELL_INTEGRATION=1",
-  "    export ZDOTDIR SMTERM_ZDOTDIR SMTERM_SHELL_INTEGRATION",
+  `    printf '__smterm_nonce=%s\\n' "$n" > "$d/.zshenv"`,
+  ...heredoc(".zshenv", "__SMTERM_ZSHENV__", REMOTE_ZSHENV),
+  '    trap - HUP INT QUIT TERM; umask "$m"',
+  "    SMTERM_USER_ZDOTDIR=${ZDOTDIR-}; ZDOTDIR=$d; SMTERM_ZDOTDIR=$d",
+  "    export SMTERM_USER_ZDOTDIR ZDOTDIR SMTERM_ZDOTDIR",
   '    exec "$s" -l',
   "    ;;",
   "  bash)",
   `    printf '__smterm_nonce=%s\\n' "$n" > "$d/bashrc"`,
   ...heredoc("bashrc", "__SMTERM_BASHRC__", REMOTE_BASHRC),
-  '    trap - HUP INT TERM; umask "$m"',
+  '    trap - HUP INT QUIT TERM; umask "$m"',
   "    __SMTERM_TMP=$d; export __SMTERM_TMP",
   '    exec "$s" --rcfile "$d/bashrc" -i',
   "    ;;",
   "  esac",
-  '  command rm -rf -- "$d"; trap - HUP INT TERM; umask "$m"; return 1',
+  '  command rm -rf -- "$d"; trap - HUP INT QUIT TERM; umask "$m"; return 1',
   "}",
-  "__smterm_boot",
+  `__smterm_boot || ${osc("skip")} # the plain shell, next: main stops looking`,
   "",
 ].join("\n")
 
@@ -156,15 +173,19 @@ export function handshakeReply(nonce: string): string {
 
 // A pane stops looking after this much output: the hello comes right after login, so a
 // session that got this far without one isn't integrated (and scanning costs nothing again).
+// Once the bootstrap booted, its hello (or skip) follows within a few lines.
 const HELLO_SCAN_LIMIT = 1 << 20
+const AFTER_BOOT_LIMIT = 64 << 10
 
 /** Watches a pane's output for its bootstrap: `booted` once the script runs on the host, and
- *  the answer to its hello, once. */
+ *  the answer to its hello, once. Done after the hello, a skip (the plain shell), or a budget. */
 export class HelloWatch {
   private readonly bootMark: string
   private readonly helloMark: string
+  private readonly skipMark: string
   private tail = ""
   private scanned = 0
+  private sinceBoot = 0
   booted = false
   done = false
 
@@ -174,6 +195,7 @@ export class HelloWatch {
   ) {
     this.bootMark = `\x1b]${SMTERM_OSC};boot;${challenge}\x07`
     this.helloMark = `\x1b]${SMTERM_OSC};hello;${challenge}\x07`
+    this.skipMark = `\x1b]${SMTERM_OSC};skip;${challenge}\x07`
   }
 
   /** The answer to write, the first time the hello shows up in `data`; else null. */
@@ -181,26 +203,41 @@ export class HelloWatch {
     if (this.done) return null
     const text = this.tail + data
     if (!this.booted && text.includes(this.bootMark)) this.booted = true
-    if (this.booted && text.includes(this.helloMark)) {
-      this.done = true
-      this.tail = ""
-      return this.reply
+    if (this.booted) {
+      if (text.includes(this.helloMark)) return this.finish(this.reply)
+      if (text.includes(this.skipMark)) return this.finish(null)
+      this.sinceBoot += data.length
+      if (this.sinceBoot > AFTER_BOOT_LIMIT) return this.finish(null)
     }
     this.scanned += data.length
-    if (this.scanned > HELLO_SCAN_LIMIT) {
-      this.done = true
-      this.tail = ""
-      return null
-    }
+    if (this.scanned > HELLO_SCAN_LIMIT) return this.finish(null)
     this.tail = text.slice(-(this.helloMark.length - 1))
     return null
   }
+
+  private finish(reply: string | null): string | null {
+    this.done = true
+    this.tail = ""
+    return reply
+  }
 }
 
-/** The bootstrap never ran: the pane ended before it booted, and not by ssh itself (255 =
- *  connection or auth failure — nothing to do with the host's shell). */
-export const integrationFailed = (booted: boolean, exitCode: number): boolean =>
-  !booted && exitCode !== 255
+// A host without sh fails as soon as it's logged in; much later is the user's own session.
+const QUICK_FAILURE_MS = 120_000
+
+/** The host couldn't run the bootstrap: the pane ended on its own (not closed, replaced or
+ *  quit by smterm, not killed by a signal — ^C at a password prompt), before it booted, soon
+ *  after starting, and not with ssh's own 255 (connection or auth failure). */
+export function integrationFailed(end: {
+  booted: boolean
+  exitCode: number
+  signal: number
+  closedBySmterm: boolean
+  livedMs: number
+}): boolean {
+  if (end.booted || end.closedBySmterm || end.signal) return false
+  return end.exitCode !== 255 && end.livedMs < QUICK_FAILURE_MS
+}
 
 export const INTEGRATION_FAILED_NOTE =
   "\r\n\x1b[2m[smterm] This host couldn't start shell integration; reconnect for a plain shell.\x1b[0m\r\n"
