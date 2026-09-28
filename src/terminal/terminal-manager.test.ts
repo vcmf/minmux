@@ -875,6 +875,24 @@ describe("TerminalManager — reopening a verified folder", () => {
     expect(st().sessions[id]).not.toHaveProperty("remoteCwd")
   })
 
+  it("a reopen no report ever confirms (a hung mount) is dropped, so it can't hang again", async () => {
+    vi.useFakeTimers()
+    try {
+      const { id, term } = start({})
+      await vi.advanceTimersByTimeAsync(0)
+      nonceHandlers[id]!(N)
+      term.osc[6973]!(`${N};P;web;${hex("/mnt/nfs/stuck")}`)
+      exitHandlers[id]!({ code: 0, signal: 0 })
+      await vi.advanceTimersByTimeAsync(0)
+      term.type("\r")
+      expect(st().sessions[id]!.reopenCwd).toEqual({ dir: "/mnt/nfs/stuck", host: "web" })
+      await vi.advanceTimersByTimeAsync(61_000) // the cd hangs: no prompt, no report
+      expect(st().sessions[id]).not.toHaveProperty("reopenCwd")
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it("an unverified folder (a plain host's OSC 7 or title) is never reopened", async () => {
     const { id, term } = start({})
     await flush()

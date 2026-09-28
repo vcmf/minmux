@@ -414,18 +414,22 @@ export const useStore = create<AppState>((set, get) => ({
       const s = state.sessions[sessionId]
       const ok = verified && cwd !== undefined && !!host
       if (!s?.remote) return state
+      // Any report of where the shell is replaces the folder to reopen: the shell is elsewhere
+      // now (a plain connection's own OSC 7 too), or went somewhere we won't reopen.
+      const reported = cwd !== undefined || verified
       const same =
         s.remoteCwd === cwd &&
         !!s.remoteCwdVerified === ok &&
         s.remoteCwdHost === (ok ? host : undefined) &&
-        !(ok && s.reopenCwd)
+        !(reported && s.reopenCwd)
       if (same) return state
       const next: Session = { ...s, remoteCwd: cwd, remoteCwdVerified: ok, remoteCwdHost: host }
       if (cwd === undefined) delete next.remoteCwd
       if (!ok) {
         delete next.remoteCwdVerified
         delete next.remoteCwdHost
-      } else delete next.reopenCwd
+      }
+      if (reported) delete next.reopenCwd
       return { sessions: { ...state.sessions, [sessionId]: next } }
     }),
   setReopenCwd: (sessionId, reopen) =>

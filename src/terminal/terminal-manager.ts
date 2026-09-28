@@ -61,6 +61,7 @@ interface Entry {
   nonce?: string // ssh panes: this connection's nonce (integrated hosts; from main)
   verified?: boolean // …and its shell has reported with it: untagged reports are ignored now
   hostCmd?: boolean // …while a command it started runs (a tagged C, no D yet): see untrusted()
+  reopenTimer?: ReturnType<typeof setTimeout> // drops a reopen no report ever confirmed
   liveSince?: number // when this connection went live (a drop after STABLE_MS may auto-retry)
   retryAttempt: number // the automatic reconnect this connection came from (0 = none)
   retryTotal: number // automatic reconnects since you last connected it yourself (capped)
@@ -78,6 +79,8 @@ interface Entry {
 
 // Output quiet for this long (while a command runs) ⇒ the task is waiting.
 const IDLE_MS = 1200
+// A reopened folder the new connection never reports within this is dropped (see requestPty).
+const REOPEN_REPORT_MS = 60_000
 // Don't spam the store with an "output" signal on every PTY chunk.
 const OUTPUT_SIGNAL_THROTTLE_MS = 150
 
@@ -363,8 +366,17 @@ function requestPty(id: string, entry: Entry, attachOnly: boolean, given?: Sessi
   const reopen = session.remote && !attachOnly ? reopenFor(session) : undefined
   if (session.remote) {
     entry.lastKey = undefined // a new ssh: nothing typed into it yet
-    // Its folder is unknown until the host says (the reopen is a request, not a fact).
-    if (reopen) useStore.getState().setReopenCwd(id, reopen)
+    // Its folder is unknown until the host says (the reopen is a request, not a fact). One
+    // that never gets a report (a hung mount, a shell that doesn't report) is dropped, so it
+    // can't hang every later reconnect and relaunch too.
+    clearTimeout(entry.reopenTimer)
+    if (reopen) {
+      useStore.getState().setReopenCwd(id, reopen)
+      entry.reopenTimer = setTimeout(() => {
+        const now = useStore.getState().sessions[id]?.reopenCwd
+        if (now && now.dir === reopen.dir) useStore.getState().setReopenCwd(id, undefined)
+      }, REOPEN_REPORT_MS)
+    }
     entry.osc7 = false
     entry.cwdHost = undefined
     entry.nonce = undefined // this connection's own, when main says (never the last one's)
@@ -1248,6 +1260,7 @@ export const TerminalManager = {
     connectNow.delete(id)
     if (entry) clearTimeout(entry.resumeTimer)
     if (entry) clearTimeout(entry.retryTimer)
+    if (entry) clearTimeout(entry.reopenTimer)
     // No entry = never started in this renderer (e.g. a hidden surface after a reload), but
     // main may still hold its PTY — always kill (an unknown id is a no-op there).
     if (!entry) return ipc.ptyKill(id)

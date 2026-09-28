@@ -97,7 +97,7 @@ export const REMOTE_ZSHENV = [
   'if [[ -o interactive && -n "$__smterm_reopen" ]]; then',
   "  __smterm_reopen_once() {",
   "    local ret=$?",
-  "    add-zsh-hook -d precmd __smterm_reopen_once",
+  "    precmd_functions=(${precmd_functions:#__smterm_reopen_once})",
   '    __smterm_cd_to "$__smterm_reopen"',
   "    unset __smterm_reopen",
   "    return $ret",
@@ -146,24 +146,27 @@ export const PAYLOAD = [
   osc("boot"), // it ran (whatever it picks next)
   "# Writes stdin to stdout with builtins only (no cat: each process costs a few ms).",
   "__smterm_w() { while IFS= read -r __l; do printf '%s\\n' \"$__l\"; done; }",
-  "# The folder to reopen, from the answer: decoded with arithmetic only, and kept only on the",
-  "# machine that reported it (one alias can reach several: round-robin logins).",
+  "# The folder to reopen, from the answer: kept only on the machine that reported it (one alias",
+  "# can reach several: round-robin logins), then decoded with arithmetic, one byte per field.",
   "__smterm_where() {",
-  "  c=${1%%:*}; r=${1#*:}; __SMTERM_CD=",
-  '  case "$1" in -|*[!a-z0-9:.-]*) return ;; esac',
-  '  case "$r" in ""|*[!0-9a-f]*) return ;; esac',
-  "  [ $((${#r} % 2)) -eq 0 ] || return",
-  "  e=",
-  '  while [ -n "$r" ]; do',
-  '    b=${r%"${r#??}"}; r=${r#??}; v=$((0x$b))',
-  '    e="$e\\\\$((v / 64))$((v / 8 % 8))$((v % 8))"',
-  "  done",
+  "  __SMTERM_CD=",
+  '  case "$1" in -|*[!a-z0-9_:.-]*|*:*:*) return ;; esac',
+  "  c=${1%%:*}; r=${1#*:}",
+  '  case "$r" in ""|*[!0-9a-f.]*) return ;; esac',
   "  h=$(uname -n 2>/dev/null); h=${h%%.*}",
   '  [ "$h" = "$c" ] || h=$(printf %s "$h" | tr A-Z a-z)',
   '  if [ "$h" != "$c" ]; then',
   '    printf \'\\033[2m[smterm] not reopening the folder: this is %s, not %s\\033[0m\\n\' "$h" "$c"',
   "    return",
   "  fi",
+  "  e=",
+  "  set -f; IFS=.",
+  "  for b in $r; do",
+  '    case "$b" in [0-9a-f][0-9a-f]) ;; *) unset IFS; set +f; return ;; esac',
+  "    v=$((0x$b))",
+  '    e="$e\\\\$((v / 64))$((v / 8 % 8))$((v % 8))"',
+  "  done",
+  "  unset IFS; set +f",
   '  __SMTERM_CD=$(printf "$e")',
   "  export __SMTERM_CD",
   "}",
@@ -194,7 +197,9 @@ export const PAYLOAD = [
   '  if [ -z "$a" ]; then stty min 0 time 20 2>/dev/null; while IFS= read -r l; do :; done; fi',
   '  stty "$t" 2>/dev/null',
   '  case "$n" in *[!0-9a-f]*) n= ;; esac',
-  "  x=${l#*:} # `-`, or where to reopen: <host label>:<hex of the folder>",
+  "  x=${l#*:} # `-`, or where to reopen: <host label>:<hex bytes, dot-separated>",
+  '  case "$x" in -|[a-z0-9_-]*:[0-9a-f][0-9a-f]*) ;; *) n= ;; esac',
+  '  case "$x" in *:*:*|*[!a-z0-9_:.-]*) n= ;; esac',
   '  if [ ${#n} -ne 32 ] || [ "$l" != "$n:$x" ]; then',
   '    command rm -rf -- "$d"; trap - HUP INT QUIT TERM; umask "$m"; return 1',
   "  fi",
@@ -243,16 +248,20 @@ export function remoteBootstrapCommand(challenge: string): string {
   return `exec sh -c '${body}'`
 }
 
+// The host decodes a folder field by field in sh: bounded, so a deep path can't stall a login.
+const MAX_REOPEN_BYTES = 1024
+
 /** The line main types in answer to the hello (read with echo off): the nonce, and the folder
- *  to reopen as `<host's first label>:<hex of its bytes>` (or `-`) — hex, so nothing in a
- *  folder's name is ever read by a shell. */
+ *  to reopen as `<host's first label>:<hex bytes, dot-separated>` (or `-`) — hex, so nothing in
+ *  a folder's name is ever read by a shell. */
 export function handshakeReply(nonce: string, reopen?: ReopenCwd): string {
   if (!HEX.test(nonce)) throw new Error("remote bootstrap: nonce must be hex")
   const at = reopen && parseReopen(reopen)
   const label = at?.host.split(".")[0]
+  const bytes = at ? Buffer.from(at.dir, "utf8") : undefined
   const where =
-    at && label && /^[a-z0-9-]+$/.test(label)
-      ? `${label}:${Buffer.from(at.dir, "utf8").toString("hex")}`
+    at && bytes && label && /^[a-z0-9_-]+$/.test(label) && bytes.length <= MAX_REOPEN_BYTES
+      ? `${label}:${[...bytes].map((b) => b.toString(16).padStart(2, "0")).join(".")}`
       : "-"
   return `smterm:${nonce}:${where}\r`
 }

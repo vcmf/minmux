@@ -1138,7 +1138,13 @@ describe("store — remote folder", () => {
     const r = firstTab().activeSessionId
     st().setReopenCwd(r, { dir: "/srv/app", host: "web" })
     expect(reopenFor(st().sessions[r])).toEqual({ dir: "/srv/app", host: "web" })
-    st().setRemoteCwd(r, "/srv/unverified") // shown, but never where a split opens
+    st().setRemoteCwd(r, "/srv/unverified") // the shell is elsewhere: never reopen /srv/app,
+    expect(reopenFor(st().sessions[r])).toBeUndefined() // …and an unverified one never either
+    st().setReopenCwd(r, { dir: "/srv/app", host: "web" })
+    st().setRemoteCwd(r, undefined, true, "web") // it moved somewhere we won't reopen
+    expect(st().sessions[r]).not.toHaveProperty("reopenCwd")
+    st().setReopenCwd(r, { dir: "/srv/app", host: "web" })
+    st().setRemoteCwd(r, undefined) // a new connection starting: not a report, keeps it
     expect(reopenFor(st().sessions[r])).toEqual({ dir: "/srv/app", host: "web" })
     st().setRemoteCwd(r, "/srv/now", true, "web")
     expect(st().sessions[r]).not.toHaveProperty("reopenCwd") // the live one wins now
