@@ -48,6 +48,10 @@ describe("closeConfirmText", () => {
     expect(tab.action).toBe("Close session")
     const one = closeConfirmText({ kind: "tab", tabId: "t", title: "x", count: 1, claude: 0 })
     expect(one.body).toBe("Its terminal will close and whatever runs in it stops.")
+    const oneClaude = closeConfirmText({ kind: "tab", tabId: "t", title: "x", count: 1, claude: 1 })
+    expect(oneClaude.body).toBe(
+      "Claude is running in its terminal. Closing it stops Claude and the shell.",
+    )
     const term = closeConfirmText({
       kind: "terminal",
       tabId: "t",

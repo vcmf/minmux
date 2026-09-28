@@ -490,7 +490,7 @@ function App() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const k = e.key.toLowerCase()
-      // The close-pane dialog is modal: no palette / find / new terminal behind it.
+      // The close confirm is modal: no palette / find / new terminal behind it.
       if (useStore.getState().closeConfirm) return
       if (appShortcut(e, { isMac }) === "new-surface") {
         e.preventDefault()

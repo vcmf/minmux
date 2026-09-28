@@ -322,6 +322,7 @@ export function TerminalPane({ pane, tabId }: { pane: PaneLeaf; tabId: string })
                     title="Close terminal"
                     onMouseDown={(e) => {
                       e.stopPropagation()
+                      e.preventDefault() // keep focus off this button: the dialog focuses its own
                       if (e.button === 0) useStore.getState().requestCloseTerminal(tabId, id)
                     }}
                   >

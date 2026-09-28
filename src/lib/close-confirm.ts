@@ -56,10 +56,12 @@ export function closeConfirmText(c: CloseConfirm): { title: string; body: string
       return {
         title: `Close "${c.title}"?`,
         body:
-          (c.count === 1
-            ? "Its terminal will close and whatever runs in it stops."
-            : `${plural(c.count, "terminal")} will close and whatever runs in them stops.`) +
-          (c.claude ? ` ${c.claude === 1 ? "1 is" : `${c.claude} are`} running Claude.` : ""),
+          c.count === 1
+            ? c.claude
+              ? "Claude is running in its terminal. Closing it stops Claude and the shell."
+              : "Its terminal will close and whatever runs in it stops."
+            : `${plural(c.count, "terminal")} will close and whatever runs in them stops.` +
+              (c.claude ? ` ${c.claude === 1 ? "1 is" : `${c.claude} are`} running Claude.` : ""),
         action: "Close session",
       }
     case "terminal":

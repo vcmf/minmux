@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from "vitest"
-import { render, screen, fireEvent } from "@testing-library/react"
+import { render, screen, fireEvent, act } from "@testing-library/react"
 import { ClosePaneDialog } from "./close-pane-dialog"
 import { useStore } from "../store"
 import { resetStore, testShell } from "../test/helpers"
@@ -86,10 +86,21 @@ describe("ClosePaneDialog — modal", () => {
 })
 
 describe("ClosePaneDialog — sessions and terminals", () => {
+  it("dismisses itself when its target was closed some other way", () => {
+    st().newTab(testShell)
+    const tabId = st().tabs[0]!.id
+    useStore.setState({ closeConfirm: { kind: "tab", tabId, title: "term", count: 2, claude: 0 } })
+    const { container } = render(<ClosePaneDialog />)
+    expect(container).not.toBeEmptyDOMElement()
+    act(() => st().closeTab(tabId))
+    expect(container).toBeEmptyDOMElement()
+    expect(st().closeConfirm).toBeNull()
+  })
+
   it("names the session, the terminal count and a running Claude", () => {
-    useStore.setState({
-      closeConfirm: { kind: "tab", tabId: "t", title: "term", count: 3, claude: 1 },
-    })
+    st().newTab(testShell)
+    const tabId = st().tabs[0]!.id
+    useStore.setState({ closeConfirm: { kind: "tab", tabId, title: "term", count: 3, claude: 1 } })
     render(<ClosePaneDialog />)
     expect(screen.getByText('Close "term"?')).toBeInTheDocument()
     expect(screen.getByText(/3 terminals will close.*1 is running Claude/)).toBeInTheDocument()

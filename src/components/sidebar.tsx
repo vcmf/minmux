@@ -472,8 +472,12 @@ function RowClose({ title, onClose }: { title: string; onClose: () => void }) {
       className="tree-close"
       title={title}
       aria-label={title}
-      // The row's mousedown selects / focuses it — closing must not.
-      onMouseDown={(e) => e.stopPropagation()}
+      // The row's mousedown selects / focuses it — closing must not; nor may the button take
+      // focus (the terminal you're typing in keeps it; a dialog focuses its own button).
+      onMouseDown={(e) => {
+        e.stopPropagation()
+        e.preventDefault()
+      }}
       onClick={(e) => {
         e.stopPropagation()
         onClose()

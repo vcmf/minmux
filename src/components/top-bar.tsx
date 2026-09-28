@@ -227,6 +227,7 @@ export function TopBar() {
                   title="Close tab"
                   onMouseDown={(e) => {
                     e.stopPropagation()
+                    e.preventDefault() // keep focus off this button: the dialog focuses its own
                     useStore.getState().requestCloseTab(tab.id) // asks first when it'd kill work
                   }}
                 >

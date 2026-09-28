@@ -513,7 +513,7 @@ describe("store — surfaces (terminal tabs inside a pane)", () => {
     expect(pane().sessionIds).toHaveLength(2)
   })
 
-  it("closePane closes every terminal in the pane and clears the dialog", () => {
+  it("confirming closes every terminal in the pane and clears the dialog", () => {
     st().newTab(shell)
     st().splitActive("row", shell) // A | B
     st().newSurface() // B pane: [B, B2]
@@ -523,7 +523,7 @@ describe("store — surfaces (terminal tabs inside a pane)", () => {
     if (right.type !== "leaf") throw new Error("expected leaf")
     st().setPaneRoot(right.sessionIds[0]!, "/Users/me/b")
     st().requestClosePane(firstTab().id, right.id)
-    st().closePane(firstTab().id, right.id)
+    st().confirmClose()
     expect(st().closeConfirm).toBeNull()
     expect(firstTab().root.type).toBe("leaf")
     for (const id of right.sessionIds) expect(st().sessions[id]).toBeUndefined()
@@ -1137,6 +1137,20 @@ describe("closing a session / a terminal asks first when it'd kill work", () => 
     expect(st().tabs).toHaveLength(1)
     st().confirmClose()
     expect(st().tabs).toHaveLength(0)
+  })
+
+  it("a pane's header × on its only terminal follows the terminal rule (Claude → ask)", () => {
+    st().newTab(shell)
+    st().splitActive("row")
+    const root = firstTab().root
+    if (root.type !== "split" || root.children[1]!.type !== "leaf")
+      throw new Error("expected split")
+    const right = root.children[1]
+    st().applyAgentEvents([
+      { event: "SessionStart", sessionId: "c", paneId: right.sessionIds[0]!, nested: false },
+    ])
+    st().requestClosePane(firstTab().id, right.id)
+    expect(st().closeConfirm).toMatchObject({ kind: "terminal", claude: true })
   })
 
   it("a single terminal that's running asks too; cancel keeps everything", () => {

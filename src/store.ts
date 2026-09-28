@@ -82,8 +82,6 @@ function focusedCwd(state: AppState): string | undefined {
  *  share one panel — the top-bar icons switch it (click the active one to hide). */
 export type RightView = "files" | "changes" | "agents" | null
 
-/** A pane close awaiting confirmation (the pane holds several terminals). */
-
 interface AppState {
   sessions: Record<string, Session>
   tabs: Tab[]
@@ -638,17 +636,16 @@ export const useStore = create<AppState>((set, get) => ({
     set((state) => {
       const tab = state.tabs.find((t) => t.id === tabId)
       const pane = tab && findPaneById(tab.root, paneId)
-      if (!tab || !pane) return { closeConfirm: null }
+      if (!tab || !pane) return {}
       const dropped = dropSessions(state, pane.sessionIds)
       const root = removePane(tab.root, paneId)
-      if (root === null) return { ...dropped, ...withoutTab(state, tabId), closeConfirm: null }
+      if (root === null) return { ...dropped, ...withoutTab(state, tabId) }
       const activeSessionId = pane.sessionIds.includes(tab.activeSessionId)
         ? firstSessionId(root)
         : tab.activeSessionId
       return {
         ...dropped,
         sessions: markSeen(dropped.sessions, activeSessionId),
-        closeConfirm: null,
         tabs: replaceTab(state.tabs, tabId, (t) => ({ ...t, root, activeSessionId })),
       }
     }),
@@ -660,7 +657,8 @@ export const useStore = create<AppState>((set, get) => ({
     if (pane.sessionIds.length > 1) {
       set({ closeConfirm: { kind: "pane", tabId, paneId, count: pane.sessionIds.length } })
     } else {
-      get().closePane(tabId, paneId)
+      // One terminal: the terminal rule (asks while it runs a command or Claude).
+      get().requestCloseTerminal(tabId, pane.sessionIds[0]!)
     }
   },
 
