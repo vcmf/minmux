@@ -1,10 +1,12 @@
 import { useEffect, useRef } from "react"
 import { useStore } from "../store"
 import { TerminalManager } from "../terminal/terminal-manager"
+import { closeConfirmText } from "../lib/close-confirm"
 
-/** Confirm closing a pane that holds several terminals (all of them get killed). */
+/** "Are you sure?" before a close that would kill work: a pane of several terminals, a
+ *  session, or a running terminal — rules + wording in lib/close-confirm. */
 export function ClosePaneDialog() {
-  const pending = useStore((s) => s.closePaneConfirm)
+  const pending = useStore((s) => s.closeConfirm)
   const confirmRef = useRef<HTMLButtonElement>(null)
   const cancelRef = useRef<HTMLButtonElement>(null)
 
@@ -16,11 +18,11 @@ export function ClosePaneDialog() {
       if (sid) TerminalManager.focus(sid)
     })
   const cancel = () => {
-    useStore.getState().cancelClosePane()
+    useStore.getState().cancelClose()
     refocus()
   }
   const confirm = () => {
-    if (pending) useStore.getState().closePane(pending.tabId, pending.paneId)
+    useStore.getState().confirmClose()
     refocus()
   }
 
@@ -45,6 +47,7 @@ export function ClosePaneDialog() {
   }, [pending])
 
   if (!pending) return null
+  const text = closeConfirmText(pending)
   return (
     <div className="settings-overlay" onMouseDown={cancel}>
       <div
@@ -57,14 +60,14 @@ export function ClosePaneDialog() {
           e.preventDefault()
         }}
       >
-        <h2 id="close-pane-title">Close pane with {pending.count} terminals?</h2>
-        <p>Every terminal in this pane will be closed and its running processes stopped.</p>
+        <h2 id="close-pane-title">{text.title}</h2>
+        <p>{text.body}</p>
         <div className="confirm-actions">
           <button ref={cancelRef} className="btn" onClick={cancel}>
             Cancel
           </button>
           <button ref={confirmRef} className="btn danger" onClick={confirm}>
-            Close pane
+            {text.action}
           </button>
         </div>
       </div>

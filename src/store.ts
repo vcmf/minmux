@@ -22,7 +22,14 @@ import type { RemotePhase } from "./lib/remote-connect"
 import { reduceSignals } from "./lib/session-status"
 import type { SignalEvent } from "./lib/session-status"
 import { inGitKey, paneOfGitKey } from "./lib/agent-dirs"
-import { reduceAgentEvent, emptyGraph, dropPaneSessions } from "./lib/agent-graph"
+import { reduceAgentEvent, emptyGraph, dropPaneSessions, claudePaneIds } from "./lib/agent-graph"
+import {
+  tabCloseConfirm,
+  terminalCloseConfirm,
+  type CloseConfirm,
+  type TerminalState,
+} from "./lib/close-confirm"
+import { tabTitle, displaySessionTitle } from "./lib/session-label"
 import type { AgentEvent, AgentGraph } from "./lib/agent-graph"
 import { defaultSettings, mergeSettings } from "./settings/schema"
 import { saveSettings } from "./settings/io"
@@ -76,11 +83,6 @@ function focusedCwd(state: AppState): string | undefined {
 export type RightView = "files" | "changes" | "agents" | null
 
 /** A pane close awaiting confirmation (the pane holds several terminals). */
-export interface ClosePaneConfirm {
-  tabId: string
-  paneId: string
-  count: number
-}
 
 interface AppState {
   sessions: Record<string, Session>
@@ -112,7 +114,7 @@ interface AppState {
   // is read via its UNC share (captured at open time — the active pane may change after).
   preview: { abs: string; name: string; wsl?: WslContext } | null
   paneRoot: Record<string, string> // per-session Files-panel root override (absent = follow cwd)
-  closePaneConfirm: ClosePaneConfirm | null // multi-surface pane close awaiting the dialog
+  closeConfirm: CloseConfirm | null // a close awaiting the "are you sure?" dialog (lib/close-confirm)
   dragging: { tabId: string; sessionId: string } | null // surface being dragged (drop hints on)
   agentMeta: Record<string, SessionMeta> // per pane: the Claude session's /color + /rename
   paneGit: Record<string, PaneGitInfo> // per terminal: branch + GitHub PR (sidebar)
@@ -161,7 +163,10 @@ interface AppState {
   closeSurface: (tabId: string, sessionId: string) => void // one terminal; last one closes the pane
   closePane: (tabId: string, paneId: string) => void // the pane with all its terminals
   requestClosePane: (tabId: string, paneId: string) => void // confirms first if several terminals
-  cancelClosePane: () => void
+  requestCloseTab: (tabId: string) => void // confirms first: >1 terminals, or its one is running
+  requestCloseTerminal: (tabId: string, sessionId: string) => void // confirms first if running
+  confirmClose: () => void // the dialog's Close
+  cancelClose: () => void
   setDragging: (dragging: { tabId: string; sessionId: string } | null) => void
   setAgentMeta: (sessionId: string, meta: SessionMeta | null) => void
   setPaneGit: (fresh: Record<string, PaneGitInfo>, polled: string[]) => void
@@ -173,6 +178,16 @@ interface AppState {
   setSystemDark: (dark: boolean) => void
   signalSession: (sessionId: string, ev: SignalEvent) => void
   revealTab: (tabId: string) => void
+}
+
+/** What closing needs to know about terminals: running a command, or a live Claude. */
+function terminalStates(state: AppState, ids: string[]): TerminalState[] {
+  const claude = claudePaneIds(state.agents)
+  return ids.map((id) => ({
+    id,
+    running: !!state.sessions[id]?.running,
+    claude: claude.includes(id),
+  }))
 }
 
 /** Whether the user is actively looking at this exact session: window focused +
@@ -342,7 +357,7 @@ export const useStore = create<AppState>((set, get) => ({
   editor: null,
   preview: null,
   paneRoot: {},
-  closePaneConfirm: null,
+  closeConfirm: null,
   dragging: null,
   agentMeta: {},
   paneGit: {},
@@ -623,17 +638,17 @@ export const useStore = create<AppState>((set, get) => ({
     set((state) => {
       const tab = state.tabs.find((t) => t.id === tabId)
       const pane = tab && findPaneById(tab.root, paneId)
-      if (!tab || !pane) return { closePaneConfirm: null }
+      if (!tab || !pane) return { closeConfirm: null }
       const dropped = dropSessions(state, pane.sessionIds)
       const root = removePane(tab.root, paneId)
-      if (root === null) return { ...dropped, ...withoutTab(state, tabId), closePaneConfirm: null }
+      if (root === null) return { ...dropped, ...withoutTab(state, tabId), closeConfirm: null }
       const activeSessionId = pane.sessionIds.includes(tab.activeSessionId)
         ? firstSessionId(root)
         : tab.activeSessionId
       return {
         ...dropped,
         sessions: markSeen(dropped.sessions, activeSessionId),
-        closePaneConfirm: null,
+        closeConfirm: null,
         tabs: replaceTab(state.tabs, tabId, (t) => ({ ...t, root, activeSessionId })),
       }
     }),
@@ -643,13 +658,42 @@ export const useStore = create<AppState>((set, get) => ({
     const pane = tab && findPaneById(tab.root, paneId)
     if (!pane) return
     if (pane.sessionIds.length > 1) {
-      set({ closePaneConfirm: { tabId, paneId, count: pane.sessionIds.length } })
+      set({ closeConfirm: { kind: "pane", tabId, paneId, count: pane.sessionIds.length } })
     } else {
       get().closePane(tabId, paneId)
     }
   },
 
-  cancelClosePane: () => set({ closePaneConfirm: null }),
+  requestCloseTab: (tabId) => {
+    const s = get()
+    const tab = s.tabs.find((t) => t.id === tabId)
+    if (!tab) return
+    const title = tabTitle(tab, s.sessions, s.home)
+    const ask = tabCloseConfirm(tabId, title, terminalStates(s, allSessionIds(tab.root)))
+    if (ask) set({ closeConfirm: ask })
+    else s.closeTab(tabId)
+  },
+
+  requestCloseTerminal: (tabId, sessionId) => {
+    const s = get()
+    const session = s.sessions[sessionId]
+    const [t] = terminalStates(s, [sessionId])
+    if (!session || !t) return
+    const ask = terminalCloseConfirm(tabId, displaySessionTitle(session, s.home), t)
+    if (ask) set({ closeConfirm: ask })
+    else s.closeSurface(tabId, sessionId)
+  },
+
+  confirmClose: () => {
+    const c = get().closeConfirm
+    set({ closeConfirm: null })
+    if (!c) return
+    if (c.kind === "pane") get().closePane(c.tabId, c.paneId)
+    else if (c.kind === "tab") get().closeTab(c.tabId)
+    else get().closeSurface(c.tabId, c.sessionId)
+  },
+
+  cancelClose: () => set({ closeConfirm: null }),
 
   setDragging: (dragging) => set({ dragging }),
 

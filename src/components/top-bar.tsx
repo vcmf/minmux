@@ -227,7 +227,7 @@ export function TopBar() {
                   title="Close tab"
                   onMouseDown={(e) => {
                     e.stopPropagation()
-                    useStore.getState().closeTab(tab.id)
+                    useStore.getState().requestCloseTab(tab.id) // asks first when it'd kill work
                   }}
                 >
                   <X size={11} />

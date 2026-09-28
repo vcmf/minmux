@@ -492,7 +492,7 @@ describe("store — surfaces (terminal tabs inside a pane)", () => {
     const root = firstTab().root
     if (root.type !== "split") throw new Error("expected split")
     st().requestClosePane(firstTab().id, root.children[1].id)
-    expect(st().closePaneConfirm).toBeNull()
+    expect(st().closeConfirm).toBeNull()
     expect(firstTab().root.type).toBe("leaf")
   })
 
@@ -501,10 +501,15 @@ describe("store — surfaces (terminal tabs inside a pane)", () => {
     st().newSurface()
     const p = pane()
     st().requestClosePane(firstTab().id, p.id)
-    expect(st().closePaneConfirm).toEqual({ tabId: firstTab().id, paneId: p.id, count: 2 })
+    expect(st().closeConfirm).toEqual({
+      kind: "pane",
+      tabId: firstTab().id,
+      paneId: p.id,
+      count: 2,
+    })
     expect(pane().sessionIds).toHaveLength(2) // nothing closed yet
-    st().cancelClosePane()
-    expect(st().closePaneConfirm).toBeNull()
+    st().cancelClose()
+    expect(st().closeConfirm).toBeNull()
     expect(pane().sessionIds).toHaveLength(2)
   })
 
@@ -519,7 +524,7 @@ describe("store — surfaces (terminal tabs inside a pane)", () => {
     st().setPaneRoot(right.sessionIds[0]!, "/Users/me/b")
     st().requestClosePane(firstTab().id, right.id)
     st().closePane(firstTab().id, right.id)
-    expect(st().closePaneConfirm).toBeNull()
+    expect(st().closeConfirm).toBeNull()
     expect(firstTab().root.type).toBe("leaf")
     for (const id of right.sessionIds) expect(st().sessions[id]).toBeUndefined()
     expect(st().paneRoot[right.sessionIds[0]!]).toBeUndefined()
@@ -1107,5 +1112,53 @@ describe("store — remote folder", () => {
     expect(st().sessions[l]!.remoteCwd).toBeUndefined()
     st().setRemoteCwd(r, undefined) // unknown again (a new connection)
     expect(st().sessions[r]).not.toHaveProperty("remoteCwd")
+  })
+})
+
+describe("closing a session / a terminal asks first when it'd kill work", () => {
+  beforeEach(() => resetStore())
+  const running = (id: string) =>
+    useStore.setState((x) => ({
+      sessions: { ...x.sessions, [id]: { ...x.sessions[id]!, running: true } },
+    }))
+
+  it("a session with one idle terminal closes right away", () => {
+    st().newTab(shell)
+    st().requestCloseTab(firstTab().id)
+    expect(st().tabs).toHaveLength(0)
+    expect(st().closeConfirm).toBeNull()
+  })
+
+  it("a session with several terminals always asks (top bar and sidebar share this)", () => {
+    st().newTab(shell)
+    st().splitActive("row")
+    st().requestCloseTab(firstTab().id)
+    expect(st().closeConfirm).toMatchObject({ kind: "tab", count: 2 })
+    expect(st().tabs).toHaveLength(1)
+    st().confirmClose()
+    expect(st().tabs).toHaveLength(0)
+  })
+
+  it("a single terminal that's running asks too; cancel keeps everything", () => {
+    st().newTab(shell)
+    running(firstTab().activeSessionId)
+    st().requestCloseTab(firstTab().id)
+    expect(st().closeConfirm).toMatchObject({ kind: "tab", count: 1 })
+    st().cancelClose()
+    expect(st().tabs).toHaveLength(1)
+  })
+
+  it("a terminal closes right away when idle, and asks while running (or with Claude)", () => {
+    st().newTab(shell)
+    st().splitActive("row")
+    const [a, b] = allSessionIds(firstTab().root)
+    st().requestCloseTerminal(firstTab().id, a!)
+    expect(allSessionIds(firstTab().root)).toEqual([b])
+    st().applyAgentEvents([{ event: "SessionStart", sessionId: "c", paneId: b!, nested: false }])
+    st().newSurface()
+    st().requestCloseTerminal(firstTab().id, b!)
+    expect(st().closeConfirm).toMatchObject({ kind: "terminal", sessionId: b, claude: true })
+    st().confirmClose()
+    expect(allSessionIds(firstTab().root)).not.toContain(b)
   })
 })

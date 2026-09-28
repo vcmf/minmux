@@ -39,7 +39,7 @@ export function resetStore() {
     sidebarCollapsed: false,
     git: null,
     paneRoot: {},
-    closePaneConfirm: null,
+    closeConfirm: null,
     dragging: null,
     agentMeta: {},
     agents: emptyGraph,

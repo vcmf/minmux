@@ -553,6 +553,34 @@ body {
 .tree-sub.attn {
   color: var(--amber);
 }
+/* Hover × on sidebar rows: replaces the meta (pane count / status word) in place — no layout
+   shift, no re-render; keyboard focus shows it too. */
+.tree-close {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  flex: none;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: none;
+  color: var(--dim);
+  cursor: pointer;
+}
+.tree-close:hover {
+  background: var(--border2); /* matches the top bar's tab-close hover */
+  color: var(--text);
+}
+.tree-row:hover .tree-close,
+.tree-row:focus-within .tree-close {
+  display: inline-flex;
+}
+.tree-row:hover .tree-swap-meta,
+.tree-row:focus-within .tree-swap-meta {
+  display: none;
+}
 .tree-meta {
   font-size: 10px;
   flex: 0 0 auto;

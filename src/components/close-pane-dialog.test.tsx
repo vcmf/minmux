@@ -21,7 +21,7 @@ const setup = () => {
 
 beforeEach(() => {
   resetStore()
-  useStore.setState({ closePaneConfirm: null })
+  useStore.setState({ closeConfirm: null })
 })
 
 describe("ClosePaneDialog", () => {
@@ -41,7 +41,7 @@ describe("ClosePaneDialog", () => {
     render(<ClosePaneDialog />)
     fireEvent.click(screen.getByRole("button", { name: "Close pane" }))
     expect(st().tabs).toHaveLength(0)
-    expect(st().closePaneConfirm).toBeNull()
+    expect(st().closeConfirm).toBeNull()
   })
 
   it("the confirm button has focus, so Enter confirms", () => {
@@ -54,7 +54,7 @@ describe("ClosePaneDialog", () => {
     setup()
     const { rerender } = render(<ClosePaneDialog />)
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }))
-    expect(st().closePaneConfirm).toBeNull()
+    expect(st().closeConfirm).toBeNull()
     expect(Object.keys(st().sessions)).toHaveLength(2)
 
     const root = st().tabs[0]!.root
@@ -62,7 +62,7 @@ describe("ClosePaneDialog", () => {
     st().requestClosePane(st().tabs[0]!.id, root.id)
     rerender(<ClosePaneDialog />)
     fireEvent.keyDown(window, { key: "Escape" })
-    expect(st().closePaneConfirm).toBeNull()
+    expect(st().closeConfirm).toBeNull()
     expect(Object.keys(st().sessions)).toHaveLength(2)
   })
 })
@@ -70,7 +70,7 @@ describe("ClosePaneDialog", () => {
 describe("ClosePaneDialog — modal", () => {
   beforeEach(() => {
     resetStore()
-    useStore.setState({ closePaneConfirm: null })
+    useStore.setState({ closeConfirm: null })
   })
 
   it("Tab cycles between the dialog's buttons only", () => {
@@ -82,5 +82,17 @@ describe("ClosePaneDialog — modal", () => {
     expect(cancelBtn).toHaveFocus()
     fireEvent.keyDown(cancelBtn, { key: "Tab" })
     expect(confirmBtn).toHaveFocus()
+  })
+})
+
+describe("ClosePaneDialog — sessions and terminals", () => {
+  it("names the session, the terminal count and a running Claude", () => {
+    useStore.setState({
+      closeConfirm: { kind: "tab", tabId: "t", title: "term", count: 3, claude: 1 },
+    })
+    render(<ClosePaneDialog />)
+    expect(screen.getByText('Close "term"?')).toBeInTheDocument()
+    expect(screen.getByText(/3 terminals will close.*1 is running Claude/)).toBeInTheDocument()
+    expect(screen.getByText("Close session")).toBeInTheDocument()
   })
 })

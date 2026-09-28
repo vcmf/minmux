@@ -491,7 +491,7 @@ function App() {
     const onKey = (e: KeyboardEvent) => {
       const k = e.key.toLowerCase()
       // The close-pane dialog is modal: no palette / find / new terminal behind it.
-      if (useStore.getState().closePaneConfirm) return
+      if (useStore.getState().closeConfirm) return
       if (appShortcut(e, { isMac }) === "new-surface") {
         e.preventDefault()
         if (e.repeat) return // holding the chord must not spawn a shell per key-repeat

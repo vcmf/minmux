@@ -118,7 +118,7 @@ describe("TerminalPane — surfaces", () => {
     st().newSurface()
     renderPane(tabId)
     fireEvent.mouseDown(screen.getByTitle("Close pane"))
-    expect(st().closePaneConfirm).toMatchObject({ count: 2 })
+    expect(st().closeConfirm).toMatchObject({ kind: "pane", count: 2 })
     expect(leaf().sessionIds).toHaveLength(2)
   })
 
