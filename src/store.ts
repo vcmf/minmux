@@ -53,7 +53,6 @@ function makeSession(shell: ShellOption, initialCwd?: string): Session {
     // A remote session's shell runs on the host: a local cwd would be meaningless there.
     ...(shell.remote ? { remote: { ...shell.remote } } : { cwd: initialCwd }),
     ...(shell.remote && shell.remoteSaved !== undefined ? { remoteSaved: shell.remoteSaved } : {}),
-    ...(shell.remote && shell.remoteCwd ? { remoteCwd: shell.remoteCwd } : {}),
   }
 }
 
@@ -132,7 +131,7 @@ interface AppState {
   claudeExited: (paneId: string) => void // the pane's shell prompt came back after Claude
   setRightView: (view: RightView) => void
   setSessionCwd: (sessionId: string, cwd: string) => void
-  setRemoteCwd: (sessionId: string, cwd: string) => void // an ssh pane's remote folder
+  setRemoteCwd: (sessionId: string, cwd: string | undefined) => void // undefined = unknown again
   setPaletteOpen: (open: boolean) => void
   setHostPickerOpen: (open: boolean) => void
   /** Open a host: a new tab, or a split of the active pane. Remembered as recent. */
@@ -397,12 +396,14 @@ export const useStore = create<AppState>((set, get) => ({
       if (!s || s.remote || s.cwd === cwd) return {}
       return { sessions: { ...state.sessions, [sessionId]: { ...s, cwd } } }
     }),
-  // Display (and reconnect) only: local panels read `cwd`, which a remote session never has.
+  // Display only: local panels read `cwd`, which a remote session never has.
   setRemoteCwd: (sessionId, cwd) =>
     set((state) => {
       const s = state.sessions[sessionId]
       if (!s?.remote || s.remoteCwd === cwd) return state
-      return { sessions: { ...state.sessions, [sessionId]: { ...s, remoteCwd: cwd } } }
+      const next = { ...s, remoteCwd: cwd }
+      if (cwd === undefined) delete next.remoteCwd
+      return { sessions: { ...state.sessions, [sessionId]: next } }
     }),
   // One overlay at a time: opening either closes the other (⌘K over an open picker).
   setPaletteOpen: (paletteOpen) =>

@@ -347,6 +347,9 @@ prompt heuristic in S1, which runs on the existing throttled output-idle path.
       instead of the host count. [shot](ssh-ux/h1-header-status.png)
 - [x] **H2** Keep both host and folder: a remote pane row reads `<folder> [host]` over the
       remote path (home-relative, front-shortened), or `user@hostname` when the host reports no
-      folder. The folder is learnt from OSC 7, else the Debian/Ubuntu title, and a reconnect, a
-      relaunch or a split opens a login shell there (option A; tmux is the fuller answer, phase
-      2). [shot](ssh-ux/h2-remote-folder.png)
+      folder. The folder comes from OSC 7, else the Debian/Ubuntu title; display only, per
+      connection. **Reopen-on-reconnect (option A) was built and dropped**: the folder comes from
+      pane output that anything can fake, and two review rounds found command injections (fish's
+      `\'`, cmd.exe's `%VAR:~n,m%`) plus a trust problem (steering a login into a folder whose
+      `.envrc`/venv hooks run). Revisit with phase 3 (a nonce-verified OSC 7 from our own
+      integration) or phase 2 (tmux keeps the folder itself). [shot](ssh-ux/h2-remote-folder.png)

@@ -1105,13 +1105,7 @@ describe("store — remote folder", () => {
     const l = st().tabs[1]!.activeSessionId
     st().setRemoteCwd(l, "/x")
     expect(st().sessions[l]!.remoteCwd).toBeUndefined()
-  })
-
-  it("a split of an ssh pane keeps its remote folder", () => {
-    st().setShells([shell])
-    st().newTab(hostShellOption(testHost("web")))
-    st().setRemoteCwd(firstTab().activeSessionId, "~/proj")
-    st().splitActive("row", shell)
-    expect(st().sessions[firstTab().activeSessionId]!.remoteCwd).toBe("~/proj")
+    st().setRemoteCwd(r, undefined) // unknown again (a new connection)
+    expect(st().sessions[r]).not.toHaveProperty("remoteCwd")
   })
 })

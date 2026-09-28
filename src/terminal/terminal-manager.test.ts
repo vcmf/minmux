@@ -107,7 +107,6 @@ beforeEach(() => {
     return () => delete exitHandlers[id]
   })
   vi.mocked(ipc.ptySpawn).mockResolvedValue({ reattached: false, integrated: false })
-  TerminalManager.resetHostMemory()
 })
 
 /** A remote session in the store (restored or not), started the way a pane starts it. */
@@ -756,33 +755,6 @@ describe("TerminalManager — the remote folder", () => {
     term.titleHandlers.forEach((h) => h("quang@web: ~/ignored"))
     expect(st().sessions[id]!.remoteCwd).toBe("/srv/app") // OSC 7 is authoritative now
   })
-
-  it("a reconnect asks main to open it there", async () => {
-    const { id, term } = start({})
-    await flush()
-    term.osc[7]!("file://web/srv/app")
-    exitHandlers[id]!({ code: 0, signal: 0 })
-    await flush()
-    term.type("\r")
-    expect(spawnCalls()[1]!.remoteCwd).toBe("/srv/app")
-  })
-
-  it("a host whose config runs a RemoteCommand refuses it: reconnect once plainly, then stop", async () => {
-    const { id, term } = start({})
-    await flush()
-    term.osc[7]!("file://web/srv/app")
-    exitHandlers[id]!({ code: 0, signal: 0 })
-    await flush()
-    term.type("\r")
-    await flush()
-    term.buffer.active.getLine = () => ({
-      translateToString: () => "Cannot execute command-line and remote command.",
-    })
-    exitHandlers[id]!({ code: 255, signal: 0 })
-    await flush()
-    expect(spawnCalls()).toHaveLength(3)
-    expect(spawnCalls()[2]!.remoteCwd).toBeUndefined()
-  })
 })
 
 describe("TerminalManager — the remote folder, the edges", () => {
@@ -794,61 +766,28 @@ describe("TerminalManager — the remote folder, the edges", () => {
     term.titleHandlers.forEach((h) => h("root@db: /etc"))
     expect(st().sessions[id]!.remoteCwd).toBe("/srv/app")
   })
-
-  it("the RemoteCommand fallback only follows a start that sent a folder", async () => {
-    const { id, term } = start({}) // first connect: no folder known yet, none sent
-    await flush()
-    out(id, "Welcome")
-    term.buffer.active.getLine = () => ({
-      translateToString: () => "Cannot execute command-line and remote command.",
-    })
-    exitHandlers[id]!({ code: 0, signal: 0 })
-    await flush()
-    expect(spawnCalls()).toHaveLength(1) // no surprise reconnect
-  })
-
-  it("a start sent to a folder that ends at once: the next connect goes plain", async () => {
-    const { id, term } = start({})
-    await flush()
-    term.osc[7]!("file://web/srv/app")
-    exitHandlers[id]!({ code: 0, signal: 0 })
-    await flush()
-    term.type("\r") // reconnect: sent /srv/app…
-    await flush()
-    expect(spawnCalls()[1]!.remoteCwd).toBe("/srv/app")
-    exitHandlers[id]!({ code: 1, signal: 0 }) // …and it died straight away (no sh there?)
-    await flush()
-    term.type("\r")
-    expect(spawnCalls()[2]!.remoteCwd).toBeUndefined()
-  })
 })
 
-describe("TerminalManager — RemoteCommand learnt at runtime reaches the host's splits", () => {
-  it("after a conflict, a split of that host doesn't try the folder again", async () => {
+describe("TerminalManager — the remote folder, per connection", () => {
+  it("a new connection forgets the folder (it starts at home) until the shell says again", async () => {
     const { id, term } = start({})
     await flush()
     term.osc[7]!("file://web/srv/app")
+    expect(st().sessions[id]!.remoteCwd).toBe("/srv/app")
     exitHandlers[id]!({ code: 0, signal: 0 })
     await flush()
-    term.type("\r") // sent /srv/app
+    term.type("\r") // reconnect
+    expect(st().sessions[id]!.remoteCwd).toBeUndefined()
+    expect(spawnCalls()[1]).not.toHaveProperty("remoteCwd") // nothing is ever sent back
+    term.osc[7]!("file://other/x") // a new connection may be a new machine name: learnt afresh
+    expect(st().sessions[id]!.remoteCwd).toBe("/x")
+  })
+
+  it("a title's short hostname and OSC 7's full one are the same machine", async () => {
+    const { id, term } = start({})
     await flush()
-    term.buffer.active.getLine = () => ({
-      translateToString: () => "Cannot execute command-line and remote command.",
-    })
-    exitHandlers[id]!({ code: 255, signal: 0 })
-    await flush()
-    const split = start({}) // another pane on web, carrying a folder
-    useStore.setState((s) => ({
-      sessions: { ...s.sessions, [split.id]: { ...s.sessions[split.id]!, remoteCwd: "/srv/app" } },
-    }))
-    split.term.type("") // (already started) — reconnect it:
-    exitHandlers[split.id]!({ code: 0, signal: 0 })
-    await flush()
-    split.term.type("\r")
-    expect(
-      spawnCalls()
-        .filter((c) => c.id === split.id)
-        .every((c) => !c.remoteCwd),
-    ).toBe(true)
+    term.titleHandlers.forEach((h) => h("u@box: ~/src"))
+    term.osc[7]!("file://box.corp.example/home/u/src")
+    expect(st().sessions[id]!.remoteCwd).toBe("/home/u/src")
   })
 })

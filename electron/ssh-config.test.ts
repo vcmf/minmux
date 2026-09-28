@@ -869,14 +869,3 @@ describe("matchPatterns", () => {
     }
   })
 })
-
-describe("RemoteCommand", () => {
-  it("is kept (first value wins); `none` means there isn't one", () => {
-    const hs = hostsOf(
-      "Host a\n  RemoteCommand tmux new -A\nHost b\n  RemoteCommand none\nHost c\n",
-    )
-    expect(hs.find((h) => h.alias === "a")?.remoteCommand).toBe("tmux")
-    expect(hs.find((h) => h.alias === "b")?.remoteCommand).toBeUndefined()
-    expect(hs.find((h) => h.alias === "c")?.remoteCommand).toBeUndefined()
-  })
-})

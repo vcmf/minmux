@@ -495,7 +495,7 @@ async function spawnRemote(
   opts: SpawnOpts,
   outcome: () => PendingOutcome<Electron.WebContents>,
 ): Promise<SpawnResult> {
-  const plan = await ssh().spawnPlan(opts.remote, opts.remoteCwd)
+  const plan = await ssh().spawnPlan(opts.remote)
   // What arrived while we waited: the pane may be gone, resized, typed into, or taken over
   // by a reloaded renderer.
   const meanwhile = outcome()

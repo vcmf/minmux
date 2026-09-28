@@ -152,7 +152,7 @@ describe("buildSshSpawn", () => {
   it("keeps a hostile-looking target after `--` so ssh can't read it as an option", () => {
     const args = buildSshSpawn({ ...remote, target: "-oProxyCommand=evil" }, mac)!.args
     expect(args.indexOf("--")).toBeLessThan(args.indexOf("-oProxyCommand=evil"))
-    expect(args[args.length - 1]).toBe("-oProxyCommand=evil")
+    expect(args.at(-1)).toBe("-oProxyCommand=evil")
   })
 
   it("runs a WSL host through the distro's own ssh, never our shell integration", () => {
@@ -221,40 +221,6 @@ describe("mergeHosts — markHidden", () => {
     expect(hosts.map((h) => [h.hostId, h.hidden ?? false])).toEqual([
       ["native:web", false],
       ["native:github.com", true],
-    ])
-  })
-})
-
-describe("buildSshSpawn — a remote folder", () => {
-  const remote: RemoteRef = { hostId: "native:web", label: "web", target: "web", env: "native" }
-  const mac: SpawnContext = { platform: "darwin", sshPath: "/usr/bin/ssh", keepAliveSeconds: 0 }
-
-  it("appends the fixed cd script after the destination (the folder is its argument)", () => {
-    const args = buildSshSpawn(remote, mac, "~/proj")!.args
-    expect(args.slice(0, 3)).toEqual(["-t", "--", "web"])
-    expect(args).toHaveLength(4)
-    expect(args[3]).toMatch(/^exec sh -c '.*' smterm '~\/proj'$/)
-  })
-
-  it("adds nothing without a folder", () => {
-    expect(buildSshSpawn(remote, mac)!.args).toEqual(["-t", "--", "web"])
-  })
-
-  it("WSL: the command goes after the distro's ssh destination too", () => {
-    const win: SpawnContext = { platform: "win32", sshPath: "ssh.exe", keepAliveSeconds: 0 }
-    const r: RemoteRef = { ...remote, hostId: "wsl:U:web", env: "wsl:U" }
-    const args = buildSshSpawn(r, win, "/srv")!.args
-    expect(args[args.length - 2]).toBe("web")
-    expect(args[args.length - 1]).toContain("smterm '/srv'")
-  })
-})
-
-describe("mergeHosts — RemoteCommand", () => {
-  it("flags a host whose config runs a RemoteCommand", () => {
-    const hosts = merge({ native: [{ alias: "t", remoteCommand: "tmux" }, { alias: "p" }] })
-    expect(hosts.map((h) => [h.hostId, h.remoteCommand ?? false])).toEqual([
-      ["native:t", true],
-      ["native:p", false],
     ])
   })
 })

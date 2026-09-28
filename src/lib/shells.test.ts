@@ -89,15 +89,3 @@ describe("inheritShell — an unreadable saved host", () => {
     })
   })
 })
-
-describe("inheritShell — the remote folder", () => {
-  it("a split of an ssh pane opens in the same remote folder", () => {
-    const remote = { hostId: "native:web", label: "web", target: "web", env: "native" as const }
-    expect(
-      inheritShell([], { command: "ssh", args: [], remote, remoteCwd: "~/proj" }),
-    ).toMatchObject({
-      remote,
-      remoteCwd: "~/proj",
-    })
-  })
-})

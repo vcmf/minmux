@@ -397,15 +397,13 @@ and `terminal-manager` types `claude --resume <id> [--permission-mode m]` at the
 - **The WSL path skips our shell integration** (`wsl.exe … -e ssh`, no `--rcfile`).
 - **One spawn per pane; typed-ahead keys are dropped** while the plan is built, and while a
   pane is waiting/closed/failed only a bare Enter does anything (it reconnects).
-- **`remoteCwd` is display + reconnect only.** It comes from what the host prints (OSC 7,
-  else the Ubuntu-style title) and is never `cwd`, so no local panel reads a remote path. A
-  reconnect / restore / split sends it to main, which re-validates it and appends a fixed
-  `sh -c` script with the folder as its argument (never spliced into code). **Only folders
-  of letters, digits, space and `._-/~+@,:=%#` are ever sent** (`safeForCd`): inside single
-  quotes nothing there is special in any login shell (fish treats `\'` as an escaped quote,
-  csh expands `!`), so the quoting can't be escaped; others are shown, never sent; skipped for a
-  host whose config sets `RemoteCommand`, and dropped for the pane if ssh still says
-  "Cannot execute command-line and remote command".
+- **`remoteCwd` is display only, and per connection.** It comes from what the host prints
+  (OSC 7, else the Ubuntu-style title) and is never `cwd`, so no local panel reads a remote
+  path; a new connection clears it. **Nothing derived from it is ever sent to the host**: an
+  automatic `cd` on reconnect was built and removed, because anything printed in a pane can
+  fake an OSC 7 or a title (reviews found injections under fish and cmd.exe, and a trust issue
+  with `.envrc`-style hooks). Reopening a folder waits for a trustworthy source (phase 3 shell
+  integration) or tmux (phase 2).
 - **Reconnect reuses the session id.** terminal-manager wires xterm listeners once per
   entry and only re-requests the PTY; a second `term.onData` would send every key twice.
 - **`attachOnly`** exists for `restore: "on-focus"`: reattach a live PTY after a reload, but

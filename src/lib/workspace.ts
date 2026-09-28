@@ -1,4 +1,3 @@
-import { cleanRemoteCwd } from "./remote-cwd"
 import type { PaneNode, RemoteRef, Session, Tab } from "../types"
 import { parseRemoteRef, sshLabel } from "./ssh-validate"
 import { clampPanelWidth } from "./right-panel"
@@ -23,7 +22,6 @@ interface PersistedSession {
   cwd?: string
   // An ssh session's host. Older builds ignore it and run `ssh <target>` from command/args.
   remote?: Pick<RemoteRef, "hostId" | "label" | "target" | "env">
-  remoteCwd?: string // where its remote shell was: a relaunch opens it there again
 }
 
 interface PersistedTab {
@@ -86,7 +84,6 @@ export function serializeWorkspace(state: WorkspaceState): PersistedWorkspace {
               },
             }
           : {}),
-      ...(s.remote && s.remoteCwd ? { remoteCwd: s.remoteCwd } : {}),
     })),
     ...(state.rightPanelWidth !== undefined ? { rightPanelWidth: state.rightPanelWidth } : {}),
   }
@@ -177,8 +174,6 @@ export function deserializeWorkspace(input: unknown): WorkspaceState | null {
       // build that wrote it can still read it back).
       if (!remote) sessions[p.id]!.remoteSaved = p.remote
       delete sessions[p.id]!.cwd // a remote session never has a local cwd
-      const remoteCwd = cleanRemoteCwd(p.remoteCwd)
-      if (remoteCwd) sessions[p.id]!.remoteCwd = remoteCwd
     }
   }
 
