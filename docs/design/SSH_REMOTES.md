@@ -373,6 +373,16 @@ them. At a prompt they use `printf` and builtins only (a test checks for `$(` or
 **Cost** (local, stub host): the first prompt comes about 30 ms later (bash 9 → 37 ms, zsh
 17 → 51 ms), plus one round trip on a real link; nothing per keystroke or per output byte.
 
+**In the renderer (P3b)**: main returns the connection's nonce with the spawn result (a
+reattach too). `lib/remote-reports.ts` parses `OSC 6973;<nonce>;C | D;<exit> | 7;<url>`; only
+this connection's nonce counts (a nested integrated shell has its own). The first tagged report
+makes the pane _verified_: from then on its untagged OSC 7 / 133 and title are a program's and
+ignored. Tagged `C` / `D` drive the same status as local OSC 133 (not the local-only Claude
+resume flow), and a tagged folder is stored with `remoteCwdVerified`, the only kind P3c will
+reopen. A new connection forgets the nonce and the folder. Measured: a 300k-line firehose takes
+the same time on an integrated and a plain pane (~615 ms), and the local `SMTERM_PERF` suite
+shows no change against v0.1.39 (e2e ~22–24 MB/s either way, renderer ~50 MB/s).
+
 Still to come: inside tmux (phase 2) the scripts wrap their reports in tmux passthrough
 (`allow-passthrough on`, §6b).
 

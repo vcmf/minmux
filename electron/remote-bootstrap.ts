@@ -14,8 +14,9 @@
 
 import { BASH_HOOKS, ZSH_HOOKS } from "./shell-integration"
 
-/** The private OSC code the remote hooks and the hello use (xterm ignores unknown codes). */
-export const SMTERM_OSC = 6973
+import { SMTERM_OSC } from "../src/lib/remote-reports"
+
+export { SMTERM_OSC }
 
 const HEX = /^[0-9a-f]{16,64}$/
 

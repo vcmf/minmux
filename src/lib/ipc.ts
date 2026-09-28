@@ -18,9 +18,12 @@ export interface Ipc {
   // Resolves { reattached: true } when the session was already live in main and we
   // reconnected the (reloaded) renderer to it, replaying history, instead of spawning.
   // started: false = attachOnly found nothing live to reattach, so nothing was started.
-  ptySpawn: (
-    opts: SpawnOpts,
-  ) => Promise<{ reattached: boolean; integrated?: boolean; started?: boolean }>
+  ptySpawn: (opts: SpawnOpts) => Promise<{
+    reattached: boolean
+    integrated?: boolean
+    started?: boolean
+    remoteNonce?: string // an integrated ssh pane: its shell's reports carry it
+  }>
   onPtyData: (id: string, cb: (data: string) => void) => () => void
   ptyWrite: (id: string, data: string) => void
   ptyResize: (id: string, cols: number, rows: number) => void

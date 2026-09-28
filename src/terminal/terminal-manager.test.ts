@@ -757,6 +757,64 @@ describe("TerminalManager — the remote folder", () => {
   })
 })
 
+describe("TerminalManager — an integrated host's reports (nonce-checked)", () => {
+  const N = "0123456789abcdef".repeat(2)
+  const integrated = async () => {
+    vi.mocked(ipc.ptySpawn).mockResolvedValueOnce({ reattached: false, remoteNonce: N })
+    const started = start({})
+    await flush()
+    return started
+  }
+
+  it("its folder and command marks, tagged with this connection's nonce, count", async () => {
+    const { id, term } = await integrated()
+    term.osc[6973]!(`${N};7;file://web/srv/llm%20train`)
+    expect(st().sessions[id]!.remoteCwd).toBe("/srv/llm train")
+    expect(st().sessions[id]!.remoteCwdVerified).toBe(true)
+    term.osc[6973]!(`${N};C`)
+    expect(st().sessions[id]!.status).toBe("working")
+    term.osc[6973]!(`${N};D;0`)
+    expect(st().sessions[id]!.status).toBe("idle")
+  })
+
+  it("another nonce, or untagged reports once it has spoken, are a program's: ignored", async () => {
+    const { id, term } = await integrated()
+    term.osc[6973]!(`${"f".repeat(32)};7;file://web/tmp/fake`) // a nested integrated shell
+    expect(st().sessions[id]!.remoteCwd).toBeUndefined()
+    term.osc[6973]!(`${N};7;file://web/srv/app`)
+    term.osc[7]!("file://web/tmp/printed") // e.g. `cat` of a file holding escape codes
+    term.titleHandlers.forEach((h) => h("u@web: ~/printed"))
+    expect(st().sessions[id]!.remoteCwd).toBe("/srv/app")
+    term.osc[133]!("C")
+    expect(st().sessions[id]!.status).not.toBe("working")
+  })
+
+  it("an unverified folder is display only, and a new connection starts over", async () => {
+    const { id, term } = await integrated()
+    term.osc[7]!("file://web/srv/before") // before our shell spoke: still shown…
+    expect(st().sessions[id]!.remoteCwd).toBe("/srv/before")
+    expect(st().sessions[id]!.remoteCwdVerified).toBeUndefined() // …but not trusted
+    term.osc[6973]!(`${N};7;file://web/srv/app`)
+    exitHandlers[id]!({ code: 0, signal: 0 })
+    await flush()
+    term.type("\r") // reconnect: a plain one this time (no nonce)
+    await flush()
+    expect(st().sessions[id]!.remoteCwdVerified).toBeUndefined()
+    term.osc[6973]!(`${N};7;file://web/srv/stale`) // the last connection's nonce: ignored
+    expect(st().sessions[id]!.remoteCwd).toBeUndefined()
+    term.osc[7]!("file://web/srv/plain") // untagged counts again on a plain connection
+    expect(st().sessions[id]!.remoteCwd).toBe("/srv/plain")
+  })
+
+  it("a local pane ignores the private code", async () => {
+    vi.mocked(ipc.ptySpawn).mockResolvedValueOnce({ reattached: false, remoteNonce: N })
+    const { id, term } = start({ local: true })
+    await flush()
+    term.osc[6973]!(`${N};C`)
+    expect(st().sessions[id]!.status).not.toBe("working")
+  })
+})
+
 describe("TerminalManager — the remote folder, the edges", () => {
   it("a report from another host (an ssh inside the pane) doesn't move the folder", async () => {
     const { id, term } = start({})

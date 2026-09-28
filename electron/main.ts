@@ -404,7 +404,13 @@ function writeSettings(contents: string): void {
 // The renderer's spawn request (src/lib/ipc.ts), with `remote` untrusted until SshService
 // rebuilds it from main's own list.
 type SpawnOpts = Omit<SpawnRequest, "remote"> & { remote?: unknown }
-type SpawnResult = { reattached: boolean; integrated: boolean; started?: boolean }
+// remoteNonce: an integrated ssh pane's nonce, so the renderer trusts only its shell's reports.
+type SpawnResult = {
+  reattached: boolean
+  integrated: boolean
+  started?: boolean
+  remoteNonce?: string
+}
 
 /** A reloaded renderer asking for a live session: rebind output, resize, replay history. */
 function reattach(rec: PtySession, sender: Electron.WebContents, opts: SpawnOpts): SpawnResult {
@@ -419,7 +425,7 @@ function reattach(rec: PtySession, sender: Electron.WebContents, opts: SpawnOpts
   }
   emit(rec, rec.buffer.dump())
   diag("pty-reattach", { id: opts.id, pid: rec.proc.pid })
-  return { reattached: true, integrated: rec.integrated }
+  return { reattached: true, integrated: rec.integrated, remoteNonce: rec.remoteNonce }
 }
 
 /** The env every spawned PTY starts from (process env + injection + our opt-outs). */
@@ -522,7 +528,7 @@ function startPty(sender: Electron.WebContents, opts: SpawnOpts, spec: StartSpec
   })
   sessions.set(opts.id, rec)
   diag("pty-spawn", { id: opts.id, pid: proc.pid, shell: path.basename(spec.file) })
-  return { reattached: false, integrated: spec.integrated }
+  return { reattached: false, integrated: spec.integrated, remoteNonce: rec.remoteNonce }
 }
 
 const SSH_PROBE_TIMEOUT_MS = 5000 // `ssh -G` reads config only, but WSL may be waking up

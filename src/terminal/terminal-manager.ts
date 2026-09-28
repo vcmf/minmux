@@ -13,6 +13,7 @@ import { withAlpha } from "../settings/themes"
 import { displaySessionTitle } from "../lib/session-label"
 import { allPanes, allSessionIds, visibleSessionIds } from "../lib/pane-tree"
 import { canRetry, sshFailureKind, type SshFailure } from "../lib/ssh-errors"
+import { parseRemoteReport, SMTERM_OSC } from "../lib/remote-reports"
 import { cwdFromOsc7, cwdFromTitle, sameMachine } from "../lib/remote-cwd"
 import { webglPanes, shouldRebuildAtlas } from "../lib/renderer-policy"
 import { appShortcut, keyAction } from "../lib/terminal-keys"
@@ -56,6 +57,8 @@ interface Entry {
   escArmedAt?: number // an idle ssh pane's first Esc: a second within ESC_CLOSE_MS closes it
   osc7?: boolean // ssh panes: the host reports its folder via OSC 7 (the title is a fallback)
   cwdHost?: string // ssh panes: the host this connection's first folder report named
+  nonce?: string // ssh panes: this connection's nonce (integrated hosts; from main)
+  verified?: boolean // …and its shell has reported with it: untagged reports are ignored now
   liveSince?: number // when this connection went live (a drop after STABLE_MS may auto-retry)
   retryAttempt: number // the automatic reconnect this connection came from (0 = none)
   retryTotal: number // automatic reconnects since you last connected it yourself (capped)
@@ -358,6 +361,8 @@ function requestPty(id: string, entry: Entry, attachOnly: boolean, given?: Sessi
     // …and starts at home, not where the last one was: its folder is unknown until it says.
     entry.osc7 = false
     entry.cwdHost = undefined
+    entry.nonce = undefined // this connection's own, when main says (never the last one's)
+    entry.verified = false
     if (!attachOnly) useStore.getState().setRemoteCwd(id, undefined)
     setPhase(id, entry, "starting")
   }
@@ -380,12 +385,13 @@ function requestPty(id: string, entry: Entry, attachOnly: boolean, given?: Sessi
       // (Startup loads settings before any restore spawns, so first spawns are correct.)
       bg: activeTheme(useStore.getState()).terminal.background,
     })
-    .then(({ reattached, integrated, started }) => {
+    .then(({ reattached, integrated, started, remoteNonce }) => {
       if (entries.get(id) !== entry) return // closed meanwhile
       if (entry.startSeq !== seq) {
         entry.flow.replaying = false // superseded (e.g. it exited first): nothing is replaying
         return
       }
+      if (entry.remote) entry.nonce = remoteNonce
       if (entry.remote) {
         const next = afterStart(entry.remote, started, reattached)
         if (next === "waiting") setIdle(id, entry, "waiting")
@@ -725,7 +731,7 @@ function spawn(session: Session, entry: Entry) {
   term.onTitleChange((title) => {
     store.setSessionOscTitle(session.id, title)
     // An ssh pane that doesn't send OSC 7: the Debian / Ubuntu title `user@host: ~/dir`.
-    if (session.remote && !entry.osc7) {
+    if (session.remote && !entry.osc7 && !entry.verified) {
       const at = cwdFromTitle(title)
       if (at && sameHostAsBefore(entry, session.id, at.host))
         useStore.getState().setRemoteCwd(session.id, at.dir)
@@ -736,6 +742,7 @@ function spawn(session: Session, entry: Entry) {
   term.parser.registerOscHandler(7, (data) => {
     // An ssh pane's folder is on the host: shown, never read locally, never sent back.
     if (session.remote) {
+      if (entry.verified) return true // our integrated shell reports its folder itself
       const at = cwdFromOsc7(data)
       if (at && sameHostAsBefore(entry, session.id, at.host)) {
         entry.osc7 = true // authoritative from now on: the title is only a fallback
@@ -774,8 +781,26 @@ function spawn(session: Session, entry: Entry) {
   // Terminal bell — a generic "waiting on you" from readline/prompts/agents.
   term.onBell(() => raiseAttention())
 
+  // An integrated ssh pane's own shell (docs/design/SSH_REMOTES.md §8): its reports carry this
+  // connection's nonce, so a program printing escape codes can't pass for them. Once one has
+  // come, the untagged OSC 7 / 133 / title on this pane are a program's, and ignored.
+  term.parser.registerOscHandler(SMTERM_OSC, (data) => {
+    if (!session.remote) return true
+    const r = parseRemoteReport(data, entry.nonce)
+    if (!r) return true
+    entry.verified = true
+    if (r.kind === "cwd") useStore.getState().setRemoteCwd(session.id, r.dir, true)
+    else if (r.kind === "start") store.signalSession(session.id, { type: "command-start" })
+    else {
+      clearTimeout(entry.idleTimer) // precise idle: the heuristic mustn't flip it later
+      store.signalSession(session.id, { type: "command-end" })
+    }
+    return true
+  })
+
   // OSC 133;C/D — command start/finish.
   term.parser.registerOscHandler(133, (data) => {
+    if (session.remote && entry.verified) return true // see the SMTERM_OSC handler
     const kind = data.charAt(0)
     if (kind === "C") store.signalSession(session.id, { type: "command-start" })
     else if (kind === "D") {
