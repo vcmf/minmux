@@ -55,6 +55,7 @@ function harness(
     wslFs: () => memFs({}),
     wslWatchPaths: (d, p) => [`\\\\wsl.localhost\\${d}${p.replace(/\//g, "\\")}`],
     sshPath: async () => SSH,
+    sshEffectiveConfig: async () => "user me\nhostname 10.0.0.1\n",
     // One long-lived watcher: each set() is recorded (the paths watched from then on).
     createWatcher: (fire) => {
       const w = { sets: [] as string[][], closed: false }
@@ -445,6 +446,84 @@ describe("SshService watching", () => {
     raw = JSON.stringify({ ssh: { keepAliveSeconds: 0 } })
     h.svc.settingsChanged()
     expect(await h.svc.spawnPlan(web)).toEqual({ file: SSH, args: ["-t", "--", "web"] })
+  })
+
+  it("flags a host that opted in to shell integration, from the next spawn", async () => {
+    let raw = JSON.stringify({ ssh: { keepAliveSeconds: 0 } })
+    const h = harness({ readSettings: () => raw })
+    expect(await h.svc.spawnPlan(web)).toEqual({ file: SSH, args: ["-t", "--", "web"] })
+    raw = JSON.stringify({ ssh: { keepAliveSeconds: 0, integration: ["w*", "!db"] } })
+    h.svc.settingsChanged()
+    expect(await h.svc.spawnPlan(web)).toEqual({
+      file: SSH,
+      args: ["-t", "--", "web"], // main adds the bootstrap: the plan only says so
+      integration: true,
+    })
+    expect(await h.svc.spawnPlan({ hostId: "native:db" })).not.toHaveProperty("integration")
+  })
+
+  it("asks ssh for the effective config with the same options, and plain if it runs a command", async () => {
+    const settings = { ssh: { integration: ["*"] } }
+    const probes: string[][] = []
+    let config: string | null = "remotecommand tmux new -A -s main\n"
+    const h = harness(
+      {
+        sshEffectiveConfig: async (file, args) => {
+          probes.push([file, ...args])
+          return config
+        },
+      },
+      { settings },
+    )
+    const plain = { file: SSH, args: expect.arrayContaining(["-t", "--", "web"]) }
+    expect(await h.svc.spawnPlan(web)).toEqual(plain) // the user's RemoteCommand wins
+    expect(probes[0]).toEqual([
+      SSH,
+      ...((await h.svc.spawnPlan(web)) as { args: string[] }).args.map((a) =>
+        a === "-t" ? "-G" : a,
+      ),
+    ])
+    expect(probes).toHaveLength(1) // a RemoteCommand "no" is kept
+    h.svc.invalidate()
+    config = null // ssh -G failed: never guess, and ask again next time
+    expect(await h.svc.spawnPlan(web)).not.toHaveProperty("integration")
+    expect(await h.svc.spawnPlan(web)).not.toHaveProperty("integration")
+    expect(probes).toHaveLength(3)
+    h.svc.invalidate()
+    config = "remotecommand none\n"
+    expect(await h.svc.spawnPlan(web)).toHaveProperty("integration", true)
+    const asked = probes.length
+    expect(await h.svc.spawnPlan(web)).toHaveProperty("integration", true)
+    expect(probes).toHaveLength(asked) // a "yes" is kept until something changes…
+    h.svc.invalidate()
+    await h.svc.spawnPlan(web)
+    expect(probes).toHaveLength(asked + 1) // …like the config
+  })
+
+  it("a host marked plain connects plainly until its setting or the config changes", async () => {
+    let raw = JSON.stringify({ ssh: { integration: ["web"] } })
+    const h = harness({ readSettings: () => raw })
+    h.svc.markPlain("native:web")
+    expect(await h.svc.spawnPlan(web)).not.toHaveProperty("integration")
+    raw = JSON.stringify({ ssh: { integration: [] } })
+    h.svc.settingsChanged()
+    raw = JSON.stringify({ ssh: { integration: ["web"] } })
+    h.svc.settingsChanged() // switched off and on: try again
+    expect(await h.svc.spawnPlan(web)).toHaveProperty("integration", true)
+    h.svc.markPlain("native:web")
+    h.svc.invalidate() // e.g. the ssh config was edited
+    expect(await h.svc.spawnPlan(web)).toHaveProperty("integration", true)
+  })
+
+  it("toggling integration doesn't reload the host list", async () => {
+    let raw = "{}"
+    const h = harness({ readSettings: () => raw })
+    await h.svc.hosts()
+    raw = JSON.stringify({ ssh: { integration: ["web"] } })
+    h.svc.settingsChanged()
+    await vi.advanceTimersByTimeAsync(250)
+    expect(h.onChange).not.toHaveBeenCalled()
+    expect(await h.svc.spawnPlan(web)).toHaveProperty("integration", true)
   })
 
   it("settingsChanged with nothing changed is a no-op", async () => {

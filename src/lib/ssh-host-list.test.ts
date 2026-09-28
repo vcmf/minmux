@@ -95,11 +95,17 @@ describe("sshCommand", () => {
 
 describe("hostMenuItems", () => {
   it("offers pin or unpin, and the config only for this machine's hosts", () => {
-    const native = hostMenuItems({ pinned: false, native: true }).map((i) => i.label)
+    const native = hostMenuItems({ pinned: false, native: true, integration: false }).map(
+      (i) => i.label,
+    )
     expect(native).toContain("Pin to sidebar")
     expect(native).toContain("Open ssh config")
-    const wsl = hostMenuItems({ pinned: true, native: false }).map((i) => i.label)
+    const wsl = hostMenuItems({ pinned: true, native: false, integration: true }).map(
+      (i) => i.label,
+    )
     expect(wsl).toContain("Unpin from sidebar")
     expect(wsl).not.toContain("Open ssh config")
+    expect(native).toContain("Turn on shell integration")
+    expect(wsl).toContain("Turn off shell integration")
   })
 })

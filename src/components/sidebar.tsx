@@ -20,6 +20,7 @@ import { claudePaneIds } from "../lib/agent-graph"
 import { claudeWorkFlat, inGitFor, inGitKey, inLabel, worksElsewhere } from "../lib/agent-dirs"
 import { ClaudeIcon } from "./claude-icon"
 import { ContextMenu } from "./context-menu"
+import { integrationOn } from "../lib/ssh-integration"
 import {
   folderMenuItems,
   isAbsoluteHostPath,
@@ -502,6 +503,7 @@ function RemoteHosts() {
   const hosts = useStore((s) => s.sshHosts)
   const loaded = useStore((s) => s.sshHostsLoaded)
   const pinned = useStore((s) => s.settings.ssh.pinned)
+  const integration = useStore((s) => s.settings.ssh.integration)
   const connected = useStore(useShallow((s) => connectedHostIds(s.sessions, s.remotePhase)))
   // Hosts with any pane open (live or not): they stay listed while you work with them.
   const openIds = useStore(
@@ -674,6 +676,7 @@ function RemoteHosts() {
           items={hostMenuItems({
             pinned: pinned.includes(menu.host.hostId),
             native: menu.host.env === "native",
+            integration: integrationOn(menu.host.label, integration),
           })}
           onSelect={(id) => runHostAction(menu.host, id)}
           onClose={() => setMenu(null)}

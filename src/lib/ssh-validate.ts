@@ -38,6 +38,7 @@ export interface SshSettings {
   restore: "auto" | "on-focus" // after a relaunch: reconnect at once, or when the pane is used
   autoReconnect: boolean // retry a dropped, established connection a few times (default on)
   colors: Record<string, string> // alias pattern ("prod-*") → a named colour or #rrggbb
+  integration: string[] // alias patterns ("gpu-*", "!gpu-old") whose shells report to smterm
 }
 
 /** Named host colours (theme tokens, so they follow light/dark). Anything else is #rrggbb. */
@@ -120,7 +121,8 @@ export function mergeSshSettings(input: unknown): SshSettings {
   }
   const colors = Object.fromEntries(picked) // own data properties, even for "__proto__"
   const autoReconnect = o.autoReconnect !== false
-  return { hidden, shown, pinned, keepAliveSeconds, restore, autoReconnect, colors }
+  const integration = aliasList(o.integration)
+  return { hidden, shown, pinned, keepAliveSeconds, restore, autoReconnect, colors, integration }
 }
 
 const MAX_LABEL = 200

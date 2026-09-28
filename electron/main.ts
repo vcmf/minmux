@@ -14,7 +14,7 @@ import path from "node:path"
 import fs from "node:fs"
 import os from "node:os"
 import { execFile, spawn } from "node:child_process"
-import { randomUUID } from "node:crypto"
+import { randomBytes, randomUUID } from "node:crypto"
 import { StringDecoder } from "node:string_decoder"
 import * as pty from "node-pty"
 import type { IPty } from "node-pty"
@@ -54,6 +54,13 @@ import { displayName, profileNames, resolveProfile, scrubParentInstanceEnv } fro
 import { PaneGitService } from "./pane-git"
 import { SshService } from "./ssh-service"
 import { PendingSpawns, type PendingOutcome } from "./pending-spawns"
+import {
+  HelloWatch,
+  handshakeReply,
+  integrationFailed,
+  remoteBootstrapCommand,
+  INTEGRATION_FAILED_NOTE,
+} from "./remote-bootstrap"
 import { createPathWatcher } from "./ssh-watcher"
 import { nodeMiniFs, wslMiniFs } from "./ssh-config"
 import type { PaneGitRequest } from "../src/lib/pane-git"
@@ -115,6 +122,8 @@ interface PtySession {
   wslDistro?: string // for a WSL pane: the distro, so its Linux paths resolve to the right UNC share
   integrated: boolean // our shell integration (OSC 133 marks, claude wrapper) was injected
   live: Drainable // this PTY's entry in livePtys (outlives the session record until onExit)
+  hello?: HelloWatch // an integrated ssh pane, until its bootstrap's hello is answered
+  remoteNonce?: string // …and the nonce its shell's reports carry
 }
 const sessions = new Map<string, PtySession>()
 // Every node-pty that hasn't reported its exit yet — including closed panes still winding
@@ -435,10 +444,12 @@ interface StartSpec {
   env: Record<string, string>
   wslDistro?: string
   integrated: boolean
+  remote?: { hostId: string; hello: HelloWatch; nonce: string } // an integrated ssh pane
 }
 
 /** Spawn a node-pty for a session and wire it (buffer, coalescer, exit, drain registry). */
 function startPty(sender: Electron.WebContents, opts: SpawnOpts, spec: StartSpec): SpawnResult {
+  const startedAt = Date.now()
   const proc = pty.spawn(spec.file, spec.args, {
     name: "xterm-256color",
     cols: opts.cols || 80,
@@ -460,11 +471,19 @@ function startPty(sender: Electron.WebContents, opts: SpawnOpts, spec: StartSpec
     wslDistro: spec.wslDistro,
     integrated: spec.integrated,
     live,
+    hello: spec.remote?.hello,
+    remoteNonce: spec.remote?.nonce,
   }
   if (coalesce) {
     rec.coalescer = new OutputCoalescer(PTY_FLUSH_MS, PTY_MAX_FLUSH_BYTES, (d) => emit(rec, d))
   }
   proc.onData((data) => {
+    // An integrated ssh pane's bootstrap says hello once, right after login: answer it with
+    // the nonce (its echo is off). A bounded scan — it stops for good once answered.
+    if (rec.hello && !rec.hello.done) {
+      const reply = rec.hello.feed(data)
+      if (reply) proc.write(reply)
+    }
     rec.buffer.push(data) // keep for replay on reattach
     if (rec.coalescer) rec.coalescer.push(data)
     else emit(rec, data) // A/B baseline: one IPC message per node-pty chunk
@@ -472,6 +491,22 @@ function startPty(sender: Electron.WebContents, opts: SpawnOpts, spec: StartSpec
   proc.onExit((e) => {
     diag("pty-exit", { id: opts.id, code: e.exitCode, signal: e.signal ?? 0 })
     rec.coalescer?.flush() // don't lose the final output
+    // The host couldn't even start the bootstrap (no sh: a Windows host, a ForceCommand):
+    // say so, and connect it plainly until the ssh config or settings change.
+    if (
+      spec.remote &&
+      integrationFailed({
+        booted: spec.remote.hello.booted,
+        exitCode: e.exitCode,
+        signal: e.signal ?? 0,
+        closedBySmterm: sessions.get(opts.id) !== rec || draining(),
+        livedMs: Date.now() - startedAt,
+      })
+    ) {
+      ssh().markPlain(spec.remote.hostId)
+      rec.buffer.push(INTEGRATION_FAILED_NOTE)
+      emit(rec, INTEGRATION_FAILED_NOTE)
+    }
     // Only a session that's still ours (not closed on purpose — pty:kill already cleaned up —
     // nor replaced by a newer PTY for the same id) tells its pane and drops its state.
     if (sessions.get(opts.id) === rec) {
@@ -490,6 +525,8 @@ function startPty(sender: Electron.WebContents, opts: SpawnOpts, spec: StartSpec
   return { reattached: false, integrated: spec.integrated }
 }
 
+const SSH_PROBE_TIMEOUT_MS = 5000 // `ssh -G` reads config only, but WSL may be waking up
+
 /** A remote (ssh) session: main rebuilds the command from its own host list. */
 async function spawnRemote(
   opts: SpawnOpts,
@@ -502,16 +539,28 @@ async function spawnRemote(
   if (meanwhile.killed) throw new Error("the pane was closed") // never an ssh with no pane
   if (draining()) throw new Error("smterm is quitting")
   if ("error" in plan) throw new Error(plan.error)
+  // The host opted in to shell integration: its command bootstraps our hooks there, and main
+  // answers its hello with a fresh nonce (never on the command line — see remote-bootstrap).
+  const hostId = (opts.remote as { hostId: string }).hostId
+  let remote: StartSpec["remote"]
+  let args = plan.args
+  if (plan.integration) {
+    const challenge = randomBytes(8).toString("hex")
+    const nonce = randomBytes(16).toString("hex")
+    args = [...plan.args, remoteBootstrapCommand(challenge)]
+    remote = { hostId, nonce, hello: new HelloWatch(challenge, handshakeReply(nonce)) }
+  }
   // No local shell integration (and no claude hook env): the shell runs on the remote host.
   const result = startPty(
     meanwhile.sender,
     { ...opts, cols: meanwhile.cols, rows: meanwhile.rows },
     {
       file: plan.file,
-      args: plan.args,
+      args,
       cwd: os.homedir(),
       env: baseSpawnEnv(opts),
       integrated: false,
+      remote,
     },
   )
   // Keys typed before ssh existed are dropped, not replayed: they'd land before ssh turns
@@ -633,6 +682,10 @@ function ssh(): SshService {
     wslFs: (distro) => wslMiniFs(distro),
     wslWatchPaths: (distro, linuxPath) => wslUncCandidates(distro, linuxPath),
     sshPath: nativeSshPath,
+    sshEffectiveConfig: async (file, args) => {
+      const r = await execQuiet(file, args, SSH_PROBE_TIMEOUT_MS)
+      return r.code === 0 ? r.stdout : null
+    },
     createWatcher: (onChange) =>
       createPathWatcher(onChange, (err) => diag("ssh-watch-error", { err: String(err) })),
     onChange: () => mainWindow?.webContents.send("ssh-hosts-changed"),

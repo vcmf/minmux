@@ -310,21 +310,71 @@ an smterm quit (but not a network drop).
 
 ## 8. Remote shell integration (phase 3)
 
-Goal: OSC 7 cwd and OSC 133 marks from the remote shell, so splits open in the same remote
-folder and status is exact.
+Goal: OSC 7 cwd and OSC 133 marks from the remote shell, so splits can open in the same remote
+folder and status is exact. Built on the `epic/ssh-integration` branch in three steps:
+**P3a** the bootstrap and handshake, **P3b** trusting only nonce-tagged reports (folder,
+status), **P3c** reopening a verified folder on split, reconnect and restore.
 
-Approach: send our zsh/bash integration over the connection at start, without touching the
-remote dotfiles.
+**Opt-in per host**: `"ssh": { "integration": ["gpu-*", "!gpu-old"] }` (ssh-style patterns; a
+host's own `alias` / `!alias` entry beats any pattern), or right-click a host → Turn on shell
+integration. Remote environments vary (busybox, restricted shells, `ForceCommand`), so it is
+never on by default.
 
-- The bootstrap detects the login shell and starts it with our script (bash: `--rcfile` via a
-  temp file; zsh: a temp `ZDOTDIR` that sources the user's real `.zshrc`, same trick as local).
-- Script is sent inline (base64) so nothing is installed permanently; temp files go in
-  `${TMPDIR:-/tmp}` and are removed on exit.
-- Inside tmux, the scripts wrap OSC 7/133 in tmux passthrough (`allow-passthrough on`, §6b).
-- On split with a known remote cwd: the new pane starts with `cd <quoted cwd>` before the shell.
-- Opt-in per host at first (`"integration": true`) because remote environments vary (busybox,
-  restricted shells, `ForceCommand`). If the bootstrap fails, fall back to a plain shell.
-- Reuses the scripts in `electron/shell-integration.ts`; the bootstrap builder is pure and tested.
+**Two channels** (`electron/remote-bootstrap.ts`, pure and tested). #78 showed that nothing
+variable may travel in text the host's login shell parses (fish `\'`, cmd.exe `%VAR%`), and
+other users on the host can read a command line with `ps`:
+
+- **The command is fixed**: `exec sh -c '<challenge> <base64 of the bootstrap>'`. Inside the
+  quotes: no quote, backslash, `!` or newline, so bash, zsh, fish and csh pass it to `sh`
+  unchanged. The only variable part is a hex challenge. It holds no secret and no folder.
+- **The nonce goes through the terminal**: the bootstrap prints `OSC 6973;boot;<challenge>`,
+  turns echo off (raw, `-isig`: ^C is just data meanwhile), prints `OSC 6973;hello;<challenge>`
+  and reads lines, 5 s each. Main answers straight from the pty output (`HelloWatch`, a bounded
+  scan that stops once answered, skipped, or 64 KB after boot): `smterm:<nonce>:-`. A pre-login
+  banner can't trigger it: it doesn't know the challenge. Lines typed during the login (an
+  Enter while the banner scrolls) are read past: only the line with the `smterm:` marker and a
+  32-hex nonce counts. With no answer at all, it waits out a late one (until 2 s of quiet) so
+  it can never be typed into the shell, then prints `skip` and runs the plain shell.
+
+**On the host** the bootstrap (POSIX sh) takes the login shell from `$SHELL`:
+
+- bash: `--rcfile` a temp file that reads what a login bash would (`/etc/profile`, then the
+  first of `.bash_profile` / `.bash_login` / `.profile`), then our hooks; `logout` and
+  `~/.bash_logout` work as in a login shell. (`$0` isn't `-bash`, and `shopt login_shell` is
+  off.)
+- zsh: `zsh -l` with a temp `ZDOTDIR` holding only a `.zshenv`. It puts the user's own
+  `ZDOTDIR` back first (as sshd's `zsh -c` left it, so an XDG `~/.config/zsh` works), removes
+  the temp dir, sources the user's `.zshenv` and adds the hooks; zsh then reads the user's
+  `.zprofile` / `.zshrc` / `.zlogin` itself. Nothing started from them (tmux…) inherits our
+  `ZDOTDIR`.
+- The temp dir (`mktemp -d`, 0700, in `$TMPDIR`) is gone as soon as the shell has read it. The
+  nonce is assigned before any user file runs and explicitly unexported (`allexport` can't leak
+  it). The host's history settings are left alone, and no `claude` wrapper is set up.
+- Anything else (fish, dash, no `mktemp` / `stty`, no answer) → `exec $SHELL -l`, the plain
+  login shell.
+- Known gaps: a `/etc/zsh/zshenv` that forces `ZDOTDIR` skips our file (no integration, and the
+  0700 temp dir stays until the host clears `$TMPDIR`). sshd prints no MOTD / "Last login"
+  when a command is given, so opted-in hosts don't show them.
+
+**The hooks** are the local ones with every report tagged: `OSC 6973;<nonce>;C`, `;D;<exit>`
+and `;7;file://host/path`, and no standard OSC 7 / 133 at all, so nothing untagged can pass for
+them. At a prompt they use `printf` and builtins only (a test checks for `$(` or backticks).
+
+**When it can't run**:
+
+- A `RemoteCommand` in the config (ssh refuses a command beside it, and the user's wins):
+  main asks `ssh -G` with the same options (Match and Include count), for opted-in hosts only,
+  cached until the config or settings change. Any doubt → a plain connection.
+- The host has no `sh` (a Windows host, a `ForceCommand`): the pane ends on its own before
+  `boot`, within two minutes, not by a signal (closing a pane or ^C at a password prompt
+  doesn't count) and not with ssh's own 255. It prints a note, and main connects that host
+  plainly until its integration setting or the ssh config changes.
+
+**Cost** (local, stub host): the first prompt comes about 30 ms later (bash 9 → 37 ms, zsh
+17 → 51 ms), plus one round trip on a real link; nothing per keystroke or per output byte.
+
+Still to come: inside tmux (phase 2) the scripts wrap their reports in tmux passthrough
+(`allow-passthrough on`, §6b).
 
 ---
 

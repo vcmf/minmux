@@ -122,6 +122,7 @@ describe("ssh settings", () => {
       restore: "auto",
       autoReconnect: true,
       colors: {},
+      integration: [],
     })
     expect(mergeSettings({}).ssh).toEqual(defaultSettings.ssh)
     expect(mergeSettings({ ssh: "nope" }).ssh).toEqual(defaultSettings.ssh)
@@ -135,6 +136,7 @@ describe("ssh settings", () => {
           keepAliveSeconds: 0,
           restore: "on-focus",
           colors: { "prod-*": "red" },
+          integration: [" gpu-* ", "!gpu-old", 7, "gpu-*"],
         },
       }).ssh,
     ).toEqual({
@@ -145,6 +147,7 @@ describe("ssh settings", () => {
       restore: "on-focus",
       autoReconnect: true,
       colors: { "prod-*": "red" },
+      integration: ["gpu-*", "!gpu-old"],
     })
   })
 
