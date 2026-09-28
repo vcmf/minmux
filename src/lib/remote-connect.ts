@@ -213,37 +213,79 @@ export const RETRY_DELAYS_MS = [2000, 5000, 10000]
  *  Shorter-lived ones (usually an auth failure) only continue a sequence already running. */
 export const STABLE_MS = 30_000
 
-/** Whether to reconnect a dropped ssh on its own, and when. Only a lost link (exit 255, no
- *  signal) of an established connection — never a clean exit, a remote command's own code, a
- *  drop at a password / host-key prompt, or something that dies at once — and at most
- *  RETRY_DELAYS_MS.length times in a row. Each try is a fresh login shell: nothing re-runs. */
+/** Whether to reconnect a dropped ssh on its own, and when. Only a lost link (exit 255 and
+ *  ssh saying so, no signal) of an established connection — never a clean exit, a remote
+ *  command's own code, a drop at a password / host-key prompt, or something that dies at once
+ *  — at most RETRY_DELAYS_MS.length times in a row and MAX_AUTO_RECONNECTS in all. Each try is
+ *  a fresh login: the shell's history is gone, and a `RemoteCommand` in the config runs again. */
 export function retryPlan(o: {
   enabled: boolean
   code: number
   signal: number
   atPrompt: boolean
-  liveForMs: number // how long this connection was live (0 = never got past connecting)
+  dropped: boolean // ssh said the link went (lostLink on its last lines), not a mere 255
+  liveForMs: number // how long it was live since its last prompt (0 = never got past connecting)
   attempt: number // the retry this connection came from (0 = not a retry)
+  total: number // automatic reconnects of this pane since you last connected it yourself
 }): { attempt: number; delayMs: number } | null {
-  if (!o.enabled || o.signal || o.code !== 255 || o.atPrompt) return null
+  if (!retryEligible(o)) return null
+  if (o.total >= MAX_AUTO_RECONNECTS) return null // a link that keeps dropping: your call now
   const next = o.liveForMs >= STABLE_MS ? 1 : o.attempt > 0 ? o.attempt + 1 : 0
   if (next === 0 || next > RETRY_DELAYS_MS.length) return null
   return { attempt: next, delayMs: RETRY_DELAYS_MS[next - 1]! }
 }
 
-/** ssh panes Connect all should connect: waiting at a Connect prompt, or restored under
- *  on-focus in a tab that hasn't been shown yet (not started, so no phase). */
+/** An exit that auto-reconnect may act on at all: a lost link, per ssh itself. */
+export function retryEligible(o: {
+  enabled: boolean
+  code: number
+  signal: number
+  atPrompt: boolean
+  dropped: boolean
+}): boolean {
+  return o.enabled && !o.signal && o.code === 255 && !o.atPrompt && o.dropped
+}
+
+/** At most this many automatic reconnects per pane until you reconnect it yourself. */
+export const MAX_AUTO_RECONNECTS = 6
+
+// What ssh prints when the link (not the session) went. Exit 255 alone isn't enough: ssh
+// passes through the remote shell's status, and a logout after a failed command can be 255.
+const LOST_LINK =
+  /(closed by remote host|broken pipe|connection reset|server .* not responding|network is unreachable|connection timed out|no route to host|connection refused|could not resolve hostname)/i
+
+/** Whether ssh's last lines say the connection was lost. */
+export const lostLink = (tail: string): boolean => LOST_LINK.test(tail)
+
+/** An ssh pane waiting to be connected: at a Connect prompt, or restored under on-focus in a
+ *  tab not shown yet (not started, so no phase). */
+export function isWaitingRemote(
+  s: { remote?: unknown; restored?: boolean },
+  phase: RemotePhase | undefined,
+  restore: SshSettings["restore"],
+): boolean {
+  if (!s.remote) return false
+  return phase === "waiting" || (phase === undefined && !!s.restored && restore === "on-focus")
+}
+
+/** The ssh panes Connect all connects. */
 export function waitingRemoteIds(
   sessions: Record<string, { id: string; remote?: unknown; restored?: boolean }>,
   phases: Record<string, RemotePhase>,
   restore: SshSettings["restore"],
 ): string[] {
   return Object.values(sessions)
-    .filter(
-      (s) =>
-        s.remote &&
-        (phases[s.id] === "waiting" ||
-          (phases[s.id] === undefined && s.restored && restore === "on-focus")),
-    )
+    .filter((s) => isWaitingRemote(s, phases[s.id], restore))
     .map((s) => s.id)
+}
+
+/** How many ssh panes are waiting (the Connect all count), without building the list. */
+export function countWaitingRemote(
+  sessions: Record<string, { id: string; remote?: unknown; restored?: boolean }>,
+  phases: Record<string, RemotePhase>,
+  restore: SshSettings["restore"],
+): number {
+  let n = 0
+  for (const s of Object.values(sessions)) if (isWaitingRemote(s, phases[s.id], restore)) n++
+  return n
 }

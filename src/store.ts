@@ -146,7 +146,7 @@ interface AppState {
   setShells: (shells: ShellOption[]) => void
   setSshHosts: (hosts: SshHost[]) => void
   setRemotePhase: (sessionId: string, phase: RemotePhase, detail?: string) => void
-  restoreWorkspace: (ws: WorkspaceState) => void
+  restoreWorkspace: (ws: WorkspaceState, livePtys?: string[]) => void
   setRightPanelWidth: (px: number, maxAvail?: number) => void
   newTab: (shell: ShellOption) => void
   splitWith: (direction: "row" | "column", shell: ShellOption) => void // a new tab if none
@@ -468,11 +468,15 @@ export const useStore = create<AppState>((set, get) => ({
         : { sshHosts: hosts, sshHostsLoaded: true },
     ),
 
-  restoreWorkspace: (ws) =>
+  restoreWorkspace: (ws, livePtys = []) =>
     set({
-      // Marked so a restored ssh pane can follow `ssh.restore` (terminal-manager).
+      // Marked so a restored ssh pane can follow `ssh.restore` (terminal-manager) — unless its
+      // ssh is still live in main (a renderer reload): that one isn't waiting for anything.
       sessions: Object.fromEntries(
-        Object.entries(ws.sessions).map(([id, s]) => [id, s.remote ? { ...s, restored: true } : s]),
+        Object.entries(ws.sessions).map(([id, s]) => [
+          id,
+          s.remote && !livePtys.includes(id) ? { ...s, restored: true } : s,
+        ]),
       ),
       remotePhase: {},
       remoteDetail: {},

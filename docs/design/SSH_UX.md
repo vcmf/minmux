@@ -327,12 +327,15 @@ prompt heuristic in S1, which runs on the existing throttled output-idle path.
       [sidebar, pinned + open](ssh-ux/s3-sidebar-after.png),
       [new-tab menu](ssh-ux/s3-new-tab-menu.png).
 - [x] **S4** bounded auto-retry, "Connect all" (F13 auto-retry, F14). `retryPlan` (pure):
-      only a lost link (exit 255, no signal) of a connection live ≥ 30 s, never at a prompt;
-      retries at 2 / 5 / 10 s, a retry that dies at once continues the sequence, one that holds
-      starts a fresh budget; Enter reconnects now (and resets it), closing cancels it;
-      `ssh.autoReconnect` (default on) and a Settings checkbox. The pane says `Reconnecting in 5 s
-(2/3)` and the sidebar `reconnecting` (amber, pulsing; not a red tab); when the tries run out,
-      `Couldn't reconnect … after 3 tries`. **Connect all (N)** beside the bell (from 2 waiting
-      panes) and in the palette connects every waiting ssh pane, starting restored ones in tabs not
-      shown yet. Shots: [reconnecting](ssh-ux/s4-reconnecting.png),
-      [connect all](ssh-ux/s4-connect-all.png).
+      only a lost link (exit 255 and ssh saying so on its last lines: "closed by remote host",
+      "Broken pipe", …; read from xterm's buffer at exit, never the output stream), no signal, not
+      at a prompt, of a connection live ≥ 30 s since its last prompt; retries at 2 / 5 / 10 s, a
+      retry that dies at once continues the sequence, one that holds starts a fresh budget, and
+      six automatic reconnects in all until you reconnect yourself. Enter reconnects now (and
+      resets the budget), closing cancels it, turning `ssh.autoReconnect` off stops a countdown.
+      Each try is a fresh login (a `RemoteCommand` runs again). **Connect all (N)** beside the bell
+      (from 2 waiting panes) and in the palette connects every waiting ssh pane, starting restored
+      ones in tabs not shown yet (sized like the visible pane), one pane per host first and the
+      rest once it's past its prompt, so a ControlMaster is shared. A renderer reload asks main
+      which ssh panes are still live (`pty:live-ids`), so those never read as waiting. Shots:
+      [reconnecting](ssh-ux/s4-reconnecting.png), [connect all](ssh-ux/s4-connect-all.png).

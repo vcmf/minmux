@@ -501,11 +501,19 @@ describe("TerminalManager — automatic reconnect", () => {
     await vi.advanceTimersByTimeAsync(ms)
     return t
   }
+  /** ssh's last line before it exits: the link went. */
+  const lost = (t: { term: FakeTerminal }) => {
+    t.term.buffer.active.getLine = () => ({
+      translateToString: () => "Connection to web closed by remote host.",
+    })
+  }
 
   it("a drop after 30 s retries at 2 s, 5 s, 10 s, then gives up and waits for Enter", async () => {
     vi.useFakeTimers()
     try {
-      const { id, term } = await liveFor(31_000)
+      const t = await liveFor(31_000)
+      const { id, term } = t
+      lost(t)
       exitHandlers[id]!({ code: 255, signal: 0 })
       expect(term.written).toContain("Reconnecting in 2 s (1/3)")
       expect(st().remoteDetail[id]).toBe("retrying")
@@ -533,11 +541,13 @@ describe("TerminalManager — automatic reconnect", () => {
     vi.useFakeTimers()
     try {
       const a = await liveFor(5_000)
+      lost(a)
       exitHandlers[a.id]!({ code: 255, signal: 0 })
       const b = await liveFor(60_000)
       exitHandlers[b.id]!({ code: 0, signal: 0 })
       withSsh({ autoReconnect: false })
       const c = await liveFor(60_000)
+      lost(c)
       exitHandlers[c.id]!({ code: 255, signal: 0 })
       await vi.advanceTimersByTimeAsync(20_000)
       expect(spawnCalls()).toHaveLength(3) // just the three first connects
@@ -565,17 +575,118 @@ describe("TerminalManager — automatic reconnect", () => {
   it("Enter during the countdown reconnects now (once), and closing cancels it", async () => {
     vi.useFakeTimers()
     try {
-      const { id, term } = await liveFor(31_000)
+      const t = await liveFor(31_000)
+      const { id, term } = t
+      lost(t)
       exitHandlers[id]!({ code: 255, signal: 0 })
       term.type("\r")
       expect(spawnCalls()).toHaveLength(2)
       await vi.advanceTimersByTimeAsync(5000)
       expect(spawnCalls()).toHaveLength(2) // the scheduled one was cancelled
       const other = await liveFor(31_000)
+      lost(other)
       exitHandlers[other.id]!({ code: 255, signal: 0 })
       TerminalManager.dispose(other.id)
       await vi.advanceTimersByTimeAsync(5000)
       expect(spawnCalls().filter((c) => c.id === other.id)).toHaveLength(1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})
+
+describe("TerminalManager — automatic reconnect, the edges", () => {
+  const liveFor = async (ms: number) => {
+    const t = start({})
+    await vi.advanceTimersByTimeAsync(0)
+    out(t.id, "Welcome")
+    await vi.advanceTimersByTimeAsync(ms)
+    return t
+  }
+  const lastLine = (t: { term: FakeTerminal }, text: string) => {
+    t.term.buffer.active.getLine = () => ({ translateToString: () => text })
+  }
+
+  it("a logout whose status was 255 (no lost-link words) doesn't reconnect", async () => {
+    vi.useFakeTimers()
+    try {
+      const t = await liveFor(60_000)
+      lastLine(t, "logout")
+      exitHandlers[t.id]!({ code: 255, signal: 0 })
+      await vi.advanceTimersByTimeAsync(20_000)
+      expect(spawnCalls()).toHaveLength(1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it("time at a password prompt isn't 'established': a failed login after 40 s never retries", async () => {
+    vi.useFakeTimers()
+    try {
+      const t = start({})
+      await vi.advanceTimersByTimeAsync(0)
+      lastLine(t, "Password: ")
+      out(t.id, "Password: ")
+      await vi.advanceTimersByTimeAsync(40_000) // three slow wrong tries
+      t.term.type("\r")
+      out(t.id, "\r\n") // answered: live again, the 30 s start over
+      lastLine(t, "Connection to web closed by remote host.")
+      exitHandlers[t.id]!({ code: 255, signal: 0 })
+      await vi.advanceTimersByTimeAsync(20_000)
+      expect(spawnCalls()).toHaveLength(1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it("after a retry that held, a clean exit reads as ended (not 'couldn't reconnect')", async () => {
+    vi.useFakeTimers()
+    try {
+      const t = await liveFor(31_000)
+      lastLine(t, "Connection to web closed by remote host.")
+      exitHandlers[t.id]!({ code: 255, signal: 0 })
+      await vi.advanceTimersByTimeAsync(2000)
+      out(t.id, "Welcome back")
+      await vi.advanceTimersByTimeAsync(60_000)
+      lastLine(t, "logout")
+      exitHandlers[t.id]!({ code: 0, signal: 0 })
+      expect(t.term.written).toContain("Session on web ended")
+      expect(t.term.written).not.toContain("Couldn't reconnect")
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it("stops after six automatic reconnects in all, even if each held", async () => {
+    vi.useFakeTimers()
+    try {
+      const t = await liveFor(31_000)
+      for (let i = 0; i < 7; i++) {
+        lastLine(t, "Connection to web closed by remote host.")
+        exitHandlers[t.id]!({ code: 255, signal: 0 })
+        await vi.advanceTimersByTimeAsync(2000)
+        out(t.id, "Welcome back")
+        await vi.advanceTimersByTimeAsync(31_000)
+      }
+      expect(spawnCalls()).toHaveLength(1 + 6)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it("turning the setting off stops a countdown already running", async () => {
+    vi.useFakeTimers()
+    try {
+      const t = await liveFor(31_000)
+      lastLine(t, "Connection to web closed by remote host.")
+      exitHandlers[t.id]!({ code: 255, signal: 0 })
+      useStore.setState((s) => ({
+        settings: { ...s.settings, ssh: { ...s.settings.ssh, autoReconnect: false } },
+      }))
+      await vi.advanceTimersByTimeAsync(3000)
+      expect(spawnCalls()).toHaveLength(1)
+      expect(t.term.written).toContain("Automatic reconnect is off")
+      expect(st().remoteDetail[t.id]).toBe("lost")
     } finally {
       vi.useRealTimers()
     }
@@ -599,5 +710,27 @@ describe("TerminalManager — Connect all", () => {
     const calls = spawnCalls()
     expect(calls.map((c) => c.id).sort()).toEqual([waiting.id, unstarted].sort())
     expect(calls.every((c) => c.attachOnly === undefined)).toBe(true) // a real connect
+  })
+})
+
+describe("TerminalManager — Connect all, one host at a time", () => {
+  it("connects the first pane per host, then the rest once it's past its prompt", async () => {
+    vi.useFakeTimers()
+    try {
+      vi.mocked(ipc.ptySpawn).mockResolvedValue({ reattached: false, started: false })
+      const a = start({ restored: true, restore: "on-focus" })
+      const b = start({ restored: true, restore: "on-focus" }) // same host (web)
+      await vi.advanceTimersByTimeAsync(0)
+      vi.mocked(ipc.ptySpawn).mockClear()
+      vi.mocked(ipc.ptySpawn).mockResolvedValue({ reattached: false, integrated: false })
+      TerminalManager.connectAll()
+      expect(spawnCalls().map((c) => c.id)).toEqual([a.id]) // only the first
+      await vi.advanceTimersByTimeAsync(0)
+      out(a.id, "Welcome") // live…
+      await vi.advanceTimersByTimeAsync(2100) // …and stayed off a prompt
+      expect(spawnCalls().map((c) => c.id)).toEqual([a.id, b.id])
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

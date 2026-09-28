@@ -44,6 +44,7 @@ const api = {
   ptyResize: (id: string, cols: number, rows: number) =>
     ipcRenderer.send("pty:resize", id, cols, rows),
   ptyKill: (id: string) => ipcRenderer.send("pty:kill", id),
+  ptyLiveIds: () => ipcRenderer.invoke("pty:live-ids") as Promise<string[]>,
 
   listShells: () => ipcRenderer.invoke("shells:list"),
 

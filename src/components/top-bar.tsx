@@ -22,7 +22,7 @@ import { activeTheme, useStore } from "../store"
 import { ipc } from "../lib/ipc"
 import { allSessionIds } from "../lib/pane-tree"
 import { aggregateBadge } from "../lib/session-status"
-import { tabRemoteBadge, waitingRemoteIds } from "../lib/remote-connect"
+import { countWaitingRemote, tabRemoteBadge } from "../lib/remote-connect"
 import { hostColor, hostColorCss } from "../lib/ssh-hosts-ui"
 import { tabTitleParts } from "../lib/session-label"
 import { resolveDefaultShell } from "../lib/shells"
@@ -56,8 +56,8 @@ export function TopBar() {
   const windowFocused = useStore((s) => s.windowFocused)
   const hostColors = useStore((s) => s.settings.ssh.colors)
   // ssh panes waiting at a Connect prompt (a relaunch under on-focus): one click connects all.
-  const waitingSsh = useStore(
-    (s) => waitingRemoteIds(s.sessions, s.remotePhase, s.settings.ssh.restore).length,
+  const waitingSsh = useStore((s) =>
+    countWaitingRemote(s.sessions, s.remotePhase, s.settings.ssh.restore),
   )
   const home = useStore((s) => s.home)
   const defaultShellPref = useStore((s) => s.settings.defaultShell)

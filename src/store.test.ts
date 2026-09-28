@@ -1053,3 +1053,37 @@ describe("store — overlays and default-hidden hosts", () => {
     expect(st().settings.ssh.shown).toEqual([])
   })
 })
+
+describe("store — restore after a renderer reload", () => {
+  beforeEach(resetStore)
+
+  it("an ssh pane still live in main isn't marked restored (nothing is waiting)", () => {
+    const remote = { ...hostShellOption(testHost("db")).remote! }
+    const ses = (id: string) => ({
+      id,
+      title: "",
+      command: "ssh",
+      args: [],
+      status: "idle" as const,
+      unread: false,
+      remote,
+    })
+    st().restoreWorkspace(
+      {
+        sessions: { r: ses("r"), l: ses("l") },
+        tabs: [
+          {
+            id: "t",
+            title: "",
+            root: { type: "leaf", id: "p", sessionIds: ["r", "l"], activeSessionId: "r" },
+            activeSessionId: "r",
+          },
+        ],
+        activeTabId: "t",
+      },
+      ["l"],
+    )
+    expect(st().sessions.r!.restored).toBe(true)
+    expect(st().sessions.l!.restored).toBeUndefined()
+  })
+})

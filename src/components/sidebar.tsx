@@ -33,7 +33,7 @@ import { TerminalManager } from "../terminal/terminal-manager"
 import { allPanes } from "../lib/pane-tree"
 import { resolveDefaultShell } from "../lib/shells"
 import { statusUi } from "../lib/status-ui"
-import { remoteStatusUi } from "../lib/remote-connect"
+import { isWaitingRemote, remoteStatusUi } from "../lib/remote-connect"
 import {
   connectedHostIds,
   groupHosts,
@@ -233,8 +233,9 @@ export function Sidebar() {
                     ? remoteStatusUi(
                         // A restored on-focus pane in a tab not shown yet hasn't started: it's
                         // waiting too (Connect all counts it), not idle.
-                        remotePhase[id] ??
-                          (s.restored && sshRestore === "on-focus" ? "waiting" : undefined),
+                        isWaitingRemote(s, remotePhase[id], sshRestore)
+                          ? "waiting"
+                          : remotePhase[id],
                         s.status,
                         remoteDetail[id],
                       )

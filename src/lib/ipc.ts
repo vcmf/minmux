@@ -25,6 +25,7 @@ export interface Ipc {
   ptyWrite: (id: string, data: string) => void
   ptyResize: (id: string, cols: number, rows: number) => void
   ptyKill: (id: string) => void
+  ptyLiveIds: () => Promise<string[]> // sessions with a live PTY in main (after a reload)
   // The PTY's process exited on its own (not a pty:kill) — e.g. a dropped ssh connection.
   onPtyExit: (id: string, cb: (e: { code: number; signal: number }) => void) => () => void
   listSshHosts: () => Promise<SshHost[] | null> // null = main couldn't build it this time

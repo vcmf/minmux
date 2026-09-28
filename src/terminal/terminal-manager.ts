@@ -31,7 +31,9 @@ import {
   isIdle,
   mayBePrompt,
   onKey,
+  lostLink,
   onOutput,
+  retryEligible,
   retryPlan,
   waitingRemoteIds,
   type RemoteIdle,
@@ -53,6 +55,7 @@ interface Entry {
   escArmedAt?: number // an idle ssh pane's first Esc: a second within ESC_CLOSE_MS closes it
   liveSince?: number // when this connection went live (a drop after STABLE_MS may auto-retry)
   retryAttempt: number // the automatic reconnect this connection came from (0 = none)
+  retryTotal: number // automatic reconnects since you last connected it yourself (capped)
   retryTimer?: ReturnType<typeof setTimeout> // a scheduled automatic reconnect
   startSeq?: number // bumps per PTY request: a stale answer never moves `remote`
   joinerId?: number
@@ -306,6 +309,7 @@ function build(): Entry {
     spawned: false,
     flow: newShellFlow(),
     retryAttempt: 0,
+    retryTotal: 0,
   }
 }
 
@@ -408,11 +412,22 @@ function requestPty(id: string, entry: Entry, attachOnly: boolean, given?: Sessi
   entry.flow.replaying = true
 }
 
+/** The last few rows up to the cursor, as text (ssh's parting words after an exit). */
+function lastLines(term: Terminal, n: number): string {
+  const b = term.buffer.active
+  const end = b.baseY + b.cursorY
+  const rows: string[] = []
+  for (let y = Math.max(0, end - n); y <= end; y++) {
+    rows.push(b.getLine(y)?.translateToString(true) ?? "")
+  }
+  return rows.join("\n")
+}
+
 /** Record an ssh pane's phase here (keys) and in the store (header button, sidebar dot). */
 function setPhase(id: string, entry: Entry, phase: RemotePhase, detail?: string) {
-  if (phase === "live" && entry.remote !== "live" && entry.remote !== "prompt") {
-    entry.liveSince = Date.now()
-  }
+  // "Established" counts from the last answered prompt: time spent at a password or host-key
+  // question isn't time connected (a failed login must never look established).
+  if (phase === "live" && entry.remote !== "live") entry.liveSince = Date.now()
   entry.remote = phase
   if (phase !== "failed") entry.failure = undefined
   entry.escArmedAt = undefined
@@ -477,6 +492,36 @@ function setIdle(
   entry.failure = failure
 }
 
+/** Call `then` once pane `id` is live and has stayed off a prompt for a moment (or it ended,
+ *  failed, was closed, or a minute passed) — the point where more panes to its host can follow. */
+function afterAuth(id: string, then: () => void) {
+  let settle: ReturnType<typeof setTimeout> | undefined
+  let done = false
+  const finish = () => {
+    if (done) return
+    done = true
+    clearTimeout(settle)
+    clearTimeout(giveUp)
+    off()
+    then()
+  }
+  const check = () => {
+    const st = useStore.getState()
+    const phase = st.remotePhase[id]
+    clearTimeout(settle)
+    if (!st.sessions[id] || phase === "closed" || phase === "failed") return finish()
+    if (phase === "live") settle = setTimeout(finish, AUTH_SETTLE_MS) // a prompt would cancel it
+  }
+  const off = useStore.subscribe((s, prev) => {
+    if (s.remotePhase[id] !== prev.remotePhase[id] || s.sessions[id] !== prev.sessions[id]) check()
+  })
+  const giveUp = setTimeout(finish, 60_000)
+  check()
+}
+// Live this long without turning into a prompt = past authentication (the prompt check runs
+// on the ~1.2 s output-idle timer).
+const AUTH_SETTLE_MS = 2000
+
 // Sessions Connect all is starting: their first spawn connects instead of only reattaching.
 const connectNow = new Set<string>()
 
@@ -519,7 +564,10 @@ function connectRemote(id: string, entry: Entry, auto = false) {
   if (entry.remote === "failed" && entry.failure && !canRetry(entry.failure)) return
   clearTimeout(entry.retryTimer)
   entry.retryTimer = undefined
-  if (!auto) entry.retryAttempt = 0 // you asked: a fresh retry budget from here
+  if (!auto) {
+    entry.retryAttempt = 0 // you asked: a fresh retry budget from here
+    entry.retryTotal = 0
+  }
   const label = useStore.getState().sessions[id]?.remote?.label ?? "the host"
   entry.term.write(banner(`connecting to ${label}…`))
   requestPty(id, entry, false)
@@ -560,28 +608,51 @@ function spawn(session: Session, entry: Entry) {
       entry.startSeq = (entry.startSeq ?? 0) + 1 // an answer still in flight is stale now
       clearTimeout(entry.idleTimer)
       useStore.getState().signalSession(session.id, { type: "command-end" }) // nothing runs now
-      // A lost link of an established connection reconnects on its own, a few times.
-      const plan = retryPlan({
-        enabled: useStore.getState().settings.ssh.autoReconnect,
-        code: e.code,
-        signal: e.signal,
-        atPrompt: entry.remote === "prompt",
-        liveForMs: entry.liveSince === undefined ? 0 : Date.now() - entry.liveSince,
-        attempt: entry.retryAttempt,
-      })
+      const atPrompt = entry.remote === "prompt"
+      const liveForMs = entry.liveSince === undefined ? 0 : Date.now() - entry.liveSince
       entry.liveSince = undefined
-      const gaveUp = !plan && entry.retryAttempt > 0 ? entry.retryAttempt : undefined
-      entry.retryAttempt = plan?.attempt ?? 0
-      // resets the screen, then the banner below it
-      setIdle(session.id, entry, "closed", { ...e, retry: plan ?? undefined, gaveUp })
-      if (plan) {
+      // Keys are gated now; what happens next depends on ssh's last words, so decide once xterm
+      // has parsed them (they arrive with the exit).
+      entry.remote = "closed"
+      entry.term.write("", () => {
+        if (entries.get(session.id) !== entry || entry.remote !== "closed") return // Enter came first
+        const ssh = useStore.getState().settings.ssh
+        const why = {
+          enabled: ssh.autoReconnect,
+          code: e.code,
+          signal: e.signal,
+          atPrompt,
+          dropped: lostLink(lastLines(entry.term, 4)),
+        }
+        // A lost link of an established connection reconnects on its own, a few times.
+        const plan = retryPlan({
+          ...why,
+          liveForMs,
+          attempt: entry.retryAttempt,
+          total: entry.retryTotal,
+        })
+        const gaveUp =
+          !plan && retryEligible(why) && entry.retryAttempt > 0 ? entry.retryAttempt : undefined
+        entry.retryAttempt = plan?.attempt ?? 0
+        if (plan) entry.retryTotal++
+        // resets the screen, then the banner below it
+        setIdle(session.id, entry, "closed", { ...e, retry: plan ?? undefined, gaveUp })
+        if (!plan) return
         entry.retryTimer = setTimeout(() => {
           entry.retryTimer = undefined
-          if (entries.get(session.id) === entry && entry.remote === "closed") {
+          const still = entries.get(session.id) === entry && entry.remote === "closed"
+          // Turned off meanwhile: the countdown stops here; Enter still connects.
+          if (still && useStore.getState().settings.ssh.autoReconnect) {
             connectRemote(session.id, entry, true)
+          } else if (still) {
+            entry.retryAttempt = 0
+            entry.term.write(
+              banner("Automatic reconnect is off. Enter to reconnect · Esc twice to close"),
+            )
+            setPhase(session.id, entry, "closed", "lost")
           }
         }, plan.delayMs)
-      }
+      })
     })
     const restore = useStore.getState().settings.ssh.restore
     // Connect all started it: connect, don't just reattach (on-focus would leave it waiting).
@@ -1053,15 +1124,26 @@ export const TerminalManager = {
    *  shown yet (started now, parked, and connected rather than only reattached). */
   connectAll() {
     const st = useStore.getState()
+    const byHost = new Map<string, string[]>()
     for (const id of waitingRemoteIds(st.sessions, st.remotePhase, st.settings.ssh.restore)) {
+      const hostId = st.sessions[id]?.remote?.hostId
+      if (hostId) byHost.set(hostId, [...(byHost.get(hostId) ?? []), id])
+    }
+    // Size a not-yet-shown pane like the one on screen, not xterm's default 80x24.
+    const likeId = st.tabs.find((t) => t.id === st.activeTabId)?.activeSessionId
+    const connectOne = (id: string) => {
       const entry = entries.get(id)
-      if (entry?.spawned) connectRemote(id, entry)
-      else {
-        const session = st.sessions[id]
-        if (!session) continue
-        connectNow.add(id)
-        TerminalManager.ensureRunning(session)
-      }
+      if (entry?.spawned) return connectRemote(id, entry)
+      const session = useStore.getState().sessions[id]
+      if (!session) return
+      connectNow.add(id)
+      TerminalManager.ensureRunning(session, likeId !== id ? likeId : undefined)
+    }
+    // One pane per host first; the rest once it's past any prompt, so they can share its
+    // connection (ControlMaster) instead of each asking for the password.
+    for (const [first, ...rest] of byHost.values()) {
+      connectOne(first!)
+      if (rest.length) afterAuth(first!, () => rest.forEach(connectOne))
     }
   },
 
