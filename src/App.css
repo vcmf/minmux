@@ -593,9 +593,6 @@ body {
   color: var(--faint);
   cursor: pointer;
 }
-.remote-count {
-  font-size: 10.5px;
-}
 .remote-list {
   flex: 1 1 auto;
   min-height: 0;
@@ -2206,4 +2203,17 @@ body.resizing-col {
 }
 .connect-all:hover {
   background: var(--elev);
+}
+
+/* ── Remote header status: ● 2 live · amber needs you · red down ── */
+.remote-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-left: 4px;
+}
+.remote-status-n {
+  font-size: 10.5px;
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
 }
