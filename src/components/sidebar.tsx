@@ -33,7 +33,7 @@ import { TerminalManager } from "../terminal/terminal-manager"
 import { allPanes } from "../lib/pane-tree"
 import { resolveDefaultShell } from "../lib/shells"
 import { statusUi } from "../lib/status-ui"
-import { isWaitingRemote, remoteStatusUi } from "../lib/remote-connect"
+import { isWaitingRemote, remoteStatusUi, remoteSummary, summaryText } from "../lib/remote-connect"
 import {
   connectedHostIds,
   groupHosts,
@@ -443,11 +443,13 @@ function PrLine({ pr }: { pr: PrInfo }) {
 const REMOTE_COLLAPSED_KEY = "smterm.sidebar.remoteCollapsed"
 
 // A per-window convenience: storage can be missing or throw (private mode, tests).
+// Collapsed until you open it (then your choice is remembered): the header's status says
+// what's connected, and its search button opens the picker either way.
 function readCollapsed(): boolean {
   try {
-    return localStorage.getItem(REMOTE_COLLAPSED_KEY) === "1"
+    return localStorage.getItem(REMOTE_COLLAPSED_KEY) !== "0"
   } catch {
-    return false
+    return true
   }
 }
 function writeCollapsed(v: boolean) {
@@ -471,6 +473,14 @@ function RemoteHosts() {
     ]),
   )
   const hostColors = useStore((s) => s.settings.ssh.colors)
+  // Flattened to primitives for useShallow (a fresh object would re-render every update).
+  const [live, needsYou, down] = useStore(
+    useShallow((s) => {
+      const r = remoteSummary(s.sessions, s.remotePhase, s.remoteDetail)
+      return [r.live, r.needsYou, r.down]
+    }),
+  )
+  const summary = { live, needsYou, down }
   const [collapsed, setCollapsed] = useState(readCollapsed)
   const [menu, setMenu] = useState<{ x: number; y: number; host: SshHost } | null>(null)
   const visibleCount = useMemo(() => visibleHosts(hosts).length, [hosts])
@@ -492,7 +502,18 @@ function RemoteHosts() {
         <button className="remote-toggle" onClick={toggle} aria-expanded={!collapsed}>
           {collapsed ? <CaretRight size={11} /> : <CaretDown size={11} />}
           <span className="section-label">Remote</span>
-          {visibleCount > 0 && <span className="status-faint remote-count">{visibleCount}</span>}
+          {summary.live + summary.needsYou + summary.down > 0 && (
+            <span className="remote-status" title={summaryText(summary)}>
+              {summary.live > 0 && (
+                <>
+                  <span className="dot accent" />
+                  <span className="remote-status-n">{summary.live}</span>
+                </>
+              )}
+              {summary.needsYou > 0 && <span className="dot amber" aria-label="needs you" />}
+              {summary.down > 0 && <span className="dot red" aria-label="disconnected" />}
+            </span>
+          )}
         </button>
         <span className="remote-header-actions">
           <button className="iconbtn" title="Connect to host…" onClick={browse}>

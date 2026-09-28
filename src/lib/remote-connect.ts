@@ -289,3 +289,38 @@ export function countWaitingRemote(
   for (const s of Object.values(sessions)) if (isWaitingRemote(s, phases[s.id], restore)) n++
   return n
 }
+
+/** The Remote header's status: live ssh panes, and whether any needs you or is down. */
+export interface RemoteSummary {
+  live: number // panes with ssh running (incl. one at a password prompt)
+  needsYou: number // at a password / host-key prompt, or reconnecting on its own
+  down: number // lost or failed, waiting on you (a clean exit isn't "down")
+}
+
+export function remoteSummary(
+  sessions: Record<string, { id: string; remote?: unknown }>,
+  phases: Record<string, RemotePhase>,
+  details: Record<string, string>,
+): RemoteSummary {
+  const out = { live: 0, needsYou: 0, down: 0 }
+  for (const s of Object.values(sessions)) {
+    if (!s.remote) continue
+    const p = phases[s.id]
+    const d = details[s.id]
+    if (p === "live" || p === "prompt") out.live++
+    if (p === "prompt" || (p === "closed" && d === "retrying")) out.needsYou++
+    if (p === "failed" || (p === "closed" && d !== "ended" && d !== "retrying")) out.down++
+  }
+  return out
+}
+
+/** The summary in words, for the header's tooltip ("" when nothing is remote). */
+export function summaryText(s: RemoteSummary): string {
+  return [
+    s.live && `${s.live} connected`,
+    s.needsYou && `${s.needsYou} need${s.needsYou === 1 ? "s" : ""} you`,
+    s.down && `${s.down} disconnected`,
+  ]
+    .filter(Boolean)
+    .join(" · ")
+}

@@ -7,6 +7,8 @@ import {
   onOutput,
   remoteStatusUi,
   retryPlan,
+  remoteSummary,
+  summaryText,
   retryEligible,
   lostLink,
   isWaitingRemote,
@@ -399,5 +401,31 @@ describe("isWaitingRemote / countWaitingRemote", () => {
     expect(isWaitingRemote({}, "waiting", "on-focus")).toBe(false)
     const sessions = { a: { id: "a", remote: r }, b: { id: "b", remote: r, restored: true } }
     expect(countWaitingRemote(sessions, { a: "waiting" }, "on-focus")).toBe(2)
+  })
+})
+
+describe("remoteSummary / summaryText", () => {
+  it("counts live panes (a prompt is live), what needs you, and what's down", () => {
+    const r = { hostId: "native:web" }
+    const sessions = {
+      a: { id: "a", remote: r },
+      b: { id: "b", remote: r },
+      c: { id: "c", remote: r },
+      d: { id: "d", remote: r },
+      e: { id: "e", remote: r },
+      f: { id: "f" },
+    }
+    const phases = {
+      a: "live",
+      b: "prompt",
+      c: "closed",
+      d: "closed",
+      e: "failed",
+      f: "live",
+    } as Record<string, RemotePhase>
+    const sum = remoteSummary(sessions, phases, { c: "retrying", d: "ended" })
+    expect(sum).toEqual({ live: 2, needsYou: 2, down: 1 })
+    expect(summaryText(sum)).toBe("2 connected · 2 need you · 1 disconnected")
+    expect(summaryText({ live: 0, needsYou: 0, down: 0 })).toBe("")
   })
 })

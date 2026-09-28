@@ -22,9 +22,13 @@ const showHosts = (hosts: SshHost[]) => {
   }))
 }
 
+/** The Remote section's remembered choice: most tests look inside it, so they start it open. */
+const REMOTE_KEY = "smterm.sidebar.remoteCollapsed"
+
 beforeEach(() => {
   resetStore()
   vi.clearAllMocks()
+  localStorage.setItem(REMOTE_KEY, "0")
 })
 
 describe("Sidebar", () => {
@@ -282,11 +286,7 @@ describe("Sidebar — folder lines: full path + right-click menu", () => {
 
 describe("Sidebar — Remote hosts", () => {
   beforeEach(() => {
-    try {
-      localStorage.clear()
-    } catch {
-      // no storage in this environment
-    }
+    localStorage.setItem(REMOTE_KEY, "0")
   })
 
   it("lists saved hosts with their detail, without env headings for one env", () => {
@@ -489,5 +489,38 @@ describe("Sidebar — a restored ssh pane not started yet", () => {
     }))
     render(<Sidebar />)
     expect(screen.getByText("not connected")).toBeInTheDocument()
+  })
+})
+
+describe("Sidebar — Remote header", () => {
+  it("starts collapsed when you've never chosen", () => {
+    localStorage.removeItem(REMOTE_KEY)
+    showHosts([testHost("web")])
+    render(<Sidebar />)
+    expect(screen.getByText("Remote").closest("button")).toHaveAttribute("aria-expanded", "false")
+    expect(screen.queryByTitle("Open a terminal on web")).not.toBeInTheDocument()
+  })
+
+  it("shows live connections, and whether one needs you or is down, not the host count", () => {
+    st().setSshHosts([testHost("web"), testHost("db"), testHost("pi")])
+    st().newTab(hostShellOption(testHost("web")))
+    st().newTab(hostShellOption(testHost("db")))
+    st().newTab(hostShellOption(testHost("pi")))
+    const [a, b, c] = st().tabs.map((t) => t.activeSessionId)
+    st().setRemotePhase(a!, "live")
+    st().setRemotePhase(b!, "prompt", "password")
+    st().setRemotePhase(c!, "closed", "lost")
+    render(<Sidebar />)
+    const status = document.querySelector(".remote-status") as HTMLElement
+    expect(status.querySelector(".remote-status-n")!.textContent).toBe("2") // web + db (at a prompt)
+    expect(status.querySelector(".dot.amber")).not.toBeNull()
+    expect(status.querySelector(".dot.red")).not.toBeNull()
+    expect(status.title).toBe("2 connected · 1 needs you · 1 disconnected")
+  })
+
+  it("nothing remote: no status at all", () => {
+    st().setSshHosts([testHost("web")])
+    render(<Sidebar />)
+    expect(document.querySelector(".remote-status")).toBeNull()
   })
 })
