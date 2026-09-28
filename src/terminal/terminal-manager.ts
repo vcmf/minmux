@@ -13,6 +13,7 @@ import { withAlpha } from "../settings/themes"
 import { displaySessionTitle } from "../lib/session-label"
 import { allPanes, allSessionIds, visibleSessionIds } from "../lib/pane-tree"
 import { canRetry, sshFailureKind, type SshFailure } from "../lib/ssh-errors"
+import { cwdFromOsc7, cwdFromTitle, sameMachine } from "../lib/remote-cwd"
 import { webglPanes, shouldRebuildAtlas } from "../lib/renderer-policy"
 import { appShortcut, keyAction } from "../lib/terminal-keys"
 import { gridChanged, type Grid } from "../lib/resize"
@@ -53,6 +54,8 @@ interface Entry {
   failure?: SshFailure // with remote = "failed": why, so Enter / Retry only act when they can
   lastKey?: string // ssh panes: the last input sent (a prompt check skips a line being typed)
   escArmedAt?: number // an idle ssh pane's first Esc: a second within ESC_CLOSE_MS closes it
+  osc7?: boolean // ssh panes: the host reports its folder via OSC 7 (the title is a fallback)
+  cwdHost?: string // ssh panes: the host this connection's first folder report named
   liveSince?: number // when this connection went live (a drop after STABLE_MS may auto-retry)
   retryAttempt: number // the automatic reconnect this connection came from (0 = none)
   retryTotal: number // automatic reconnects since you last connected it yourself (capped)
@@ -352,6 +355,10 @@ function requestPty(id: string, entry: Entry, attachOnly: boolean, given?: Sessi
   entry.startSeq = seq
   if (session.remote) {
     entry.lastKey = undefined // a new ssh: nothing typed into it yet
+    // …and starts at home, not where the last one was: its folder is unknown until it says.
+    entry.osc7 = false
+    entry.cwdHost = undefined
+    if (!attachOnly) useStore.getState().setRemoteCwd(id, undefined)
     setPhase(id, entry, "starting")
   }
   void ipc
@@ -522,6 +529,30 @@ function afterAuth(id: string, then: () => void) {
 // on the ~1.2 s output-idle timer).
 const AUTH_SETTLE_MS = 2000
 
+/** Whether a folder report (naming `host`) is this pane's own host's, not a machine reached
+ *  from inside it (an ssh to another box, a container). A report naming the configured
+ *  alias or HostName always is, and fixes the machine; otherwise the first one seen outside
+ *  a reload's replay does, and later ones must match it. */
+function sameHostAsBefore(entry: Entry, id: string, host: string): boolean {
+  if (!host || host === "localhost") return true
+  const remote = useStore.getState().sessions[id]?.remote
+  const hostName = useStore
+    .getState()
+    .sshHosts.find((h) => h.hostId === remote?.hostId)
+    ?.detail?.replace(/^[^@]*@/, "")
+    .replace(/:\d+$/, "")
+  const configured = [remote?.target, hostName].filter((x): x is string => !!x)
+  if (configured.some((c) => sameMachine(c.toLowerCase(), host))) {
+    entry.cwdHost = host
+    return true
+  }
+  if (entry.cwdHost === undefined) {
+    if (!entry.flow.replaying) entry.cwdHost = host // replayed history may be a nested shell's
+    return true
+  }
+  return sameMachine(entry.cwdHost, host)
+}
+
 // Sessions Connect all is starting: their first spawn connects instead of only reattaching.
 const connectNow = new Set<string>()
 
@@ -691,10 +722,27 @@ function spawn(session: Session, entry: Entry) {
   // OSC 0/2 (window title) → live session title (shells set it to cmd/cwd;
   // agents like Claude Code can set it to the task). Manual rename still wins
   // at the tab level (store keeps tab.title as the pin).
-  term.onTitleChange((title) => store.setSessionOscTitle(session.id, title))
+  term.onTitleChange((title) => {
+    store.setSessionOscTitle(session.id, title)
+    // An ssh pane that doesn't send OSC 7: the Debian / Ubuntu title `user@host: ~/dir`.
+    if (session.remote && !entry.osc7) {
+      const at = cwdFromTitle(title)
+      if (at && sameHostAsBefore(entry, session.id, at.host))
+        useStore.getState().setRemoteCwd(session.id, at.dir)
+    }
+  })
 
   // OSC 7 — the shell reports its working directory (file://host/path).
   term.parser.registerOscHandler(7, (data) => {
+    // An ssh pane's folder is on the host: shown, never read locally, never sent back.
+    if (session.remote) {
+      const at = cwdFromOsc7(data)
+      if (at && sameHostAsBefore(entry, session.id, at.host)) {
+        entry.osc7 = true // authoritative from now on: the title is only a fallback
+        useStore.getState().setRemoteCwd(session.id, at.dir)
+      }
+      return true
+    }
     try {
       const path = decodeURIComponent(new URL(data).pathname)
       if (path) store.setSessionCwd(session.id, path)

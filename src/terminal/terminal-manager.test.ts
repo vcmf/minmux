@@ -13,7 +13,14 @@ class FakeTerminal {
   rows = 24
   written = ""
   dataHandlers: ((d: string) => void)[] = []
-  parser = { registerOscHandler: () => ({ dispose() {} }) }
+  osc: Record<number, (data: string) => boolean> = {}
+  titleHandlers: ((t: string) => void)[] = []
+  parser = {
+    registerOscHandler: (n: number, cb: (data: string) => boolean) => {
+      this.osc[n] = cb
+      return { dispose() {} }
+    },
+  }
   buffer = {
     active: {
       type: "normal" as "normal" | "alternate",
@@ -36,7 +43,8 @@ class FakeTerminal {
     this.dataHandlers.push(cb)
     return { dispose() {} }
   }
-  onTitleChange() {
+  onTitleChange(cb: (t: string) => void) {
+    this.titleHandlers.push(cb)
     return { dispose() {} }
   }
   onBell() {
@@ -732,5 +740,67 @@ describe("TerminalManager — Connect all, one host at a time", () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+})
+
+describe("TerminalManager — the remote folder", () => {
+  it("OSC 7 from the host sets it (never the local cwd); the title is only a fallback", async () => {
+    const { id, term } = start({})
+    await flush()
+    term.titleHandlers.forEach((h) => h("quang@web: ~/from-title"))
+    expect(st().sessions[id]!.remoteCwd).toBe("~/from-title")
+    term.osc[7]!("file://web/srv/app")
+    expect(st().sessions[id]!.remoteCwd).toBe("/srv/app")
+    expect(st().sessions[id]!.cwd).toBeUndefined()
+    term.titleHandlers.forEach((h) => h("quang@web: ~/ignored"))
+    expect(st().sessions[id]!.remoteCwd).toBe("/srv/app") // OSC 7 is authoritative now
+  })
+})
+
+describe("TerminalManager — the remote folder, the edges", () => {
+  it("a report from another host (an ssh inside the pane) doesn't move the folder", async () => {
+    const { id, term } = start({})
+    await flush()
+    term.osc[7]!("file://web/srv/app")
+    term.osc[7]!("file://db/var/lib/pg") // ssh db, from inside web's pane
+    term.titleHandlers.forEach((h) => h("root@db: /etc"))
+    expect(st().sessions[id]!.remoteCwd).toBe("/srv/app")
+  })
+})
+
+describe("TerminalManager — the remote folder, per connection", () => {
+  it("a new connection forgets the folder (it starts at home) until the shell says again", async () => {
+    const { id, term } = start({})
+    await flush()
+    term.osc[7]!("file://web/srv/app")
+    expect(st().sessions[id]!.remoteCwd).toBe("/srv/app")
+    exitHandlers[id]!({ code: 0, signal: 0 })
+    await flush()
+    term.type("\r") // reconnect
+    expect(st().sessions[id]!.remoteCwd).toBeUndefined()
+    expect(spawnCalls()[1]).not.toHaveProperty("remoteCwd") // nothing is ever sent back
+    term.osc[7]!("file://other/x") // a new connection may be a new machine name: learnt afresh
+    expect(st().sessions[id]!.remoteCwd).toBe("/x")
+  })
+
+  it("a title's short hostname and OSC 7's full one are the same machine", async () => {
+    const { id, term } = start({})
+    await flush()
+    term.titleHandlers.forEach((h) => h("u@box: ~/src"))
+    term.osc[7]!("file://box.corp.example/home/u/src")
+    expect(st().sessions[id]!.remoteCwd).toBe("/home/u/src")
+  })
+})
+
+describe("TerminalManager — whose folder a report is", () => {
+  it("a report naming the configured host takes over from a nested one seen first", async () => {
+    st().setSshHosts([testHost("web", "native", "me@web.corp.example")])
+    const { id, term } = start({})
+    await flush()
+    term.osc[7]!("file://db/var/lib/pg") // an ssh db inside, reported first
+    term.osc[7]!("file://web.corp.example/srv/app") // then web's own shell
+    expect(st().sessions[id]!.remoteCwd).toBe("/srv/app")
+    term.osc[7]!("file://db/var/tmp") // db again: not this pane's host
+    expect(st().sessions[id]!.remoteCwd).toBe("/srv/app")
   })
 })

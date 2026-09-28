@@ -774,6 +774,24 @@ body {
   color: var(--dim);
   border: 1px solid var(--border2);
 }
+/* An ssh pane row's host, boxed like the shell badge (truncated; the host's colour if set). */
+.host-box {
+  font-size: 10px;
+  border-radius: 4px;
+  padding: 0 5px;
+  color: var(--dim);
+  border: 1px solid var(--border2);
+  max-width: 110px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 0 1 auto;
+}
+.host-box.colored {
+  color: var(--host);
+  border-color: color-mix(in srgb, var(--host) 45%, transparent);
+}
 .pane-badge.agent {
   color: var(--accent);
   border-color: color-mix(in srgb, var(--accent) 40%, transparent);

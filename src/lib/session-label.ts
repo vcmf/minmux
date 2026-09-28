@@ -1,4 +1,5 @@
 import { allSessionIds } from "./pane-tree"
+import { hasFormatChar, homeRelative, remoteCwdName } from "./remote-cwd"
 import type { Session, Tab } from "../types"
 
 /** Short shell-type label for the badge (zsh/bash/pwsh/wsl/…) from the command. */
@@ -37,6 +38,15 @@ export function displaySessionTitle(session: Session | undefined, home: string):
   if (isCustomOscTitle(session.oscTitle)) return session.oscTitle!.trim()
   if (session.remote) return session.remote.label
   return cwdBasename(session.cwd, home) || shellType(session.command) || session.title || "shell"
+}
+
+/** An ssh pane's sidebar headline: a program's own title, else its remote folder's name,
+ *  else the host (tabs and pane headers keep naming the host). */
+export function remoteRowTitle(session: Session, home: string, user?: string): string {
+  const title = session.oscTitle
+  if (isCustomOscTitle(title) && !hasFormatChar(title!)) return title!.trim()
+  if (session.remoteCwd) return remoteCwdName(homeRelative(session.remoteCwd, user))
+  return session.remote?.label ?? displaySessionTitle(session, home)
 }
 
 /** A tab's display title: the manual pin (tab.title) if set, else the focused pane's live

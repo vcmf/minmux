@@ -161,6 +161,10 @@ defaults, it doesn't replace them. Hiding is by alias, so it applies in every en
 - **Keepalive.** smterm adds `ServerAliveInterval=30` (with `ServerAliveCountMax=4`), so an idle
   pane survives NAT timeouts and a dead link ends in about two minutes instead of hanging.
   `"ssh": { "keepAliveSeconds": 0 }` leaves it to your config.
+- **Where you are.** If the host reports its folder (OSC 7, or the Debian/Ubuntu title
+  `user@host: ~/dir`), the sidebar row shows it, with the host boxed beside it. It's display
+  only: a reconnect or a relaunch opens a fresh login at home (keeping your place across drops
+  is what tmux persistence will do).
 - **Reconnect.** When `ssh` exits, the pane says why and Enter (or the **Reconnect** button)
   connects again. A connection that was up for 30 s (after its last password prompt) and then
   loses its link (ssh says so: "closed by remote host", "Broken pipe", …) reconnects on its

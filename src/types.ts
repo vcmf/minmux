@@ -39,6 +39,7 @@ export interface Session {
   detail?: string // why it needs attention (OSC-9 message / "needs input")
   remote?: RemoteRef // runs on an ssh host: no local cwd, files or git (splits stay on it)
   remoteSaved?: unknown // a saved host this build couldn't read: written back as-is on save
+  remoteCwd?: string // runtime only: where its remote shell reports it is (display, never read locally)
   restored?: boolean // runtime only (never saved): came from workspace.json this launch/reload
 }
 

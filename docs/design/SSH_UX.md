@@ -339,3 +339,17 @@ prompt heuristic in S1, which runs on the existing throttled output-idle path.
       rest once it's past its prompt, so a ControlMaster is shared. A renderer reload asks main
       which ssh panes are still live (`pty:live-ids`), so those never read as waiting. Shots:
       [reconnecting](ssh-ux/s4-reconnecting.png), [connect all](ssh-ux/s4-connect-all.png).
+
+## 8. Follow-ups (2026-09-28 feedback)
+
+- [ ] **H1** Remote section collapsed by default; its header shows connection status
+      (`● N` live, pulsing while connecting, amber when one needs you, red when one is down)
+      instead of the host count. [shot](ssh-ux/h1-header-status.png)
+- [x] **H2** Keep both host and folder: a remote pane row reads `<folder> [host]` over the
+      remote path (home-relative, front-shortened), or `user@hostname` when the host reports no
+      folder. The folder comes from OSC 7, else the Debian/Ubuntu title; display only, per
+      connection. **Reopen-on-reconnect (option A) was built and dropped**: the folder comes from
+      pane output that anything can fake, and two review rounds found command injections (fish's
+      `\'`, cmd.exe's `%VAR:~n,m%`) plus a trust problem (steering a login into a folder whose
+      `.envrc`/venv hooks run). Revisit with phase 3 (a nonce-verified OSC 7 from our own
+      integration) or phase 2 (tmux keeps the folder itself). [shot](ssh-ux/h2-remote-folder.png)

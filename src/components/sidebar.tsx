@@ -33,9 +33,11 @@ import { TerminalManager } from "../terminal/terminal-manager"
 import { allPanes } from "../lib/pane-tree"
 import { resolveDefaultShell } from "../lib/shells"
 import { statusUi } from "../lib/status-ui"
+import { detailUser, homeRelative, shortRemoteCwd } from "../lib/remote-cwd"
 import { isWaitingRemote, remoteStatusUi, remoteSummary, summaryText } from "../lib/remote-connect"
 import {
   connectedHostIds,
+  envTitle,
   groupHosts,
   hostColor,
   hostColorCss,
@@ -45,6 +47,7 @@ import type { SshHost } from "../types"
 import { hostMenuItems, sidebarHosts, visibleHosts, type HostActionId } from "../lib/ssh-host-list"
 import { runHostAction } from "../lib/ssh-host-actions"
 import {
+  remoteRowTitle,
   tabTitle,
   sessionSubline,
   branchLine,
@@ -241,6 +244,11 @@ export function Sidebar() {
                       )
                     : statusUi(s.status)
                   const isActive = active && tab.activeSessionId === id
+                  // The host's colour, looked up once for the icon and the host box.
+                  const rowColor = s.remote ? hostCss(s.remote.target) : undefined
+                  const rowUser = s.remote
+                    ? detailUser(sshHosts.find((h) => h.hostId === s.remote!.hostId)?.detail)
+                    : undefined
                   return (
                     <div
                       key={id}
@@ -269,7 +277,7 @@ export function Sidebar() {
                               weight="fill"
                               // A host's colour (a safety cue) beats a Claude /color accent.
                               color={
-                                (s.remote ? hostCss(s.remote.target) : undefined) ??
+                                rowColor ??
                                 accentOf(id) ??
                                 (isActive ? "var(--accent)" : "var(--dim)")
                               }
@@ -279,8 +287,30 @@ export function Sidebar() {
                       </span>
                       <div className="tree-labels">
                         <span className="tree-primary-row">
-                          <span className="tree-primary">{displaySessionTitle(s, home)}</span>
-                          <span className="pane-badge">{shellType(s.command)}</span>
+                          {s.remote && s.remoteCwd ? (
+                            // Like a local row: the folder's name, then (boxed) where it is.
+                            <>
+                              <span className="tree-primary">
+                                {remoteRowTitle(s, home, rowUser)}
+                              </span>
+                              <span
+                                className={`host-box${rowColor ? " colored" : ""}`}
+                                style={
+                                  rowColor
+                                    ? ({ "--host": rowColor } as React.CSSProperties)
+                                    : undefined
+                                }
+                                title={remoteWhere(s.remote, sshHosts)}
+                              >
+                                {s.remote.label}
+                              </span>
+                            </>
+                          ) : (
+                            <>
+                              <span className="tree-primary">{displaySessionTitle(s, home)}</span>
+                              <span className="pane-badge">{shellType(s.command)}</span>
+                            </>
+                          )}
                         </span>
                         {s.status === "attention" && s.detail ? (
                           <span className="tree-sub attn">{s.detail}</span>
@@ -293,8 +323,15 @@ export function Sidebar() {
                         )}
                         {s.remote ? (
                           // Its folders are on the host: no local folder line or menu.
-                          <span className="tree-sub" title={`ssh ${s.remote.target}`}>
-                            {remoteWhere(s.remote, sshHosts)}
+                          <span
+                            className="tree-sub"
+                            title={s.remoteCwd ?? `ssh ${s.remote.target}`}
+                          >
+                            {s.remoteCwd
+                              ? // Front-shortened to fit: the folder at the end is what matters.
+                                shortRemoteCwd(homeRelative(s.remoteCwd, rowUser), 28) +
+                                (s.remote.env === "native" ? "" : ` · ${envTitle(s.remote.env)}`)
+                              : remoteWhere(s.remote, sshHosts)}
                           </span>
                         ) : (
                           <DirLines
