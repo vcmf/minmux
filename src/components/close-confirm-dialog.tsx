@@ -16,7 +16,6 @@ export function CloseConfirmDialog() {
       wasOpen.current = false
       if (!document.activeElement || document.activeElement === document.body) refocus()
     }
-     
   }, [pending])
   const confirmRef = useRef<HTMLButtonElement>(null)
   const cancelRef = useRef<HTMLButtonElement>(null)
