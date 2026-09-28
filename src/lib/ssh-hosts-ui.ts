@@ -57,7 +57,8 @@ export function sameHosts(a: SshHost[], b: SshHost[]): boolean {
       h.label === o.label &&
       h.target === o.target &&
       h.env === o.env &&
-      h.detail === o.detail
+      h.detail === o.detail &&
+      h.hidden === o.hidden
     )
   })
 }

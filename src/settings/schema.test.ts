@@ -115,7 +115,8 @@ describe("parseSettings", () => {
 describe("ssh settings", () => {
   it("defaults: nothing hidden, a 30 s keepalive, reconnect at once", () => {
     expect(defaultSettings.ssh).toEqual({
-      hidden: DEFAULT_HIDDEN_HOSTS,
+      hidden: [],
+      shown: [],
       pinned: [],
       keepAliveSeconds: 30,
       restore: "auto",
@@ -137,6 +138,7 @@ describe("ssh settings", () => {
       }).ssh,
     ).toEqual({
       hidden: ["github.com"],
+      shown: [],
       pinned: [],
       keepAliveSeconds: 0,
       restore: "on-focus",
@@ -148,8 +150,8 @@ describe("ssh settings", () => {
     const hidden = defaultSettings.ssh.hidden
     hidden.push("leak")
     try {
-      expect(mergeSettings({}).ssh.hidden).toEqual(DEFAULT_HIDDEN_HOSTS)
-      expect(mergeSshSettings({}).hidden).toEqual(DEFAULT_HIDDEN_HOSTS)
+      expect(mergeSettings({}).ssh.hidden).toEqual([])
+      expect(mergeSshSettings({}).hidden).toEqual([])
       expect(DEFAULT_HIDDEN_HOSTS).not.toContain("leak")
     } finally {
       hidden.pop()

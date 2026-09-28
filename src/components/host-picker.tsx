@@ -9,24 +9,12 @@ import {
   hiddenHosts,
   hostMenuItems,
   hostSections,
-  sshCommand,
   visibleHosts,
   type HostActionId,
 } from "../lib/ssh-host-list"
 import type { SshHost } from "../types"
 import { ContextMenu } from "./context-menu"
-
-/** Run a host-menu action (shared by the picker and the sidebar's host rows). */
-export function runHostAction(h: SshHost, id: HostActionId) {
-  const st = useStore.getState()
-  if (id === "open") st.openHost(h, "tab")
-  else if (id === "splitRight") st.openHost(h, "row")
-  else if (id === "splitDown") st.openHost(h, "column")
-  else if (id === "copyCommand") ipc.clipboardWrite(sshCommand(h))
-  else if (id === "pin") st.toggleHostPinned(h.hostId)
-  else if (id === "hide") st.setHostHidden(h.label, true)
-  else ipc.openSshConfig()
-}
+import { runHostAction } from "../lib/ssh-host-actions"
 
 /** "Connect to host": the saved hosts, host first. ⏎ new tab · ⌥⏎ split right · ⇧⏎ down. */
 export function HostPicker() {
@@ -97,7 +85,12 @@ export function HostPicker() {
           <span className="kbd">esc</span>
         </div>
         <div className="palette-results">
-          {loaded && visibleHosts(hosts).length === 0 && (
+          {loaded && visibleHosts(hosts).length === 0 && hidden.length > 0 && (
+            <div className="host-picker-empty">
+              <p>All your hosts are hidden. Show one from “Hidden ({hidden.length})” below.</p>
+            </div>
+          )}
+          {loaded && hosts.length === 0 && (
             <div className="host-picker-empty">
               <p>
                 No hosts yet. smterm lists the <code>Host</code> entries in ~/.ssh/config (and in

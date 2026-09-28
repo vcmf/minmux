@@ -127,7 +127,8 @@ in-app settings panel; a live watcher re-applies changes as you save.
   "cursorBlink": true,
   "scrollback": 5000,
   "ssh": {
-    "hidden": ["github.com"], // default: the common git hosts
+    "hidden": ["bastion"], // your own; the common git hosts are hidden on top
+    "shown": [], // git hosts you brought back
     "pinned": ["native:gpu-box"], // kept in the sidebar
     "keepAliveSeconds": 30,
     "restore": "auto", // auto | on-focus
@@ -146,7 +147,9 @@ section keeps just the hosts you pinned or have open. It never keeps its own hos
 <alias>`, so keys, `ssh-agent`, 1Password, `ProxyJump` and password or 2FA prompts all work as
 in any terminal. Editing the config updates the list as you save. Wildcard patterns
 (`Host *.corp`) aren't listed. Git hosts (`github.com`, `gitlab.com`, …) are hidden by default;
-show one again from the picker's "Hidden" footer, or set your own `"ssh": { "hidden": [...] }`.
+show one again from the picker's "Hidden" footer (recorded in `ssh.shown`). Hide your own hosts
+with right-click → Hide host, or `"ssh": { "hidden": ["bastion"] }`; that list adds to the git
+defaults, it doesn't replace them. Hiding is by alias, so it applies in every environment.
 
 - **Know where you are.** A remote pane's header shows where it runs (`user@hostname` from your
   config, else the alias). Give hosts a colour with `ssh.colors`: ssh-style patterns such as

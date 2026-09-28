@@ -281,7 +281,8 @@ export function TopBar() {
                 {visibleHosts(sshHosts).length > quickHosts.length && (
                   <button
                     className="shell-menu-item shell-menu-more"
-                    onMouseDown={() => {
+                    onMouseDown={(e) => {
+                      e.preventDefault() // the picker's input keeps the focus it takes
                       setShellMenu(false)
                       useStore.getState().setHostPickerOpen(true)
                     }}

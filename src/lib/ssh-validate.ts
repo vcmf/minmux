@@ -31,7 +31,8 @@ export const isSshEnv = (v: unknown): v is SshEnv => parseSshEnv(v) !== null
 /** The `ssh` settings block. Hosts come from ~/.ssh/config only: these are presentation
  *  and session-keeping preferences, never how to connect. */
 export interface SshSettings {
-  hidden: string[] // aliases hidden from the list (default: the git hosts, DEFAULT_HIDDEN_HOSTS)
+  hidden: string[] // aliases you hid (on top of DEFAULT_HIDDEN_HOSTS; see effectiveHidden)
+  shown: string[] // DEFAULT_HIDDEN_HOSTS entries you brought back
   pinned: string[] // hostIds kept in the sidebar
   keepAliveSeconds: number // ServerAliveInterval smterm adds (0 = add none, the config decides)
   restore: "auto" | "on-focus" // after a relaunch: reconnect at once, or when the pane is used
@@ -48,8 +49,9 @@ export const isHostColor = (v: unknown): v is string =>
   typeof v === "string" &&
   ((HOST_COLOR_NAMES as readonly string[]).includes(v.toLowerCase()) || HEX_COLOR.test(v))
 
-/** Hidden until you show them: git forges live in ssh configs but aren't places to open a
- *  shell. Only the default: an explicit `ssh.hidden` (even []) replaces it. */
+/** Hidden until you show them (`ssh.shown`): git forges live in ssh configs but aren't places
+ *  to open a shell. Kept apart from `ssh.hidden`, so a saved settings.json never freezes this
+ *  list and a later addition here reaches everyone. */
 export const DEFAULT_HIDDEN_HOSTS: readonly string[] = Object.freeze([
   "github.com",
   "gitlab.com",
@@ -59,7 +61,7 @@ export const DEFAULT_HIDDEN_HOSTS: readonly string[] = Object.freeze([
   "codeberg.org",
 ])
 const MAX_SSH_PINNED = 200
-const MAX_HOST_ID_LEN = 300
+const MAX_HOST_ID = 300 // a pinned id, as in parseRemoteRef
 
 const DEFAULT_KEEPALIVE = 30
 const MAX_KEEPALIVE = 3600
@@ -68,28 +70,34 @@ const MAX_SSH_HIDDEN = 1000
 const asObject = (v: unknown): Record<string, unknown> =>
   v && typeof v === "object" ? (v as Record<string, unknown>) : {}
 
+/** A list of host aliases: unique, trimmed, no control characters, capped. */
+function aliasList(v: unknown): string[] {
+  if (!Array.isArray(v)) return []
+  const out = v
+    .filter((x): x is string => typeof x === "string")
+    .map((x) => x.trim())
+    .filter((x) => x !== "" && x.length <= 255 && !hasControlChar(x))
+  return [...new Set(out)].slice(0, MAX_SSH_HIDDEN)
+}
+
+/** What's actually hidden: your list, plus the defaults you haven't shown (case-insensitive,
+ *  as ssh matches aliases). */
+export function effectiveHidden(ssh: Pick<SshSettings, "hidden" | "shown">): string[] {
+  const shown = new Set(ssh.shown.map((a) => a.toLowerCase()))
+  return [...ssh.hidden, ...DEFAULT_HIDDEN_HOSTS.filter((a) => !shown.has(a.toLowerCase()))]
+}
+
 /** The `ssh` block, validated (fresh arrays every call). */
 export function mergeSshSettings(input: unknown): SshSettings {
   const o = asObject(input)
-  const hidden = Array.isArray(o.hidden)
-    ? [
-        ...new Set(
-          o.hidden
-            .filter((x): x is string => typeof x === "string")
-            .map((x) => x.trim())
-            .filter((x) => x !== "" && x.length <= 255 && !hasControlChar(x)),
-        ),
-      ].slice(0, MAX_SSH_HIDDEN)
-    : [...DEFAULT_HIDDEN_HOSTS]
+  const hidden = aliasList(o.hidden)
+  const shown = aliasList(o.shown)
   const pinned = Array.isArray(o.pinned)
     ? [
         ...new Set(
           o.pinned.filter(
             (x): x is string =>
-              typeof x === "string" &&
-              x !== "" &&
-              x.length <= MAX_HOST_ID_LEN &&
-              !hasControlChar(x),
+              typeof x === "string" && x !== "" && x.length <= MAX_HOST_ID && !hasControlChar(x),
           ),
         ),
       ].slice(0, MAX_SSH_PINNED)
@@ -110,10 +118,9 @@ export function mergeSshSettings(input: unknown): SshSettings {
     if (!picked.has(key)) picked.set(key, v.toLowerCase())
   }
   const colors = Object.fromEntries(picked) // own data properties, even for "__proto__"
-  return { hidden, pinned, keepAliveSeconds, restore, colors }
+  return { hidden, shown, pinned, keepAliveSeconds, restore, colors }
 }
 
-const MAX_HOST_ID = 300
 const MAX_LABEL = 200
 
 /** A RemoteRef's identity (hostId, target, env; label → target), validated; null if unusable. */

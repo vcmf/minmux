@@ -4,6 +4,7 @@ import {
   isSshEnv,
   isSshTarget,
   DEFAULT_HIDDEN_HOSTS,
+  effectiveHidden,
   mergeSshSettings,
   parseRemoteRef,
   parseSshEnv,
@@ -85,10 +86,11 @@ describe("parseSshEnv / isSshEnv", () => {
 })
 
 describe("mergeSshSettings", () => {
-  it("defaults: git hosts hidden, nothing pinned, a 30 s keepalive, reconnect at once", () => {
+  it("defaults: nothing of your own hidden or shown, nothing pinned, 30 s keepalive, auto", () => {
     for (const v of [undefined, null, {}, "nope", 3]) {
       expect(mergeSshSettings(v)).toEqual({
-        hidden: DEFAULT_HIDDEN_HOSTS,
+        hidden: [],
+        shown: [],
         pinned: [],
         keepAliveSeconds: 30,
         restore: "auto",
@@ -101,8 +103,7 @@ describe("mergeSshSettings", () => {
     expect(
       mergeSshSettings({ hidden: ["a", "a", "", " ", 3, null, "b", " prod "] }).hidden,
     ).toEqual(["a", "b", "prod"])
-    expect(mergeSshSettings({ hidden: "a" }).hidden).toEqual(DEFAULT_HIDDEN_HOSTS) // not a list
-    expect(mergeSshSettings({ hidden: [] }).hidden).toEqual([]) // an explicit [] shows them all
+    expect(mergeSshSettings({ hidden: "a" }).hidden).toEqual([])
     expect(mergeSshSettings({ hidden: ["x".repeat(256), "ok", "a\u0007b"] }).hidden).toEqual(["ok"])
     const many = Array.from({ length: 1500 }, (_, i) => `h${i}`)
     expect(mergeSshSettings({ hidden: many }).hidden).toHaveLength(1000)
@@ -126,7 +127,7 @@ describe("mergeSshSettings", () => {
     const a = mergeSshSettings({})
     a.hidden.push("x")
     a.pinned.push("y")
-    expect(mergeSshSettings({}).hidden).toEqual(DEFAULT_HIDDEN_HOSTS)
+    expect(mergeSshSettings({}).hidden).toEqual([])
     expect(mergeSshSettings({}).pinned).toEqual([])
   })
 })
@@ -221,5 +222,15 @@ describe("mergeSshSettings — pinned", () => {
     expect(mergeSshSettings({ pinned: "native:web" }).pinned).toEqual([])
     const many = Array.from({ length: 300 }, (_, i) => `native:h${i}`)
     expect(mergeSshSettings({ pinned: many }).pinned).toHaveLength(200)
+  })
+})
+
+describe("effectiveHidden", () => {
+  it("your list plus the git defaults you haven't shown — a saved [] never unhides them", () => {
+    expect(effectiveHidden({ hidden: [], shown: [] })).toEqual([...DEFAULT_HIDDEN_HOSTS])
+    expect(effectiveHidden({ hidden: ["bastion"], shown: ["GitHub.com"] })).toEqual([
+      "bastion",
+      ...DEFAULT_HIDDEN_HOSTS.filter((a) => a !== "github.com"),
+    ])
   })
 })

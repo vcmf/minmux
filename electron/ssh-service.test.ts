@@ -641,3 +641,28 @@ describe("SshService.spawnPlan", () => {
     expect(await planning).toEqual({ error: expect.stringContaining("ssh config") })
   })
 })
+
+describe("SshService — settings main doesn't use", () => {
+  beforeEach(() => vi.useFakeTimers())
+  afterEach(() => vi.useRealTimers())
+
+  it("a pin or a colour change doesn't reload the configs", async () => {
+    let raw = JSON.stringify({})
+    const h = harness({ readSettings: () => raw })
+    await h.svc.hosts()
+    raw = JSON.stringify({ ssh: { pinned: ["native:web"], colors: { web: "red" } } })
+    h.svc.settingsChanged()
+    await vi.advanceTimersByTimeAsync(250)
+    expect(h.onChange).not.toHaveBeenCalled()
+  })
+
+  it("git hosts are hidden by default, even with a saved empty `hidden`", async () => {
+    const h = harness(
+      {},
+      { config: "Host web\nHost github.com\n", settings: { ssh: { hidden: [] } } },
+    )
+    const hosts = await h.svc.hosts()
+    expect(hosts.find((x) => x.hostId === "native:github.com")?.hidden).toBe(true)
+    expect(hosts.find((x) => x.hostId === "native:web")?.hidden).toBeUndefined()
+  })
+})

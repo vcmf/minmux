@@ -5,7 +5,12 @@
 
 import path from "node:path"
 import type { SshHost } from "../src/types"
-import { mergeSshSettings, parseSshEnv, type SshSettings } from "../src/lib/ssh-validate"
+import {
+  effectiveHidden,
+  mergeSshSettings,
+  parseSshEnv,
+  type SshSettings,
+} from "../src/lib/ssh-validate"
 import { SSH_ERRORS } from "../src/lib/ssh-errors"
 import {
   globMatchesPath,
@@ -51,6 +56,10 @@ function orNullAfter<T>(p: Promise<T | null>, ms: number): Promise<T | null> {
 
 type DistroHosts = { hosts: SshConfigHost[]; watch: string[]; globs: string[] }
 
+/** The part of the ssh settings main acts on: a pin or a colour change needs no reload. */
+const mainKey = (s: SshSettings) =>
+  JSON.stringify([effectiveHidden(s).map((a) => a.toLowerCase()), s.keepAliveSeconds])
+
 export class SshService {
   private native: Promise<LoadResult> | null = null
   private distros = new Map<string, { at: number; p: Promise<DistroHosts | null> }>()
@@ -71,7 +80,7 @@ export class SshService {
 
   constructor(private readonly deps: SshDeps) {
     this.current = this.readSettings() ?? mergeSshSettings({})
-    this.settingsKey = JSON.stringify(this.current)
+    this.settingsKey = mainKey(this.current)
   }
 
   /** The sidebar list (hidden hosts filtered; WSL hosts of running distros only). */
@@ -117,7 +126,7 @@ export class SshService {
   settingsChanged(): void {
     const next = this.readSettings()
     if (!next) return
-    const key = JSON.stringify(next)
+    const key = mainKey(next)
     if (key === this.settingsKey) return
     this.current = next
     this.settingsKey = key
@@ -197,7 +206,7 @@ export class SshService {
     const input = {
       native: native.hosts,
       wsl,
-      settings: this.current,
+      settings: { hidden: effectiveHidden(this.current) },
       platform: this.deps.platform,
     }
     return {
@@ -222,7 +231,7 @@ export class SshService {
     const input = {
       native: native.hosts,
       wsl,
-      settings: this.current,
+      settings: { hidden: effectiveHidden(this.current) },
       platform: this.deps.platform,
     }
     return { hosts: mergeHosts(input, { all: true }), distroDown }

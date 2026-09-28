@@ -197,3 +197,10 @@ describe("patternListMatch", () => {
     expect(patternListMatch(",,", "web")).toBe(false)
   })
 })
+
+describe("sameHosts — the hidden flag", () => {
+  it("a relist that only hides or shows a host is a change (Hide host must take effect)", () => {
+    const web = testHost("web")
+    expect(sameHosts([web], [{ ...web, hidden: true }])).toBe(false)
+  })
+})

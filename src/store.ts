@@ -17,6 +17,7 @@ import {
 import { inheritShell, resolveDefaultShell } from "./lib/shells"
 import { hostShellOption, sameHosts } from "./lib/ssh-hosts-ui"
 import { pushRecent, toggleHidden, togglePinned } from "./lib/ssh-host-list"
+import { DEFAULT_HIDDEN_HOSTS } from "./lib/ssh-validate"
 import type { RemotePhase } from "./lib/remote-connect"
 import { reduceSignals } from "./lib/session-status"
 import type { SignalEvent } from "./lib/session-status"
@@ -96,7 +97,7 @@ interface AppState {
   settingsOpen: boolean
   paletteOpen: boolean
   hostPickerOpen: boolean // the "Connect to host" picker
-  sshRecent: string[] // hostIds, newest first (a per-window convenience: localStorage)
+  sshRecent: string[] // hostIds, newest first (a convenience: localStorage, last writer wins)
   searchOpen: boolean
   rightView: RightView // which view the single right-side panel shows (null = hidden)
   rightPanelWidth: number // px width of the right panel (drag-resizable, persisted)
@@ -394,8 +395,11 @@ export const useStore = create<AppState>((set, get) => ({
       if (!s || s.remote || s.cwd === cwd) return {}
       return { sessions: { ...state.sessions, [sessionId]: { ...s, cwd } } }
     }),
-  setPaletteOpen: (paletteOpen) => set({ paletteOpen }),
-  setHostPickerOpen: (hostPickerOpen) => set({ hostPickerOpen }),
+  // One overlay at a time: opening either closes the other (⌘K over an open picker).
+  setPaletteOpen: (paletteOpen) =>
+    set(paletteOpen ? { paletteOpen, hostPickerOpen: false } : { paletteOpen }),
+  setHostPickerOpen: (hostPickerOpen) =>
+    set(hostPickerOpen ? { hostPickerOpen, paletteOpen: false } : { hostPickerOpen }),
   openHost: (host, how) => {
     if (host.hidden) return // listed only so it can be shown again
     const shell = hostShellOption(host)
@@ -413,9 +417,18 @@ export const useStore = create<AppState>((set, get) => ({
   setHostHidden: (alias, hide) => {
     const st = get()
     const ssh = st.settings.ssh
+    const isDefault = DEFAULT_HIDDEN_HOSTS.some((a) => a.toLowerCase() === alias.toLowerCase())
     st.updateSettings({
       ...st.settings,
-      ssh: { ...ssh, hidden: toggleHidden(ssh.hidden, alias, hide) },
+      ssh: {
+        ...ssh,
+        hidden: toggleHidden(ssh.hidden, alias, hide),
+        // Showing a default-hidden git host is recorded as "shown"; hiding it again undoes that.
+        shown:
+          isDefault && !hide
+            ? toggleHidden(ssh.shown, alias, true)
+            : toggleHidden(ssh.shown, alias, false),
+      },
     })
   },
   setSearchOpen: (searchOpen) => set({ searchOpen }),

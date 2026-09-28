@@ -317,8 +317,10 @@ prompt heuristic in S1, which runs on the existing throttled output-idle path.
       split down; right-click for the host menu (open, splits, copy `ssh` command, pin, hide, open
       config for this machine's hosts). Pins live in `ssh.pinned` (settings), recents in local
       storage. The sidebar lists pinned + hosts with a pane open, then "All hosts (N)…". Main lists
-      hidden hosts flagged (`hidden`) so the picker's "Hidden (N)" footer can show them again; the
-      default `ssh.hidden` is the common git hosts (an explicit list, even `[]`, replaces it). The
+      hidden hosts flagged (`hidden`) so the picker's "Hidden (N)" footer can show them again. The
+      common git hosts are hidden on top of `ssh.hidden` (your own list) unless brought back
+      (`ssh.shown`), so a saved settings.json never freezes the defaults; hiding is by alias, in
+      every environment. The
       palette has one host-first row per host (no split duplicates); the new-tab menu shows six,
       ellipsized. Shots: [picker](ssh-ux/s3-picker.png), [menu](ssh-ux/s3-picker-menu.png),
       [sidebar, nothing pinned](ssh-ux/s3-sidebar-empty.png),

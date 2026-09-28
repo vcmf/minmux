@@ -112,3 +112,12 @@ describe("HostPicker — focus", () => {
     expect(document.activeElement).toBe(input())
   })
 })
+
+describe("HostPicker — everything hidden", () => {
+  it("says the hosts are hidden (not that there are none)", () => {
+    st().setSshHosts([{ ...testHost("github.com"), hidden: true }])
+    render(<HostPicker />)
+    expect(screen.getByText(/All your hosts are hidden/)).toBeInTheDocument()
+    expect(screen.queryByText(/No hosts yet/)).not.toBeInTheDocument()
+  })
+})

@@ -43,7 +43,7 @@ import {
 } from "../lib/ssh-hosts-ui"
 import type { SshHost } from "../types"
 import { hostMenuItems, sidebarHosts, visibleHosts, type HostActionId } from "../lib/ssh-host-list"
-import { runHostAction } from "./host-picker"
+import { runHostAction } from "../lib/ssh-host-actions"
 import {
   tabTitle,
   sessionSubline,
@@ -496,7 +496,15 @@ function RemoteHosts() {
       </div>
       {!collapsed && (
         <div className="remote-list">
-          {loaded && visibleCount === 0 && (
+          {loaded && visibleCount === 0 && hosts.length > 0 && (
+            <div className="remote-empty">
+              <span className="status-faint">All your hosts are hidden.</span>
+              <button className="remote-empty-btn" onClick={browse}>
+                Show hidden hosts
+              </button>
+            </div>
+          )}
+          {loaded && hosts.length === 0 && (
             <div className="remote-empty">
               <span className="status-faint">
                 Hosts come from the <code>Host</code> entries in ~/.ssh/config. Add one there and it

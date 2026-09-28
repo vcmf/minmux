@@ -1026,3 +1026,30 @@ describe("store — opening, pinning and hiding hosts", () => {
     expect(st().settings.ssh.hidden).toContain("web")
   })
 })
+
+describe("store — overlays and default-hidden hosts", () => {
+  beforeEach(resetStore)
+
+  it("the palette and the host picker never stack", () => {
+    st().setHostPickerOpen(true)
+    st().setPaletteOpen(true)
+    expect(st().hostPickerOpen).toBe(false)
+    st().setHostPickerOpen(true)
+    expect(st().paletteOpen).toBe(false)
+  })
+
+  it("showing a default-hidden git host records it in `shown`; hiding it again undoes that", () => {
+    st().setHostHidden("GitHub.com", false)
+    expect(st().settings.ssh.shown).toEqual(["GitHub.com"])
+    st().setHostHidden("github.com", true)
+    expect(st().settings.ssh.shown).toEqual([])
+    expect(st().settings.ssh.hidden).toEqual(["github.com"])
+  })
+
+  it("hiding and showing your own host touches only `hidden`", () => {
+    st().setHostHidden("web", true)
+    st().setHostHidden("web", false)
+    expect(st().settings.ssh.hidden).toEqual([])
+    expect(st().settings.ssh.shown).toEqual([])
+  })
+})
