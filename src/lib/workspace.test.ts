@@ -453,3 +453,39 @@ describe("workspace — runtime-only session fields", () => {
     expect(JSON.stringify(out)).not.toContain("restored")
   })
 })
+
+describe("workspace — a remote folder", () => {
+  const remote = { hostId: "native:web", label: "web", target: "web", env: "native" as const }
+  const state = (s: Partial<Session>) => ({
+    sessions: {
+      r: {
+        id: "r",
+        title: "",
+        command: "ssh",
+        args: [],
+        status: "idle" as const,
+        unread: false,
+        remote,
+        ...s,
+      },
+    },
+    tabs: [
+      {
+        id: "t",
+        title: "",
+        activeSessionId: "r",
+        root: { type: "leaf" as const, id: "p", sessionIds: ["r"], activeSessionId: "r" },
+      },
+    ],
+    activeTabId: "t",
+  })
+
+  it("is saved for an ssh pane and restored (validated)", () => {
+    const out = serializeWorkspace(state({ remoteCwd: "~/proj" }))
+    expect(out.sessions[0]!.remoteCwd).toBe("~/proj")
+    const back = deserializeWorkspace(out)!
+    expect(back.sessions.r!.remoteCwd).toBe("~/proj")
+    const bad = { ...out, sessions: [{ ...out.sessions[0]!, remoteCwd: "rel\\u001b[2J" }] }
+    expect(deserializeWorkspace(bad)!.sessions.r!.remoteCwd).toBeUndefined()
+  })
+})

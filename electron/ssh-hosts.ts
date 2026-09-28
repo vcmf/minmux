@@ -4,6 +4,7 @@
 // RemoteRef from the renderer is untrusted: trustedRemote() takes the host from main's own
 // list before anything is spawned.
 
+import { remoteCdCommand } from "../src/lib/remote-cwd"
 import type { RemoteRef, SshEnv, SshHost } from "../src/types"
 import type { SshSettings } from "../src/lib/ssh-validate"
 import { isSshTarget, parseSshEnv } from "../src/lib/ssh-validate"
@@ -49,6 +50,7 @@ export function mergeHosts(
       env,
       ...(detail ? { detail } : {}),
       ...(markHidden && isHidden(h) ? { hidden: true as const } : {}),
+      ...(h.remoteCommand ? { remoteCommand: true as const } : {}),
     })
   }
   for (const h of native) add(h, "native", "native")
@@ -77,11 +79,19 @@ export interface SpawnContext {
 export function buildSshSpawn(
   remote: RemoteRef,
   ctx: SpawnContext,
+  cwd?: string, // open the login shell in this remote folder (already validated)
 ): { file: string; args: string[] } | null {
   const env = parseSshEnv(remote.env)
   if (!env) return null
-  // `--` ends ssh's options, so a destination starting with `-` can never become one.
-  const tail = [...keepAliveFlags(ctx.keepAliveSeconds), "-t", "--", remote.target]
+  // `--` ends ssh's options, so a destination starting with `-` can never become one. The
+  // folder goes in as the argument of a fixed script (remoteCdCommand), never as code.
+  const tail = [
+    ...keepAliveFlags(ctx.keepAliveSeconds),
+    "-t",
+    "--",
+    remote.target,
+    ...(cwd ? [remoteCdCommand(cwd)] : []),
+  ]
   if (env.kind === "native") return { file: ctx.sshPath, args: tail }
   if (ctx.platform !== "win32") return null
   // The distro's own ssh (its keys, config and agent). `-e` execs directly (no default-

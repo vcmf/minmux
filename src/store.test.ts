@@ -1087,3 +1087,31 @@ describe("store — restore after a renderer reload", () => {
     expect(st().sessions.l!.restored).toBeUndefined()
   })
 })
+
+describe("store — remote folder", () => {
+  beforeEach(resetStore)
+
+  it("setRemoteCwd records an ssh pane's folder (same state when unchanged); local panes never", () => {
+    st().setShells([shell])
+    st().newTab(hostShellOption(testHost("web")))
+    const r = firstTab().activeSessionId
+    st().setRemoteCwd(r, "~/proj")
+    expect(st().sessions[r]!.remoteCwd).toBe("~/proj")
+    expect(st().sessions[r]!.cwd).toBeUndefined() // local panels never see it
+    const before = useStore.getState()
+    st().setRemoteCwd(r, "~/proj")
+    expect(useStore.getState()).toBe(before)
+    st().newTab(shell)
+    const l = st().tabs[1]!.activeSessionId
+    st().setRemoteCwd(l, "/x")
+    expect(st().sessions[l]!.remoteCwd).toBeUndefined()
+  })
+
+  it("a split of an ssh pane keeps its remote folder", () => {
+    st().setShells([shell])
+    st().newTab(hostShellOption(testHost("web")))
+    st().setRemoteCwd(firstTab().activeSessionId, "~/proj")
+    st().splitActive("row", shell)
+    expect(st().sessions[firstTab().activeSessionId]!.remoteCwd).toBe("~/proj")
+  })
+})

@@ -339,3 +339,14 @@ prompt heuristic in S1, which runs on the existing throttled output-idle path.
       rest once it's past its prompt, so a ControlMaster is shared. A renderer reload asks main
       which ssh panes are still live (`pty:live-ids`), so those never read as waiting. Shots:
       [reconnecting](ssh-ux/s4-reconnecting.png), [connect all](ssh-ux/s4-connect-all.png).
+
+## 8. Follow-ups (2026-09-28 feedback)
+
+- [ ] **H1** Remote section collapsed by default; its header shows connection status
+      (`● N` live, pulsing while connecting, amber when one needs you, red when one is down)
+      instead of the host count. [shot](ssh-ux/h1-header-status.png)
+- [x] **H2** Keep both host and folder: a remote pane row reads `<folder> [host]` over the
+      remote path (home-relative, front-shortened), or `user@hostname` when the host reports no
+      folder. The folder is learnt from OSC 7, else the Debian/Ubuntu title, and a reconnect, a
+      relaunch or a split opens a login shell there (option A; tmux is the fuller answer, phase
+      2). [shot](ssh-ux/h2-remote-folder.png)

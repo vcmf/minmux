@@ -13,7 +13,14 @@ class FakeTerminal {
   rows = 24
   written = ""
   dataHandlers: ((d: string) => void)[] = []
-  parser = { registerOscHandler: () => ({ dispose() {} }) }
+  osc: Record<number, (data: string) => boolean> = {}
+  titleHandlers: ((t: string) => void)[] = []
+  parser = {
+    registerOscHandler: (n: number, cb: (data: string) => boolean) => {
+      this.osc[n] = cb
+      return { dispose() {} }
+    },
+  }
   buffer = {
     active: {
       type: "normal" as "normal" | "alternate",
@@ -36,7 +43,8 @@ class FakeTerminal {
     this.dataHandlers.push(cb)
     return { dispose() {} }
   }
-  onTitleChange() {
+  onTitleChange(cb: (t: string) => void) {
+    this.titleHandlers.push(cb)
     return { dispose() {} }
   }
   onBell() {
@@ -732,5 +740,46 @@ describe("TerminalManager — Connect all, one host at a time", () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+})
+
+describe("TerminalManager — the remote folder", () => {
+  it("OSC 7 from the host sets it (never the local cwd); the title is only a fallback", async () => {
+    const { id, term } = start({})
+    await flush()
+    term.titleHandlers.forEach((h) => h("quang@web: ~/from-title"))
+    expect(st().sessions[id]!.remoteCwd).toBe("~/from-title")
+    term.osc[7]!("file://web/srv/app")
+    expect(st().sessions[id]!.remoteCwd).toBe("/srv/app")
+    expect(st().sessions[id]!.cwd).toBeUndefined()
+    term.titleHandlers.forEach((h) => h("quang@web: ~/ignored"))
+    expect(st().sessions[id]!.remoteCwd).toBe("/srv/app") // OSC 7 is authoritative now
+  })
+
+  it("a reconnect asks main to open it there", async () => {
+    const { id, term } = start({})
+    await flush()
+    term.osc[7]!("file://web/srv/app")
+    exitHandlers[id]!({ code: 0, signal: 0 })
+    await flush()
+    term.type("\r")
+    expect(spawnCalls()[1]!.remoteCwd).toBe("/srv/app")
+  })
+
+  it("a host whose config runs a RemoteCommand refuses it: reconnect once plainly, then stop", async () => {
+    const { id, term } = start({})
+    await flush()
+    term.osc[7]!("file://web/srv/app")
+    exitHandlers[id]!({ code: 0, signal: 0 })
+    await flush()
+    term.type("\r")
+    await flush()
+    term.buffer.active.getLine = () => ({
+      translateToString: () => "Cannot execute command-line and remote command.",
+    })
+    exitHandlers[id]!({ code: 255, signal: 0 })
+    await flush()
+    expect(spawnCalls()).toHaveLength(3)
+    expect(spawnCalls()[2]!.remoteCwd).toBeUndefined()
   })
 })

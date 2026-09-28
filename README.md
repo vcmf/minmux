@@ -161,6 +161,10 @@ defaults, it doesn't replace them. Hiding is by alias, so it applies in every en
 - **Keepalive.** smterm adds `ServerAliveInterval=30` (with `ServerAliveCountMax=4`), so an idle
   pane survives NAT timeouts and a dead link ends in about two minutes instead of hanging.
   `"ssh": { "keepAliveSeconds": 0 }` leaves it to your config.
+- **Where you were.** If the host reports its folder (OSC 7, or the Debian/Ubuntu title
+  `user@host: ~/dir`), the sidebar row shows it with the host boxed beside it, and a reconnect,
+  a relaunch or a split opens a login shell there again (not for a host whose config sets
+  `RemoteCommand`: ssh won't take both). Hosts that report nothing get a plain login.
 - **Reconnect.** When `ssh` exits, the pane says why and Enter (or the **Reconnect** button)
   connects again. A connection that was up for 30 s (after its last password prompt) and then
   loses its link (ssh says so: "closed by remote host", "Broken pipe", …) reconnects on its

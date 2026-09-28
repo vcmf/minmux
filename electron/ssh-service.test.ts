@@ -666,3 +666,21 @@ describe("SshService — settings main doesn't use", () => {
     expect(hosts.find((x) => x.hostId === "native:web")?.hidden).toBeUndefined()
   })
 })
+
+describe("SshService — a remote folder", () => {
+  const webRef = { hostId: "native:web", label: "web", target: "web", env: "native" }
+
+  it("a valid folder becomes the cd command; an invalid one is dropped", async () => {
+    const h = harness()
+    const plan = await h.svc.spawnPlan(webRef, "~/proj")
+    expect("args" in plan && plan.args[plan.args.length - 1]).toContain("smterm '~/proj'")
+    const bad = await h.svc.spawnPlan(webRef, "relative/dir")
+    expect("args" in bad && bad.args[bad.args.length - 1]).toBe("web")
+  })
+
+  it("never for a host whose config runs a RemoteCommand (ssh would refuse both)", async () => {
+    const h = harness({}, { config: "Host web\n  RemoteCommand tmux new -A\n" })
+    const plan = await h.svc.spawnPlan(webRef, "~/proj")
+    expect("args" in plan && plan.args[plan.args.length - 1]).toBe("web")
+  })
+})

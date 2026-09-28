@@ -5,6 +5,7 @@ export interface ShellOption {
   args: string[]
   remote?: RemoteRef // an ssh host: main builds the real command; command/args are labels
   remoteSaved?: unknown // with remote: a saved host this build couldn't read (kept verbatim)
+  remoteCwd?: string // with remote: open there (a split of a remote pane keeps its folder)
 }
 
 /** Which `ssh` runs a remote session: the host's own, or one inside a WSL distro. */
@@ -22,6 +23,7 @@ export interface RemoteRef {
 export interface SshHost extends RemoteRef {
   detail?: string // "user@hostname:port" subline
   hidden?: true // in `ssh.hidden`: listed so it can be shown again, never offered to open
+  remoteCommand?: true // its config sets a RemoteCommand: a reconnect can't also `cd`
 }
 
 import type { SessionStatus } from "./lib/session-status"
@@ -39,6 +41,7 @@ export interface Session {
   detail?: string // why it needs attention (OSC-9 message / "needs input")
   remote?: RemoteRef // runs on an ssh host: no local cwd, files or git (splits stay on it)
   remoteSaved?: unknown // a saved host this build couldn't read: written back as-is on save
+  remoteCwd?: string // where its remote shell is (from what the host prints): display + reconnect
   restored?: boolean // runtime only (never saved): came from workspace.json this launch/reload
 }
 
@@ -81,4 +84,5 @@ export interface SpawnOpts {
   bg?: string // theme terminal background hex → COLORFGBG so agents detect light/dark
   remote?: RemoteRef // an ssh session: main rebuilds the command from its own host list
   attachOnly?: boolean // reattach a live PTY, but start nothing (a restored on-focus ssh pane)
+  remoteCwd?: string // an ssh session: open the login shell in this remote folder
 }

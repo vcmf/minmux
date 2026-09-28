@@ -17,10 +17,11 @@ export interface SshConfigHost {
   hostName?: string
   user?: string
   port?: string
+  remoteCommand?: string // set: ssh runs it, and refuses a command of ours on top
 }
 
-type Field = "hostName" | "user" | "port"
-const FIELDS: readonly Field[] = ["hostName", "user", "port"]
+type Field = "hostName" | "user" | "port" | "remoteCommand"
+const FIELDS: readonly Field[] = ["hostName", "user", "port", "remoteCommand"]
 
 /** A config file in order: blocks, and Includes with their Host line (null = unevaluable Match). */
 export type SshConfigItem =
@@ -89,6 +90,7 @@ const KEYWORD_FIELDS = new Map<string, Field>([
   ["hostname", "hostName"],
   ["user", "user"],
   ["port", "port"],
+  ["remotecommand", "remoteCommand"],
 ])
 
 type Block = Extract<SshConfigItem, { type: "block" }>
@@ -222,6 +224,10 @@ export function hostsFromBlocks(blocks: GuardedBlock[]): SshConfigHost[] {
       host.hostName = v.hostName.replace(/%(%|h)/g, (_m, c: string) => (c === "h" ? alias : "%"))
     if (v.user) host.user = v.user
     if (v.port) host.port = v.port
+    // `RemoteCommand none` is ssh's way of saying there isn't one.
+    if (v.remoteCommand && v.remoteCommand.toLowerCase() !== "none") {
+      host.remoteCommand = v.remoteCommand
+    }
     return host
   })
 }

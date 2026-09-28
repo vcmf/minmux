@@ -33,6 +33,7 @@ import { TerminalManager } from "../terminal/terminal-manager"
 import { allPanes } from "../lib/pane-tree"
 import { resolveDefaultShell } from "../lib/shells"
 import { statusUi } from "../lib/status-ui"
+import { detailUser, homeRelative, remoteCwdName, shortRemoteCwd } from "../lib/remote-cwd"
 import { isWaitingRemote, remoteStatusUi } from "../lib/remote-connect"
 import {
   connectedHostIds,
@@ -279,8 +280,34 @@ export function Sidebar() {
                       </span>
                       <div className="tree-labels">
                         <span className="tree-primary-row">
-                          <span className="tree-primary">{displaySessionTitle(s, home)}</span>
-                          <span className="pane-badge">{shellType(s.command)}</span>
+                          {s.remote ? (
+                            // Like a local row: the folder's name, then (boxed) where it is.
+                            <>
+                              <span className="tree-primary">
+                                {s.remoteCwd
+                                  ? remoteCwdName(s.remoteCwd)
+                                  : displaySessionTitle(s, home)}
+                              </span>
+                              <span
+                                className={`host-box${hostCss(s.remote.target) ? " colored" : ""}`}
+                                style={
+                                  hostCss(s.remote.target)
+                                    ? ({
+                                        "--host": hostCss(s.remote.target),
+                                      } as React.CSSProperties)
+                                    : undefined
+                                }
+                                title={remoteWhere(s.remote, sshHosts)}
+                              >
+                                {s.remote.label}
+                              </span>
+                            </>
+                          ) : (
+                            <>
+                              <span className="tree-primary">{displaySessionTitle(s, home)}</span>
+                              <span className="pane-badge">{shellType(s.command)}</span>
+                            </>
+                          )}
                         </span>
                         {s.status === "attention" && s.detail ? (
                           <span className="tree-sub attn">{s.detail}</span>
@@ -293,8 +320,22 @@ export function Sidebar() {
                         )}
                         {s.remote ? (
                           // Its folders are on the host: no local folder line or menu.
-                          <span className="tree-sub" title={`ssh ${s.remote.target}`}>
-                            {remoteWhere(s.remote, sshHosts)}
+                          <span
+                            className="tree-sub"
+                            title={s.remoteCwd ?? `ssh ${s.remote.target}`}
+                          >
+                            {s.remoteCwd
+                              ? // Front-shortened to fit: the folder at the end is what matters.
+                                shortRemoteCwd(
+                                  homeRelative(
+                                    s.remoteCwd,
+                                    detailUser(
+                                      sshHosts.find((h) => h.hostId === s.remote!.hostId)?.detail,
+                                    ),
+                                  ),
+                                  28,
+                                )
+                              : remoteWhere(s.remote, sshHosts)}
                           </span>
                         ) : (
                           <DirLines

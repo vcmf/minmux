@@ -12,6 +12,7 @@ import {
   type SshSettings,
 } from "../src/lib/ssh-validate"
 import { SSH_ERRORS } from "../src/lib/ssh-errors"
+import { cleanRemoteCwd } from "../src/lib/remote-cwd"
 import {
   globMatchesPath,
   loadSshConfig,
@@ -143,15 +144,17 @@ export class SshService {
 
   /** The command for a renderer's RemoteRef, from main's own host list (worked out again if
    *  the config changes meanwhile). */
-  async spawnPlan(ref: unknown): Promise<SpawnPlan> {
+  /** `cwd`: the remote folder to open in (from the renderer: validated again here, and
+   *  dropped for a host whose config runs a RemoteCommand, which ssh won't combine). */
+  async spawnPlan(ref: unknown, cwd?: unknown): Promise<SpawnPlan> {
     for (let attempt = 0; ; attempt++) {
       const gen = this.generation
-      const plan = await this.planOnce(ref)
+      const plan = await this.planOnce(ref, cwd)
       if (gen === this.generation || attempt >= 2) return plan
     }
   }
 
-  private async planOnce(ref: unknown): Promise<SpawnPlan> {
+  private async planOnce(ref: unknown, cwdIn?: unknown): Promise<SpawnPlan> {
     const hostId = ref && typeof ref === "object" ? (ref as { hostId?: unknown }).hostId : undefined
     if (hostId === "unavailable") {
       return { error: SSH_ERRORS.newerBuild }
@@ -168,14 +171,16 @@ export class SshService {
     }
     const { platform } = this.deps
     const keepAliveSeconds = this.current.keepAliveSeconds
+    const hasRemoteCommand = trust.hosts.find((h) => h.hostId === remote.hostId)?.remoteCommand
+    const cwd = hasRemoteCommand ? undefined : (cleanRemoteCwd(cwdIn) ?? undefined)
     if (parseSshEnv(remote.env)?.kind === "wsl") {
-      const plan = buildSshSpawn(remote, { platform, sshPath: "ssh", keepAliveSeconds })
+      const plan = buildSshSpawn(remote, { platform, sshPath: "ssh", keepAliveSeconds }, cwd)
       return plan ?? { error: SSH_ERRORS.wslOffWindows }
     }
     const sshPath = await this.deps.sshPath()
     if (!sshPath) return { error: SSH_ERRORS.noSsh }
     return (
-      buildSshSpawn(remote, { platform, sshPath, keepAliveSeconds }) ?? {
+      buildSshSpawn(remote, { platform, sshPath, keepAliveSeconds }, cwd) ?? {
         error: SSH_ERRORS.cantBuild,
       }
     )

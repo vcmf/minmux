@@ -13,6 +13,7 @@ import { withAlpha } from "../settings/themes"
 import { displaySessionTitle } from "../lib/session-label"
 import { allPanes, allSessionIds, visibleSessionIds } from "../lib/pane-tree"
 import { canRetry, sshFailureKind, type SshFailure } from "../lib/ssh-errors"
+import { REMOTE_COMMAND_CONFLICT, cwdFromOsc7, cwdFromTitle } from "../lib/remote-cwd"
 import { webglPanes, shouldRebuildAtlas } from "../lib/renderer-policy"
 import { appShortcut, keyAction } from "../lib/terminal-keys"
 import { gridChanged, type Grid } from "../lib/resize"
@@ -53,6 +54,8 @@ interface Entry {
   failure?: SshFailure // with remote = "failed": why, so Enter / Retry only act when they can
   lastKey?: string // ssh panes: the last input sent (a prompt check skips a line being typed)
   escArmedAt?: number // an idle ssh pane's first Esc: a second within ESC_CLOSE_MS closes it
+  osc7?: boolean // ssh panes: the host reports its folder via OSC 7 (the title is a fallback)
+  noCd?: boolean // ssh panes: the host's config runs a RemoteCommand; reconnect plainly
   liveSince?: number // when this connection went live (a drop after STABLE_MS may auto-retry)
   retryAttempt: number // the automatic reconnect this connection came from (0 = none)
   retryTotal: number // automatic reconnects since you last connected it yourself (capped)
@@ -365,6 +368,10 @@ function requestPty(id: string, entry: Entry, attachOnly: boolean, given?: Sessi
       // An ssh session: main rebuilds the command from its own host list (never ours).
       ...(session.remote ? { remote: session.remote } : {}),
       ...(attachOnly ? { attachOnly: true } : {}),
+      // Back in its remote folder (a reconnect, a restore, a split), when the host said where.
+      ...(session.remote && session.remoteCwd && !entry.noCd
+        ? { remoteCwd: session.remoteCwd }
+        : {}),
       // → COLORFGBG so agents detect light/dark (fallback when the OSC-11 bg query can't
       // complete, e.g. across the wsl.exe hop). Captured at spawn: a running shell's env
       // can't be rewritten, so a later theme switch — incl. appearance "system" following
@@ -616,13 +623,21 @@ function spawn(session: Session, entry: Entry) {
       entry.remote = "closed"
       entry.term.write("", () => {
         if (entries.get(session.id) !== entry || entry.remote !== "closed") return // Enter came first
+        // The host's config has a RemoteCommand, so ssh refused our `cd`: drop the folder for
+        // this pane and connect again plainly, once.
+        const tail = lastLines(entry.term, 4)
+        if (!entry.noCd && tail.includes(REMOTE_COMMAND_CONFLICT)) {
+          entry.noCd = true
+          setPhase(session.id, entry, "closed", "lost")
+          return connectRemote(session.id, entry, true)
+        }
         const ssh = useStore.getState().settings.ssh
         const why = {
           enabled: ssh.autoReconnect,
           code: e.code,
           signal: e.signal,
           atPrompt,
-          dropped: lostLink(lastLines(entry.term, 4)),
+          dropped: lostLink(tail),
         }
         // A lost link of an established connection reconnects on its own, a few times.
         const plan = retryPlan({
@@ -691,10 +706,26 @@ function spawn(session: Session, entry: Entry) {
   // OSC 0/2 (window title) → live session title (shells set it to cmd/cwd;
   // agents like Claude Code can set it to the task). Manual rename still wins
   // at the tab level (store keeps tab.title as the pin).
-  term.onTitleChange((title) => store.setSessionOscTitle(session.id, title))
+  term.onTitleChange((title) => {
+    store.setSessionOscTitle(session.id, title)
+    // An ssh pane that doesn't send OSC 7: the Debian / Ubuntu title `user@host: ~/dir`.
+    if (session.remote && !entry.osc7) {
+      const dir = cwdFromTitle(title)
+      if (dir) useStore.getState().setRemoteCwd(session.id, dir)
+    }
+  })
 
   // OSC 7 — the shell reports its working directory (file://host/path).
   term.parser.registerOscHandler(7, (data) => {
+    // An ssh pane's folder is on the host: shown (and reconnected to), never read locally.
+    if (session.remote) {
+      const dir = cwdFromOsc7(data)
+      if (dir) {
+        entry.osc7 = true // authoritative from now on: the title is only a fallback
+        useStore.getState().setRemoteCwd(session.id, dir)
+      }
+      return true
+    }
     try {
       const path = decodeURIComponent(new URL(data).pathname)
       if (path) store.setSessionCwd(session.id, path)

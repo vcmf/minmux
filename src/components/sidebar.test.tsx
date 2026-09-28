@@ -491,3 +491,26 @@ describe("Sidebar — a restored ssh pane not started yet", () => {
     expect(screen.getByText("not connected")).toBeInTheDocument()
   })
 })
+
+describe("Sidebar — an ssh pane's row", () => {
+  it("the remote folder's name, the host boxed, and the path below", () => {
+    st().setSshHosts([testHost("gpu-box", "native", "quang@10.0.4.12")])
+    st().newTab(hostShellOption(testHost("gpu-box")))
+    st().setRemoteCwd(st().tabs[0]!.activeSessionId, "~/projects/llm-train")
+    render(<Sidebar />)
+    expect(screen.getByText("llm-train")).toHaveClass("tree-primary")
+    const box = document.querySelector(".host-box") as HTMLElement
+    expect(box.textContent).toBe("gpu-box")
+    expect(box.title).toBe("quang@10.0.4.12")
+    expect(screen.getByText("~/projects/llm-train")).toHaveClass("tree-sub")
+  })
+
+  it("folder unknown: the host's name, and user@hostname below", () => {
+    st().setSshHosts([testHost("gpu-box", "native", "quang@10.0.4.12")])
+    st().newTab(hostShellOption(testHost("gpu-box")))
+    render(<Sidebar />)
+    expect(document.querySelector(".host-box")!.textContent).toBe("gpu-box")
+    const subs = [...document.querySelectorAll(".tree .tree-sub")].map((e) => e.textContent)
+    expect(subs).toContain("quang@10.0.4.12") // the pane row (the host list shows it too)
+  })
+})
