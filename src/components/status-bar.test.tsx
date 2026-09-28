@@ -102,10 +102,18 @@ describe("StatusBar version badge", () => {
 })
 
 describe("StatusBar — ssh prompts count as waiting", () => {
-  it("an ssh pane at a password prompt counts, like the bell", () => {
+  it("an off-screen ssh pane at a password prompt counts, like the bell", () => {
+    st().newTab(hostShellOption(testHost("web")))
+    st().setRemotePhase(st().tabs[0]!.activeSessionId, "prompt", "password")
+    st().newTab(testShell) // another tab in front
+    render(<StatusBar />)
+    expect(screen.getByText(/1 waiting/)).toBeInTheDocument()
+  })
+
+  it("the pane you're driving never counts (you're the one answering it)", () => {
     st().newTab(hostShellOption(testHost("web")))
     st().setRemotePhase(st().tabs[0]!.activeSessionId, "prompt", "password")
     render(<StatusBar />)
-    expect(screen.getByText(/1 waiting/)).toBeInTheDocument()
+    expect(screen.getByText(/0 waiting/)).toBeInTheDocument()
   })
 })

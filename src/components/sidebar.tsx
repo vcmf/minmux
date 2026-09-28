@@ -31,7 +31,7 @@ import { TerminalManager } from "../terminal/terminal-manager"
 import { allPanes } from "../lib/pane-tree"
 import { resolveDefaultShell } from "../lib/shells"
 import { statusUi } from "../lib/status-ui"
-import { remoteStatusUi, type AuthPrompt } from "../lib/remote-connect"
+import { remoteStatusUi } from "../lib/remote-connect"
 import { connectedHostIds, groupHosts, hostShellOption, remoteSubline } from "../lib/ssh-hosts-ui"
 import type { SshHost } from "../types"
 import {
@@ -213,11 +213,7 @@ export function Sidebar() {
                   const s = sessions[id]
                   if (!s) return null
                   const ui = s.remote
-                    ? remoteStatusUi(
-                        remotePhase[id],
-                        s.status,
-                        remoteDetail[id] as AuthPrompt | undefined,
-                      )
+                    ? remoteStatusUi(remotePhase[id], s.status, remoteDetail[id])
                     : statusUi(s.status)
                   const isActive = active && tab.activeSessionId === id
                   return (

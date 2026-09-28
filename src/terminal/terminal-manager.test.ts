@@ -136,7 +136,7 @@ describe("TerminalManager — ssh restore", () => {
     const { id, term } = start({ restored: true, restore: "on-focus" })
     expect(spawnCalls()[0]!.attachOnly).toBe(true)
     await flush()
-    expect(term.written).toContain("web isn't connected yet. Enter to connect · Esc to close")
+    expect(term.written).toContain("web isn't connected yet. Enter to connect · Esc twice to close")
     expect(st().remotePhase[id]).toBe("waiting")
 
     term.type("ls\r") // not a bare Enter: dropped, never sent to a host that isn't there
@@ -183,7 +183,7 @@ describe("TerminalManager — ssh exit and reconnect", () => {
     await flush()
     exitHandlers[id]!({ code: 255, signal: 0 })
     expect(term.written).toContain(
-      "Connection to web lost (the connection dropped or was refused). Enter to reconnect · Esc to close",
+      "Connection to web lost (the connection dropped or was refused). Enter to reconnect · Esc twice to close",
     )
     expect(st().remotePhase[id]).toBe("closed")
     term.type("q")
@@ -203,7 +203,9 @@ describe("TerminalManager — ssh exit and reconnect", () => {
     const { id, term } = start({})
     await flush()
     exitHandlers[id]!({ code: 0, signal: 0 })
-    expect(term.written).toContain("Session on web ended. Enter to start a new one · Esc to close")
+    expect(term.written).toContain(
+      "Session on web ended. Enter to start a new one · Esc twice to close",
+    )
   })
 
   it("a refused spawn shows why, and Enter (or Connect) retries", async () => {
@@ -372,13 +374,92 @@ describe("TerminalManager — ssh prompts, closing, failures", () => {
     }
   })
 
-  it("Esc closes a disconnected pane (its surface), keys otherwise go nowhere", async () => {
+  it("Esc twice closes a disconnected pane; once only asks (vim habit right after a drop)", async () => {
     const { id, term } = start({})
     await flush()
     out(id, "hi")
     exitHandlers[id]!({ code: 255, signal: 0 })
     term.type("\u001b")
+    await flush()
+    expect(st().sessions[id]).toBeDefined()
+    expect(term.written).toContain("Press Esc again to close this pane.")
+    term.type("\u001b")
+    await flush() // the close waits for the key event to unwind
     expect(st().sessions[id]).toBeUndefined() // App then disposes its terminal (kills the PTY)
+  })
+
+  it("a first Esc goes stale: a second one much later only asks again", async () => {
+    vi.useFakeTimers()
+    try {
+      const { id, term } = start({})
+      await vi.advanceTimersByTimeAsync(0)
+      exitHandlers[id]!({ code: 255, signal: 0 })
+      term.type("\u001b")
+      await vi.advanceTimersByTimeAsync(3000)
+      term.type("\u001b")
+      await vi.advanceTimersByTimeAsync(10)
+      expect(st().sessions[id]).toBeDefined()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it("a clean exit records `ended`; a drop `lost`", async () => {
+    const { id } = start({})
+    await flush()
+    exitHandlers[id]!({ code: 0, signal: 0 })
+    expect(st().remoteDetail[id]).toBe("ended")
+    const b = start({})
+    await flush()
+    exitHandlers[b.id]!({ code: 255, signal: 0 })
+    expect(st().remoteDetail[b.id]).toBe("lost")
+  })
+
+  it("no prompt for a line the user is typing, nor in a full-screen program", async () => {
+    vi.useFakeTimers()
+    try {
+      const { id, term } = start({})
+      await vi.advanceTimersByTimeAsync(0)
+      out(id, "quang@gpu-box:~$ ")
+      term.type("i") // typed; the echo arrives
+      out(id, ">>> if password:")
+      cursorLine(term, ">>> if password:")
+      await vi.advanceTimersByTimeAsync(1300)
+      expect(st().remotePhase[id]).toBe("live")
+      term.type("\r") // Enter: the next question may be a real prompt again…
+      term.buffer.active.type = "alternate" // …but not inside vim
+      out(id, "  password:")
+      cursorLine(term, "  password:")
+      await vi.advanceTimersByTimeAsync(1300)
+      expect(st().remotePhase[id]).toBe("live")
+      term.buffer.active.type = "normal"
+      out(id, "[sudo] password for quang: ")
+      cursorLine(term, "[sudo] password for quang: ")
+      await vi.advanceTimersByTimeAsync(1300)
+      expect(st().remoteDetail[id]).toBe("password")
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it("a prompt soft-wrapped in a narrow pane is still recognised", async () => {
+    vi.useFakeTimers()
+    try {
+      const { id, term } = start({})
+      await vi.advanceTimersByTimeAsync(0)
+      out(id, "…")
+      const rows = ["Are you sure you want to continue connec", "ting (yes/no/[fingerprint])? "]
+      term.buffer.active.baseY = 0
+      term.buffer.active.cursorY = 1
+      term.buffer.active.getLine = ((y: number) =>
+        rows[y] === undefined
+          ? undefined
+          : { translateToString: () => rows[y]!, isWrapped: y === 1 }) as never
+      await vi.advanceTimersByTimeAsync(1300)
+      expect(st().remoteDetail[id]).toBe("host key")
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it("a failure that can never work here: no retry by Enter or by Connect", async () => {
@@ -390,7 +471,7 @@ describe("TerminalManager — ssh prompts, closing, failures", () => {
     term.type("\r")
     TerminalManager.connect(id)
     expect(spawnCalls()).toHaveLength(1)
-    expect(term.written).toContain("Esc to close")
+    expect(term.written).toContain("Esc twice to close")
     expect(term.written).not.toContain("Enter to retry")
   })
 

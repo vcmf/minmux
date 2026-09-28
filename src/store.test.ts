@@ -982,3 +982,17 @@ describe("store — remote detail", () => {
     expect(st().remoteDetail).toEqual({})
   })
 })
+
+describe("store — remote detail keeps its reference", () => {
+  beforeEach(resetStore)
+
+  it("a phase change with the same (no) detail doesn't reallocate remoteDetail", () => {
+    st().newTab(hostShellOption(testHost("web")))
+    const id = firstTab().activeSessionId
+    st().setRemotePhase(id, "starting")
+    const before = st().remoteDetail
+    st().setRemotePhase(id, "live")
+    expect(st().remoteDetail).toBe(before)
+    expect(st().remotePhase[id]).toBe("live")
+  })
+})

@@ -10,7 +10,7 @@ import { canMove, findPaneById, type MoveTarget } from "../lib/pane-tree"
 import { dropZone, insertIndex } from "../lib/drop-zone"
 import { displaySessionTitle, shellType } from "../lib/session-label"
 import { remoteBadge } from "../lib/ssh-hosts-ui"
-import { isIdle, remoteStatusUi, type AuthPrompt } from "../lib/remote-connect"
+import { isIdle, remoteStatusUi } from "../lib/remote-connect"
 import { canRetry, type SshFailure } from "../lib/ssh-errors"
 import { statusUi } from "../lib/status-ui"
 import { newSurfaceKey } from "../lib/platform"
@@ -49,7 +49,9 @@ export function TerminalPane({ pane, tabId }: { pane: PaneLeaf; tabId: string })
     const p = s.remotePhase[activeId]
     return isIdle(p) ? p : undefined
   })
-  const failure = useStore((s) => s.remoteDetail[activeId]) as SshFailure | undefined
+  // The failure kind (phase failed) or "ended" / "lost" (phase closed).
+  const remoteDetail = useStore((s) => s.remoteDetail[activeId])
+  const failure = remoteDetail as SshFailure | undefined
   // Each surface's remote phase + detail, flat primitives (a surface tab shows its state dot).
   const remoteFlat = useStore(
     useShallow((s) =>
@@ -243,7 +245,7 @@ export function TerminalPane({ pane, tabId }: { pane: PaneLeaf; tabId: string })
               ? remoteStatusUi(
                   (remoteFlat[i * 2] || undefined) as Parameters<typeof remoteStatusUi>[0],
                   s.status,
-                  (remoteFlat[i * 2 + 1] || undefined) as AuthPrompt | undefined,
+                  remoteFlat[i * 2 + 1] || undefined,
                 )
               : statusUi(s?.status ?? "idle")
             return (
@@ -319,16 +321,18 @@ export function TerminalPane({ pane, tabId }: { pane: PaneLeaf; tabId: string })
           {session?.remote ? remoteBadge(session.remote) : shellType(session?.command ?? "")}
         </span>
         <div className="pane-header-spacer" />
-        {remoteIdle === "failed" && failure === "host-gone" && (
-          <button
-            className="pane-connect"
-            title="Open ~/.ssh/config"
-            onMouseDown={(e) => e.stopPropagation()}
-            onClick={() => ipc.openSshConfig()}
-          >
-            Open ssh config
-          </button>
-        )}
+        {remoteIdle === "failed" &&
+          failure === "host-gone" &&
+          session?.remote?.env === "native" && (
+            <button
+              className="pane-connect"
+              title="Open ~/.ssh/config"
+              onMouseDown={(e) => e.stopPropagation()}
+              onClick={() => ipc.openSshConfig()}
+            >
+              Open ssh config
+            </button>
+          )}
         {remoteIdle && !(remoteIdle === "failed" && failure && !canRetry(failure)) && (
           <button
             className="pane-connect"
@@ -340,7 +344,13 @@ export function TerminalPane({ pane, tabId }: { pane: PaneLeaf; tabId: string })
             }}
           >
             <Plugs size={12} />
-            {remoteIdle === "waiting" ? "Connect" : remoteIdle === "failed" ? "Retry" : "Reconnect"}
+            {remoteIdle === "waiting"
+              ? "Connect"
+              : remoteIdle === "failed"
+                ? "Retry"
+                : remoteDetail === "ended"
+                  ? "Start again"
+                  : "Reconnect"}
           </button>
         )}
         <button

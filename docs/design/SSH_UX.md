@@ -291,7 +291,10 @@ prompt heuristic in S1, which runs on the existing throttled output-idle path.
       prompt (checked once per quiet spell on the cursor line) shows as amber `password` etc. and,
       off-screen, raises attention (bell, status bar, OS notification). `disconnected` and
       `can't connect` are red, `not connected` hollow, on the sidebar row, the surface tab and the
-      tab dot. The message says what happened in words with `Enter to reconnect · Esc to close`;
+      tab dot (a clean `exit` reads neutral `ended`). The message says what happened in words with
+      `Enter to reconnect · Esc twice to close` (one Esc only asks: it's often vim habit right
+      after a drop); prompts are only looked for outside full-screen programs and not on a line
+      the user is typing; the pane you're driving never counts on the bell;
       failures carry their kind (shared `lib/ssh-errors.ts` with main): a host gone from the
       config adds "Open ssh config", one that can never work here offers no Retry. Shots:
       [connecting](ssh-ux/s1-connecting.png), [password](ssh-ux/s1-password.png),

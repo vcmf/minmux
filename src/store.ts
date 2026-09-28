@@ -381,10 +381,14 @@ export const useStore = create<AppState>((set, get) => ({
     set((state) => {
       if (!state.sessions[sessionId]) return state
       const samePhase = state.remotePhase[sessionId] === phase
-      if (samePhase && state.remoteDetail[sessionId] === detail) return state
-      const remoteDetail = { ...state.remoteDetail }
-      if (detail === undefined) delete remoteDetail[sessionId]
-      else remoteDetail[sessionId] = detail
+      const sameDetail = state.remoteDetail[sessionId] === detail
+      if (samePhase && sameDetail) return state
+      let remoteDetail = state.remoteDetail
+      if (!sameDetail) {
+        remoteDetail = { ...state.remoteDetail }
+        if (detail === undefined) delete remoteDetail[sessionId]
+        else remoteDetail[sessionId] = detail
+      }
       return {
         remotePhase: samePhase ? state.remotePhase : { ...state.remotePhase, [sessionId]: phase },
         remoteDetail,

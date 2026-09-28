@@ -11,6 +11,10 @@ const clockNow = () =>
 export function StatusBar() {
   const sessions = useStore((s) => s.sessions)
   const remotePhase = useStore((s) => s.remotePhase)
+  // The pane you're driving never counts as waiting (the attention rule).
+  const driving = useStore((s) =>
+    s.windowFocused ? s.tabs.find((t) => t.id === s.activeTabId)?.activeSessionId : undefined,
+  )
   const git = useStore((s) => s.git)
   const [platform, setPlatform] = useState("")
   const [clock, setClock] = useState(clockNow)
@@ -52,7 +56,7 @@ export function StatusBar() {
   const running = all.filter((s) => s.status === "working").length
   // Needs you: attention, or an ssh pane at a password / host-key prompt (same as the bell).
   const waiting = all.filter(
-    (s) => s.status === "attention" || remotePhase[s.id] === "prompt",
+    (s) => s.status === "attention" || (remotePhase[s.id] === "prompt" && s.id !== driving),
   ).length
 
   return (

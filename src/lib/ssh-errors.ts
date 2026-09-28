@@ -4,6 +4,8 @@
 
 export type SshFailure = "host-gone" | "no-ssh" | "wsl-down" | "not-here" | "other"
 
+const WSL_DOWN_TAIL = ") didn't answer — try again once it's running"
+
 export const SSH_ERRORS = {
   hostGone: "this host is no longer in your ssh config",
   noSsh: "ssh isn't installed (or isn't on PATH)",
@@ -11,7 +13,7 @@ export const SSH_ERRORS = {
   wslOffWindows: "WSL hosts can only be opened on Windows",
   cantBuild: "can't build the ssh command",
   /** A WSL distro that didn't answer in time. */
-  wslDown: (distro: string) => `WSL (${distro}) didn't answer — try again once it's running`,
+  wslDown: (distro: string) => `WSL (${distro}${WSL_DOWN_TAIL}`,
 } as const
 
 /** The failure kind for a spawn error message (as main wrote it). */
@@ -21,7 +23,7 @@ export function sshFailureKind(error: string): SshFailure {
   if (error.includes(SSH_ERRORS.newerBuild) || error.includes(SSH_ERRORS.wslOffWindows)) {
     return "not-here"
   }
-  if (/^WSL \(.+\) didn't answer/.test(error)) return "wsl-down"
+  if (error.startsWith("WSL (") && error.includes(WSL_DOWN_TAIL)) return "wsl-down"
   return "other"
 }
 

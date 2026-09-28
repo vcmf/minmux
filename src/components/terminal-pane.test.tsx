@@ -382,3 +382,22 @@ describe("TerminalPane — ssh failure actions", () => {
     expect(screen.queryByText("Open ssh config")).not.toBeInTheDocument()
   })
 })
+
+describe("TerminalPane — WSL and clean exits", () => {
+  it("a WSL host gone from its distro's config gets no Open ssh config (it'd open the wrong one)", () => {
+    st().newTab(hostShellOption(testHost("gpu", "wsl:Ubuntu")))
+    const tab = st().tabs[0]!
+    st().setRemotePhase(tab.activeSessionId, "failed", "host-gone")
+    renderPane(tab.id)
+    expect(screen.queryByText("Open ssh config")).not.toBeInTheDocument()
+    expect(screen.getByText("Retry")).toBeInTheDocument()
+  })
+
+  it("after a clean exit the button says Start again", () => {
+    st().newTab(hostShellOption(testHost("web")))
+    const tab = st().tabs[0]!
+    st().setRemotePhase(tab.activeSessionId, "closed", "ended")
+    renderPane(tab.id)
+    expect(screen.getByText("Start again")).toBeInTheDocument()
+  })
+})

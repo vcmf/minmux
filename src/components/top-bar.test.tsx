@@ -144,13 +144,21 @@ describe("TopBar — ssh states on the tab dot and the bell", () => {
   it("a disconnected ssh pane turns its tab's dot red; a prompt, amber, and counts on the bell", () => {
     st().newTab(hostShellOption(testHost("web")))
     const id = st().tabs[0]!.activeSessionId
-    st().setRemotePhase(id, "closed")
+    st().setRemotePhase(id, "closed", "lost")
+    st().newTab(testShell) // another tab in front: the ssh pane is off-screen
     const { rerender } = render(<TopBar />)
     expect(document.querySelector(".tab .dot.red")).not.toBeNull()
     act(() => st().setRemotePhase(id, "prompt", "password"))
     rerender(<TopBar />)
     expect(document.querySelector(".tab .dot.amber")).not.toBeNull()
     expect(screen.getByText("1")).toBeInTheDocument() // bell count
+  })
+
+  it("a clean exit on the host isn't a red tab", () => {
+    st().newTab(hostShellOption(testHost("web")))
+    st().setRemotePhase(st().tabs[0]!.activeSessionId, "closed", "ended")
+    render(<TopBar />)
+    expect(document.querySelector(".tab .dot.red")).toBeNull()
   })
 
   it("a live ssh pane leaves the tab dot to the ordinary status", () => {

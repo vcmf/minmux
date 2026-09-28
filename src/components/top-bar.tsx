@@ -36,6 +36,8 @@ export function TopBar() {
   const sshHosts = useStore((s) => s.sshHosts)
   const sessions = useStore((s) => s.sessions)
   const remotePhase = useStore((s) => s.remotePhase)
+  const remoteDetail = useStore((s) => s.remoteDetail)
+  const windowFocused = useStore((s) => s.windowFocused)
   const home = useStore((s) => s.home)
   const defaultShellPref = useStore((s) => s.settings.defaultShell)
   const rightView = useStore((s) => s.rightView)
@@ -72,8 +74,10 @@ export function TopBar() {
   const waiting: { tabId: string; sessionId: string }[] = []
   for (const tab of tabs) {
     for (const id of allSessionIds(tab.root)) {
-      // Needs you: attention, or an ssh pane at a password / host-key prompt.
-      if (sessions[id]?.status === "attention" || remotePhase[id] === "prompt") {
+      // Needs you: attention, or an ssh pane at a password / host-key prompt — unless it's the
+      // pane you're looking at (the attention rule: never nag the pane you're driving).
+      const driving = windowFocused && tab.id === activeTabId && tab.activeSessionId === id
+      if (sessions[id]?.status === "attention" || (remotePhase[id] === "prompt" && !driving)) {
         waiting.push({ tabId: tab.id, sessionId: id })
       }
     }
@@ -136,7 +140,9 @@ export function TopBar() {
               }),
             )
             // An ssh pane at a prompt reads as needing input; a dropped one, red (after attention).
-            const remote = tabRemoteBadge(ids.map((id) => remotePhase[id]))
+            const remote = tabRemoteBadge(
+              ids.map((id) => ({ phase: remotePhase[id], detail: remoteDetail[id] })),
+            )
             const pulse = badge === "working" && !remote
             const dotClass =
               badge === "attention" || remote === "prompt"

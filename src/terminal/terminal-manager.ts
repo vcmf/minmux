@@ -29,6 +29,7 @@ import {
   firstStart,
   idleMessage,
   isIdle,
+  mayBePrompt,
   onKey,
   onOutput,
   type RemoteIdle,
@@ -46,6 +47,8 @@ interface Entry {
   offExit?: () => void
   remote?: RemotePhase // ssh panes only: where the connection is (rules: lib/remote-connect)
   failure?: SshFailure // with remote = "failed": why, so Enter / Retry only act when they can
+  lastKey?: string // ssh panes: the last input sent (a prompt check skips a line being typed)
+  escArmedAt?: number // an idle ssh pane's first Esc: a second within ESC_CLOSE_MS closes it
   startSeq?: number // bumps per PTY request: a stale answer never moves `remote`
   joinerId?: number
   idleTimer?: ReturnType<typeof setTimeout>
@@ -329,7 +332,10 @@ function requestPty(id: string, entry: Entry, attachOnly: boolean, given?: Sessi
   const { term } = entry
   const seq = (entry.startSeq ?? 0) + 1
   entry.startSeq = seq
-  if (session.remote) setPhase(id, entry, "starting")
+  if (session.remote) {
+    entry.lastKey = undefined // a new ssh: nothing typed into it yet
+    setPhase(id, entry, "starting")
+  }
   void ipc
     .ptySpawn({
       id: session.id,
@@ -392,6 +398,7 @@ function requestPty(id: string, entry: Entry, attachOnly: boolean, given?: Sessi
 function setPhase(id: string, entry: Entry, phase: RemotePhase, detail?: string) {
   entry.remote = phase
   if (phase !== "failed") entry.failure = undefined
+  entry.escArmedAt = undefined
   useStore.getState().setRemotePhase(id, phase, detail)
 }
 
@@ -432,20 +439,32 @@ function setIdle(
   phase: RemoteIdle,
   info?: { code?: number; signal?: number; error?: string },
 ) {
-  const label = useStore.getState().sessions[id]?.remote?.label ?? "the host"
-  const text = banner(idleMessage(phase, label, info))
+  const remote = useStore.getState().sessions[id]?.remote
+  const label = remote?.label ?? "the host"
+  const wslDistro = remote?.env.startsWith("wsl:") ? remote.env.slice(4) : undefined
+  const text = banner(idleMessage(phase, label, { ...info, wslDistro }))
   if (phase === "closed") writeAfterDrop(entry, text)
   else entry.term.write(text)
   const failure = phase === "failed" ? sshFailureKind(cleanError(info?.error)) : undefined
-  setPhase(id, entry, phase, failure) // now: keys are gated before the banner is even drawn
+  // closed: "ended" (a clean exit on the host) reads neutral, "lost" red
+  const ended = !info?.code && !info?.signal
+  const detail =
+    phase === "failed" ? failure : phase === "closed" ? (ended ? "ended" : "lost") : undefined
+  setPhase(id, entry, phase, detail) // now: keys are gated before the banner is even drawn
   entry.failure = failure
 }
 
-/** Esc on an idle ssh pane: close it (the surface; its pane goes when it was the last). */
+// Two presses of Esc, this close together, close an idle ssh pane (one is often vim habit).
+const ESC_CLOSE_MS = 2000
+
+/** Esc twice on an idle ssh pane: close it (the surface; its pane goes when it was the last).
+ *  After this key event unwinds — closing disposes the xterm that's still handling it. */
 function closeRemote(id: string) {
-  const st = useStore.getState()
-  const tab = st.tabs.find((t) => allSessionIds(t.root).includes(id))
-  if (tab) st.closeSurface(tab.id, id)
+  setTimeout(() => {
+    const st = useStore.getState()
+    const tab = st.tabs.find((t) => allSessionIds(t.root).includes(id))
+    if (tab) st.closeSurface(tab.id, id)
+  }, 0)
 }
 
 /** Output went quiet on a live ssh pane: if the cursor line is a password / passphrase / code /
@@ -453,7 +472,14 @@ function closeRemote(id: string) {
  *  Runs on the idle timer, so once per quiet spell — never per output chunk. */
 function checkAuthPrompt(id: string, entry: Entry, raise: (detail?: string) => void) {
   const b = entry.term.buffer.active
-  const line = b.getLine(b.baseY + b.cursorY)?.translateToString(true) ?? ""
+  if (!mayBePrompt({ alternateScreen: b.type === "alternate", lastKey: entry.lastKey })) return
+  // The cursor row plus the rows it soft-wraps from (a long prompt in a narrow pane).
+  let row = b.baseY + b.cursorY
+  let line = b.getLine(row)?.translateToString(true) ?? ""
+  for (let n = 0; n < 4 && row > 0 && b.getLine(row)?.isWrapped; n++) {
+    row--
+    line = (b.getLine(row)?.translateToString(true) ?? "") + line
+  }
   const kind = authPrompt(line)
   if (!kind) return
   setPhase(id, entry, "prompt", kind)
@@ -522,12 +548,18 @@ function spawn(session: Session, entry: Entry) {
   }
 
   term.onData((data) => {
-    // An ssh pane that isn't connected: Enter connects, anything else goes nowhere.
+    // An ssh pane that isn't connected: Enter connects, Esc twice closes, the rest goes nowhere.
     if (entry.remote) {
-      const k = onKey(entry.remote, data, entry.failure)
+      const armed = entry.escArmedAt !== undefined && Date.now() - entry.escArmedAt < ESC_CLOSE_MS
+      const k = onKey(entry.remote, data, entry.failure, armed)
       if (k === "connect") return connectRemote(session.id, entry)
       if (k === "close") return closeRemote(session.id)
+      if (k === "arm-close") {
+        entry.escArmedAt = Date.now()
+        return void entry.term.write(banner("Press Esc again to close this pane."))
+      }
       if (k === "drop") return
+      entry.lastKey = data
     }
     ipc.ptyWrite(session.id, data)
   })

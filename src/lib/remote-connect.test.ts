@@ -13,6 +13,7 @@ import {
   firstStart,
   idleMessage,
   isIdle,
+  mayBePrompt,
   onKey,
   type RemotePhase,
 } from "./remote-connect"
@@ -70,34 +71,34 @@ describe("isIdle", () => {
 describe("idleMessage", () => {
   it("says what happened, then the keys: Enter acts, Esc closes", () => {
     expect(idleMessage("waiting", "gpu")).toBe(
-      "gpu isn't connected yet. Enter to connect · Esc to close",
+      "gpu isn't connected yet. Enter to connect · Esc twice to close",
     )
     expect(idleMessage("closed", "gpu", { code: 0, signal: 0 })).toBe(
-      "Session on gpu ended. Enter to start a new one · Esc to close",
+      "Session on gpu ended. Enter to start a new one · Esc twice to close",
     )
     expect(idleMessage("closed", "gpu", { code: 255, signal: 0 })).toBe(
-      "Connection to gpu lost (the connection dropped or was refused). Enter to reconnect · Esc to close",
+      "Connection to gpu lost (the connection dropped or was refused). Enter to reconnect · Esc twice to close",
     )
     expect(idleMessage("closed", "gpu", { code: 0, signal: 9 })).toBe(
-      "Connection to gpu lost (ssh was stopped (signal 9)). Enter to reconnect · Esc to close",
+      "Connection to gpu lost (ssh was stopped (signal 9)). Enter to reconnect · Esc twice to close",
     )
   })
 
   it("matches a failure to what can fix it", () => {
     expect(idleMessage("failed", "gpu", { error: SSH_ERRORS.hostGone })).toBe(
-      "gpu isn't in your ssh config any more. Add it back, then Enter to retry · Esc to close",
+      "gpu isn't in your ssh config any more. Add it back, then Enter to retry · Esc twice to close",
     )
     expect(idleMessage("failed", "gpu", { error: SSH_ERRORS.noSsh })).toBe(
-      "ssh isn't installed or isn't on PATH. Install OpenSSH, then Enter to retry · Esc to close",
+      "ssh isn't installed or isn't on PATH. Install OpenSSH, then Enter to retry · Esc twice to close",
     )
     expect(idleMessage("failed", "gpu", { error: SSH_ERRORS.newerBuild })).toBe(
-      `gpu can't be opened here: ${SSH_ERRORS.newerBuild}. Esc to close`, // no Enter: it can't work
+      `gpu can't be opened here: ${SSH_ERRORS.newerBuild}. Esc twice to close`, // no Enter: it can't work
     )
     expect(idleMessage("failed", "gpu", { error: SSH_ERRORS.wslDown("Ubuntu") })).toBe(
-      `${SSH_ERRORS.wslDown("Ubuntu")}. Enter to retry · Esc to close`,
+      `${SSH_ERRORS.wslDown("Ubuntu")}. Enter to retry · Esc twice to close`,
     )
     expect(idleMessage("failed", "gpu", { error: "host not listed" })).toBe(
-      "couldn't connect to gpu: host not listed. Enter to retry · Esc to close",
+      "couldn't connect to gpu: host not listed. Enter to retry · Esc twice to close",
     )
   })
 })
@@ -121,9 +122,10 @@ describe("onOutput", () => {
 })
 
 describe("onKey — Esc and failures that can't be retried", () => {
-  it("Esc closes an idle pane; it's an ordinary key in a live one", () => {
+  it("Esc twice closes an idle pane; it's an ordinary key in a live one", () => {
     for (const p of ["waiting", "closed", "failed"] as RemotePhase[]) {
-      expect(onKey(p, "\u001b")).toBe("close")
+      expect(onKey(p, "\u001b")).toBe("arm-close") // the first press only arms it
+      expect(onKey(p, "\u001b", undefined, true)).toBe("close")
     }
     expect(onKey("live", "\u001b")).toBe("forward")
     expect(onKey("prompt", "\u001b")).toBe("forward")
@@ -190,10 +192,16 @@ describe("remoteStatusUi", () => {
 })
 
 describe("tabRemoteBadge", () => {
-  it("a prompt beats a drop; nothing remote-wrong → null", () => {
-    expect(tabRemoteBadge(["live", "closed", "prompt"])).toBe("prompt")
-    expect(tabRemoteBadge(["live", "failed"])).toBe("down")
-    expect(tabRemoteBadge(["live", undefined, "starting", "waiting"])).toBeNull()
+  it("a prompt beats a drop; a clean exit isn't a drop; nothing remote-wrong → null", () => {
+    expect(
+      tabRemoteBadge([{ phase: "live" }, { phase: "closed", detail: "lost" }, { phase: "prompt" }]),
+    ).toBe("prompt")
+    expect(tabRemoteBadge([{ phase: "live" }, { phase: "failed", detail: "other" }])).toBe("down")
+    expect(tabRemoteBadge([{ phase: "closed", detail: "lost" }])).toBe("down")
+    expect(tabRemoteBadge([{ phase: "closed", detail: "ended" }])).toBeNull()
+    expect(
+      tabRemoteBadge([{ phase: "live" }, {}, { phase: "starting" }, { phase: "waiting" }]),
+    ).toBeNull()
     expect(tabRemoteBadge([])).toBeNull()
   })
 })
@@ -236,5 +244,27 @@ describe("cursorBelowContent", () => {
     expect(cursorBelowContent({ lastContentRow: 9, cursorRow: 9, baseY: 0 })).toBe("")
     expect(cursorBelowContent({ lastContentRow: 9, cursorRow: 12, baseY: 0 })).toBe("")
     expect(cursorBelowContent({ lastContentRow: -1, cursorRow: 0, baseY: 0 })).toBe("")
+  })
+})
+
+describe("mayBePrompt", () => {
+  it("never in a full-screen program, nor on a line the user is typing", () => {
+    expect(mayBePrompt({ alternateScreen: true })).toBe(false) // vim on a `password:` line
+    expect(mayBePrompt({ alternateScreen: false, lastKey: ":" })).toBe(false) // `if password:`
+    expect(mayBePrompt({ alternateScreen: false, lastKey: "d" })).toBe(false)
+  })
+
+  it("at login (nothing typed yet) or right after Enter (sudo)", () => {
+    expect(mayBePrompt({ alternateScreen: false })).toBe(true)
+    expect(mayBePrompt({ alternateScreen: false, lastKey: "\r" })).toBe(true)
+    expect(mayBePrompt({ alternateScreen: false, lastKey: "sudo ls\r" })).toBe(true) // a paste
+  })
+})
+
+describe("idleMessage — WSL hosts", () => {
+  it("a WSL host gone from its distro's config doesn't send you to your own ssh config", () => {
+    expect(idleMessage("failed", "gpu", { error: SSH_ERRORS.hostGone, wslDistro: "Ubuntu" })).toBe(
+      "gpu isn't in Ubuntu's ssh config any more, or the distro was removed. Enter to retry · Esc twice to close",
+    )
   })
 })

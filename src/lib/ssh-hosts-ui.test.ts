@@ -125,10 +125,11 @@ describe("remote labels", () => {
 })
 
 describe("connectedHostIds — only live panes count", () => {
-  it("dialing, waiting, closed, failed and never-started panes don't count", () => {
+  it("dialing, waiting, closed, failed and never-started panes don't count; a prompt does", () => {
     const web = hostShellOption(testHost("web")).remote
     const sessions = { a: session("a", web), b: session("b", web) }
     expect(connectedHostIds(sessions, { a: "closed", b: "live" })).toEqual(["native:web"])
+    expect(connectedHostIds(sessions, { a: "prompt" })).toEqual(["native:web"]) // ssh runs
     for (const p of ["starting", "waiting", "closed", "failed"]) {
       expect(connectedHostIds(sessions, { a: p, b: p })).toEqual([])
     }

@@ -46,17 +46,27 @@ export function onOutput(phase: RemotePhase): RemotePhase {
 }
 
 /** A key typed into the pane: to the shell while it runs. In an idle pane Enter connects
- *  (unless it never can), Esc closes it, and anything else goes nowhere — never to a host that
- *  isn't there, nor echoed ahead of a password prompt. */
+ *  (unless it never can) and Esc closes it — on the second press (`escArmed`), since a first
+ *  one is often vim habit right after a drop; anything else goes nowhere, never to a host that
+ *  isn't there nor echoed ahead of a password prompt. */
 export function onKey(
   phase: RemotePhase,
   data: string,
   failure?: SshFailure,
-): "forward" | "connect" | "close" | "drop" {
+  escArmed = false,
+): "forward" | "connect" | "arm-close" | "close" | "drop" {
   if (!isIdle(phase)) return "forward"
-  if (data === "\x1b") return "close"
+  if (data === "\x1b") return escArmed ? "close" : "arm-close"
   if (data === "\r") return phase === "failed" && failure && !canRetry(failure) ? "drop" : "connect"
   return "drop"
+}
+
+/** Whether the cursor line may be an auth question at all: never in a full-screen program
+ *  (vim on a `password:` line), and not a line the user is typing (`if password:` in a REPL) —
+ *  only when nothing was typed since, or the last thing typed ended with Enter (sudo). */
+export function mayBePrompt(o: { alternateScreen: boolean; lastKey?: string }): boolean {
+  if (o.alternateScreen) return false
+  return o.lastKey === undefined || o.lastKey.endsWith("\r")
 }
 
 /** What ssh (or the host) is asking for, from the line the cursor sits on; null for none. */
@@ -88,15 +98,17 @@ export function exitReason(code: number, signal: number): string {
 export function idleMessage(
   phase: RemoteIdle,
   label: string,
-  info?: { code?: number; signal?: number; error?: string },
+  info?: { code?: number; signal?: number; error?: string; wslDistro?: string },
 ): string {
-  const close = "Esc to close"
+  const close = "Esc twice to close"
   if (phase === "waiting") return `${label} isn't connected yet. Enter to connect · ${close}`
   if (phase === "failed") {
     const error = cleanError(info?.error)
     switch (sshFailureKind(error)) {
       case "host-gone":
-        return `${label} isn't in your ssh config any more. Add it back, then Enter to retry · ${close}`
+        return info?.wslDistro
+          ? `${label} isn't in ${info.wslDistro}'s ssh config any more, or the distro was removed. Enter to retry · ${close}`
+          : `${label} isn't in your ssh config any more. Add it back, then Enter to retry · ${close}`
       case "no-ssh":
         return `ssh isn't installed or isn't on PATH. Install OpenSSH, then Enter to retry · ${close}`
       case "not-here":
@@ -120,15 +132,18 @@ export function idleMessage(
 export function remoteStatusUi(
   phase: RemotePhase | undefined,
   status: SessionStatus,
-  prompt?: AuthPrompt,
+  detail?: string, // the prompt kind (phase "prompt") or "ended" / "lost" (phase "closed")
 ): StatusUi {
+  const prompt = detail as AuthPrompt | undefined
   switch (phase) {
     case "starting":
       return { dot: "faint", word: "connecting", pulse: true }
     case "prompt":
       return { dot: "amber", word: prompt ?? "needs input", pulse: false }
-    case "closed":
-      return { dot: "red", word: "disconnected", pulse: false }
+    case "closed": // `detail` "ended" = a clean exit on the host: not a failure
+      return detail === "ended"
+        ? { dot: "hollow", word: "ended", pulse: false }
+        : { dot: "red", word: "disconnected", pulse: false }
     case "failed":
       return { dot: "red", word: "can't connect", pulse: false }
     case "waiting":
@@ -164,9 +179,14 @@ export function cursorBelowContent(o: {
   return `\x1b[${o.lastContentRow - o.baseY + 1};1H` // 1-based screen row; the banner's \r\n steps below
 }
 
-/** A tab's ssh summary: any pane at a prompt → "prompt"; else any disconnected or failed →
- *  "down"; else null (the tab's ordinary badge applies). */
-export function tabRemoteBadge(phases: (RemotePhase | undefined)[]): "prompt" | "down" | null {
-  if (phases.includes("prompt")) return "prompt"
-  return phases.some((p) => p === "closed" || p === "failed") ? "down" : null
+/** A tab's ssh summary: any pane at a prompt → "prompt"; else any lost or failed connection →
+ *  "down" (a clean `exit` isn't); else null (the tab's ordinary badge applies). */
+export function tabRemoteBadge(
+  panes: { phase?: RemotePhase; detail?: string }[],
+): "prompt" | "down" | null {
+  if (panes.some((p) => p.phase === "prompt")) return "prompt"
+  const down = panes.some(
+    (p) => p.phase === "failed" || (p.phase === "closed" && p.detail !== "ended"),
+  )
+  return down ? "down" : null
 }
