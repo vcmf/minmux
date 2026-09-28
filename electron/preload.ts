@@ -33,6 +33,13 @@ const api = {
   },
   openSshConfig: () => ipcRenderer.send("ssh:open-config"),
 
+  onPtyNonce: (id: string, cb: (nonce: string) => void) => {
+    const channel = `pty:nonce:${id}`
+    const listener = (_e: unknown, nonce: string) => cb(nonce)
+    ipcRenderer.on(channel, listener)
+    return () => ipcRenderer.removeListener(channel, listener)
+  },
+
   onPtyData: (id: string, cb: (data: string) => void) => {
     const channel = `pty:data:${id}`
     const listener = (_e: unknown, data: string) => cb(data)

@@ -51,6 +51,7 @@ interface Entry {
   spawned: boolean // PTY spawned/reattached + output listeners wired (may precede `opened`)
   offData?: () => void
   offExit?: () => void
+  offNonce?: () => void
   remote?: RemotePhase // ssh panes only: where the connection is (rules: lib/remote-connect)
   failure?: SshFailure // with remote = "failed": why, so Enter / Retry only act when they can
   lastKey?: string // ssh panes: the last input sent (a prompt check skips a line being typed)
@@ -59,6 +60,7 @@ interface Entry {
   cwdHost?: string // ssh panes: the host this connection's first folder report named
   nonce?: string // ssh panes: this connection's nonce (integrated hosts; from main)
   verified?: boolean // …and its shell has reported with it: untagged reports are ignored now
+  hostCmd?: boolean // …while a command it started runs (a tagged C, no D yet): see untrusted()
   liveSince?: number // when this connection went live (a drop after STABLE_MS may auto-retry)
   retryAttempt: number // the automatic reconnect this connection came from (0 = none)
   retryTotal: number // automatic reconnects since you last connected it yourself (capped)
@@ -363,6 +365,7 @@ function requestPty(id: string, entry: Entry, attachOnly: boolean, given?: Sessi
     entry.cwdHost = undefined
     entry.nonce = undefined // this connection's own, when main says (never the last one's)
     entry.verified = false
+    entry.hostCmd = false
     if (!attachOnly) useStore.getState().setRemoteCwd(id, undefined)
     setPhase(id, entry, "starting")
   }
@@ -391,7 +394,7 @@ function requestPty(id: string, entry: Entry, attachOnly: boolean, given?: Sessi
         entry.flow.replaying = false // superseded (e.g. it exited first): nothing is replaying
         return
       }
-      if (entry.remote) entry.nonce = remoteNonce
+      if (entry.remote && remoteNonce) entry.nonce = remoteNonce // a reattach (sent ahead too)
       if (entry.remote) {
         const next = afterStart(entry.remote, started, reattached)
         if (next === "waiting") setIdle(id, entry, "waiting")
@@ -539,6 +542,14 @@ const AUTH_SETTLE_MS = 2000
  *  from inside it (an ssh to another box, a container). A report naming the configured
  *  alias or HostName always is, and fixes the machine; otherwise the first one seen outside
  *  a reload's replay does, and later ones must match it. */
+/** Whether an ssh pane's untagged folder report (OSC 7, title) is to be shown: always on a
+ *  plain host; on an integrated one only while a command our shell started runs — `exec zsh`,
+ *  `sudo -i`, a nested shell with no hooks. At our shell's own prompt they're its PS1 / a
+ *  framework's echo of what it reported tagged. Shown, they're never verified. */
+function untrusted(entry: Entry): boolean {
+  return !entry.verified || entry.hostCmd === true
+}
+
 function sameHostAsBefore(entry: Entry, id: string, host: string): boolean {
   if (!host || host === "localhost") return true
   const remote = useStore.getState().sessions[id]?.remote
@@ -639,6 +650,10 @@ function spawn(session: Session, entry: Entry) {
   })
 
   if (session.remote) {
+    // The host took this connection's nonce (main saw its ok): trust reports carrying it.
+    entry.offNonce = ipc.onPtyNonce(session.id, (nonce) => {
+      if (entries.get(session.id) === entry) entry.nonce = nonce
+    })
     // A dropped link or `exit` on the host: say so, and let Enter (or Connect) reconnect.
     entry.offExit = ipc.onPtyExit(session.id, (e) => {
       if (entries.get(session.id) !== entry) return
@@ -731,7 +746,7 @@ function spawn(session: Session, entry: Entry) {
   term.onTitleChange((title) => {
     store.setSessionOscTitle(session.id, title)
     // An ssh pane that doesn't send OSC 7: the Debian / Ubuntu title `user@host: ~/dir`.
-    if (session.remote && !entry.osc7 && !entry.verified) {
+    if (session.remote && !entry.osc7 && untrusted(entry)) {
       const at = cwdFromTitle(title)
       if (at && sameHostAsBefore(entry, session.id, at.host))
         useStore.getState().setRemoteCwd(session.id, at.dir)
@@ -742,7 +757,7 @@ function spawn(session: Session, entry: Entry) {
   term.parser.registerOscHandler(7, (data) => {
     // An ssh pane's folder is on the host: shown, never read locally, never sent back.
     if (session.remote) {
-      if (entry.verified) return true // our integrated shell reports its folder itself
+      if (!untrusted(entry)) return true // our shell, at its prompt, reports its folder itself
       const at = cwdFromOsc7(data)
       if (at && sameHostAsBefore(entry, session.id, at.host)) {
         entry.osc7 = true // authoritative from now on: the title is only a fallback
@@ -789,7 +804,9 @@ function spawn(session: Session, entry: Entry) {
     const r = parseRemoteReport(data, entry.nonce)
     if (!r) return true
     entry.verified = true
-    if (r.kind === "cwd") useStore.getState().setRemoteCwd(session.id, r.dir, true)
+    if (r.kind !== "cwd") entry.hostCmd = r.kind === "start"
+    // A folder we can't take (or show) still means it moved: the old one goes, not reopened.
+    if (r.kind === "cwd") useStore.getState().setRemoteCwd(session.id, r.dir ?? undefined, true)
     else if (r.kind === "start") store.signalSession(session.id, { type: "command-start" })
     else {
       clearTimeout(entry.idleTimer) // precise idle: the heuristic mustn't flip it later
@@ -1232,6 +1249,7 @@ export const TerminalManager = {
     releaseWebgl(entry)
     entry.offData?.()
     entry.offExit?.()
+    entry.offNonce?.()
     ipc.ptyKill(id)
     entry.term.dispose()
     entry.host.remove()

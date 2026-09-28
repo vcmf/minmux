@@ -405,11 +405,12 @@ and `terminal-manager` types `claude --resume <id> [--permission-mode m]` at the
   with `.envrc`-style hooks). Reopening a folder waits for a trustworthy source (phase 3 shell
   integration) or tmux (phase 2).
 - **An integrated ssh pane trusts only nonce-tagged reports** (`OSC 6973;<nonce>;…`, parsed by
-  `lib/remote-reports.ts`). Main hands the renderer the connection's nonce in the spawn result
-  (reattach too); once one tagged report has come, that pane ignores untagged OSC 7 / 133 and
-  the title — they're a program's. `remoteCwdVerified` marks a folder from a tagged report:
-  the only kind that may ever be reopened. Before the first one, untagged reports still show
-  (display only, as for a plain host).
+  `lib/remote-reports.ts`; the folder is hex of `$PWD`, never a URL). Main pushes the nonce
+  (`pty:nonce:<id>`) only after the host's `ok`, and before a reattach's replay. Once a tagged
+  report has come, untagged OSC 7 / 133 and titles are ignored at our shell's prompt, and shown
+  but never verified while a command it started runs (`exec zsh`, `sudo -i`: see `untrusted()`
+  in terminal-manager). `remoteCwdVerified` marks a folder from a tagged report: the only kind
+  that may ever be reopened.
 - **Reconnect reuses the session id.** terminal-manager wires xterm listeners once per
   entry and only re-requests the PTY; a second `term.onData` would send every key twice.
 - **`attachOnly`** exists for `restore: "on-focus"`: reattach a live PTY after a reload, but

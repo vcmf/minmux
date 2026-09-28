@@ -357,8 +357,13 @@ other users on the host can read a command line with `ps`:
   when a command is given, so opted-in hosts don't show them.
 
 **The hooks** are the local ones with every report tagged: `OSC 6973;<nonce>;C`, `;D;<exit>`
-and `;7;file://host/path`, and no standard OSC 7 / 133 at all, so nothing untagged can pass for
-them. At a prompt they use `printf` and builtins only (a test checks for `$(` or backticks).
+and `;P;<host>;<hex of $PWD's bytes>`, and no standard OSC 7 / 133 at all, so nothing untagged
+can pass for them. The folder is hex, not a `file://` URL: a URL is re-parsed on the way (`#`
+and `?` cut it, `\` and `..` are normalised, `%2F` is decoded), so a crafted directory name
+could make a report name a different, real directory. Hex arrives exactly as the shell has it;
+the renderer refuses (never repairs) non-UTF-8, relative paths, `.` / `..` segments, control or
+format characters. At a prompt the hooks use `printf` and builtins only (a test checks for
+`$(` or backticks): the hex loop costs ~0.3 ms (zsh) to ~1 ms (macOS bash 3.2) for a long path.
 
 **When it can't run**:
 
@@ -373,15 +378,33 @@ them. At a prompt they use `printf` and builtins only (a test checks for `$(` or
 **Cost** (local, stub host): the first prompt comes about 30 ms later (bash 9 → 37 ms, zsh
 17 → 51 ms), plus one round trip on a real link; nothing per keystroke or per output byte.
 
-**In the renderer (P3b)**: main returns the connection's nonce with the spawn result (a
-reattach too). `lib/remote-reports.ts` parses `OSC 6973;<nonce>;C | D;<exit> | 7;<url>`; only
-this connection's nonce counts (a nested integrated shell has its own). The first tagged report
-makes the pane _verified_: from then on its untagged OSC 7 / 133 and title are a program's and
-ignored. Tagged `C` / `D` drive the same status as local OSC 133 (not the local-only Claude
-resume flow), and a tagged folder is stored with `remoteCwdVerified`, the only kind P3c will
-reopen. A new connection forgets the nonce and the folder. Measured: a 300k-line firehose takes
-the same time on an integrated and a plain pane (~615 ms), and the local `SMTERM_PERF` suite
-shows no change against v0.1.39 (e2e ~22–24 MB/s either way, renderer ~50 MB/s).
+**In the renderer (P3b)**: the bootstrap prints `OSC 6973;ok;<challenge>` once it has taken
+a valid answer. Only then does main hand the renderer the nonce (`pty:nonce:<id>`, sent before
+the output that follows; on a reattach, before the replay, and in the spawn result). A nonce the
+host didn't take (a late answer typed into the plain shell, a `skip`) is never trusted.
+`lib/remote-reports.ts` parses the reports; only this connection's nonce counts (a nested
+integrated shell has its own). The first tagged report makes the pane _verified_:
+
+- At our shell's prompt (after a tagged `D`), untagged OSC 7 / 133 and titles are ignored —
+  they're PS1 (Ubuntu's `user@host: dir` title), a prompt framework, or something printed.
+- While a command it started runs (a tagged `C`, no `D` yet: `exec zsh`, `sudo -i`, a nested
+  shell with no hooks), untagged folder reports are shown again, but never verified: the
+  sidebar follows the nested shell, and P3c has nothing to reopen until our shell reports.
+- A tagged folder the renderer refuses clears the old one (it moved; where is unknown).
+- Tagged `C` / `D` drive the same status as local OSC 133 (not the local-only Claude resume
+  flow). A tagged folder is stored with `remoteCwdVerified`, the only kind P3c will reopen.
+- A new connection forgets the nonce and the folder.
+
+Known gaps: `exec zsh` leaves the pane "running" (its `C` never gets a `D`) until the
+connection ends. With `set -x` / `setopt xtrace` on the host, the hooks' `printf` lines trace
+the nonce. Anything that replays raw pane output on the host (`script` logs, tmux
+`capture-pane -e`) replays valid reports of that connection. A server `ForceCommand` that goes
+on to an interactive session (a bastion) exposes the challenge in `$SSH_ORIGINAL_COMMAND`, so a
+program there could answer our hello itself; the effect stays on that host.
+
+Measured: a 300k-line firehose takes the same time on an integrated and a plain pane (~615 ms),
+and the local `SMTERM_PERF` suite shows no change against v0.1.39 (e2e ~22–24 MB/s either way,
+renderer ~50 MB/s).
 
 Still to come: inside tmux (phase 2) the scripts wrap their reports in tmux passthrough
 (`allow-passthrough on`, §6b).

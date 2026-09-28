@@ -123,7 +123,8 @@ interface PtySession {
   integrated: boolean // our shell integration (OSC 133 marks, claude wrapper) was injected
   live: Drainable // this PTY's entry in livePtys (outlives the session record until onExit)
   hello?: HelloWatch // an integrated ssh pane, until its bootstrap's hello is answered
-  remoteNonce?: string // …and the nonce its shell's reports carry
+  pendingNonce?: string // …the nonce it was offered…
+  remoteNonce?: string // …and, once the host confirmed it (ok), what its shell's reports carry
 }
 const sessions = new Map<string, PtySession>()
 // Every node-pty that hasn't reported its exit yet — including closed panes still winding
@@ -423,9 +424,17 @@ function reattach(rec: PtySession, sender: Electron.WebContents, opts: SpawnOpts
   } catch {
     // transient 0-size during layout — a later resize settles it
   }
+  sendNonce(rec) // before the replay: its reports need it
   emit(rec, rec.buffer.dump())
   diag("pty-reattach", { id: opts.id, pid: rec.proc.pid })
   return { reattached: true, integrated: rec.integrated, remoteNonce: rec.remoteNonce }
+}
+
+/** An integrated ssh pane's confirmed nonce, to its renderer (on its own channel, not data). */
+function sendNonce(rec: PtySession): void {
+  if (rec.remoteNonce && !draining() && !rec.sender.isDestroyed()) {
+    rec.sender.send(`pty:nonce:${rec.id}`, rec.remoteNonce)
+  }
 }
 
 /** The env every spawned PTY starts from (process env + injection + our opt-outs). */
@@ -478,7 +487,7 @@ function startPty(sender: Electron.WebContents, opts: SpawnOpts, spec: StartSpec
     integrated: spec.integrated,
     live,
     hello: spec.remote?.hello,
-    remoteNonce: spec.remote?.nonce,
+    pendingNonce: spec.remote?.nonce,
   }
   if (coalesce) {
     rec.coalescer = new OutputCoalescer(PTY_FLUSH_MS, PTY_MAX_FLUSH_BYTES, (d) => emit(rec, d))
@@ -487,8 +496,13 @@ function startPty(sender: Electron.WebContents, opts: SpawnOpts, spec: StartSpec
     // An integrated ssh pane's bootstrap says hello once, right after login: answer it with
     // the nonce (its echo is off). A bounded scan — it stops for good once answered.
     if (rec.hello && !rec.hello.done) {
-      const reply = rec.hello.feed(data)
-      if (reply) proc.write(reply)
+      const step = rec.hello.feed(data)
+      if (step?.write) proc.write(step.write)
+      if (step?.armed) {
+        // Before this chunk's output (the coalescer sends it later): its reports need it.
+        rec.remoteNonce = rec.pendingNonce
+        sendNonce(rec)
+      }
     }
     rec.buffer.push(data) // keep for replay on reattach
     if (rec.coalescer) rec.coalescer.push(data)
