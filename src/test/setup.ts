@@ -12,6 +12,7 @@ const unsub = () => noop
 const smtermStub = {
   ptySpawn: vi.fn(async () => {}),
   onPtyData: vi.fn(unsub),
+  onPtyNonce: vi.fn(unsub),
   ptyWrite: vi.fn(),
   ptyResize: vi.fn(),
   ptyKill: vi.fn(),

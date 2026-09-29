@@ -14,12 +14,31 @@ import { execFileSync } from "node:child_process"
 // at a prompt because no full-screen program is running to want the mouse.
 const MOUSE_RESET = "\\033[?1000l\\033[?1002l\\033[?1003l\\033[?1006l"
 
-const ZSH_ZSHENV = [
+export const ZSH_ZSHENV = [
   "# smterm shell integration — zsh .zshenv (loaded for every zsh invocation).",
   'if [[ -f "${SMTERM_USER_ZDOTDIR:-$HOME}/.zshenv" ]]; then',
   '  source "${SMTERM_USER_ZDOTDIR:-$HOME}/.zshenv"',
   "fi",
   '[[ -n "$SMTERM_ZDOTDIR" ]] && ZDOTDIR="$SMTERM_ZDOTDIR"',
+  "",
+].join("\n")
+
+/** zsh's prompt hooks (OSC 133 marks, OSC 7, mouse reset): shared by local and remote rcs. */
+export const ZSH_HOOKS = [
+  "# Emit OSC 133 marks so smterm can track command start/finish.",
+  'if [[ -o interactive && -z "${__SMTERM_ZSH_HOOKS-}" ]]; then',
+  "  __SMTERM_ZSH_HOOKS=1",
+  "  autoload -Uz add-zsh-hook 2>/dev/null",
+  "  __smterm_preexec() { printf '\\033]133;C\\007'; }",
+  "  __smterm_precmd() {",
+  "    local ret=$?",
+  "    printf '\\033]133;D;%s\\007' \"$ret\"",
+  '    printf \'\\033]7;file://%s%s\\007\' "${HOST:-localhost}" "$PWD"',
+  "    printf '" + MOUSE_RESET + "' # heal a crashed TUI's leftover mouse mode",
+  "  }",
+  "  add-zsh-hook preexec __smterm_preexec 2>/dev/null",
+  "  add-zsh-hook precmd __smterm_precmd 2>/dev/null",
+  "fi",
   "",
 ].join("\n")
 
@@ -52,21 +71,7 @@ export const ZSH_ZSHRC = [
   "  setopt SHARE_HISTORY",
   "fi",
   "",
-  "# Emit OSC 133 marks so smterm can track command start/finish.",
-  'if [[ -o interactive && -z "${__SMTERM_ZSH_HOOKS-}" ]]; then',
-  "  __SMTERM_ZSH_HOOKS=1",
-  "  autoload -Uz add-zsh-hook 2>/dev/null",
-  "  __smterm_preexec() { printf '\\033]133;C\\007'; }",
-  "  __smterm_precmd() {",
-  "    local ret=$?",
-  "    printf '\\033]133;D;%s\\007' \"$ret\"",
-  '    printf \'\\033]7;file://%s%s\\007\' "${HOST:-localhost}" "$PWD"',
-  "    printf '" + MOUSE_RESET + "' # heal a crashed TUI's leftover mouse mode",
-  "  }",
-  "  add-zsh-hook preexec __smterm_preexec 2>/dev/null",
-  "  add-zsh-hook precmd __smterm_precmd 2>/dev/null",
-  "fi",
-  "",
+  ZSH_HOOKS,
   "# Route `claude` through smterm's scoped hook settings so the agents board can",
   "# observe its sessions/sub-agents. Only when smterm provides the file; the user's",
   "# global ~/.claude config is untouched. (M6 — docs/design/AGENT_OBSERVABILITY.md)",
@@ -76,7 +81,7 @@ export const ZSH_ZSHRC = [
   "",
 ].join("\n")
 
-const ZSH_ZPROFILE = [
+export const ZSH_ZPROFILE = [
   "# smterm shell integration — zsh .zprofile (login shells)",
   'if [[ -f "${SMTERM_USER_ZDOTDIR:-$HOME}/.zprofile" ]]; then',
   '  source "${SMTERM_USER_ZDOTDIR:-$HOME}/.zprofile"',
@@ -94,11 +99,15 @@ const ZSH_ZLOGIN = [
 
 // Everything below runs AFTER the user's rc — which may `set -u` / `setopt nounset`: every
 // variable we read there is expanded as ${X-} so an unset one can't abort our integration.
-export const BASH_RC = [
+const BASH_LOCAL_PRELUDE = [
   "# smterm shell integration — bash (loaded via bash --rcfile).",
   "if [[ -f /etc/bash.bashrc ]]; then source /etc/bash.bashrc; fi",
   'if [[ -f "$HOME/.bashrc" ]]; then source "$HOME/.bashrc"; fi',
   "",
+]
+
+/** bash's hooks, after the user's own startup files (shared by local and remote rcs). */
+export const BASH_HOOKS = [
   "# Only instrument interactive shells, once.",
   'case "$-" in *i*) ;; *) return ;; esac',
   '[[ -n "${__SMTERM_BASH_HOOKS-}" ]] && return',
@@ -152,6 +161,8 @@ export const BASH_RC = [
   "fi",
   "",
 ].join("\n")
+
+export const BASH_RC = [...BASH_LOCAL_PRELUDE, BASH_HOOKS].join("\n")
 
 export interface ShellOption {
   id: string

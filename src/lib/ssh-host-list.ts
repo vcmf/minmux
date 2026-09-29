@@ -98,10 +98,22 @@ export function sshCommand(h: SshHost): string {
 }
 
 export type HostActionId =
-  "open" | "splitRight" | "splitDown" | "copyCommand" | "pin" | "hide" | "openConfig"
+  | "open"
+  | "splitRight"
+  | "splitDown"
+  | "copyCommand"
+  | "pin"
+  | "hide"
+  | "integration"
+  | "openConfig"
 
 /** A host row's right-click menu. */
-export function hostMenuItems(o: { pinned: boolean; native: boolean }) {
+// integration: null = shell integration is off in settings (no per-host toggle to offer).
+export function hostMenuItems(o: {
+  pinned: boolean
+  native: boolean
+  integration: boolean | null
+}) {
   return [
     { id: "open" as HostActionId, label: "Open in new tab" },
     { id: "splitRight" as HostActionId, label: "Split right" },
@@ -109,6 +121,15 @@ export function hostMenuItems(o: { pinned: boolean; native: boolean }) {
     { id: "copyCommand" as HostActionId, label: "Copy ssh command", separatorBefore: true },
     { id: "pin" as HostActionId, label: o.pinned ? "Unpin from sidebar" : "Pin to sidebar" },
     { id: "hide" as HostActionId, label: "Hide host" },
+    // Applies to the next connection (a live shell keeps what it started with).
+    ...(o.integration === null
+      ? []
+      : [
+          {
+            id: "integration" as HostActionId,
+            label: o.integration ? "Turn off shell integration" : "Turn on shell integration",
+          },
+        ]),
     // The ssh config smterm can open is this machine's; a WSL host's lives in its distro.
     ...(o.native
       ? [{ id: "openConfig" as HostActionId, label: "Open ssh config", separatorBefore: true }]

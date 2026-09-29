@@ -17,6 +17,8 @@ import {
 import { inheritShell, resolveDefaultShell } from "./lib/shells"
 import { hostShellOption, sameHosts } from "./lib/ssh-hosts-ui"
 import { pushRecent, toggleHidden, togglePinned } from "./lib/ssh-host-list"
+import { declineIntegration, integrationOn, setIntegration, undecided } from "./lib/ssh-integration"
+import { reopenFor, type ReopenCwd } from "./lib/remote-reports"
 import { DEFAULT_HIDDEN_HOSTS } from "./lib/ssh-validate"
 import type { RemotePhase } from "./lib/remote-connect"
 import { reduceSignals } from "./lib/session-status"
@@ -50,7 +52,7 @@ import { clampPanelWidth, RIGHT_PANEL_DEFAULT } from "./lib/right-panel"
 
 const newId = () => crypto.randomUUID()
 
-function makeSession(shell: ShellOption, initialCwd?: string): Session {
+function makeSession(shell: ShellOption, initialCwd?: string, reopen?: ReopenCwd): Session {
   return {
     id: newId(),
     title: shell.label,
@@ -61,6 +63,7 @@ function makeSession(shell: ShellOption, initialCwd?: string): Session {
     // A remote session's shell runs on the host: a local cwd would be meaningless there.
     ...(shell.remote ? { remote: { ...shell.remote } } : { cwd: initialCwd }),
     ...(shell.remote && shell.remoteSaved !== undefined ? { remoteSaved: shell.remoteSaved } : {}),
+    ...(shell.remote && reopen ? { reopenCwd: reopen } : {}),
   }
 }
 
@@ -98,6 +101,11 @@ interface AppState {
   settingsOpen: boolean
   paletteOpen: boolean
   hostPickerOpen: boolean // the "Connect to host" picker
+  // The one-line "open splits in the same folder?" hint, on the split that prompted it
+  // (runtime only). `on` = just turned on: it says when it takes effect.
+  integrationHint: { sessionId: string; alias: string; state: "ask" | "on" } | null
+  hintDismissed: string[] // aliases whose hint was closed this run ("not now")
+  answerIntegrationHint: (choice: "on" | "never" | "dismiss") => void
   sshRecent: string[] // hostIds, newest first (a convenience: localStorage, last writer wins)
   searchOpen: boolean
   rightView: RightView // which view the single right-side panel shows (null = hidden)
@@ -132,13 +140,22 @@ interface AppState {
   claudeExited: (paneId: string) => void // the pane's shell prompt came back after Claude
   setRightView: (view: RightView) => void
   setSessionCwd: (sessionId: string, cwd: string) => void
-  setRemoteCwd: (sessionId: string, cwd: string | undefined) => void // undefined = unknown again
+  // undefined = unknown again; verified = reported by our integrated shell (nonce-checked), by
+  // `host`. A verified folder replaces the one to reopen (it's where the shell really is now).
+  setRemoteCwd: (
+    sessionId: string,
+    cwd: string | undefined,
+    verified?: boolean,
+    host?: string,
+  ) => void
+  setReopenCwd: (sessionId: string, reopen: ReopenCwd | undefined) => void // next connection's folder
   setPaletteOpen: (open: boolean) => void
   setHostPickerOpen: (open: boolean) => void
   /** Open a host: a new tab, or a split of the active pane. Remembered as recent. */
   openHost: (host: SshHost, how: "tab" | "row" | "column") => void
   toggleHostPinned: (hostId: string) => void // settings.ssh.pinned
   setHostHidden: (alias: string, hide: boolean) => void // settings.ssh.hidden
+  toggleHostIntegration: (alias: string) => void // settings.ssh.integration
   setSearchOpen: (open: boolean) => void
   setSidebarCollapsed: (collapsed: boolean) => void
   setSettingsOpen: (open: boolean) => void
@@ -232,11 +249,11 @@ export const isSessionVisible = (sessionId: string): boolean =>
 // each caller resolves its own shell/cwd, this owns the pane-tree mechanics.
 function splitActivePane(
   state: AppState,
-  opts: { shell: ShellOption; cwd?: string; direction: "row" | "column" },
+  opts: { shell: ShellOption; cwd?: string; direction: "row" | "column"; reopen?: ReopenCwd },
 ): Partial<AppState> {
   const tab = state.tabs.find((t) => t.id === state.activeTabId)
   if (!tab) return {}
-  const session = makeSession(opts.shell, opts.cwd)
+  const session = makeSession(opts.shell, opts.cwd, opts.reopen)
   const root = splitNode(
     tab.root,
     tab.activeSessionId,
@@ -251,6 +268,28 @@ function splitActivePane(
       t.id === tab.id ? { ...t, root, activeSessionId: session.id } : t,
     ),
   }
+}
+
+/** Whether a hint for `alias` still has a question to ask: ask mode, and no entry decides it. */
+export const hintStillAsks = (
+  alias: string,
+  ssh: { integrationMode: string; integration: string[] },
+): boolean => ssh.integrationMode === "ask" && undecided(alias, ssh.integration)
+
+/** A split of an ssh pane on a host you never chose for (ask mode): offer shell integration on
+ *  the new pane, once per host per run — it's what makes a split open in the same folder. */
+function hintFor(state: AppState, shell: ShellOption, next: Partial<AppState>): Partial<AppState> {
+  const alias = shell.remote?.label
+  const ssh = state.settings.ssh
+  const tab = next.tabs?.find((t) => t.id === state.activeTabId)
+  if (!alias || !tab || ssh.integrationMode !== "ask") return {}
+  if (!undecided(alias, ssh.integration) || state.hintDismissed.includes(alias)) return {}
+  // Already offered on a split of this host: it stays there (moving it would resize that pane
+  // under whatever now runs in it).
+  if (state.integrationHint?.alias === alias && state.sessions[state.integrationHint.sessionId]) {
+    return {}
+  }
+  return { integrationHint: { sessionId: tab.activeSessionId, alias, state: "ask" } }
 }
 
 /** Make `sessionId` the tab's focus and its pane's visible surface (same tab if unchanged). */
@@ -284,7 +323,14 @@ function dropSessions(
   ids: string[],
 ): Pick<
   AppState,
-  "sessions" | "paneRoot" | "agentMeta" | "paneGit" | "resume" | "remotePhase" | "remoteDetail"
+  | "sessions"
+  | "paneRoot"
+  | "agentMeta"
+  | "paneGit"
+  | "resume"
+  | "remotePhase"
+  | "remoteDetail"
+  | "integrationHint"
 > {
   const sessions = { ...state.sessions }
   const paneRoot = { ...state.paneRoot }
@@ -303,7 +349,19 @@ function dropSessions(
     delete paneRoot[id] // don't leak the pane's root override
     delete agentMeta[id] // …or its Claude accent
   }
-  return { sessions, paneRoot, agentMeta, paneGit, resume, remotePhase, remoteDetail }
+  // The hint goes with the pane it was on (closing it isn't an answer: a later split asks again).
+  const hint = state.integrationHint
+  const integrationHint = hint && ids.includes(hint.sessionId) ? null : hint
+  return {
+    sessions,
+    paneRoot,
+    agentMeta,
+    paneGit,
+    resume,
+    remotePhase,
+    remoteDetail,
+    integrationHint,
+  }
 }
 
 /** Remove a tab; if it was active, the last remaining tab takes over. */
@@ -353,6 +411,8 @@ export const useStore = create<AppState>((set, get) => ({
   settingsOpen: false,
   paletteOpen: false,
   hostPickerOpen: false,
+  integrationHint: null,
+  hintDismissed: [],
   sshRecent: readRecent(),
   searchOpen: false,
   rightView: null,
@@ -421,12 +481,35 @@ export const useStore = create<AppState>((set, get) => ({
       return { sessions: { ...state.sessions, [sessionId]: { ...s, cwd } } }
     }),
   // Display only: local panels read `cwd`, which a remote session never has.
-  setRemoteCwd: (sessionId, cwd) =>
+  setRemoteCwd: (sessionId, cwd, verified = false, host) =>
     set((state) => {
       const s = state.sessions[sessionId]
-      if (!s?.remote || s.remoteCwd === cwd) return state
-      const next = { ...s, remoteCwd: cwd }
+      const ok = verified && cwd !== undefined && !!host
+      if (!s?.remote) return state
+      // Any report of where the shell is replaces the folder to reopen: the shell is elsewhere
+      // now (a plain connection's own OSC 7 too), or went somewhere we won't reopen.
+      const reported = cwd !== undefined || verified
+      const same =
+        s.remoteCwd === cwd &&
+        !!s.remoteCwdVerified === ok &&
+        s.remoteCwdHost === (ok ? host : undefined) &&
+        !(reported && s.reopenCwd)
+      if (same) return state
+      const next: Session = { ...s, remoteCwd: cwd, remoteCwdVerified: ok, remoteCwdHost: host }
       if (cwd === undefined) delete next.remoteCwd
+      if (!ok) {
+        delete next.remoteCwdVerified
+        delete next.remoteCwdHost
+      }
+      if (reported) delete next.reopenCwd
+      return { sessions: { ...state.sessions, [sessionId]: next } }
+    }),
+  setReopenCwd: (sessionId, reopen) =>
+    set((state) => {
+      const s = state.sessions[sessionId]
+      if (!s?.remote || JSON.stringify(s.reopenCwd) === JSON.stringify(reopen)) return state
+      const next: Session = { ...s, reopenCwd: reopen }
+      if (!reopen) delete next.reopenCwd
       return { sessions: { ...state.sessions, [sessionId]: next } }
     }),
   // One overlay at a time: opening either closes the other (⌘K over an open picker).
@@ -447,6 +530,38 @@ export const useStore = create<AppState>((set, get) => ({
     const st = get()
     const ssh = st.settings.ssh
     st.updateSettings({ ...st.settings, ssh: { ...ssh, pinned: togglePinned(ssh.pinned, hostId) } })
+  },
+  toggleHostIntegration: (alias) => {
+    const st = get()
+    const ssh = st.settings.ssh
+    const on = !integrationOn(alias, ssh.integration, ssh.integrationMode)
+    st.updateSettings({
+      ...st.settings,
+      ssh: {
+        ...ssh,
+        integration: setIntegration(ssh.integration, alias, on, ssh.integrationMode),
+      },
+    })
+  },
+  answerIntegrationHint: (choice) => {
+    const st = get()
+    const hint = st.integrationHint
+    if (!hint) return
+    const ssh = st.settings.ssh
+    // Decided meanwhile (the host menu, Settings): nothing left to ask; never write behind it.
+    const stale = hint.state === "ask" && !hintStillAsks(hint.alias, ssh)
+    if (choice === "dismiss" || stale) {
+      return set({
+        integrationHint: null,
+        hintDismissed: [...st.hintDismissed.filter((a) => a !== hint.alias), hint.alias],
+      })
+    }
+    const integration =
+      choice === "on"
+        ? setIntegration(ssh.integration, hint.alias, true, ssh.integrationMode)
+        : declineIntegration(ssh.integration, hint.alias)
+    st.updateSettings({ ...st.settings, ssh: { ...ssh, integration } })
+    set({ integrationHint: choice === "on" ? { ...hint, state: "on" } : null })
   },
   setHostHidden: (alias, hide) => {
     const st = get()
@@ -569,7 +684,10 @@ export const useStore = create<AppState>((set, get) => ({
       const src = state.sessions[tab.activeSessionId]
       const shell = inheritShell(state.shells, src) ?? fallback
       if (!shell) return {}
-      return splitActivePane(state, { shell, cwd: src?.cwd, direction })
+      // An ssh pane's split opens where it verifiably is (its host's shell integration).
+      const reopen = shell.remote ? reopenFor(src) : undefined
+      const next = splitActivePane(state, { shell, cwd: src?.cwd, direction, reopen })
+      return { ...next, ...hintFor(state, shell, next) }
     }),
 
   // Open a folder (an agent's cwd / worktree from the board) as a split beside the active
@@ -614,12 +732,13 @@ export const useStore = create<AppState>((set, get) => ({
       const src = state.sessions[tab.activeSessionId]
       const shell = inheritShell(state.shells, src) ?? fallback
       if (!shell) return {}
-      const session = makeSession(shell, src?.cwd)
+      const session = makeSession(shell, src?.cwd, shell.remote ? reopenFor(src) : undefined)
       const root = addSurface(tab.root, pane.id, session.id)
-      return {
+      const next = {
         sessions: { ...state.sessions, [session.id]: session },
         tabs: replaceTab(state.tabs, tab.id, (t) => ({ ...t, root, activeSessionId: session.id })),
       }
+      return { ...next, ...hintFor(state, shell, next) }
     }),
 
   closeSurface: (tabId, sessionId) =>

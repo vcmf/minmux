@@ -1,5 +1,6 @@
 import type { PaneNode, RemoteRef, Session, Tab } from "../types"
 import { parseRemoteRef, sshLabel } from "./ssh-validate"
+import { parseReopen, reopenFor, type ReopenCwd } from "./remote-reports"
 import { clampPanelWidth } from "./right-panel"
 import { findPane, firstSessionId, selectSurface } from "./pane-tree"
 
@@ -22,6 +23,9 @@ interface PersistedSession {
   cwd?: string
   // An ssh session's host. Older builds ignore it and run `ssh <target>` from command/args.
   remote?: Pick<RemoteRef, "hostId" | "label" | "target" | "env">
+  // An ssh session's verified folder, reopened after a relaunch (integrated hosts only).
+  // Older builds ignore it.
+  reopen?: ReopenCwd
 }
 
 interface PersistedTab {
@@ -84,6 +88,7 @@ export function serializeWorkspace(state: WorkspaceState): PersistedWorkspace {
               },
             }
           : {}),
+      ...(reopenFor(s) ? { reopen: reopenFor(s) } : {}),
     })),
     ...(state.rightPanelWidth !== undefined ? { rightPanelWidth: state.rightPanelWidth } : {}),
   }
@@ -174,6 +179,10 @@ export function deserializeWorkspace(input: unknown): WorkspaceState | null {
       // build that wrote it can still read it back).
       if (!remote) sessions[p.id]!.remoteSaved = p.remote
       delete sessions[p.id]!.cwd // a remote session never has a local cwd
+      // Validated again (the file is only as trusted as whatever can write it): a folder we'd
+      // show; main checks it once more, and only an integrated host's own shell cds to it.
+      const reopen = parseReopen(p.reopen)
+      if (reopen) sessions[p.id]!.reopenCwd = reopen
     }
   }
 

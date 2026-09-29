@@ -133,6 +133,8 @@ in-app settings panel; a live watcher re-applies changes as you save.
     "keepAliveSeconds": 30,
     "restore": "auto", // auto | on-focus
     "colors": { "prod-*": "red", "staging-*": "amber" }, // red | amber | blue | #rrggbb
+    "integrationMode": "ask", // shell integration: ask (per host) | all | off
+    "integration": ["gpu-*", "!prod-*"], // hosts turned on (ask) or left out (!alias)
   },
 }
 ```
@@ -164,7 +166,10 @@ defaults, it doesn't replace them. Hiding is by alias, so it applies in every en
 - **Where you are.** If the host reports its folder (OSC 7, or the Debian/Ubuntu title
   `user@host: ~/dir`), the sidebar row shows it, with the host boxed beside it. It's display
   only: a reconnect or a relaunch opens a fresh login at home (keeping your place across drops
-  is what tmux persistence will do).
+  is what tmux persistence will do). With shell integration on, the folder and the pane's
+  running / idle status come from smterm's own hooks on the host, and text a program prints
+  can't fake them — and a split, a reconnect or a relaunch opens in that folder again (on
+  the same machine; a folder that's gone just says so).
 - **Reconnect.** When `ssh` exits, the pane says why and Enter (or the **Reconnect** button)
   connects again. A connection that was up for 30 s (after its last password prompt) and then
   loses its link (ssh says so: "closed by remote host", "Broken pipe", …) reconnects on its
@@ -177,6 +182,15 @@ defaults, it doesn't replace them. Hiding is by alias, so it applies in every en
   and in the palette) connects every waiting one, including those in tabs you haven't opened
   yet: the first pane per host, then the rest once it's past its password prompt, so they can
   share a ControlMaster.
+- **Shell integration.** It's what makes a split, a reconnect or a relaunch open in the same
+  folder on a host, and its status exact. By default smterm asks: the first time you split an
+  ssh pane on a host you haven't decided for, a one-line hint offers **Turn on** / **Never**. Or right-click a host → Turn on shell integration, or pick **All hosts** / **Off**
+  in Settings → SSH (`ssh.integrationMode`; with "all", `!alias` entries in `ssh.integration`
+  are the exceptions). A host that has it starts your bash or zsh with smterm's prompt hooks,
+  sent inline for that session: nothing is installed, your dotfiles still load, and the temp
+  files are gone once the shell has started. Other shells, a `RemoteCommand` in your config,
+  or a host without `sh` get the plain login shell. (sshd skips the MOTD / "Last login" lines
+  when smterm sends its command.) Details and costs: `docs/design/SSH_REMOTES.md` §8.
 - **Prompt-free splits.** Each pane is its own `ssh`. For hosts that ask for a password, let
   OpenSSH share one connection by adding this to your `~/.ssh/config`:
 

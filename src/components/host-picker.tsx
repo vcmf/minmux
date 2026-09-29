@@ -14,6 +14,7 @@ import {
 } from "../lib/ssh-host-list"
 import type { SshHost } from "../types"
 import { ContextMenu } from "./context-menu"
+import { integrationOn } from "../lib/ssh-integration"
 import { runHostAction } from "../lib/ssh-host-actions"
 
 /** "Connect to host": the saved hosts, host first. ⏎ new tab · ⌥⏎ split right · ⇧⏎ down. */
@@ -21,6 +22,8 @@ export function HostPicker() {
   const hosts = useStore((s) => s.sshHosts)
   const loaded = useStore((s) => s.sshHostsLoaded)
   const pinned = useStore((s) => s.settings.ssh.pinned)
+  const integration = useStore((s) => s.settings.ssh.integration)
+  const mode = useStore((s) => s.settings.ssh.integrationMode)
   const colors = useStore((s) => s.settings.ssh.colors)
   const recent = useStore((s) => s.sshRecent)
   const connected = useStore(useShallow((s) => connectedHostIds(s.sessions, s.remotePhase)))
@@ -180,6 +183,8 @@ export function HostPicker() {
             items={hostMenuItems({
               pinned: pinned.includes(menu.host.hostId),
               native: menu.host.env === "native",
+              integration:
+                mode === "off" ? null : integrationOn(menu.host.label, integration, mode),
             })}
             onSelect={(id) => {
               if (id === "open" || id === "splitRight" || id === "splitDown") close()

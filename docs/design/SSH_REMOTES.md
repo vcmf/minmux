@@ -310,21 +310,142 @@ an smterm quit (but not a network drop).
 
 ## 8. Remote shell integration (phase 3)
 
-Goal: OSC 7 cwd and OSC 133 marks from the remote shell, so splits open in the same remote
-folder and status is exact.
+Goal: OSC 7 cwd and OSC 133 marks from the remote shell, so splits can open in the same remote
+folder and status is exact. Built on the `epic/ssh-integration` branch in three steps:
+**P3a** the bootstrap and handshake, **P3b** trusting only nonce-tagged reports (folder,
+status), **P3c** reopening a verified folder on split, reconnect and restore.
 
-Approach: send our zsh/bash integration over the connection at start, without touching the
-remote dotfiles.
+**Which hosts** (`lib/ssh-integration.ts`): `ssh.integrationMode` is `ask` (default), `all` or
+`off`, and `ssh.integration` holds ssh-style patterns inside it (a host's own `alias` / `!alias`
+entry beats any pattern). `ask`: only the hosts listed; `all`: every host but `!alias` ones;
+`off`: none. It's never simply on for everyone by default: it runs our script on every host
+you reach (audit logs and session recorders see it, the MOTD goes, network gear and git-only
+hosts error once), so the user chooses. To make that choice easy to find, in `ask` mode the
+first split (or new terminal) of an ssh pane on a host no entry mentions shows a one-line
+hint on the new pane: **Turn on** (writes `alias`; applies from its next connection) /
+**Never** (writes `!alias`) / × (not now: not asked again for that host this run).
+The host menu's toggle and Settings → SSH → Shell integration change the same two keys. The hint
+stays on the split it was offered on (a second split doesn't move it and resize that pane),
+goes when that pane closes, and hides as soon as the host is decided elsewhere. An older build
+ignores `integrationMode`: after a downgrade, "Off" falls back to the list alone (and "All
+hosts" to the list only, the safe way).
 
-- The bootstrap detects the login shell and starts it with our script (bash: `--rcfile` via a
-  temp file; zsh: a temp `ZDOTDIR` that sources the user's real `.zshrc`, same trick as local).
-- Script is sent inline (base64) so nothing is installed permanently; temp files go in
-  `${TMPDIR:-/tmp}` and are removed on exit.
-- Inside tmux, the scripts wrap OSC 7/133 in tmux passthrough (`allow-passthrough on`, §6b).
-- On split with a known remote cwd: the new pane starts with `cd <quoted cwd>` before the shell.
-- Opt-in per host at first (`"integration": true`) because remote environments vary (busybox,
-  restricted shells, `ForceCommand`). If the bootstrap fails, fall back to a plain shell.
-- Reuses the scripts in `electron/shell-integration.ts`; the bootstrap builder is pure and tested.
+**Two channels** (`electron/remote-bootstrap.ts`, pure and tested). #78 showed that nothing
+variable may travel in text the host's login shell parses (fish `\'`, cmd.exe `%VAR%`), and
+other users on the host can read a command line with `ps`:
+
+- **The command is fixed**: `exec sh -c '<challenge> <base64 of the bootstrap>'`. Inside the
+  quotes: no quote, backslash, `!` or newline, so bash, zsh, fish and csh pass it to `sh`
+  unchanged. The only variable part is a hex challenge. It holds no secret and no folder.
+- **The nonce goes through the terminal**: the bootstrap prints `OSC 6973;boot;<challenge>`,
+  turns echo off (raw, `-isig`: ^C is just data meanwhile), prints `OSC 6973;hello;<challenge>`
+  and reads lines, 5 s each. Main answers straight from the pty output (`HelloWatch`, a bounded
+  scan that stops once answered, skipped, or 64 KB after boot): `smterm:<nonce>:-`. A pre-login
+  banner can't trigger it: it doesn't know the challenge. Lines typed during the login (an
+  Enter while the banner scrolls) are read past: only the line with the `smterm:` marker and a
+  32-hex nonce counts. With no answer at all, it waits out a late one (until 2 s of quiet) so
+  it can never be typed into the shell, then prints `skip` and runs the plain shell.
+
+**On the host** the bootstrap (POSIX sh) takes the login shell from `$SHELL`:
+
+- bash: `--rcfile` a temp file that reads what a login bash would (`/etc/profile`, then the
+  first of `.bash_profile` / `.bash_login` / `.profile`), then our hooks; `logout` and
+  `~/.bash_logout` work as in a login shell. (`$0` isn't `-bash`, and `shopt login_shell` is
+  off.)
+- zsh: `zsh -l` with a temp `ZDOTDIR` holding only a `.zshenv`. It puts the user's own
+  `ZDOTDIR` back first (as sshd's `zsh -c` left it, so an XDG `~/.config/zsh` works), removes
+  the temp dir, sources the user's `.zshenv` and adds the hooks; zsh then reads the user's
+  `.zprofile` / `.zshrc` / `.zlogin` itself. Nothing started from them (tmux…) inherits our
+  `ZDOTDIR`.
+- The temp dir (`mktemp -d`, 0700, in `$TMPDIR`) is gone as soon as the shell has read it. The
+  nonce is assigned before any user file runs and explicitly unexported (`allexport` can't leak
+  it). The host's history settings are left alone, and no `claude` wrapper is set up.
+- Anything else (fish, dash, no `mktemp` / `stty`, no answer) → `exec $SHELL -l`, the plain
+  login shell.
+- Known gaps: a `/etc/zsh/zshenv` that forces `ZDOTDIR` skips our file (no integration, and the
+  0700 temp dir stays until the host clears `$TMPDIR`). sshd prints no MOTD / "Last login"
+  when a command is given, so opted-in hosts don't show them.
+
+**The hooks** are the local ones with every report tagged: `OSC 6973;<nonce>;C`, `;D;<exit>`
+and `;P;<host>;<hex of $PWD's bytes>`, and no standard OSC 7 / 133 at all, so nothing untagged
+can pass for them. The folder is hex, not a `file://` URL: a URL is re-parsed on the way (`#`
+and `?` cut it, `\` and `..` are normalised, `%2F` is decoded), so a crafted directory name
+could make a report name a different, real directory. Hex arrives exactly as the shell has it;
+the renderer refuses (never repairs) non-UTF-8, relative paths, `.` / `..` segments, control or
+format characters. At a prompt the hooks use `printf` and builtins only (a test checks for
+`$(` or backticks): the hex loop costs ~0.3 ms (zsh) to ~1 ms (macOS bash 3.2) for a long path.
+
+**When it can't run**:
+
+- A `RemoteCommand` in the config (ssh refuses a command beside it, and the user's wins):
+  main asks `ssh -G` with the same options (Match and Include count), for opted-in hosts only,
+  cached until the config or settings change. Any doubt → a plain connection.
+- The host has no `sh` (a Windows host, a `ForceCommand`): the pane ends on its own before
+  `boot`, within two minutes, not by a signal (closing a pane or ^C at a password prompt
+  doesn't count) and not with ssh's own 255. It prints a note, and main connects that host
+  plainly until its integration setting or the ssh config changes.
+
+**Cost** (local, stub host): the first prompt comes about 30 ms later (bash 9 → 37 ms, zsh
+17 → 51 ms), plus one round trip on a real link; nothing per keystroke or per output byte.
+
+**In the renderer (P3b)**: the bootstrap prints `OSC 6973;ok;<challenge>` once it has taken
+a valid answer. Only then does main hand the renderer the nonce (`pty:nonce:<id>`, sent before
+the output that follows; on a reattach, before the replay, and in the spawn result). A nonce the
+host didn't take (a late answer typed into the plain shell, a `skip`) is never trusted.
+`lib/remote-reports.ts` parses the reports; only this connection's nonce counts (a nested
+integrated shell has its own). The first tagged report makes the pane _verified_:
+
+- At our shell's prompt (after a tagged `D`), untagged OSC 7 / 133 and titles are ignored —
+  they're PS1 (Ubuntu's `user@host: dir` title), a prompt framework, or something printed.
+- While a command it started runs (a tagged `C`, no `D` yet: `exec zsh`, `sudo -i`, a nested
+  shell with no hooks), untagged folder reports are shown again, but never verified: the
+  sidebar follows the nested shell, and P3c has nothing to reopen until our shell reports.
+- A tagged folder the renderer refuses clears the old one (it moved; where is unknown).
+- Tagged `C` / `D` drive the same status as local OSC 133 (not the local-only Claude resume
+  flow). A tagged folder is stored with `remoteCwdVerified`, the only kind P3c will reopen.
+- A new connection forgets the nonce and the folder.
+
+Known gaps: `exec zsh` leaves the pane "running" (its `C` never gets a `D`) until the
+connection ends. With `set -x` / `setopt xtrace` on the host, the hooks' `printf` lines trace
+the nonce. Anything that replays raw pane output on the host (`script` logs, tmux
+`capture-pane -e`) replays valid reports of that connection. A server `ForceCommand` that goes
+on to an interactive session (a bastion) exposes the challenge in `$SSH_ORIGINAL_COMMAND`, so a
+program there could answer our hello itself; the effect stays on that host.
+
+Measured: a 300k-line firehose takes the same time on an integrated and a plain pane (~615 ms),
+and the local `SMTERM_PERF` suite shows no change against v0.1.39 (e2e ~22–24 MB/s either way,
+renderer ~50 MB/s).
+
+**Reopening the folder (P3c)**: only a verified folder, and only on an integrated host.
+
+- Where it comes from: `reopenFor(session)` — the folder the pane's shell verifiably reported
+  (a reconnect), else the pane's `reopenCwd`: its split source's verified folder (split, new
+  terminal in the pane) or the one saved in `workspace.json` (a relaunch; validated on load, as
+  the file is only as trusted as its writer). A host picked by hand opens at home. Any report
+  of where the shell is (tagged or not, e.g. a plain connection's own OSC 7) replaces it, and
+  one no report confirms within 60 s (a hung mount, a shell that never reports) is dropped, so
+  it can't hang every later reconnect and relaunch.
+- How it travels: in `pty:spawn` to main, which validates it again (`parseReopen`, at most
+  1024 UTF-8 bytes) and puts it in the handshake answer: `smterm:<nonce>:<host's first
+label>:<hex bytes, dot-separated>`. Never on the command line, and never read by the login
+  shell.
+- On the host: kept only if `uname -n` matches the reporting host's first label (one alias can
+  reach several machines: round-robin logins), else a dim note — checked before decoding. The
+  bootstrap's `sh` then decodes one byte per field (`IFS=.`, `$((0x$b))` → octal escapes → one
+  `printf`): linear, ~10 ms for 1 KB. The user's shell `builtin cd`s after its own startup
+  files (bash: the end of our rc; zsh: a one-shot first `precmd`, ahead of our hooks so the
+  reported folder is the new one). A folder that's gone gets a dim note, and the shell stays
+  where its files put it.
+- A plain host never gets it (the rule from #78 stands for anything unverified).
+- Known gaps: on a hard NFS mount (no `intr`) a hung `cd` can't be interrupted with ^C; the
+  pane has to be closed (the reopen is dropped after 60 s, so it won't happen again). Machines
+  behind one alias that share a default hostname (`ubuntu`, `localhost`) pass the check. An
+  answer that arrives after the fallback (a very slow link) is typed into the plain shell,
+  where it's an inert "command not found" that lands in that shell's history with the folder's
+  hex.
+
+Still to come: inside tmux (phase 2) the scripts wrap their reports in tmux passthrough
+(`allow-passthrough on`, §6b).
 
 ---
 

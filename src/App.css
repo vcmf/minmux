@@ -1065,6 +1065,26 @@ body {
   opacity: 0.45;
   cursor: default;
 }
+/* The shell-integration offer: one line however narrow the pane, and in the flow (not
+   overlaid like the resume strip): a fresh ssh pane can take the resize, and its prompt must
+   not sit under the strip. */
+.integration-hint {
+  position: static;
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+.integration-hint .hint-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.resume-btn.icon {
+  width: 22px;
+  padding: 0;
+  display: inline-grid;
+  place-items: center;
+  color: var(--dim);
+}
 .resume-btn.primary {
   border-color: color-mix(in srgb, var(--accent) 55%, var(--border2));
 }

@@ -16,6 +16,7 @@ const api = {
     bg?: string
     remote?: unknown
     attachOnly?: boolean
+    reopen?: unknown
   }) => ipcRenderer.invoke("pty:spawn", opts),
 
   onPtyExit: (id: string, cb: (e: { code: number; signal: number }) => void) => {
@@ -32,6 +33,13 @@ const api = {
     return () => ipcRenderer.removeListener("ssh-hosts-changed", listener)
   },
   openSshConfig: () => ipcRenderer.send("ssh:open-config"),
+
+  onPtyNonce: (id: string, cb: (nonce: string) => void) => {
+    const channel = `pty:nonce:${id}`
+    const listener = (_e: unknown, nonce: string) => cb(nonce)
+    ipcRenderer.on(channel, listener)
+    return () => ipcRenderer.removeListener(channel, listener)
+  },
 
   onPtyData: (id: string, cb: (data: string) => void) => {
     const channel = `pty:data:${id}`

@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest"
+import { reopenFor } from "./lib/remote-reports"
 import { useStore, isVisibleIn, isSessionVisible } from "./store"
 import { allSessionIds, visibleSessionIds } from "./lib/pane-tree"
 import { resetStore, testHost, testShell as shell } from "./test/helpers"
@@ -1113,6 +1114,68 @@ describe("store — remote folder", () => {
     st().setRemoteCwd(r, undefined) // unknown again (a new connection)
     expect(st().sessions[r]).not.toHaveProperty("remoteCwd")
   })
+
+  it("setRemoteCwd marks a folder our integrated shell reported, and unmarks one that isn't", () => {
+    st().setShells([shell])
+    st().newTab(hostShellOption(testHost("web")))
+    const r = firstTab().activeSessionId
+    st().setRemoteCwd(r, "/srv/app", true, "web")
+    expect(st().sessions[r]).toMatchObject({
+      remoteCwd: "/srv/app",
+      remoteCwdVerified: true,
+      remoteCwdHost: "web",
+    })
+    const before = useStore.getState()
+    st().setRemoteCwd(r, "/srv/app", true, "web")
+    expect(useStore.getState()).toBe(before)
+    st().setRemoteCwd(r, "/srv/app") // same folder, but from an untagged report
+    expect(st().sessions[r]).not.toHaveProperty("remoteCwdVerified")
+    expect(st().sessions[r]).not.toHaveProperty("remoteCwdHost")
+    st().setRemoteCwd(r, "/srv/app", true) // no host: nothing to vouch for
+    expect(st().sessions[r]).not.toHaveProperty("remoteCwdVerified")
+    st().setRemoteCwd(r, undefined, true, "web")
+    expect(st().sessions[r]).not.toHaveProperty("remoteCwdVerified")
+  })
+
+  it("the folder to reopen: kept until the shell verifiably reports, and inherited by splits", () => {
+    st().setShells([shell])
+    st().newTab(hostShellOption(testHost("web")))
+    const r = firstTab().activeSessionId
+    st().setReopenCwd(r, { dir: "/srv/app", host: "web" })
+    expect(reopenFor(st().sessions[r])).toEqual({ dir: "/srv/app", host: "web" })
+    st().setRemoteCwd(r, "/srv/unverified") // the shell is elsewhere: never reopen /srv/app,
+    expect(reopenFor(st().sessions[r])).toBeUndefined() // …and an unverified one never either
+    st().setReopenCwd(r, { dir: "/srv/app", host: "web" })
+    st().setRemoteCwd(r, undefined, true, "web") // it moved somewhere we won't reopen
+    expect(st().sessions[r]).not.toHaveProperty("reopenCwd")
+    st().setReopenCwd(r, { dir: "/srv/app", host: "web" })
+    st().setRemoteCwd(r, undefined) // a new connection starting: not a report, keeps it
+    expect(reopenFor(st().sessions[r])).toEqual({ dir: "/srv/app", host: "web" })
+    st().setRemoteCwd(r, "/srv/now", true, "web")
+    expect(st().sessions[r]).not.toHaveProperty("reopenCwd") // the live one wins now
+    expect(reopenFor(st().sessions[r])).toEqual({ dir: "/srv/now", host: "web" })
+    st().splitActive("row")
+    const split = firstTab().activeSessionId
+    expect(split).not.toBe(r)
+    expect(st().sessions[split]!.reopenCwd).toEqual({ dir: "/srv/now", host: "web" })
+    expect(st().sessions[split]).not.toHaveProperty("remoteCwd") // not known until it says
+    st().newSurface()
+    const surf = firstTab().activeSessionId
+    expect(st().sessions[surf]!.reopenCwd).toEqual({ dir: "/srv/now", host: "web" })
+  })
+
+  it("a host picked by hand (not a split) opens at home, and local panes never reopen", () => {
+    st().setShells([shell])
+    st().newTab(hostShellOption(testHost("web")))
+    const r = firstTab().activeSessionId
+    st().setRemoteCwd(r, "/srv/now", true, "web")
+    st().splitWith("row", hostShellOption(testHost("web")))
+    expect(st().sessions[firstTab().activeSessionId]).not.toHaveProperty("reopenCwd")
+    st().newTab(shell)
+    const l = st().tabs[1]!.activeSessionId
+    st().setReopenCwd(l, { dir: "/x", host: "h" })
+    expect(st().sessions[l]).not.toHaveProperty("reopenCwd")
+  })
 })
 
 describe("closing a session / a terminal asks first when it'd kill work", () => {
@@ -1185,5 +1248,99 @@ describe("closing a session / a terminal asks first when it'd kill work", () => 
     expect(st().closeConfirm).toMatchObject({ kind: "terminal", sessionId: b, claude: true })
     st().confirmClose()
     expect(allSessionIds(firstTab().root)).not.toContain(b)
+  })
+})
+
+describe("store — the shell-integration hint on an ssh split", () => {
+  beforeEach(() => resetStore())
+  const ssh = (over: object) => {
+    const settings = st().settings
+    useStore.setState({ settings: { ...settings, ssh: { ...settings.ssh, ...over } } })
+  }
+  const openWeb = () => {
+    st().setShells([shell])
+    st().newTab(hostShellOption(testHost("web")))
+  }
+
+  it("a split of a host you never chose for offers it, on the new pane", () => {
+    openWeb()
+    const src = st().tabs[0]!.activeSessionId
+    st().splitActive("row")
+    const split = st().tabs[0]!.activeSessionId
+    expect(split).not.toBe(src)
+    expect(st().integrationHint).toEqual({ sessionId: split, alias: "web", state: "ask" })
+  })
+
+  it("never on a local split, a hand-picked host, a host you decided for, or when not asking", () => {
+    st().setShells([shell])
+    st().newTab(shell)
+    st().splitActive("row")
+    expect(st().integrationHint).toBeNull()
+    openWeb()
+    st().splitWith("row", hostShellOption(testHost("web"))) // picked from the host list
+    expect(st().integrationHint).toBeNull()
+    for (const over of [
+      { integration: ["web"] },
+      { integration: ["!web"] },
+      { integrationMode: "all" },
+      { integrationMode: "off" },
+    ]) {
+      resetStore()
+      ssh(over)
+      openWeb()
+      st().splitActive("row")
+      expect(st().integrationHint).toBeNull()
+    }
+  })
+
+  it("Turn on writes the host's entry and says when it applies; Don't ask again writes !alias", () => {
+    openWeb()
+    st().splitActive("row")
+    st().answerIntegrationHint("on")
+    expect(st().settings.ssh.integration).toEqual(["web"])
+    expect(st().integrationHint).toMatchObject({ alias: "web", state: "on" })
+    resetStore()
+    openWeb()
+    st().splitActive("row")
+    st().answerIntegrationHint("never")
+    expect(st().settings.ssh.integration).toEqual(["!web"])
+    expect(st().integrationHint).toBeNull()
+  })
+
+  it("Not now: gone, and not asked again for that host this run", () => {
+    openWeb()
+    st().splitActive("row")
+    st().answerIntegrationHint("dismiss")
+    expect(st().integrationHint).toBeNull()
+    expect(st().settings.ssh.integration).toEqual([])
+    st().newSurface()
+    expect(st().integrationHint).toBeNull()
+  })
+
+  it("stays on the split it was offered on (a second split doesn't move it)", () => {
+    openWeb()
+    st().splitActive("row")
+    const first = st().integrationHint!.sessionId
+    st().splitActive("row")
+    expect(st().integrationHint!.sessionId).toBe(first)
+  })
+
+  it("goes with its pane when that pane closes (and a later split asks again)", () => {
+    openWeb()
+    st().splitActive("row")
+    const tab = st().tabs[0]!
+    st().closeSurface(tab.id, st().integrationHint!.sessionId)
+    expect(st().integrationHint).toBeNull()
+    st().splitActive("row")
+    expect(st().integrationHint).not.toBeNull()
+  })
+
+  it("decided meanwhile (Settings → Off): Turn on writes nothing", () => {
+    openWeb()
+    st().splitActive("row")
+    ssh({ integrationMode: "off" })
+    st().answerIntegrationHint("on")
+    expect(st().settings.ssh.integration).toEqual([])
+    expect(st().integrationHint).toBeNull()
   })
 })

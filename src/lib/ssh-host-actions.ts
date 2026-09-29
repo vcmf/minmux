@@ -14,5 +14,6 @@ export function runHostAction(h: SshHost, id: HostActionId) {
   else if (id === "copyCommand") ipc.clipboardWrite(sshCommand(h))
   else if (id === "pin") st.toggleHostPinned(h.hostId)
   else if (id === "hide") st.setHostHidden(h.label, true)
+  else if (id === "integration") st.toggleHostIntegration(h.label)
   else ipc.openSshConfig()
 }

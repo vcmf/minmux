@@ -13,6 +13,7 @@ import { withAlpha } from "../settings/themes"
 import { displaySessionTitle } from "../lib/session-label"
 import { allPanes, allSessionIds, visibleSessionIds } from "../lib/pane-tree"
 import { canRetry, sshFailureKind, type SshFailure } from "../lib/ssh-errors"
+import { parseRemoteReport, reopenFor, SMTERM_OSC } from "../lib/remote-reports"
 import { cwdFromOsc7, cwdFromTitle, sameMachine } from "../lib/remote-cwd"
 import { webglPanes, shouldRebuildAtlas } from "../lib/renderer-policy"
 import { appShortcut, keyAction } from "../lib/terminal-keys"
@@ -50,12 +51,17 @@ interface Entry {
   spawned: boolean // PTY spawned/reattached + output listeners wired (may precede `opened`)
   offData?: () => void
   offExit?: () => void
+  offNonce?: () => void
   remote?: RemotePhase // ssh panes only: where the connection is (rules: lib/remote-connect)
   failure?: SshFailure // with remote = "failed": why, so Enter / Retry only act when they can
   lastKey?: string // ssh panes: the last input sent (a prompt check skips a line being typed)
   escArmedAt?: number // an idle ssh pane's first Esc: a second within ESC_CLOSE_MS closes it
   osc7?: boolean // ssh panes: the host reports its folder via OSC 7 (the title is a fallback)
   cwdHost?: string // ssh panes: the host this connection's first folder report named
+  nonce?: string // ssh panes: this connection's nonce (integrated hosts; from main)
+  verified?: boolean // …and its shell has reported with it: untagged reports are ignored now
+  hostCmd?: boolean // …while a command it started runs (a tagged C, no D yet): see untrusted()
+  reopenTimer?: ReturnType<typeof setTimeout> // drops a reopen no report ever confirmed
   liveSince?: number // when this connection went live (a drop after STABLE_MS may auto-retry)
   retryAttempt: number // the automatic reconnect this connection came from (0 = none)
   retryTotal: number // automatic reconnects since you last connected it yourself (capped)
@@ -73,6 +79,8 @@ interface Entry {
 
 // Output quiet for this long (while a command runs) ⇒ the task is waiting.
 const IDLE_MS = 1200
+// A reopened folder the new connection never reports within this is dropped (see requestPty).
+const REOPEN_REPORT_MS = 60_000
 // Don't spam the store with an "output" signal on every PTY chunk.
 const OUTPUT_SIGNAL_THROTTLE_MS = 150
 
@@ -353,11 +361,27 @@ function requestPty(id: string, entry: Entry, attachOnly: boolean, given?: Sessi
   const { term } = entry
   const seq = (entry.startSeq ?? 0) + 1
   entry.startSeq = seq
+  // Where the new connection opens: the folder its shell verifiably reported (a reconnect), or
+  // the one it was given (a split, a relaunch). Kept as the pane's until the host says again.
+  const reopen = session.remote && !attachOnly ? reopenFor(session) : undefined
   if (session.remote) {
     entry.lastKey = undefined // a new ssh: nothing typed into it yet
-    // …and starts at home, not where the last one was: its folder is unknown until it says.
+    // Its folder is unknown until the host says (the reopen is a request, not a fact). One
+    // that never gets a report (a hung mount, a shell that doesn't report) is dropped, so it
+    // can't hang every later reconnect and relaunch too.
+    clearTimeout(entry.reopenTimer)
+    if (reopen) {
+      useStore.getState().setReopenCwd(id, reopen)
+      entry.reopenTimer = setTimeout(() => {
+        const now = useStore.getState().sessions[id]?.reopenCwd
+        if (now && now.dir === reopen.dir) useStore.getState().setReopenCwd(id, undefined)
+      }, REOPEN_REPORT_MS)
+    }
     entry.osc7 = false
     entry.cwdHost = undefined
+    entry.nonce = undefined // this connection's own, when main says (never the last one's)
+    entry.verified = false
+    entry.hostCmd = false
     if (!attachOnly) useStore.getState().setRemoteCwd(id, undefined)
     setPhase(id, entry, "starting")
   }
@@ -372,6 +396,7 @@ function requestPty(id: string, entry: Entry, attachOnly: boolean, given?: Sessi
       // An ssh session: main rebuilds the command from its own host list (never ours).
       ...(session.remote ? { remote: session.remote } : {}),
       ...(attachOnly ? { attachOnly: true } : {}),
+      ...(reopen ? { reopen } : {}), // used only by an integrated host (the handshake)
       // → COLORFGBG so agents detect light/dark (fallback when the OSC-11 bg query can't
       // complete, e.g. across the wsl.exe hop). Captured at spawn: a running shell's env
       // can't be rewritten, so a later theme switch — incl. appearance "system" following
@@ -380,12 +405,13 @@ function requestPty(id: string, entry: Entry, attachOnly: boolean, given?: Sessi
       // (Startup loads settings before any restore spawns, so first spawns are correct.)
       bg: activeTheme(useStore.getState()).terminal.background,
     })
-    .then(({ reattached, integrated, started }) => {
+    .then(({ reattached, integrated, started, remoteNonce }) => {
       if (entries.get(id) !== entry) return // closed meanwhile
       if (entry.startSeq !== seq) {
         entry.flow.replaying = false // superseded (e.g. it exited first): nothing is replaying
         return
       }
+      if (entry.remote && remoteNonce) entry.nonce = remoteNonce // a reattach (sent ahead too)
       if (entry.remote) {
         const next = afterStart(entry.remote, started, reattached)
         if (next === "waiting") setIdle(id, entry, "waiting")
@@ -533,6 +559,14 @@ const AUTH_SETTLE_MS = 2000
  *  from inside it (an ssh to another box, a container). A report naming the configured
  *  alias or HostName always is, and fixes the machine; otherwise the first one seen outside
  *  a reload's replay does, and later ones must match it. */
+/** Whether an ssh pane's untagged folder report (OSC 7, title) is to be shown: always on a
+ *  plain host; on an integrated one only while a command our shell started runs — `exec zsh`,
+ *  `sudo -i`, a nested shell with no hooks. At our shell's own prompt they're its PS1 / a
+ *  framework's echo of what it reported tagged. Shown, they're never verified. */
+function untrusted(entry: Entry): boolean {
+  return !entry.verified || entry.hostCmd === true
+}
+
 function sameHostAsBefore(entry: Entry, id: string, host: string): boolean {
   if (!host || host === "localhost") return true
   const remote = useStore.getState().sessions[id]?.remote
@@ -633,6 +667,10 @@ function spawn(session: Session, entry: Entry) {
   })
 
   if (session.remote) {
+    // The host took this connection's nonce (main saw its ok): trust reports carrying it.
+    entry.offNonce = ipc.onPtyNonce(session.id, (nonce) => {
+      if (entries.get(session.id) === entry) entry.nonce = nonce
+    })
     // A dropped link or `exit` on the host: say so, and let Enter (or Connect) reconnect.
     entry.offExit = ipc.onPtyExit(session.id, (e) => {
       if (entries.get(session.id) !== entry) return
@@ -725,7 +763,7 @@ function spawn(session: Session, entry: Entry) {
   term.onTitleChange((title) => {
     store.setSessionOscTitle(session.id, title)
     // An ssh pane that doesn't send OSC 7: the Debian / Ubuntu title `user@host: ~/dir`.
-    if (session.remote && !entry.osc7) {
+    if (session.remote && !entry.osc7 && untrusted(entry)) {
       const at = cwdFromTitle(title)
       if (at && sameHostAsBefore(entry, session.id, at.host))
         useStore.getState().setRemoteCwd(session.id, at.dir)
@@ -736,6 +774,7 @@ function spawn(session: Session, entry: Entry) {
   term.parser.registerOscHandler(7, (data) => {
     // An ssh pane's folder is on the host: shown, never read locally, never sent back.
     if (session.remote) {
+      if (!untrusted(entry)) return true // our shell, at its prompt, reports its folder itself
       const at = cwdFromOsc7(data)
       if (at && sameHostAsBefore(entry, session.id, at.host)) {
         entry.osc7 = true // authoritative from now on: the title is only a fallback
@@ -774,8 +813,29 @@ function spawn(session: Session, entry: Entry) {
   // Terminal bell — a generic "waiting on you" from readline/prompts/agents.
   term.onBell(() => raiseAttention())
 
+  // An integrated ssh pane's own shell (docs/design/SSH_REMOTES.md §8): its reports carry this
+  // connection's nonce, so a program printing escape codes can't pass for them. Once one has
+  // come, the untagged OSC 7 / 133 / title on this pane are a program's, and ignored.
+  term.parser.registerOscHandler(SMTERM_OSC, (data) => {
+    if (!session.remote) return true
+    const r = parseRemoteReport(data, entry.nonce)
+    if (!r) return true
+    entry.verified = true
+    if (r.kind !== "cwd") entry.hostCmd = r.kind === "start"
+    // A folder we can't take (or show) still means it moved: the old one goes, not reopened.
+    if (r.kind === "cwd") {
+      useStore.getState().setRemoteCwd(session.id, r.dir ?? undefined, true, r.host)
+    } else if (r.kind === "start") store.signalSession(session.id, { type: "command-start" })
+    else {
+      clearTimeout(entry.idleTimer) // precise idle: the heuristic mustn't flip it later
+      store.signalSession(session.id, { type: "command-end" })
+    }
+    return true
+  })
+
   // OSC 133;C/D — command start/finish.
   term.parser.registerOscHandler(133, (data) => {
+    if (session.remote && entry.verified) return true // see the SMTERM_OSC handler
     const kind = data.charAt(0)
     if (kind === "C") store.signalSession(session.id, { type: "command-start" })
     else if (kind === "D") {
@@ -1200,6 +1260,7 @@ export const TerminalManager = {
     connectNow.delete(id)
     if (entry) clearTimeout(entry.resumeTimer)
     if (entry) clearTimeout(entry.retryTimer)
+    if (entry) clearTimeout(entry.reopenTimer)
     // No entry = never started in this renderer (e.g. a hidden surface after a reload), but
     // main may still hold its PTY — always kill (an unknown id is a no-op there).
     if (!entry) return ipc.ptyKill(id)
@@ -1207,6 +1268,7 @@ export const TerminalManager = {
     releaseWebgl(entry)
     entry.offData?.()
     entry.offExit?.()
+    entry.offNonce?.()
     ipc.ptyKill(id)
     entry.term.dispose()
     entry.host.remove()

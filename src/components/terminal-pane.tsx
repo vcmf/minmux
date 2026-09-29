@@ -17,6 +17,7 @@ import { newSurfaceKey } from "../lib/platform"
 import { resolveDefaultShell } from "../lib/shells"
 import type { DropZone, PaneLeaf } from "../types"
 import { ResumeBanner } from "./resume-banner"
+import { IntegrationHint } from "./integration-hint"
 import { ClaudeIcon } from "./claude-icon"
 
 /** A pane: a strip of terminal tabs (surfaces) + a mount point for the visible one.
@@ -429,6 +430,7 @@ export function TerminalPane({ pane, tabId }: { pane: PaneLeaf; tabId: string })
         </button>
       </div>
       <ResumeBanner sessionId={activeId} />
+      <IntegrationHint sessionId={activeId} />
       <div className="terminal-mount" ref={mountRef} />
       {/* While dragging: a transparent layer over the terminal (xterm's canvas would swallow
           the drag events) that shows where the surface would land. No animation — it sits
