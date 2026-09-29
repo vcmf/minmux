@@ -167,7 +167,8 @@ defaults, it doesn't replace them. Hiding is by alias, so it applies in every en
   only: a reconnect or a relaunch opens a fresh login at home (keeping your place across drops
   is what tmux persistence will do). With shell integration on, the folder and the pane's
   running / idle status come from smterm's own hooks on the host, and text a program prints
-  can't fake them.
+  can't fake them — and a split, a reconnect or a relaunch opens in that folder again (on
+  the same machine; a folder that's gone just says so).
 - **Reconnect.** When `ssh` exits, the pane says why and Enter (or the **Reconnect** button)
   connects again. A connection that was up for 30 s (after its last password prompt) and then
   loses its link (ssh says so: "closed by remote host", "Broken pipe", …) reconnects on its

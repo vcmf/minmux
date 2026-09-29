@@ -857,6 +857,69 @@ describe("TerminalManager — an integrated host's reports (nonce-checked)", () 
   })
 })
 
+describe("TerminalManager — reopening a verified folder", () => {
+  const N = "0123456789abcdef".repeat(2)
+  const hex = (d: string) => Buffer.from(d, "utf8").toString("hex")
+
+  it("a reconnect asks to reopen where the shell verifiably was", async () => {
+    const { id, term } = start({})
+    await flush()
+    nonceHandlers[id]!(N)
+    term.osc[6973]!(`${N};P;web;${hex("/srv/llm train")}`)
+    exitHandlers[id]!({ code: 0, signal: 0 })
+    await flush()
+    term.type("\r")
+    expect(spawnCalls()[1]!.reopen).toEqual({ dir: "/srv/llm train", host: "web" })
+    // Until the new connection says where it is, the pane keeps it as the folder to reopen.
+    expect(st().sessions[id]).toMatchObject({ reopenCwd: { dir: "/srv/llm train", host: "web" } })
+    expect(st().sessions[id]).not.toHaveProperty("remoteCwd")
+  })
+
+  it("a reopen no report ever confirms (a hung mount) is dropped, so it can't hang again", async () => {
+    vi.useFakeTimers()
+    try {
+      const { id, term } = start({})
+      await vi.advanceTimersByTimeAsync(0)
+      nonceHandlers[id]!(N)
+      term.osc[6973]!(`${N};P;web;${hex("/mnt/nfs/stuck")}`)
+      exitHandlers[id]!({ code: 0, signal: 0 })
+      await vi.advanceTimersByTimeAsync(0)
+      term.type("\r")
+      expect(st().sessions[id]!.reopenCwd).toEqual({ dir: "/mnt/nfs/stuck", host: "web" })
+      await vi.advanceTimersByTimeAsync(61_000) // the cd hangs: no prompt, no report
+      expect(st().sessions[id]).not.toHaveProperty("reopenCwd")
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it("an unverified folder (a plain host's OSC 7 or title) is never reopened", async () => {
+    const { id, term } = start({})
+    await flush()
+    term.osc[7]!("file://web/srv/app")
+    exitHandlers[id]!({ code: 0, signal: 0 })
+    await flush()
+    term.type("\r")
+    expect(spawnCalls()[1]).not.toHaveProperty("reopen")
+  })
+
+  it("a restored pane reopens its saved folder; a reattach-only request sends nothing", async () => {
+    st().newTab(hostShellOption(testHost("web")))
+    const id = st().tabs[st().tabs.length - 1]!.activeSessionId
+    st().setReopenCwd(id, { dir: "/srv/app", host: "web" })
+    useStore.setState((x) => ({
+      sessions: { ...x.sessions, [id]: { ...x.sessions[id]!, restored: true } },
+    }))
+    TerminalManager.ensureRunning(st().sessions[id] as Session)
+    await flush()
+    const calls = spawnCalls().filter((c) => c.id === id)
+    const attach = calls.find((c) => c.attachOnly)
+    if (attach) expect(attach).not.toHaveProperty("reopen")
+    const fresh = calls.find((c) => !c.attachOnly)
+    expect(fresh?.reopen).toEqual({ dir: "/srv/app", host: "web" })
+  })
+})
+
 describe("TerminalManager — the remote folder, the edges", () => {
   it("a report from another host (an ssh inside the pane) doesn't move the folder", async () => {
     const { id, term } = start({})

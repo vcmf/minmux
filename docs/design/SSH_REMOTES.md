@@ -406,6 +406,34 @@ Measured: a 300k-line firehose takes the same time on an integrated and a plain 
 and the local `SMTERM_PERF` suite shows no change against v0.1.39 (e2e ~22–24 MB/s either way,
 renderer ~50 MB/s).
 
+**Reopening the folder (P3c)**: only a verified folder, and only on an integrated host.
+
+- Where it comes from: `reopenFor(session)` — the folder the pane's shell verifiably reported
+  (a reconnect), else the pane's `reopenCwd`: its split source's verified folder (split, new
+  terminal in the pane) or the one saved in `workspace.json` (a relaunch; validated on load, as
+  the file is only as trusted as its writer). A host picked by hand opens at home. Any report
+  of where the shell is (tagged or not, e.g. a plain connection's own OSC 7) replaces it, and
+  one no report confirms within 60 s (a hung mount, a shell that never reports) is dropped, so
+  it can't hang every later reconnect and relaunch.
+- How it travels: in `pty:spawn` to main, which validates it again (`parseReopen`, at most
+  1024 UTF-8 bytes) and puts it in the handshake answer: `smterm:<nonce>:<host's first
+label>:<hex bytes, dot-separated>`. Never on the command line, and never read by the login
+  shell.
+- On the host: kept only if `uname -n` matches the reporting host's first label (one alias can
+  reach several machines: round-robin logins), else a dim note — checked before decoding. The
+  bootstrap's `sh` then decodes one byte per field (`IFS=.`, `$((0x$b))` → octal escapes → one
+  `printf`): linear, ~10 ms for 1 KB. The user's shell `builtin cd`s after its own startup
+  files (bash: the end of our rc; zsh: a one-shot first `precmd`, ahead of our hooks so the
+  reported folder is the new one). A folder that's gone gets a dim note, and the shell stays
+  where its files put it.
+- A plain host never gets it (the rule from #78 stands for anything unverified).
+- Known gaps: on a hard NFS mount (no `intr`) a hung `cd` can't be interrupted with ^C; the
+  pane has to be closed (the reopen is dropped after 60 s, so it won't happen again). Machines
+  behind one alias that share a default hostname (`ubuntu`, `localhost`) pass the check. An
+  answer that arrives after the fallback (a very slow link) is typed into the plain shell,
+  where it's an inert "command not found" that lands in that shell's history with the folder's
+  hex.
+
 Still to come: inside tmux (phase 2) the scripts wrap their reports in tmux passthrough
 (`allow-passthrough on`, §6b).
 

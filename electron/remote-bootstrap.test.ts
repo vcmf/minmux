@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process"
 import fs from "node:fs"
+import os from "node:os"
 import { describe, expect, it } from "vitest"
 import {
   HelloWatch,
@@ -14,6 +15,7 @@ import {
   SMTERM_OSC,
 } from "./remote-bootstrap"
 import { BASH_HOOKS, ZSH_HOOKS } from "./shell-integration"
+import { isReopenable } from "../src/lib/remote-reports"
 
 const C = "c0ffee00c0ffee00"
 const N = "ab".repeat(16)
@@ -140,13 +142,13 @@ describe("the remote scripts", () => {
 describe("the handshake (payload)", () => {
   it("reads past lines typed early and only takes the marked, full-length answer", () => {
     expect(PAYLOAD).toContain('case "$l" in *smterm:*)')
-    expect(PAYLOAD).toContain('[ ${#n} -ne 32 ] || [ "$l" != "$n:-" ]')
+    expect(PAYLOAD).toContain('[ ${#n} -ne 32 ] || [ "$l" != "$n:$x" ]')
     expect(PAYLOAD).toContain("stty -echo -icanon -isig") // ^C is data while it waits
   })
 
   it("says ok only once it took a valid answer", () => {
     const at = (t: string) => PAYLOAD.indexOf(t)
-    expect(at(`;ok;%s`)).toBeGreaterThan(at('[ "$l" != "$n:-" ]'))
+    expect(at(`;ok;%s`)).toBeGreaterThan(at('[ "$l" != "$n:$x" ]'))
     expect(at(`;ok;%s`)).toBeLessThan(at('case "${s##*/}" in\n  zsh)'))
   })
 
@@ -157,9 +159,98 @@ describe("the handshake (payload)", () => {
 })
 
 describe("handshakeReply", () => {
-  it("is one line: a marker (keys typed early come before it), the nonce, no folder yet", () => {
+  it("is one line: a marker (keys typed early come before it), the nonce, and `-`", () => {
     expect(handshakeReply(N)).toBe(`smterm:${N}:-\r`)
     expect(() => handshakeReply("not hex")).toThrow()
+  })
+
+  it("carries the folder to reopen as hex, with the host's first label", () => {
+    const dir = "/home/q/we#ir?d $(x) ;é"
+    const hex = [...Buffer.from(dir, "utf8")].map((b) => b.toString(16).padStart(2, "0")).join(".")
+    expect(handshakeReply(N, { dir, host: "gpu-box.lan" })).toBe(`smterm:${N}:gpu-box:${hex}\r`)
+    expect(handshakeReply(N, { dir, host: "build_01" })).toMatch(
+      /^smterm:[0-9a-f]+:build_01:[0-9a-f.]+\r$/,
+    )
+  })
+
+  it("never carries a folder it wouldn't reopen, or an odd host", () => {
+    for (const bad of [
+      { dir: "relative", host: "h" },
+      { dir: "/a/../b", host: "h" },
+      { dir: "/nl\nx", host: "h" },
+      { dir: "/ok", host: "" },
+      { dir: "/ok", host: "bad host" },
+      { dir: "/" + "a".repeat(1100), host: "h" }, // decoded in sh: bounded
+      { dir: "/" + "é".repeat(600), host: "h" }, // 1200 bytes
+    ]) {
+      expect(handshakeReply(N, bad)).toBe(`smterm:${N}:-\r`)
+    }
+  })
+})
+
+describe("reopening a folder (payload + rcs)", () => {
+  // The payload's decoder, run for real under this machine's sh (no tty needed).
+  const start = PAYLOAD.indexOf("__smterm_where() {")
+  const where = PAYLOAD.slice(start, PAYLOAD.indexOf("\n}\n", start) + 2)
+  const label = os.hostname().split(".")[0]!.toLowerCase()
+  const decode = (answer: string) =>
+    execFileSync(
+      "sh",
+      ["-c", `${where}\n__smterm_where "$1"; printf %s "$__SMTERM_CD"`, "sh", answer],
+      {
+        encoding: "utf8",
+      },
+    )
+  const answerFor = (dir: string, host = label) =>
+    handshakeReply(N, { dir, host }).slice(`smterm:${N}:`.length, -1)
+
+  it("decodes any folder byte for byte, and nothing in it is ever run", () => {
+    const every =
+      "/" +
+      Array.from({ length: 254 }, (_, i) => String.fromCharCode(i + 1))
+        .filter((c) => c !== "/" && isReopenable(`/${c}`)) // every byte we'd reopen
+        .join("")
+    for (const dir of ["/srv/we#ir?d $(touch PWNED) `id` %s\\c ;é", every, "/日本/🚀"]) {
+      expect(decode(answerFor(dir))).toBe(dir)
+    }
+  })
+
+  it("keeps it only on the machine that reported it, and refuses a malformed answer", () => {
+    const elsewhere = decode(answerFor("/srv/app", "not-this-machine"))
+    expect(elsewhere).toContain("not reopening the folder") // a dim note, and no folder
+    expect(elsewhere).not.toContain("/srv/app")
+    for (const bad of ["-", `${label}:2f.zz`, `${label}:2f:61`, `${label}:2f;61`, "x"]) {
+      expect(decode(bad)).toBe("")
+    }
+  })
+
+  it("is fast for the longest folder it will send (a deep path can't stall a login)", () => {
+    const deep = "/" + "é".repeat(510) // ~1 KB of UTF-8
+    const t0 = Date.now()
+    expect(decode(answerFor(deep))).toBe(deep)
+    expect(Date.now() - t0).toBeLessThan(1500)
+  })
+
+  it("decodes the folder with arithmetic, and only on the machine that reported it", () => {
+    expect(PAYLOAD).toContain("v=$((0x$b))")
+    expect(PAYLOAD).toContain('__SMTERM_CD=$(printf "$e")')
+    expect(PAYLOAD).toContain("not reopening the folder: this is %s, not %s")
+    const at = (t: string) => PAYLOAD.indexOf(t)
+    expect(at('  __smterm_where "$x"')).toBeGreaterThan(at(";ok;%s")) // a valid answer only
+  })
+
+  it("the rcs take it before any user file (and unexport it), and cd after them", () => {
+    for (const rc of [REMOTE_BASHRC, REMOTE_ZSHENV]) {
+      const at = (t: string) => rc.indexOf(t)
+      expect(at("__smterm_reopen=${__SMTERM_CD-}; unset __SMTERM_CD")).toBeGreaterThan(0)
+      expect(at("unset __SMTERM_CD")).toBeLessThan(at("source"))
+      expect(rc).toContain('builtin cd -- "$1"') // not a user's cd function
+    }
+    expect(REMOTE_BASHRC.indexOf('__smterm_cd_to "$__smterm_reopen"')).toBeGreaterThan(
+      REMOTE_BASHRC.lastIndexOf(".profile"),
+    )
+    // zsh: in the first prompt's hooks, ahead of ours (so the folder they report is the new one)
+    expect(REMOTE_ZSHENV).toContain("precmd_functions=(__smterm_reopen_once $precmd_functions)")
   })
 })
 

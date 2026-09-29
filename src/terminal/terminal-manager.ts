@@ -13,7 +13,7 @@ import { withAlpha } from "../settings/themes"
 import { displaySessionTitle } from "../lib/session-label"
 import { allPanes, allSessionIds, visibleSessionIds } from "../lib/pane-tree"
 import { canRetry, sshFailureKind, type SshFailure } from "../lib/ssh-errors"
-import { parseRemoteReport, SMTERM_OSC } from "../lib/remote-reports"
+import { parseRemoteReport, reopenFor, SMTERM_OSC } from "../lib/remote-reports"
 import { cwdFromOsc7, cwdFromTitle, sameMachine } from "../lib/remote-cwd"
 import { webglPanes, shouldRebuildAtlas } from "../lib/renderer-policy"
 import { appShortcut, keyAction } from "../lib/terminal-keys"
@@ -61,6 +61,7 @@ interface Entry {
   nonce?: string // ssh panes: this connection's nonce (integrated hosts; from main)
   verified?: boolean // …and its shell has reported with it: untagged reports are ignored now
   hostCmd?: boolean // …while a command it started runs (a tagged C, no D yet): see untrusted()
+  reopenTimer?: ReturnType<typeof setTimeout> // drops a reopen no report ever confirmed
   liveSince?: number // when this connection went live (a drop after STABLE_MS may auto-retry)
   retryAttempt: number // the automatic reconnect this connection came from (0 = none)
   retryTotal: number // automatic reconnects since you last connected it yourself (capped)
@@ -78,6 +79,8 @@ interface Entry {
 
 // Output quiet for this long (while a command runs) ⇒ the task is waiting.
 const IDLE_MS = 1200
+// A reopened folder the new connection never reports within this is dropped (see requestPty).
+const REOPEN_REPORT_MS = 60_000
 // Don't spam the store with an "output" signal on every PTY chunk.
 const OUTPUT_SIGNAL_THROTTLE_MS = 150
 
@@ -358,9 +361,22 @@ function requestPty(id: string, entry: Entry, attachOnly: boolean, given?: Sessi
   const { term } = entry
   const seq = (entry.startSeq ?? 0) + 1
   entry.startSeq = seq
+  // Where the new connection opens: the folder its shell verifiably reported (a reconnect), or
+  // the one it was given (a split, a relaunch). Kept as the pane's until the host says again.
+  const reopen = session.remote && !attachOnly ? reopenFor(session) : undefined
   if (session.remote) {
     entry.lastKey = undefined // a new ssh: nothing typed into it yet
-    // …and starts at home, not where the last one was: its folder is unknown until it says.
+    // Its folder is unknown until the host says (the reopen is a request, not a fact). One
+    // that never gets a report (a hung mount, a shell that doesn't report) is dropped, so it
+    // can't hang every later reconnect and relaunch too.
+    clearTimeout(entry.reopenTimer)
+    if (reopen) {
+      useStore.getState().setReopenCwd(id, reopen)
+      entry.reopenTimer = setTimeout(() => {
+        const now = useStore.getState().sessions[id]?.reopenCwd
+        if (now && now.dir === reopen.dir) useStore.getState().setReopenCwd(id, undefined)
+      }, REOPEN_REPORT_MS)
+    }
     entry.osc7 = false
     entry.cwdHost = undefined
     entry.nonce = undefined // this connection's own, when main says (never the last one's)
@@ -380,6 +396,7 @@ function requestPty(id: string, entry: Entry, attachOnly: boolean, given?: Sessi
       // An ssh session: main rebuilds the command from its own host list (never ours).
       ...(session.remote ? { remote: session.remote } : {}),
       ...(attachOnly ? { attachOnly: true } : {}),
+      ...(reopen ? { reopen } : {}), // used only by an integrated host (the handshake)
       // → COLORFGBG so agents detect light/dark (fallback when the OSC-11 bg query can't
       // complete, e.g. across the wsl.exe hop). Captured at spawn: a running shell's env
       // can't be rewritten, so a later theme switch — incl. appearance "system" following
@@ -806,8 +823,9 @@ function spawn(session: Session, entry: Entry) {
     entry.verified = true
     if (r.kind !== "cwd") entry.hostCmd = r.kind === "start"
     // A folder we can't take (or show) still means it moved: the old one goes, not reopened.
-    if (r.kind === "cwd") useStore.getState().setRemoteCwd(session.id, r.dir ?? undefined, true)
-    else if (r.kind === "start") store.signalSession(session.id, { type: "command-start" })
+    if (r.kind === "cwd") {
+      useStore.getState().setRemoteCwd(session.id, r.dir ?? undefined, true, r.host)
+    } else if (r.kind === "start") store.signalSession(session.id, { type: "command-start" })
     else {
       clearTimeout(entry.idleTimer) // precise idle: the heuristic mustn't flip it later
       store.signalSession(session.id, { type: "command-end" })
@@ -1242,6 +1260,7 @@ export const TerminalManager = {
     connectNow.delete(id)
     if (entry) clearTimeout(entry.resumeTimer)
     if (entry) clearTimeout(entry.retryTimer)
+    if (entry) clearTimeout(entry.reopenTimer)
     // No entry = never started in this renderer (e.g. a hidden surface after a reload), but
     // main may still hold its PTY — always kill (an unknown id is a no-op there).
     if (!entry) return ipc.ptyKill(id)

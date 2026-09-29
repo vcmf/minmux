@@ -41,6 +41,10 @@ export interface Session {
   remoteSaved?: unknown // a saved host this build couldn't read: written back as-is on save
   remoteCwd?: string // runtime only: where its remote shell reports it is (display, never read locally)
   remoteCwdVerified?: boolean // runtime only: remoteCwd came from our integrated shell (nonce-checked)
+  remoteCwdHost?: string // runtime only: …and the host that reported it (one alias, several machines)
+  // Where its next connection opens (a verified folder: its own, or its split source's). Saved,
+  // so a relaunch reopens it; only an integrated host ever uses it (lib/remote-reports).
+  reopenCwd?: { dir: string; host: string }
   restored?: boolean // runtime only (never saved): came from workspace.json this launch/reload
 }
 
@@ -83,4 +87,5 @@ export interface SpawnOpts {
   bg?: string // theme terminal background hex → COLORFGBG so agents detect light/dark
   remote?: RemoteRef // an ssh session: main rebuilds the command from its own host list
   attachOnly?: boolean // reattach a live PTY, but start nothing (a restored on-focus ssh pane)
+  reopen?: { dir: string; host: string } // an ssh session: the verified folder to open in
 }
