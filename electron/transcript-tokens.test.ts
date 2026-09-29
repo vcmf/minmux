@@ -36,7 +36,7 @@ describe("TranscriptTokens", () => {
   let dir: string
   let file: string
   beforeEach(() => {
-    dir = fs.mkdtempSync(path.join(os.tmpdir(), "smterm-tt-"))
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), "minmux-tt-"))
     file = path.join(dir, "t.jsonl")
   })
   afterEach(() => fs.rmSync(dir, { recursive: true, force: true }))

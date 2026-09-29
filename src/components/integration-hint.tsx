@@ -49,7 +49,7 @@ export function IntegrationHint({ sessionId }: { sessionId: string }) {
       <FolderOpen size={13} />
       <span
         className="hint-text"
-        title={`Splits of ${hint.alias} open at home. With shell integration (smterm's prompt hooks, sent inline for each session) they open in the same folder, and reconnects and relaunches do too — unless its ssh config runs a RemoteCommand.`}
+        title={`Splits of ${hint.alias} open at home. With shell integration (minmux's prompt hooks, sent inline for each session) they open in the same folder, and reconnects and relaunches do too — unless its ssh config runs a RemoteCommand.`}
       >
         Open splits of <b>{hint.alias}</b> in the same folder?
       </span>

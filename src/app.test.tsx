@@ -33,7 +33,7 @@ describe("App (integration)", () => {
   it("renders the full chrome and opens an initial session", async () => {
     render(<App />)
     // Chrome is present immediately.
-    expect(screen.getByText("smterm")).toBeInTheDocument()
+    expect(screen.getByText("minmux")).toBeInTheDocument()
     expect(screen.getByText("Sessions")).toBeInTheDocument()
     expect(screen.getByText("Search or run")).toBeInTheDocument()
     // Async effects: platform label + first session from listShells().

@@ -23,7 +23,7 @@ describe("AgentMetaTracker", () => {
   let file: string
   let emitted: [string, unknown][]
   beforeEach(() => {
-    dir = fs.mkdtempSync(path.join(os.tmpdir(), "smterm-am-"))
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), "minmux-am-"))
     file = path.join(dir, "s.jsonl")
     emitted = []
   })

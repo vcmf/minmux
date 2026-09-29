@@ -43,7 +43,7 @@ export interface SshDeps {
   onChange: () => void // the host list changed (debounced)
 }
 
-/** `integration`: the host opted in to smterm's shell integration (main adds the bootstrap). */
+/** `integration`: the host opted in to minmux's shell integration (main adds the bootstrap). */
 export type SpawnPlan = { file: string; args: string[]; integration?: boolean } | { error: string }
 
 const RUNNING_DISTROS_TTL_MS = 5000 // `wsl -l --running` is a process spawn: not per call

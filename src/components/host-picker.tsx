@@ -96,7 +96,7 @@ export function HostPicker() {
           {loaded && hosts.length === 0 && (
             <div className="host-picker-empty">
               <p>
-                No hosts yet. smterm lists the <code>Host</code> entries in ~/.ssh/config (and in
+                No hosts yet. minmux lists the <code>Host</code> entries in ~/.ssh/config (and in
                 each running WSL distro&apos;s); add one there and it appears as you save.
               </p>
               <button className="remote-empty-btn" onClick={() => ipc.openSshConfig()}>

@@ -1,4 +1,4 @@
-// Which hosts run smterm's shell integration: `ssh.integrationMode` (ask per host, all hosts,
+// Which hosts run minmux's shell integration: `ssh.integrationMode` (ask per host, all hosts,
 // or off) and the `ssh.integration` list of alias patterns inside it. Shared by main (which
 // builds the command) and the renderer (host menu, split hint, settings).
 

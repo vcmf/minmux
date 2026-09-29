@@ -39,7 +39,7 @@ describe.skipIf(!hasGit)("git module (real repo)", () => {
     }
     process.env.GIT_CONFIG_NOSYSTEM = "1"
 
-    repo = fs.mkdtempSync(path.join(os.tmpdir(), "smterm-git-"))
+    repo = fs.mkdtempSync(path.join(os.tmpdir(), "minmux-git-"))
     git(repo, "-c", "init.defaultBranch=main", "init")
     git(repo, "config", "user.email", "t@t.dev")
     git(repo, "config", "user.name", "Test")
@@ -53,7 +53,7 @@ describe.skipIf(!hasGit)("git module (real repo)", () => {
     fs.writeFileSync(path.join(repo, "a.txt"), "line1\nline2-changed\nline3\n")
     fs.writeFileSync(path.join(repo, "new.txt"), "hello\nworld\n")
 
-    plain = fs.mkdtempSync(path.join(os.tmpdir(), "smterm-plain-"))
+    plain = fs.mkdtempSync(path.join(os.tmpdir(), "minmux-plain-"))
   })
 
   afterAll(() => {

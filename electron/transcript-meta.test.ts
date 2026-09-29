@@ -39,7 +39,7 @@ describe("TranscriptMeta (incremental)", () => {
   let dir: string
   let file: string
   beforeEach(() => {
-    dir = fs.mkdtempSync(path.join(os.tmpdir(), "smterm-tm-"))
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), "minmux-tm-"))
     file = path.join(dir, "t.jsonl")
   })
   afterEach(() => fs.rmSync(dir, { recursive: true, force: true }))

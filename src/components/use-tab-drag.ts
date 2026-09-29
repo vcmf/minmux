@@ -1,6 +1,6 @@
 // Drag & drop reordering of sessions (tabs), shared by the top bar (horizontal) and the
 // sidebar (vertical): one order, two views. HTML5 drag with our own payload type, so it
-// never mixes with dragging a terminal onto a pane (application/x-smterm-surface).
+// never mixes with dragging a terminal onto a pane (application/x-minmux-surface).
 import { useEffect, useRef, useState, type DragEvent } from "react"
 import { useStore } from "../store"
 import { TAB_DRAG_TYPE } from "../lib/tab-order"

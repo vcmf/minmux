@@ -15,4 +15,4 @@ export function moveTo<T extends { id: string }>(items: T[], id: string, insertA
 }
 
 /** The drag payload type for a session (tab) — distinct from a terminal (surface) drag. */
-export const TAB_DRAG_TYPE = "application/x-smterm-tab"
+export const TAB_DRAG_TYPE = "application/x-minmux-tab"

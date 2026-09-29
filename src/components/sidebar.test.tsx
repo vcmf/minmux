@@ -23,7 +23,7 @@ const showHosts = (hosts: SshHost[]) => {
 }
 
 /** The Remote section's remembered choice: most tests look inside it, so they start it open. */
-const REMOTE_KEY = "smterm.sidebar.remoteCollapsed"
+const REMOTE_KEY = "minmux.sidebar.remoteCollapsed"
 
 beforeEach(() => {
   resetStore()

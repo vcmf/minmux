@@ -1,6 +1,6 @@
 # SSH remotes: design and implementation plan
 
-Tracking doc for saved SSH connections in smterm. Click a host, get a terminal on that
+Tracking doc for saved SSH connections in minmux. Click a host, get a terminal on that
 machine. Split or add a tab from that pane and the new terminal opens on the same host.
 Same idea as VS Code's Remote-SSH host list, scoped to terminals.
 
@@ -14,7 +14,7 @@ Companion: [`SESSION_DAEMON.md`](./SESSION_DAEMON.md) (local sessions surviving 
 
 **Goal.** One click from a host in `~/.ssh/config` to a working shell on it, and every
 follow-up terminal (split, new surface, new tab from that pane) lands on the same host.
-Where the host has tmux, the remote work survives quitting smterm, sleep, and network drops.
+Where the host has tmux, the remote work survives quitting minmux, sleep, and network drops.
 
 **Phases (agreed 2026-09-26)**
 
@@ -29,8 +29,8 @@ The local session daemon (surviving a quit for **all** panes) is a separate proj
 
 **Out of scope for now**
 
-- An SSH client library inside smterm. We run the system `ssh`.
-- Defining hosts inside smterm. `~/.ssh/config` is the only source (§3).
+- An SSH client library inside minmux. We run the system `ssh`.
+- Defining hosts inside minmux. `~/.ssh/config` is the only source (§3).
 - Silent connection reuse (ControlMaster). Tried and dropped (§4b); users who want instant,
   prompt-free splits add it to their own ssh config.
 - Storing passwords or keys. Auth is whatever `ssh` already does (keys, agent, 1Password,
@@ -74,7 +74,7 @@ What goes wrong today if you just type `ssh` as a shell:
 ## 3. Hosts: `~/.ssh/config` only
 
 The user's ssh config is the single source of truth: user, port, identity file, `ProxyJump`,
-multiplexing, everything. smterm only reads the aliases to list them, and runs
+multiplexing, everything. minmux only reads the aliases to list them, and runs
 `ssh <alias>`, which resolves the rest. A host defined there also works in VS Code, scripts,
 `scp` and `git`.
 
@@ -100,7 +100,7 @@ config file it read (or an Include glob's dir) changes. Never on the hot path.
 ```jsonc
 "ssh": {
   "hidden": ["github.com"],  // aliases hidden from the list
-  "keepAliveSeconds": 30,    // ServerAliveInterval smterm adds (0 = none, the config decides)
+  "keepAliveSeconds": 30,    // ServerAliveInterval minmux adds (0 = none, the config decides)
   "restore": "auto"          // after a relaunch: "auto" reconnects, "on-focus" waits for Enter
 }
 ```
@@ -133,7 +133,7 @@ the distro's `ssh` (§5).
 after that many idle seconds: idle NAT / VPN / firewall state stays open (the "session died
 over lunch" case), and after `ServerAliveCountMax` (4) missed replies ssh exits cleanly
 instead of hanging, so the pane can offer Reconnect. It runs inside ssh itself: no timer in
-smterm. On the command line it overrides the user's own value, which is harmless (a
+minmux. On the command line it overrides the user's own value, which is harmless (a
 keepalive interval, not a behaviour change); `keepAliveSeconds: 0` leaves it to the config.
 
 **Connection reuse (dropped).** Phase 1 first tried to turn on OpenSSH multiplexing
@@ -143,7 +143,7 @@ without overriding what the user set themselves means predicting ssh's config pr
 nine review rounds kept finding cases where our model and ssh's disagreed, and the probing
 made every spawn slow and async. Removed (2026-09-27). With key + agent auth nothing is
 lost but a second of handshake per pane; for password/2FA hosts, the user adds it to their
-own config, which smterm's plain `ssh` then honours:
+own config, which minmux's plain `ssh` then honours:
 
 ```
 Host *
@@ -216,23 +216,23 @@ wsl.exe -d <distro> --cd ~ -e ssh [keepalive] -t -- <alias> [remote command]
 
 ### 6a. What happens on quit and reopen
 
-**Phase 1 (no tmux):** quitting smterm (after the confirm dialog) kills every `ssh` client.
+**Phase 1 (no tmux):** quitting minmux (after the confirm dialog) kills every `ssh` client.
 The remote shells get SIGHUP and everything running in them dies. On reopen the layout comes
 back and each SSH pane reconnects (or waits for Enter, `restore: "on-focus"`) into a
 **fresh** shell.
 
 **Phase 2 (tmux on the host):** each SSH pane runs inside its own tmux session on the server.
-Quitting smterm kills only the local `ssh` client; the tmux session and whatever runs in it (a
+Quitting minmux kills only the local `ssh` client; the tmux session and whatever runs in it (a
 `claude` mid-task, a build) keep going. Reopening runs the same command, which **reattaches**
 to the live screen. Sleep, Wi-Fi changes and VPN drops are survived the same way.
 
 ### 6b. The remote command
 
 ```
-tmux -L smterm -f /dev/null new-session -A -s smterm-<installId>-<sessionId> \; <options>
+tmux -L minmux -f /dev/null new-session -A -s minmux-<installId>-<sessionId> \; <options>
 ```
 
-- `-L smterm`: a separate tmux server socket, so we never touch the user's own tmux sessions.
+- `-L minmux`: a separate tmux server socket, so we never touch the user's own tmux sessions.
 - `-f /dev/null`: ignore the user's `~/.tmux.conf`, so the pane looks and behaves like a
   plain terminal. Our options are passed on the command line after `\;`:
   `status off` (no tmux status bar), `mouse on`, `history-limit 50000`, `escape-time 0`,
@@ -240,7 +240,7 @@ tmux -L smterm -f /dev/null new-session -A -s smterm-<installId>-<sessionId> \; 
   `allow-passthrough on` (tmux ≥ 3.3; lets phase-3 OSC 7/133 through).
 - `new-session -A`: attach if the session exists, create it otherwise. Same command for first
   open and every reconnect.
-- Session name uses the smterm session id, which `workspace.json` already persists, plus a
+- Session name uses the minmux session id, which `workspace.json` already persists, plus a
   short per-install id so two laptops using the same server never collide or reap each other.
 
 ### 6c. Detection, no separate probe
@@ -249,8 +249,8 @@ The pane's remote command is a small POSIX script (built by a pure, tested funct
 `exec sh -c '…'` so it works whatever the user's login shell is):
 
 ```sh
-if command -v tmux >/dev/null 2>&1; then exec tmux -L smterm ...
-else printf '\033]<private-osc>;smterm;no-tmux;%s\007' "$(. /etc/os-release 2>/dev/null; echo "$ID")"
+if command -v tmux >/dev/null 2>&1; then exec tmux -L minmux ...
+else printf '\033]<private-osc>;minmux;no-tmux;%s\007' "$(. /etc/os-release 2>/dev/null; echo "$ID")"
      exec "${SHELL:-sh}" -l
 fi
 ```
@@ -279,14 +279,14 @@ When a host reports no tmux, the pane header shows:
 ### 6e. Closing, cleanup, quit
 
 - **Closing a pane** ends its tmux session: main runs
-  `ssh <host> tmux -L smterm kill-session -t <name>` (async, best-effort, off the hot path;
+  `ssh <host> tmux -L minmux kill-session -t <name>` (async, best-effort, off the hot path;
   it reuses the user's own ControlMaster connection if they set one up). Quitting the app does **not**, which is the point.
 - **Orphans** (pane closed while offline): on the next connect to a host, main lists
-  `tmux -L smterm ls` and kills sessions with **this install's** prefix that no longer exist
+  `tmux -L minmux ls` and kills sessions with **this install's** prefix that no longer exist
   in the workspace. Other installs' sessions are never touched.
 - **Quit dialog** counts only sessions that will die. Persistent SSH panes are listed as
   "keep running on `<host>`" instead of adding to the warning.
-- **Known trade-off:** scrollback lives in tmux, so smterm's own scrollback/⌘F only sees the
+- **Known trade-off:** scrollback lives in tmux, so minmux's own scrollback/⌘F only sees the
   current screen for these panes. `mouse on` makes wheel scrolling enter tmux copy mode. The
   pane header gets a hint the first time.
 
@@ -296,15 +296,15 @@ When a host reports no tmux, the pane header shows:
 
 |                                        | tmux on the server | `SESSION_DAEMON.md` |
 | -------------------------------------- | ------------------ | ------------------- |
-| smterm quit / crash / update           | ✅                 | ✅                  |
+| minmux quit / crash / update           | ✅                 | ✅                  |
 | Laptop sleep, network drop, VPN change | ✅                 | ❌ ssh client dies  |
 | Laptop reboot                          | ✅                 | ❌                  |
 | Local (non-SSH) panes                  | ❌                 | ✅                  |
 | Needs anything on the server           | tmux               | nothing             |
-| Native smterm scrollback / ⌘F          | ❌ tmux owns it    | ✅                  |
+| Native minmux scrollback / ⌘F          | ❌ tmux owns it    | ✅                  |
 
 Both are planned. With the daemon in place, an SSH pane on a host without tmux still survives
-an smterm quit (but not a network drop).
+an minmux quit (but not a network drop).
 
 ---
 
@@ -340,9 +340,9 @@ other users on the host can read a command line with `ps`:
 - **The nonce goes through the terminal**: the bootstrap prints `OSC 6973;boot;<challenge>`,
   turns echo off (raw, `-isig`: ^C is just data meanwhile), prints `OSC 6973;hello;<challenge>`
   and reads lines, 5 s each. Main answers straight from the pty output (`HelloWatch`, a bounded
-  scan that stops once answered, skipped, or 64 KB after boot): `smterm:<nonce>:-`. A pre-login
+  scan that stops once answered, skipped, or 64 KB after boot): `minmux:<nonce>:-`. A pre-login
   banner can't trigger it: it doesn't know the challenge. Lines typed during the login (an
-  Enter while the banner scrolls) are read past: only the line with the `smterm:` marker and a
+  Enter while the banner scrolls) are read past: only the line with the `minmux:` marker and a
   32-hex nonce counts. With no answer at all, it waits out a late one (until 2 s of quiet) so
   it can never be typed into the shell, then prints `skip` and runs the plain shell.
 
@@ -413,7 +413,7 @@ on to an interactive session (a bastion) exposes the challenge in `$SSH_ORIGINAL
 program there could answer our hello itself; the effect stays on that host.
 
 Measured: a 300k-line firehose takes the same time on an integrated and a plain pane (~615 ms),
-and the local `SMTERM_PERF` suite shows no change against v0.1.39 (e2e ~22–24 MB/s either way,
+and the local `MINMUX_PERF` suite shows no change against v0.1.39 (e2e ~22–24 MB/s either way,
 renderer ~50 MB/s).
 
 **Reopening the folder (P3c)**: only a verified folder, and only on an integrated host.
@@ -426,7 +426,7 @@ renderer ~50 MB/s).
   one no report confirms within 60 s (a hung mount, a shell that never reports) is dropped, so
   it can't hang every later reconnect and relaunch.
 - How it travels: in `pty:spawn` to main, which validates it again (`parseReopen`, at most
-  1024 UTF-8 bytes) and puts it in the handshake answer: `smterm:<nonce>:<host's first
+  1024 UTF-8 bytes) and puts it in the handshake answer: `minmux:<nonce>:<host's first
 label>:<hex bytes, dot-separated>`. Never on the command line, and never read by the login
   shell.
 - On the host: kept only if `uname -n` matches the reporting host's first label (one alias can
@@ -452,7 +452,7 @@ Still to come: inside tmux (phase 2) the scripts wrap their reports in tmux pass
 ## 9. Later
 
 - No-sudo tmux install: upload a static tmux we build in CI (x86_64/arm64, checksummed) to
-  `~/.local/share/smterm/bin`. Explicit button only.
+  `~/.local/share/minmux/bin`. Explicit button only.
 - `dtach` / `abduco` as a persistence backend that keeps native scrollback.
 - Remote Changes panel: `git status` / `git diff` over a short ssh call
   (`ssh <host> git -C <cwd> ...`), throttled, reusing the `git.ts` parsers.
@@ -509,7 +509,7 @@ and relaunch restores SSH panes without a burst of prompts; lint + tests green.
 | 2.7 | First-use hint about tmux scrollback / copy mode                                                              | `terminal-pane.tsx`                            | ⬜     |
 | 2.8 | Acceptance: quit + reopen reattaches, lid close, Wi-Fi switch, tmux 2.x vs 3.3+, two laptops on one server    | —                                              | ⬜     |
 
-**Exit criteria:** on a host with tmux, a running `claude` survives quitting smterm and closing
+**Exit criteria:** on a host with tmux, a running `claude` survives quitting minmux and closing
 the lid, and the pane reattaches to it on reopen; on a host without tmux the banner appears once
 with the right command; closing a pane leaves no tmux session behind.
 
@@ -537,7 +537,7 @@ with the right command; closing a pane leaves no tmux session behind.
 
 | #   | Question                 | Decision                                                                              | Status |
 | --- | ------------------------ | ------------------------------------------------------------------------------------- | ------ |
-| D1  | Host source              | `~/.ssh/config` only (+ per-WSL-distro configs); smterm settings are display-only     | agreed |
+| D1  | Host source              | `~/.ssh/config` only (+ per-WSL-distro configs); minmux settings are display-only     | agreed |
 | D2  | Split from an SSH pane   | Always same host; split menu offers "local shell" explicitly                          | agreed |
 | D3  | Restore on launch        | Lazy: connect when the pane is first focused                                          | agreed |
 | D4  | Windows                  | Hosts grouped by environment: `ssh.exe` for Windows hosts, distro `ssh` for WSL hosts | agreed |

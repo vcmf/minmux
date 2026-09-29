@@ -9,7 +9,7 @@
 //     live is a NESTED claude (e.g. `claude -p` run by the agent's Bash tool, which inherits
 //     the pane id) — ignored, so it can't overwrite (or, via its SessionEnd, delete) the parent.
 //   - Later events refresh the permission mode (Shift-Tab changes it mid-session).
-//   - ANY SessionEnd of the tracked session while smterm runs clears it (/exit, double Ctrl-C
+//   - ANY SessionEnd of the tracked session while minmux runs clears it (/exit, double Ctrl-C
 //     — which may report "other" — logout), and so does the shell's prompt returning
 //     (`shellIdle`: the foreground program exited — covers a Claude killed without a
 //     SessionEnd). Only a quit/shutdown (freeze) or an app crash leaves entries to resume.
@@ -55,7 +55,7 @@ export class SessionLedger {
   private verified = new Map<string, string>()
   // Per pane: sessions launched inside its lead, until they end (in memory only).
   private nested = new Map<string, Set<string>>()
-  private entries = new Map<string, LedgerEntry>() // key: smterm pane (session) id
+  private entries = new Map<string, LedgerEntry>() // key: minmux pane (session) id
   private frozen = false
   private timer?: ReturnType<typeof setTimeout>
   private thawTimer?: ReturnType<typeof setTimeout>
@@ -269,7 +269,7 @@ export class SessionLedger {
     if (e?.carried && e.sessionId === sessionId) this.delete(paneId)
   }
 
-  /** Drop entries for panes no longer in the workspace (closed while smterm wasn't running). */
+  /** Drop entries for panes no longer in the workspace (closed while minmux wasn't running). */
   prune(keep: Set<string>): void {
     for (const id of [...this.entries.keys()]) if (!keep.has(id)) this.delete(id)
     for (const id of [...this.verified.keys()]) if (!keep.has(id)) this.verified.delete(id)

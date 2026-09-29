@@ -94,7 +94,7 @@ export function exitReason(code: number, signal: number): string {
   return `ssh exited with code ${code}`
 }
 
-/** What an idle pane says, after `[smterm]`: what happened, then the keys that act on it. */
+/** What an idle pane says, after `[minmux]`: what happened, then the keys that act on it. */
 export function idleMessage(
   phase: RemoteIdle,
   label: string,
@@ -167,8 +167,8 @@ export function remoteStatusUi(
   }
 }
 
-/** A dim `[smterm] …` line on its own row, for xterm. */
-export const banner = (text: string): string => `\r\n\x1b[2m[smterm] ${text}\x1b[0m\r\n`
+/** A dim `[minmux] …` line on its own row, for xterm. */
+export const banner = (text: string): string => `\r\n\x1b[2m[minmux] ${text}\x1b[0m\r\n`
 
 const MAX_ERROR = 300
 

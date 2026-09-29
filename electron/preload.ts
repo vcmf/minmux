@@ -141,6 +141,6 @@ const api = {
   perfMode: () => ipcRenderer.invoke("app:perf-mode") as Promise<boolean>,
 }
 
-contextBridge.exposeInMainWorld("smterm", api)
+contextBridge.exposeInMainWorld("minmux", api)
 
-export type SmtermApi = typeof api
+export type MinmuxApi = typeof api

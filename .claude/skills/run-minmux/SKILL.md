@@ -1,9 +1,9 @@
 ---
-name: run-smterm
-description: Launch and drive the real smterm Electron app (Playwright) to verify a change end-to-end — terminals, panes/surfaces, drag & drop, themes, sidebar, Claude hook/transcript features. Use when asked to run/screenshot the app or confirm a change works beyond Vitest.
+name: run-minmux
+description: Launch and drive the real minmux Electron app (Playwright) to verify a change end-to-end — terminals, panes/surfaces, drag & drop, themes, sidebar, Claude hook/transcript features. Use when asked to run/screenshot the app or confirm a change works beyond Vitest.
 ---
 
-# Drive the real smterm app
+# Drive the real minmux app
 
 Vitest can't load `node-pty` or WebGL, so anything touching `terminal-manager.ts`, real PTYs,
 rendering, focus, or Claude integrations needs a check in the **built** app. `driver.mjs` wraps
@@ -13,13 +13,13 @@ Playwright's Electron support with the traps below already handled.
 # playwright-core is a devDependency — `npm install` if it's missing (NOT in a worktree whose
 # node_modules is a symlink: see Traps)
 npx electron-vite build          # the driver runs out/ — rebuild after every change
-node .claude/skills/run-smterm/driver.mjs smoke   # → "smoke: PASS — screenshot …"
+node .claude/skills/run-minmux/driver.mjs smoke   # → "smoke: PASS — screenshot …"
 ```
 
 Write a small script for your scenario (keep it in your scratch dir, not the repo):
 
 ```js
-import { launch } from "<repo>/.claude/skills/run-smterm/driver.mjs"
+import { launch } from "<repo>/.claude/skills/run-minmux/driver.mjs"
 const s = await launch({ settings: { renderer: "dom" } }) // dom → terminal text is readable
 try {
   await s.sleep(1200) // shell startup
@@ -43,9 +43,9 @@ try {
 - **Never touch the user's real config.** `launch()` points `HOME` (and `APPDATA` on Windows —
   where the config dir lives there) at a throwaway dir, so settings.json, workspace.json,
   claude-hooks.json and window-bg are all scratch; plus a throwaway `--user-data-dir`
-  (localStorage + the single-instance lock, so it runs beside a real smterm). A real-HOME run
+  (localStorage + the single-instance lock, so it runs beside a real minmux). A real-HOME run
   overwrites the user's saved layout and hook settings. It also strips `ELECTRON_RENDERER_URL`,
-  which a dev smterm leaks into its shells and would load dev-server code instead of `out/`.
+  which a dev minmux leaks into its shells and would load dev-server code instead of `out/`.
 - **Don't `app.close()`** — the quit guard opens a native "PTYs are running" dialog and the call
   hangs. `s.quit()` kills the process.
 - **WebGL text isn't in the DOM.** Assert text with `settings: { renderer: "dom" }`; judge

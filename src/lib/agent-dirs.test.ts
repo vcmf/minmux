@@ -42,7 +42,7 @@ describe("claudeWorkDirs", () => {
 
   it("no entry without a pane or a known cwd; memoized per graph", () => {
     const g = graph([
-      { event: "SessionStart", sessionId: "a" }, // outside smterm's panes
+      { event: "SessionStart", sessionId: "a" }, // outside minmux's panes
       { event: "Stop", sessionId: "b", paneId: "p" }, // root without a cwd yet
     ])
     expect(claudeWorkDirs(g)).toEqual({})

@@ -151,7 +151,7 @@ export function SettingsPanel() {
         </label>
 
         <label className="settings-row">
-          <span title="Runs smterm's prompt hooks on the host, so splits, reconnects and relaunches open in the same folder and status is exact. Nothing is installed there.">
+          <span title="Runs minmux's prompt hooks on the host, so splits, reconnects and relaunches open in the same folder and status is exact. Nothing is installed there.">
             Shell integration
           </span>
           <select

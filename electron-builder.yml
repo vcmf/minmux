@@ -1,15 +1,15 @@
 # Packaging config (v0 free dev channel). electron-vite builds to out/, then
 # electron-builder packages it. No paid notarization: macOS is ad-hoc signed (free,
 # so Apple Silicon will launch); notarized double-click installers are v0.1 (M4).
-appId: com.smterm.app
-productName: smterm
-copyright: Copyright © 2026 smterm authors
+appId: com.minmux.app
+productName: minmux
+copyright: Copyright © 2026 minmux authors
 
 # CI publishes artifacts to GitHub Releases for the pushed tag (release.yml).
 publish:
   provider: github
   owner: vcmf
-  repo: smterm
+  repo: minmux
 
 directories:
   output: release

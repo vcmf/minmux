@@ -140,7 +140,7 @@ export function TopBar() {
       </button>
       <div className="brand">
         <img className="brand-icon" src={brandIcon} alt="" width={18} height={18} />
-        <span className="brand-name">smterm</span>
+        <span className="brand-name">minmux</span>
         {profile && (
           <span
             className="brand-profile"

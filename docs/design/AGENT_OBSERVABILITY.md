@@ -1,6 +1,6 @@
 # Design — Agent observability: the live agents & worktrees board
 
-> Surface every running agent smterm launched — the agent, its sub-agents, its worktree, its
+> Surface every running agent minmux launched — the agent, its sub-agents, its worktree, its
 > recent file activity, its status — as a first-class **board** in the app, fed by Claude Code's
 > **official** extension points (hooks now; OpenTelemetry traces later). Companion to
 > `../ARCHITECTURE.md`; supersedes the "control-plane road" caveat in `AGENT_TEAMS.md` §11 for the
@@ -23,8 +23,8 @@ state. That was wrong in one important way: **Claude Code emits its own structur
 supported channels** — hooks and OpenTelemetry. Ingesting those is an _integration_, not scraping. So
 the agent tree is reachable — just not from the PTY.
 
-**Non-negotiable principle (unchanged).** smterm stays terminal-first. This is an **additive,
-opt-in observability layer**, wired only for the shells smterm itself launches; it never becomes a
+**Non-negotiable principle (unchanged).** minmux stays terminal-first. This is an **additive,
+opt-in observability layer**, wired only for the shells minmux itself launches; it never becomes a
 prerequisite for using the terminal, and it never parses undocumented private files.
 
 ---
@@ -47,7 +47,7 @@ Claude Code exposes [31 hook events](https://code.claude.com/docs/en/hooks). The
 | `FileChanged`                       | recent file activity per agent → the "file view"                                                 |
 | `Notification` / `Stop`             | attention / turn-boundary signals (dovetails with our status engine)                             |
 
-Hooks can be typed **`http`** and POST the event JSON to `http://localhost:<port>`. So smterm runs a
+Hooks can be typed **`http`** and POST the event JSON to `http://localhost:<port>`. So minmux runs a
 tiny loopback receiver and gets every event **as it happens** (no batching). Common fields on every
 event: `session_id`, `transcript_path`, `cwd`, `permission_mode`, `hook_event_name`.
 
@@ -103,13 +103,13 @@ fire interactively; traces need empirical confirmation before we depend on them.
 
 ## 3. The zero-setup lever
 
-smterm already injects env + shell integration into the shells it spawns
+minmux already injects env + shell integration into the shells it spawns
 (`electron/shell-integration.ts`, `pty:spawn`). The user _types_ `claude` themselves, so we can't add
 `--settings` to its argv directly — but the injection gives us two clean, scoped hooks:
 
 1. **A `claude` shell wrapper** injected into the interactive shell: a function
-   `claude() { command claude --settings <smterm-hooks.json> "$@"; }`. Any `claude` a user runs in an
-   smterm pane transparently loads our scoped hook file — **without** touching their global
+   `claude() { command claude --settings <minmux-hooks.json> "$@"; }`. Any `claude` a user runs in an
+   minmux pane transparently loads our scoped hook file — **without** touching their global
    `~/.claude/settings.json`. (`--settings` is confirmed working in the spike, §7.)
 2. **Telemetry env** (Phase 2) — set `CLAUDE_CODE_ENABLE_TELEMETRY` + OTLP vars pointing at our
    loopback receiver, per the same injection.
@@ -118,18 +118,18 @@ The hook file uses `type: "http"` pointing at `http://127.0.0.1:<port>` with a p
 (the spike used `type: "command"` + `curl` to prove the payloads; `http` is the lighter production
 form — no per-event subprocess).
 
-Result: the board **just works** for agents started inside smterm, with **no user setup** and no
-global config footprint. Agents started outside smterm simply don't appear (acceptable; opt-in).
+Result: the board **just works** for agents started inside minmux, with **no user setup** and no
+global config footprint. Agents started outside minmux simply don't appear (acceptable; opt-in).
 
 ---
 
 ## 4. Architecture
 
 ```
-  claude (in a smterm pane)
+  claude (in a minmux pane)
      │  hook fires (SubagentStart, FileChanged, WorktreeCreate, …)
      ▼
-  HTTP POST → 127.0.0.1:<port>  (smterm main: hook receiver, electron/agent-hooks.ts)
+  HTTP POST → 127.0.0.1:<port>  (minmux main: hook receiver, electron/agent-hooks.ts)
      │  validate + normalise → AgentEvent
      ▼
   agent-graph reducer (pure, tested — lib/agent-graph.ts)   ← the risky logic lives here
@@ -206,7 +206,7 @@ Proceed to build `agent-graph` against the shapes captured here.
 
 ## 8. Performance & safety (hard requirements for 6b)
 
-Hooks run in the `claude` process over a **separate loopback socket** — they never touch smterm's
+Hooks run in the `claude` process over a **separate loopback socket** — they never touch minmux's
 PTY→xterm render path, so **no terminal lag**. But hooks are **synchronous to Claude's agent loop**
 (it waits, bounded by the hook `timeout`), so the receiver must not slow the agent either:
 
@@ -215,12 +215,12 @@ PTY→xterm render path, so **no terminal lag**. But hooks are **synchronous to 
 - **`http` hooks** (no per-event subprocess) + the **leanest event set** that feeds the board (drop
   per-tool `PreToolUse`/`PostToolUse` if "current tool" isn't worth a round-trip each).
 - **Cap the hook `timeout` (~2–3 s)** as a backstop: a slow/down receiver must let Claude proceed,
-  never hang it. Receiver down / smterm not running → connection refused instantly → no delay.
+  never hang it. Receiver down / minmux not running → connection refused instantly → no delay.
 - Reduce in **main**; push to the board over an IPC channel **separate** from terminal data, and
   throttle board updates. Nothing agent-observability-related may sit on the render hot path.
 
 ## 9. Out of scope
 
 - Reading undocumented private state files (the control-plane road we still reject).
-- Driving/orchestrating agents from smterm (this is _observe_, not _control_).
+- Driving/orchestrating agents from minmux (this is _observe_, not _control_).
 - Non-Claude agents in v1 (the mechanism generalises later — §5 Phase 3).

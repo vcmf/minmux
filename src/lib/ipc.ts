@@ -9,7 +9,7 @@ import type { EditorInfo } from "./file-actions"
 import type { PreviewData } from "./file-preview"
 import type { UpdateStatus } from "./version"
 
-// The typed surface the preload exposes on window.smterm. Every renderer→main
+// The typed surface the preload exposes on window.minmux. Every renderer→main
 // call goes through this one seam (keeps components portable + is the insulation
 // point for a future out-of-process session daemon — see ARCHITECTURE Appendix A).
 export type { SpawnOpts } from "../types"
@@ -137,8 +137,8 @@ export interface DiffLine {
 
 declare global {
   interface Window {
-    smterm: Ipc
+    minmux: Ipc
   }
 }
 
-export const ipc: Ipc = window.smterm
+export const ipc: Ipc = window.minmux

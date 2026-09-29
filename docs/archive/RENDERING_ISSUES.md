@@ -100,7 +100,7 @@ Likely amplifies H1/H2 rather than being the sole cause.
    `will-change: transform` on the canvas). If garble stops → **H1 confirmed** and (b) may be the fix.
 3. **Force the DOM renderer** (skip `acquireWebgl`): if garble disappears (but ligatures/speed regress)
    → the WebGL renderer/atlas is implicated (**H3**), independent of H1.
-4. **Measure during streaming** with the `SMTERM_PERF=1` harness (PERF.md) — renderer CPU + frame cost
+4. **Measure during streaming** with the `MINMUX_PERF=1` harness (PERF.md) — renderer CPU + frame cost
    while an agent streams, split vs single, to size **H2/H4**.
 
 ## Fix ideas (ranked)

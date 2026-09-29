@@ -14,9 +14,11 @@ ownership, native modules. No DOM, no React here. (Renderer rules: root `CLAUDE.
 - `git.ts` — pure git parsers + `gitStatus`/`gitDiff` for the changes panel.
 - `coalescer.ts` / `output-buffer.ts` — PTY output batching (IPC) + replay buffer (reattach).
 - `diagnostics.ts` — temporary always-on event log (`diagnostics.log` in the config dir:
-  `~/.config/smterm/`, or `smterm-<profile>/` for a dev build).
+  `~/.config/minmux/`, or `minmux-<profile>/` for a dev build).
 - `profile.ts` — which profile this process is (a dev build is `dev`); resolved first thing in
-  main. Every per-instance path uses `configDir()` / the profile name, never a literal "smterm".
+  main. Every per-instance path uses `configDir()` / the profile name, never a literal "minmux".
+- `legacy-migrate.ts` — first launch after the smterm → minmux rename copies the old config /
+  user-data dirs over (at ready, never from a running smterm). → `../docs/GOTCHAS.md#profiles`
 - `shell-env.ts` — import the login-shell PATH/env at startup (packaged GUI launches get
   a bare launchd PATH). → `../docs/GOTCHAS.md#shell-env`
 

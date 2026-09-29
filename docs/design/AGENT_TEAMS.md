@@ -1,6 +1,6 @@
-# Design — Claude Code agent teammates as native smterm panes
+# Design — Claude Code agent teammates as native minmux panes
 
-> Surface the sub-agents a coding agent spawns **as real smterm panes**, so a tab that runs
+> Surface the sub-agents a coding agent spawns **as real minmux panes**, so a tab that runs
 > `claude` shows its whole working team (each with our existing per-pane status), not just one
 > opaque stream. Companion to `ARCHITECTURE.md`; this is a **design sketch for a future, standalone
 > project** — not on any current milestone.
@@ -12,7 +12,7 @@ Status: **DRAFT / design discussion** (2026-07-10). No code yet.
 ## 1. Goal & scope
 
 **Goal.** When a `claude` session spawns **agent-team teammates**, each teammate becomes a first-class
-smterm pane in the same tab — created, driven, and torn down by the agent — so smterm's existing
+minmux pane in the same tab — created, driven, and torn down by the agent — so minmux's existing
 sidebar + per-pane status rail shows "the working agents inside the tab" for free.
 
 **In scope (v1):** Claude Code **agent teams** (`--teammate-mode`) on native shells (macOS/Linux).
@@ -42,7 +42,7 @@ A terminal sees **one PTY byte stream**. An agent's internal work is invisible t
 | **Agent-team teammates** | Claude spawns **separate CLI processes** and drives them via **tmux commands** (`teammateMode: tmux`) | **Yes** — each is its own process → its own PTY → its own pane |
 
 The teammate case is tractable **because Claude, in tmux mode, externalises the team as tmux operations.**
-If we make smterm answer those tmux operations, teammates become our panes. That's the whole idea.
+If we make minmux answer those tmux operations, teammates become our panes. That's the whole idea.
 
 ---
 
@@ -54,7 +54,7 @@ for `split-window`, `send-keys`, `capture-pane`, etc. We exploit both:
 1. **Spoof `$TMUX`** in the lead `claude`'s environment so it believes it's in a tmux session and takes
    the tmux path.
 2. **Put a fake `tmux` on `PATH`** (our shim) ahead of any real tmux. Every `tmux …` call Claude makes
-   hits our shim, which forwards a structured request to smterm over a socket and prints back the
+   hits our shim, which forwards a structured request to minmux over a socket and prints back the
    tmux-shaped output Claude expects.
 
 This is the **cmux approach** (validated in the wild) and is far lighter than implementing the tmux
@@ -62,17 +62,17 @@ control protocol (`tmux -CC`): we only emulate the handful of subcommands Claude
 
 ```
   lead pane: `claude --teammate-mode` (env: $TMUX spoofed, PATH has our shim,
-                                            SMTERM_TMUX_SOCK, SMTERM_LEAD_SESSION)
+                                            MINMUX_TMUX_SOCK, MINMUX_LEAD_SESSION)
         │  runs `tmux split-window -- claude <teammate…>`
         ▼
-  our `tmux` shim (tiny bin)  ──JSON over unix socket──►  smterm main (tmux-shim server)
+  our `tmux` shim (tiny bin)  ──JSON over unix socket──►  minmux main (tmux-shim server)
         ▲  prints tmux-shaped stdout (pane id, capture text, …)   │
         └──────────────────────────────────────────────────────  │ spawn PTY + tell renderer
                                                                    ▼
                                     node-pty (teammate)  +  renderer inserts a pane leaf
                                                             in the lead's tab (attach-or-spawn)
                                                                    ▼
-                              a real smterm pane with our existing status / cwd / sidebar entry
+                              a real minmux pane with our existing status / cwd / sidebar entry
 ```
 
 ---
@@ -83,7 +83,7 @@ control protocol (`tmux -CC`): we only emulate the handful of subcommands Claude
 | --------------------- | ------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------- |
 | **`tmux` shim**       | new small binary (bundled; Node or a tiny compiled exe)                                                      | Parse `tmux` argv → one socket request; print tmux-shaped stdout/exit code                                             |
 | **Shim server**       | `electron/tmux-shim-server.ts` (main)                                                                        | Listen on a per-lead unix socket / named pipe; map requests → PTY + pane ops                                           |
-| **Launcher glue**     | `electron/shell-integration.ts` + `pty:spawn`                                                                | When launching an agent in team mode, inject `$TMUX` spoof, `PATH` shim dir, `SMTERM_TMUX_SOCK`, `SMTERM_LEAD_SESSION` |
+| **Launcher glue**     | `electron/shell-integration.ts` + `pty:spawn`                                                                | When launching an agent in team mode, inject `$TMUX` spoof, `PATH` shim dir, `MINMUX_TMUX_SOCK`, `MINMUX_LEAD_SESSION` |
 | **Argv parser**       | `electron/tmux-cmd.ts` (**pure, tested**)                                                                    | `tmux argv → { op, … }` — the risky parsing lives here, unit-tested                                                    |
 | **Renderer bridge**   | new IPC event `team:pane` (main→renderer) + a store action                                                   | Insert/remove a teammate pane leaf in the lead's tab; mount via attach-or-spawn                                        |
 | **Reuse (unchanged)** | `node-pty`, pane-tree store, `terminal-manager` (attach-or-spawn), status engine, `renderer-policy`, sidebar | Teammate panes ARE normal sessions — everything downstream is free                                                     |
@@ -94,7 +94,7 @@ control protocol (`tmux -CC`): we only emulate the handful of subcommands Claude
 
 The exact set is **undocumented and version-specific** — so **step 0 is empirical discovery** (§14): run
 `claude --teammate-mode tmux` against a _logging_ shim and record every `tmux` invocation. Expected set
-(from cmux + tmux norms), each mapped to an smterm op:
+(from cmux + tmux norms), each mapped to an minmux op:
 
 | tmux command                                  | Maps to                                                                                                                                            |
 | --------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -114,7 +114,7 @@ Two fiddly bits: **key-name decoding** for `send-keys` (`Enter`→`\r`, `C-c`, h
 
 ## 6. Teammate lifecycle (reuses attach-or-spawn)
 
-The elegant part: a teammate pane is a **normal smterm session**, just _initiated by the shim_ instead
+The elegant part: a teammate pane is a **normal minmux session**, just _initiated by the shim_ instead
 of the user. PTYs live in main; the pane tree lives in the renderer store — so `split-window` becomes:
 
 1. Shim server (main) allocates a `sessionId`, `pty.spawn`s the teammate command (cwd from `-c`),
@@ -131,13 +131,13 @@ bounded.
 
 ---
 
-## 7. Shim ↔ smterm protocol
+## 7. Shim ↔ minmux protocol
 
-- **Transport:** unix domain socket (macOS/Linux) / named pipe (Windows). Path in `SMTERM_TMUX_SOCK`,
-  created per lead session when smterm launches the agent in team mode.
+- **Transport:** unix domain socket (macOS/Linux) / named pipe (Windows). Path in `MINMUX_TMUX_SOCK`,
+  created per lead session when minmux launches the agent in team mode.
 - **Framing:** newline-delimited JSON, request→response. The shim blocks on the reply, then emulates
   tmux's stdout + exit code.
-- **Context:** `SMTERM_LEAD_SESSION` ties every request to the lead's pane so teammates land in the
+- **Context:** `MINMUX_LEAD_SESSION` ties every request to the lead's pane so teammates land in the
   right tab (even with multiple teams across tabs, each lead has its own socket).
 
 ```jsonc
@@ -197,7 +197,7 @@ Treat that as a separate, optional, clearly-labelled follow-up, not part of this
 | ------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------- |
 | **Scrape the agent's rendered team panel** | ❌ Fragile (UI/ANSI/redraw churn); breaks every version                                                                                |
 | **Read `~/.claude/teams/*` + `tasks/*`**   | ⚠️ Works, but couples us to Claude's private on-disk format, is experimental/moving, and is the **control-plane** road (agent lock-in) |
-| **Claude hooks → smterm**                  | ⚠️ Cleaner signalling, but still Claude-specific and needs hook setup; good for the §9 _badge_, not for real panes                     |
+| **Claude hooks → minmux**                  | ⚠️ Cleaner signalling, but still Claude-specific and needs hook setup; good for the §9 _badge_, not for real panes                     |
 | **Full tmux `-CC` control mode**           | Heaviest; a whole protocol. More "standard" but far more than we need                                                                  |
 | **`tmux` shim on PATH (this doc)**         | ✅ Lightest path to _real panes_; protocol-shaped (not private-file coupling); proven by cmux; reuses all our pane infra               |
 

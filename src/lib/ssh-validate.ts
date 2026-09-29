@@ -34,11 +34,11 @@ export interface SshSettings {
   hidden: string[] // aliases you hid (on top of DEFAULT_HIDDEN_HOSTS; see effectiveHidden)
   shown: string[] // DEFAULT_HIDDEN_HOSTS entries you brought back
   pinned: string[] // hostIds kept in the sidebar
-  keepAliveSeconds: number // ServerAliveInterval smterm adds (0 = add none, the config decides)
+  keepAliveSeconds: number // ServerAliveInterval minmux adds (0 = add none, the config decides)
   restore: "auto" | "on-focus" // after a relaunch: reconnect at once, or when the pane is used
   autoReconnect: boolean // retry a dropped, established connection a few times (default on)
   colors: Record<string, string> // alias pattern ("prod-*") → a named colour or #rrggbb
-  integration: string[] // alias patterns ("gpu-*", "!gpu-old") whose shells report to smterm
+  integration: string[] // alias patterns ("gpu-*", "!gpu-old") whose shells report to minmux
   integrationMode: "ask" | "all" | "off" // ask: the list only (+ a hint); all: all but `!alias`
 }
 

@@ -1,4 +1,4 @@
-# smterm docs
+# minmux docs
 
 Project documentation. Code lives above this folder; the two docs that stay at the repo root are
 `README.md` (the public/GitHub readme) and `CLAUDE.md` (agent instructions, auto-loaded by Claude
@@ -11,14 +11,14 @@ Code — nested `electron/CLAUDE.md` too).
 | [ARCHITECTURE.md](./ARCHITECTURE.md) | System design, seams, decisions (incl. the Tauri→Electron pivot, Appendix A daemon). |
 | [ROADMAP.md](./ROADMAP.md)           | Milestones + status. Update as we go.                                                |
 | [GOTCHAS.md](./GOTCHAS.md)           | The non-obvious traps, with the _why_. Each has a one-line flag in `CLAUDE.md`.      |
-| [TESTING.md](./TESTING.md)           | Where tests live, patterns, gates; real-app checks via the `run-smterm` skill.       |
-| [PERF.md](./PERF.md)                 | Performance methodology + baselines (`SMTERM_PERF=1` harness).                       |
+| [TESTING.md](./TESTING.md)           | Where tests live, patterns, gates; real-app checks via the `run-minmux` skill.       |
+| [PERF.md](./PERF.md)                 | Performance methodology + baselines (`MINMUX_PERF=1` harness).                       |
 
 ## Research
 
 | Doc                                                    | What                                                     |
 | ------------------------------------------------------ | -------------------------------------------------------- |
-| [COMPETITIVE_LANDSCAPE.md](./COMPETITIVE_LANDSCAPE.md) | Where smterm's wedge is vs cmux/Warp/Cursor/etc.         |
+| [COMPETITIVE_LANDSCAPE.md](./COMPETITIVE_LANDSCAPE.md) | Where minmux's wedge is vs cmux/Warp/Cursor/etc.         |
 | [mux_product_spec.md](./mux_product_spec.md)           | The `mux` product/visual spec we adopted for the design. |
 
 ## Design docs / RFCs — [`design/`](./design/)

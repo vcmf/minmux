@@ -91,7 +91,7 @@ describe("reordering sessions by drag — top bar", () => {
   it("ignores a terminal (surface) drag passing over the tab list", () => {
     const { list } = setup("top")
     const before = order()
-    const data = dt({ "application/x-smterm-surface": "s1" })
+    const data = dt({ "application/x-minmux-surface": "s1" })
     drag("dragOver", list, { x: 280 }, data)
     expect(list.querySelector(".tab-drop-line")).toBeNull()
     drag("drop", list, { x: 280 }, data)

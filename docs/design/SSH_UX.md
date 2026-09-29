@@ -40,7 +40,7 @@ Severity: **P0** broken, **P1** confusing or slow in daily use, **P2** polish.
 | --- | --- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------- |
 | F1  | P0  | The "connection closed" line lands on row 2 of the scrollback, over the login banner, instead of below the last prompt. Our mode reset sends `ESC[?1049l` unconditionally; outside the alt screen that also restores a cursor position saved at the start of the session. Only send it when the alt buffer is active. | 07         |
 | F2  | P1  | Outside the pane, a dropped, waiting or failed pane looks like any idle shell: the sidebar row says `idle` with a grey dot, the tab has no mark. You only learn a host is down by looking at that pane.                                                                                                               | 07, 09, 10 |
-| F3  | P1  | A pane sitting at a password prompt reads `idle`, and the host row shows a green "connected" dot. Nothing says "this one is waiting for you", which is the state smterm is otherwise good at surfacing.                                                                                                               | 08         |
+| F3  | P1  | A pane sitting at a password prompt reads `idle`, and the host row shows a green "connected" dot. Nothing says "this one is waiting for you", which is the state minmux is otherwise good at surfacing.                                                                                                               | 08         |
 | F4  | P1  | Remote panes look like local ones. The terminal area is identical; the only cues are a 14 px globe and a small `SSH` badge. With a local and a remote pane side by side it is easy to type into the wrong one.                                                                                                        | 04, 05     |
 | F5  | P1  | The Remote list is squeezed into the bottom 40% of the sidebar while the session tree above is mostly empty. Five of eight hosts fit; the sixth is cut off under the legend. There is no search, so a long config means scrolling.                                                                                    | 01         |
 | F6  | P1  | The palette puts the verb first and the host second, and lists every host twice (Connect, Split right). Eight hosts become 16 rows, and long details wrap the label onto two lines ("Connect to / host").                                                                                                             | 03         |
@@ -105,7 +105,7 @@ confirmed from a source it is marked _unverified_.
   Disconnected and New Input, and has opt-in auto reconnect (guides warn against it on
   production). MobaXterm's stopped session prints "Press Return to exit tab, R to restart, S to
   save output".
-- **cmux.** `cmux ssh` makes a workspace per host. Open proposals ask for exactly what smterm
+- **cmux.** `cmux ssh` makes a workspace per host. Open proposals ask for exactly what minmux
   already does (pane-scoped ssh where splits inherit the host, mixed local and remote in one
   layout) plus saved remotes in the sidebar and auto reconnect.
   ([#7521](https://github.com/manaflow-ai/cmux/issues/7521))
@@ -274,7 +274,7 @@ prompt heuristic in S1, which runs on the existing throttled output-idle path.
 - **"Needs input" notifies when the window is in the background**, like agent attention.
 - **No new shortcut for now.** The host picker opens from the palette (`ssh`) and the top-bar
   picker; add a binding later if it's missed.
-- **No "Add host…" in this pass.** It would mean smterm writing to the user's `~/.ssh/config`,
+- **No "Add host…" in this pass.** It would mean minmux writing to the user's `~/.ssh/config`,
   which phase 1 keeps theirs. The empty state explains where hosts come from and offers "Open
   ssh config".
 

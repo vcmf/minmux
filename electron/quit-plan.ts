@@ -20,7 +20,7 @@ export function quitStep(s: QuitState): QuitStep {
   if (s.phase === "draining") return "hold" // no dialog, no second drain
   if (s.needsConfirm && !s.confirmed) return "confirm"
   if (s.livePtys === 0) return "proceed"
-  // Holding the quit here would make macOS report "smterm cancelled restart/logout".
+  // Holding the quit here would make macOS report "minmux cancelled restart/logout".
   if (s.osEnding) return "killNow"
   return "drain"
 }

@@ -14,22 +14,22 @@
 
 import { BASH_HOOKS, ZSH_HOOKS } from "./shell-integration"
 
-import { parseReopen, SMTERM_OSC, type ReopenCwd } from "../src/lib/remote-reports"
+import { parseReopen, MINMUX_OSC, type ReopenCwd } from "../src/lib/remote-reports"
 
-export { SMTERM_OSC }
+export { MINMUX_OSC }
 
 const HEX = /^[0-9a-f]{16,64}$/
 
 // The standard OSC 133 / OSC 7 emits in the local hooks, and their nonce-tagged remote form.
 // Each must appear in the scripts (checked in remoteHooks), or the remote shell would report
 // untagged — and then nothing it says counts. The folder goes as `P;<host>;<hex of $PWD's
-// bytes>` (__smterm_cwd): a file:// URL would be re-parsed (`#`, `?`, `\`, `..`, `%2F`), and
+// bytes>` (__minmux_cwd): a file:// URL would be re-parsed (`#`, `?`, `\`, `..`, `%2F`), and
 // the folder must arrive exactly as the shell has it.
 const EMITS: [string, string][] = [
-  ["printf '\\033]133;C\\007'", `printf '\\033]${SMTERM_OSC};%s;C\\007' "$__smterm_nonce"`],
+  ["printf '\\033]133;C\\007'", `printf '\\033]${MINMUX_OSC};%s;C\\007' "$__minmux_nonce"`],
   [
     "printf '\\033]133;D;%s\\007' \"$ret\"",
-    `printf '\\033]${SMTERM_OSC};%s;D;%s\\007' "$__smterm_nonce" "$ret"`,
+    `printf '\\033]${MINMUX_OSC};%s;D;%s\\007' "$__minmux_nonce" "$ret"`,
   ],
 ]
 const ZSH_CWD_EMIT = `printf '\\033]7;file://%s%s\\007' "\${HOST:-localhost}" "$PWD"`
@@ -37,7 +37,7 @@ const BASH_CWD_EMIT = `printf '\\033]7;file://%s%s\\007' "\${HOSTNAME:-localhost
 
 // Builtins only (a prompt must start no process): each byte of $PWD as two hex digits.
 const ZSH_CWD_FN = [
-  "__smterm_cwd() {",
+  "__minmux_cwd() {",
   "  emulate -L zsh",
   "  setopt nomultibyte",
   "  local p=$PWD h= c i v",
@@ -46,20 +46,20 @@ const ZSH_CWD_FN = [
   "    (( v = #c & 255 ))",
   "    h+=${(l:2::0:)$(( [##16] v ))}",
   "  done",
-  `  printf '\\033]${SMTERM_OSC};%s;P;%s;%s\\007' "$__smterm_nonce" "\${HOST:-localhost}" "\${(L)h}"`,
+  `  printf '\\033]${MINMUX_OSC};%s;P;%s;%s\\007' "$__minmux_nonce" "\${HOST:-localhost}" "\${(L)h}"`,
   "}",
 ].join("\n")
 const BASH_CWD_FN = [
-  "__smterm_cwd() {",
+  "__minmux_cwd() {",
   "  local LC_ALL=C p=$PWD h= i c",
   "  for ((i = 0; i < ${#p}; i++)); do printf -v c '%02x' \"'${p:i:1}\"; h+=${c: -2}; done",
-  `  printf '\\033]${SMTERM_OSC};%s;P;%s;%s\\007' "$__smterm_nonce" "\${HOSTNAME:-localhost}" "$h"`,
+  `  printf '\\033]${MINMUX_OSC};%s;P;%s;%s\\007' "$__minmux_nonce" "\${HOSTNAME:-localhost}" "$h"`,
   "}",
 ].join("\n")
 
 /** A local hook script with every report tagged with the nonce (throws if one is missing). */
 export function remoteHooks(script: string, shell: "zsh" | "bash"): string {
-  const cwd: [string, string] = [shell === "zsh" ? ZSH_CWD_EMIT : BASH_CWD_EMIT, "__smterm_cwd"]
+  const cwd: [string, string] = [shell === "zsh" ? ZSH_CWD_EMIT : BASH_CWD_EMIT, "__minmux_cwd"]
   let out = script
   for (const [from, to] of [...EMITS, cwd]) {
     if (!out.includes(from)) throw new Error(`remote hooks: missing ${from}`)
@@ -71,9 +71,9 @@ export function remoteHooks(script: string, shell: "zsh" | "bash"): string {
 // The builtin cd (not a user's cd function); ^C works while a hung mount blocks it. A folder
 // that's gone says so and leaves the shell where its startup files put it.
 const REOPEN_CD_FN = [
-  "__smterm_cd_to() {",
+  "__minmux_cd_to() {",
   '  builtin cd -- "$1" 2>/dev/null ||',
-  "    printf '\\033[2m[smterm] can not reopen %s: it is gone\\033[0m\\n' \"$1\"",
+  "    printf '\\033[2m[minmux] can not reopen %s: it is gone\\033[0m\\n' \"$1\"",
   "}",
 ].join("\n")
 
@@ -83,26 +83,26 @@ const REOPEN_CD_FN = [
 // them (tmux…) inherits a ZDOTDIR pointing at a dir that's gone. The nonce is assigned
 // before any user file runs (so `allexport` there can't export it) and never exported.
 export const REMOTE_ZSHENV = [
-  "# smterm remote integration — zsh .zshenv (the only file of ours zsh reads).",
-  "typeset +x __smterm_nonce",
-  'case "${SMTERM_ZDOTDIR-}" in */smterm.*) command rm -rf -- "$SMTERM_ZDOTDIR" 2>/dev/null ;; esac',
-  'if [[ -n "${SMTERM_USER_ZDOTDIR-}" ]]; then ZDOTDIR=$SMTERM_USER_ZDOTDIR; else unset ZDOTDIR; fi',
-  "unset SMTERM_ZDOTDIR SMTERM_USER_ZDOTDIR",
-  "__smterm_reopen=${__SMTERM_CD-}; unset __SMTERM_CD",
-  "typeset +x __smterm_reopen",
+  "# minmux remote integration — zsh .zshenv (the only file of ours zsh reads).",
+  "typeset +x __minmux_nonce",
+  'case "${MINMUX_ZDOTDIR-}" in */minmux.*) command rm -rf -- "$MINMUX_ZDOTDIR" 2>/dev/null ;; esac',
+  'if [[ -n "${MINMUX_USER_ZDOTDIR-}" ]]; then ZDOTDIR=$MINMUX_USER_ZDOTDIR; else unset ZDOTDIR; fi',
+  "unset MINMUX_ZDOTDIR MINMUX_USER_ZDOTDIR",
+  "__minmux_reopen=${__MINMUX_CD-}; unset __MINMUX_CD",
+  "typeset +x __minmux_reopen",
   'if [[ -f "${ZDOTDIR:-$HOME}/.zshenv" ]]; then source "${ZDOTDIR:-$HOME}/.zshenv"; fi',
   remoteHooks(ZSH_HOOKS, "zsh"),
   "# Reopen the folder this pane was in, once the user's own files have run: the first",
   "# prompt's hooks, first in line (so the folder they report is the new one).",
-  'if [[ -o interactive && -n "$__smterm_reopen" ]]; then',
-  "  __smterm_reopen_once() {",
+  'if [[ -o interactive && -n "$__minmux_reopen" ]]; then',
+  "  __minmux_reopen_once() {",
   "    local ret=$?",
-  "    precmd_functions=(${precmd_functions:#__smterm_reopen_once})",
-  '    __smterm_cd_to "$__smterm_reopen"',
-  "    unset __smterm_reopen",
+  "    precmd_functions=(${precmd_functions:#__minmux_reopen_once})",
+  '    __minmux_cd_to "$__minmux_reopen"',
+  "    unset __minmux_reopen",
   "    return $ret",
   "  }",
-  "  precmd_functions=(__smterm_reopen_once $precmd_functions)",
+  "  precmd_functions=(__minmux_reopen_once $precmd_functions)",
   "fi",
   REOPEN_CD_FN,
 ].join("\n")
@@ -110,13 +110,13 @@ export const REMOTE_ZSHENV = [
 // bash runs with --rcfile (never a login shell then): read the files a login bash would, in
 // its order (those usually source ~/.bashrc themselves), and behave like one on the way out.
 export const REMOTE_BASHRC = [
-  "# smterm remote integration — bash (loaded via bash --rcfile). Remove our temp dir.",
-  "export -n __smterm_nonce 2>/dev/null",
-  "__smterm_reopen=${__SMTERM_CD-}; unset __SMTERM_CD",
-  "export -n __smterm_reopen 2>/dev/null",
-  'case "${__SMTERM_TMP-}" in */smterm.*) command rm -rf -- "$__SMTERM_TMP" 2>/dev/null ;; esac',
-  "unset __SMTERM_TMP",
-  "SMTERM_SHARE_HISTORY=0 # the host's history settings are its own",
+  "# minmux remote integration — bash (loaded via bash --rcfile). Remove our temp dir.",
+  "export -n __minmux_nonce 2>/dev/null",
+  "__minmux_reopen=${__MINMUX_CD-}; unset __MINMUX_CD",
+  "export -n __minmux_reopen 2>/dev/null",
+  'case "${__MINMUX_TMP-}" in */minmux.*) command rm -rf -- "$__MINMUX_TMP" 2>/dev/null ;; esac',
+  "unset __MINMUX_TMP",
+  "MINMUX_SHARE_HISTORY=0 # the host's history settings are its own",
   'logout() { exit "$@"; }',
   'trap \'[[ -f "$HOME/.bash_logout" ]] && . "$HOME/.bash_logout"\' EXIT',
   "if [[ -f /etc/profile ]]; then source /etc/profile; fi",
@@ -127,36 +127,36 @@ export const REMOTE_BASHRC = [
   remoteHooks(BASH_HOOKS, "bash"),
   REOPEN_CD_FN,
   "# Reopen the folder this pane was in, now that the user's own files have run.",
-  'if [[ -n "${__smterm_reopen-}" ]]; then __smterm_cd_to "$__smterm_reopen"; fi',
-  "unset __smterm_reopen",
+  'if [[ -n "${__minmux_reopen-}" ]]; then __minmux_cd_to "$__minmux_reopen"; fi',
+  "unset __minmux_reopen",
 ].join("\n")
 
 const heredoc = (file: string, tag: string, body: string): string[] => {
   if (body.split("\n").includes(tag)) throw new Error(`remote bootstrap: ${tag} in its body`)
-  return [`__smterm_w <<'${tag}' >> "$d/${file}"`, body, tag]
+  return [`__minmux_w <<'${tag}' >> "$d/${file}"`, body, tag]
 }
 
-const osc = (kind: string) => `printf '\\033]${SMTERM_OSC};${kind};%s\\007' "$S"`
+const osc = (kind: string) => `printf '\\033]${MINMUX_OSC};${kind};%s\\007' "$S"`
 
 // Runs under sh (POSIX: dash, busybox, bash-as-sh). `S` is the challenge (set by the command).
 // Returns only on failure — the command then execs the plain login shell.
 export const PAYLOAD = [
-  ": smterm", // the command only evals a decoded payload that starts with this
+  ": minmux", // the command only evals a decoded payload that starts with this
   "set +f; unset IFS",
   osc("boot"), // it ran (whatever it picks next)
   "# Writes stdin to stdout with builtins only (no cat: each process costs a few ms).",
-  "__smterm_w() { while IFS= read -r __l; do printf '%s\\n' \"$__l\"; done; }",
+  "__minmux_w() { while IFS= read -r __l; do printf '%s\\n' \"$__l\"; done; }",
   "# The folder to reopen, from the answer: kept only on the machine that reported it (one alias",
   "# can reach several: round-robin logins), then decoded with arithmetic, one byte per field.",
-  "__smterm_where() {",
-  "  __SMTERM_CD=",
+  "__minmux_where() {",
+  "  __MINMUX_CD=",
   '  case "$1" in -|*[!a-z0-9_:.-]*|*:*:*) return ;; esac',
   "  c=${1%%:*}; r=${1#*:}",
   '  case "$r" in ""|*[!0-9a-f.]*) return ;; esac',
   "  h=$(uname -n 2>/dev/null); h=${h%%.*}",
   '  [ "$h" = "$c" ] || h=$(printf %s "$h" | tr A-Z a-z)',
   '  if [ "$h" != "$c" ]; then',
-  '    printf \'\\033[2m[smterm] not reopening the folder: this is %s, not %s\\033[0m\\n\' "$h" "$c"',
+  '    printf \'\\033[2m[minmux] not reopening the folder: this is %s, not %s\\033[0m\\n\' "$h" "$c"',
   "    return",
   "  fi",
   "  e=",
@@ -167,15 +167,15 @@ export const PAYLOAD = [
   '    e="$e\\\\$((v / 64))$((v / 8 % 8))$((v % 8))"',
   "  done",
   "  unset IFS; set +f",
-  '  __SMTERM_CD=$(printf "$e")',
-  "  export __SMTERM_CD",
+  '  __MINMUX_CD=$(printf "$e")',
+  "  export __MINMUX_CD",
   "}",
-  "__smterm_boot() {",
+  "__minmux_boot() {",
   "  s=${SHELL-}",
   '  case "${s##*/}" in bash|zsh) ;; *) return 1 ;; esac',
   '  [ -x "$s" ] || return 1',
   "  m=$(umask); umask 077",
-  '  d=$(mktemp -d "${TMPDIR:-/tmp}/smterm.XXXXXXXX" 2>/dev/null) || { umask "$m"; return 1; }',
+  '  d=$(mktemp -d "${TMPDIR:-/tmp}/minmux.XXXXXXXX" 2>/dev/null) || { umask "$m"; return 1; }',
   '  [ -d "$d" ] || { umask "$m"; return 1; }',
   "  trap 'command rm -rf -- \"$d\"; exit 1' HUP INT QUIT TERM",
   "  # The handshake: echo off (the answer must never show), raw, keys like ^C read as data,",
@@ -190,7 +190,7 @@ export const PAYLOAD = [
   "  while [ $k -lt 32 ]; do",
   "    k=$((k + 1)); l=",
   "    IFS= read -r l; r=$?",
-  '    case "$l" in *smterm:*) a=1; l=${l##*smterm:}; n=${l%%:*}; break ;; esac',
+  '    case "$l" in *minmux:*) a=1; l=${l##*minmux:}; n=${l%%:*}; break ;; esac',
   "    [ $r -eq 0 ] || break # nothing for 5 s",
   "  done",
   "  # No answer yet (a very slow link): wait out a late one, so it never lands in the shell.",
@@ -204,27 +204,27 @@ export const PAYLOAD = [
   '    command rm -rf -- "$d"; trap - HUP INT QUIT TERM; umask "$m"; return 1',
   "  fi",
   `  ${osc("ok")} # main hands the renderer the nonce only now`,
-  '  __smterm_where "$x"',
+  '  __minmux_where "$x"',
   '  case "${s##*/}" in',
   "  zsh)",
-  `    printf '__smterm_nonce=%s\\n' "$n" > "$d/.zshenv"`,
-  ...heredoc(".zshenv", "__SMTERM_ZSHENV__", REMOTE_ZSHENV),
+  `    printf '__minmux_nonce=%s\\n' "$n" > "$d/.zshenv"`,
+  ...heredoc(".zshenv", "__MINMUX_ZSHENV__", REMOTE_ZSHENV),
   '    trap - HUP INT QUIT TERM; umask "$m"',
-  "    SMTERM_USER_ZDOTDIR=${ZDOTDIR-}; ZDOTDIR=$d; SMTERM_ZDOTDIR=$d",
-  "    export SMTERM_USER_ZDOTDIR ZDOTDIR SMTERM_ZDOTDIR",
+  "    MINMUX_USER_ZDOTDIR=${ZDOTDIR-}; ZDOTDIR=$d; MINMUX_ZDOTDIR=$d",
+  "    export MINMUX_USER_ZDOTDIR ZDOTDIR MINMUX_ZDOTDIR",
   '    exec "$s" -l',
   "    ;;",
   "  bash)",
-  `    printf '__smterm_nonce=%s\\n' "$n" > "$d/bashrc"`,
-  ...heredoc("bashrc", "__SMTERM_BASHRC__", REMOTE_BASHRC),
+  `    printf '__minmux_nonce=%s\\n' "$n" > "$d/bashrc"`,
+  ...heredoc("bashrc", "__MINMUX_BASHRC__", REMOTE_BASHRC),
   '    trap - HUP INT QUIT TERM; umask "$m"',
-  "    __SMTERM_TMP=$d; export __SMTERM_TMP",
+  "    __MINMUX_TMP=$d; export __MINMUX_TMP",
   '    exec "$s" --rcfile "$d/bashrc" -i',
   "    ;;",
   "  esac",
   '  command rm -rf -- "$d"; trap - HUP INT QUIT TERM; umask "$m"; return 1',
   "}",
-  `__smterm_boot || ${osc("skip")} # the plain shell, next: main stops looking`,
+  `__minmux_boot || ${osc("skip")} # the plain shell, next: main stops looking`,
   "",
 ].join("\n")
 
@@ -242,7 +242,7 @@ export function remoteBootstrapCommand(challenge: string): string {
     "set -f",
     "IFS=",
     "p=$(printf %s $B|base64 -d 2>/dev/null)||p=$(printf %s $B|base64 -D 2>/dev/null)||p=",
-    "case $p in :?smterm*) eval $p;; esac",
+    "case $p in :?minmux*) eval $p;; esac",
     "exec ${SHELL:-/bin/sh} -l",
   ].join(";")
   return `exec sh -c '${body}'`
@@ -263,7 +263,7 @@ export function handshakeReply(nonce: string, reopen?: ReopenCwd): string {
     at && bytes && label && /^[a-z0-9_-]+$/.test(label) && bytes.length <= MAX_REOPEN_BYTES
       ? `${label}:${[...bytes].map((b) => b.toString(16).padStart(2, "0")).join(".")}`
       : "-"
-  return `smterm:${nonce}:${where}\r`
+  return `minmux:${nonce}:${where}\r`
 }
 
 // A pane stops looking after this much output: the hello comes right after login, so a
@@ -299,7 +299,7 @@ export class HelloWatch {
     challenge: string,
     private readonly reply: string,
   ) {
-    const mark = (kind: string) => `\x1b]${SMTERM_OSC};${kind};${challenge}\x07`
+    const mark = (kind: string) => `\x1b]${MINMUX_OSC};${kind};${challenge}\x07`
     this.bootMark = mark("boot")
     this.helloMark = mark("hello")
     this.okMark = mark("ok")
@@ -340,21 +340,21 @@ export class HelloWatch {
 const QUICK_FAILURE_MS = 120_000
 
 /** The host couldn't run the bootstrap: the pane ended on its own (not closed, replaced or
- *  quit by smterm, not killed by a signal — ^C at a password prompt), before it booted, soon
+ *  quit by minmux, not killed by a signal — ^C at a password prompt), before it booted, soon
  *  after starting, and not with ssh's own 255 (connection or auth failure). */
 export function integrationFailed(end: {
   booted: boolean
   exitCode: number
   signal: number
-  closedBySmterm: boolean
+  closedByMinmux: boolean
   livedMs: number
 }): boolean {
-  if (end.booted || end.closedBySmterm || end.signal) return false
+  if (end.booted || end.closedByMinmux || end.signal) return false
   return end.exitCode !== 255 && end.livedMs < QUICK_FAILURE_MS
 }
 
 export const INTEGRATION_FAILED_NOTE =
-  "\r\n\x1b[2m[smterm] This host couldn't start shell integration; reconnect for a plain shell.\x1b[0m\r\n"
+  "\r\n\x1b[2m[minmux] This host couldn't start shell integration; reconnect for a plain shell.\x1b[0m\r\n"
 
 /** `ssh -G` output sets a RemoteCommand (ssh prints the line only when one is set). */
 export const hasRemoteCommand = (sshG: string): boolean =>

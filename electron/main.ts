@@ -50,7 +50,19 @@ import { TranscriptTokens } from "./transcript-tokens"
 import { tokenEventsForBatch } from "./agent-tokens"
 import { AgentMetaTracker } from "./agent-meta"
 import { SessionLedger } from "./agent-sessions"
-import { displayName, profileNames, resolveProfile, scrubParentInstanceEnv } from "./profile"
+import {
+  displayName,
+  LEGACY_APP_NAME,
+  profileNames,
+  resolveProfile,
+  scrubParentInstanceEnv,
+} from "./profile"
+import {
+  legacyInstanceRunning,
+  markLegacyDirs,
+  migrateLegacyDirs,
+  pendingLegacyDirs,
+} from "./legacy-migrate"
 import { PaneGitService } from "./pane-git"
 import { SshService } from "./ssh-service"
 import { PendingSpawns, type PendingOutcome } from "./pending-spawns"
@@ -75,22 +87,22 @@ import {
 } from "../src/lib/file-preview"
 
 // This process's profile (a dev build is `dev`): picked before anything reads a path. An
-// invalid SMTERM_PROFILE stops here, synchronously — before any name, path or lock is set —
+// invalid MINMUX_PROFILE stops here, synchronously — before any name, path or lock is set —
 // so it can never fall back to (and write into) another profile's data. Then the env is
-// scrubbed of what a parent smterm set for its own pane (its hook file, pane id, our profile
+// scrubbed of what a parent minmux set for its own pane (its hook file, pane id, our profile
 // choice), so nothing we spawn — shells, editors, git — inherits it.
 const PROFILE_CHOICE = resolveProfile({
   flag: app.commandLine.hasSwitch("profile")
     ? app.commandLine.getSwitchValue("profile")
     : undefined,
-  env: process.env.SMTERM_PROFILE,
+  env: process.env.MINMUX_PROFILE ?? process.env.SMTERM_PROFILE, // the old name still picks one
   packaged: app.isPackaged,
 })
 if ("error" in PROFILE_CHOICE) {
   // macOS / Windows: a blocking error box (+ stderr for a terminal launch). Linux has no
   // dialog before ready — showErrorBox prints to stderr there itself.
-  if (process.platform !== "linux") console.error(`smterm: ${PROFILE_CHOICE.error}`)
-  dialog.showErrorBox("smterm can't start", PROFILE_CHOICE.error)
+  if (process.platform !== "linux") console.error(`minmux: ${PROFILE_CHOICE.error}`)
+  dialog.showErrorBox("minmux can't start", PROFILE_CHOICE.error)
   process.exit(1)
 }
 const PROFILE_NAMES = profileNames(PROFILE_CHOICE.profile)
@@ -118,7 +130,7 @@ interface PtySession {
   proc: IPty
   buffer: OutputBuffer
   sender: Electron.WebContents
-  coalescer?: OutputCoalescer // absent only in the SMTERM_NO_COALESCE=1 A/B baseline
+  coalescer?: OutputCoalescer // absent only in the MINMUX_NO_COALESCE=1 A/B baseline
   shell: string
   wslDistro?: string // for a WSL pane: the distro, so its Linux paths resolve to the right UNC share
   integrated: boolean // our shell integration (OSC 133 marks, claude wrapper) was injected
@@ -242,7 +254,7 @@ function createWindow() {
   })
 
   mainWindow = win
-  // Main owns the title ("smterm (dev)"): index.html's <title> would reset it on load.
+  // Main owns the title ("minmux (dev)"): index.html's <title> would reset it on load.
   win.on("page-title-updated", (e) => e.preventDefault())
   win.on("session-end", () => sessionLedger().freeze(60_000)) // Windows logout/shutdown — see onPower
   win.on("closed", () => {
@@ -255,7 +267,7 @@ function createWindow() {
   win.on("unmaximize", sendMax)
 
   // Load-test mode: surface the renderer's [PERF] report lines on stdout.
-  if (process.env.SMTERM_PERF === "1") {
+  if (process.env.MINMUX_PERF === "1") {
     win.webContents.on("console-message", (_e, _l, message) => {
       if (message.startsWith("[PERF]")) console.log(message)
     })
@@ -343,7 +355,7 @@ async function startAgentObservability(): Promise<void> {
     fs.writeFileSync(nativePath, buildHookSettings(eventsDir))
     hookSettingsPath = nativePath
     // WSL variant (Windows only): same physical dir, addressed via /mnt/c so an in-WSL
-    // `claude` can write into it. SMTERM_CLAUDE_SETTINGS is WSLENV-forwarded with /p, so
+    // `claude` can write into it. MINMUX_CLAUDE_SETTINGS is WSLENV-forwarded with /p, so
     // this file's Windows path is translated for claude to read.
     const mnt = process.platform === "win32" ? winToMnt(eventsDir) : null
     if (mnt) {
@@ -362,11 +374,11 @@ function settingsPath(): string {
   return path.join(configDir(), "settings.json")
 }
 
-/** ~/.config/smterm (%APPDATA%\smterm on Windows) — `smterm-<profile>` for another profile. */
-function configDir(): string {
+/** ~/.config/minmux (%APPDATA%\minmux on Windows) — `minmux-<profile>` for another profile. */
+function configDir(appName = PROFILE_NAMES.appName): string {
   return process.platform === "win32"
-    ? path.join(process.env.APPDATA ?? os.homedir(), PROFILE_NAMES.appName)
-    : path.join(os.homedir(), ".config", PROFILE_NAMES.appName)
+    ? path.join(process.env.APPDATA ?? os.homedir(), appName)
+    : path.join(os.homedir(), ".config", appName)
 }
 
 // The window's native background (shown before the renderer paints and in unpainted
@@ -441,10 +453,10 @@ function sendNonce(rec: PtySession): void {
 /** The env every spawned PTY starts from (process env + injection + our opt-outs). */
 function baseSpawnEnv(opts: SpawnOpts, injEnv?: Record<string, string>): Record<string, string> {
   // Shared-history opt-out: the injected scripts default SHARE_HISTORY on; pass
-  // SMTERM_SHARE_HISTORY=0 to disable. (For WSL, wslInjection lists it in $WSLENV
+  // MINMUX_SHARE_HISTORY=0 to disable. (For WSL, wslInjection lists it in $WSLENV
   // so it crosses the boundary.)
   const env = { ...process.env, ...(injEnv ?? {}) } as Record<string, string>
-  if (!shareHistoryEnabled()) env.SMTERM_SHARE_HISTORY = "0"
+  if (!shareHistoryEnabled()) env.MINMUX_SHARE_HISTORY = "0"
   // Tell agents (Claude Code, vim, …) our light/dark background via COLORFGBG — the
   // fallback when the OSC-11 background query can't complete in time (notably across
   // the wsl.exe hop). WSL forwards it over $WSLENV (listed in wslInjection).
@@ -473,7 +485,7 @@ function startPty(sender: Electron.WebContents, opts: SpawnOpts, spec: StartSpec
     cwd: spec.cwd,
     env: spec.env,
   })
-  const coalesce = process.env.SMTERM_NO_COALESCE !== "1"
+  const coalesce = process.env.MINMUX_NO_COALESCE !== "1"
   let markExited!: () => void
   const exited = new Promise<void>((res) => (markExited = res))
   const live: Drainable = { kill: (sig) => proc.kill(sig), exited }
@@ -520,7 +532,7 @@ function startPty(sender: Electron.WebContents, opts: SpawnOpts, spec: StartSpec
         booted: spec.remote.hello.booted,
         exitCode: e.exitCode,
         signal: e.signal ?? 0,
-        closedBySmterm: sessions.get(opts.id) !== rec || draining(),
+        closedByMinmux: sessions.get(opts.id) !== rec || draining(),
         livedMs: Date.now() - startedAt,
       })
     ) {
@@ -558,7 +570,7 @@ async function spawnRemote(
   // by a reloaded renderer.
   const meanwhile = outcome()
   if (meanwhile.killed) throw new Error("the pane was closed") // never an ssh with no pane
-  if (draining()) throw new Error("smterm is quitting")
+  if (draining()) throw new Error("minmux is quitting")
   if ("error" in plan) throw new Error(plan.error)
   // The host opted in to shell integration: its command bootstraps our hooks there, and main
   // answers its hello with a fresh nonce (never on the command line — see remote-bootstrap).
@@ -723,7 +735,7 @@ function registerIpc() {
   // output to the new renderer and replay recent history, rather than respawn.
   ipcMain.handle("pty:spawn", async (event, opts: SpawnOpts): Promise<SpawnResult> => {
     // nothing new may outlive the drain (or start once a quit is under way)
-    if (draining()) throw new Error("smterm is quitting")
+    if (draining()) throw new Error("minmux is quitting")
     // Still preparing (a reloaded renderer asking again): join that spawn — this renderer
     // takes over its output and size, and shares its result. Never a second spawn.
     const joined = pendingSpawns.join(opts.id, event.sender, opts.cols, opts.rows)
@@ -753,10 +765,10 @@ function registerIpc() {
     // use the /mnt/c-addressed variant; wslInjection forwards both vars over WSLENV (the
     // settings path with /p so its Windows form is translated for claude inside WSL).
     if (hookSettingsPath) {
-      env.SMTERM_CLAUDE_SETTINGS = wsl
+      env.MINMUX_CLAUDE_SETTINGS = wsl
         ? (hookSettingsPathWsl ?? hookSettingsPath)
         : hookSettingsPath
-      env.SMTERM_PANE_ID = opts.id
+      env.MINMUX_PANE_ID = opts.id
     }
     return startPty(event.sender, opts, {
       file: shellCmd,
@@ -912,7 +924,7 @@ function registerIpc() {
       memoryKB: m.memory?.workingSetSize ?? 0,
     })),
   )
-  ipcMain.handle("app:perf-mode", async () => process.env.SMTERM_PERF === "1")
+  ipcMain.handle("app:perf-mode", async () => process.env.MINMUX_PERF === "1")
 
   // Version + best-effort update check for the status-bar badge (off any hot path).
   ipcMain.handle("app:version", async () => app.getVersion())
@@ -1193,14 +1205,54 @@ function openFile(cwd: string, file: string, line?: number, col?: number): void 
 // App identity. Packaged builds get this from the bundle (electron-builder productName),
 // but in dev the app runs from Electron.app, so the dock/menu read "Electron" unless we
 // set it here. AppUserModelId groups the taskbar + routes notifications on Windows.
-// Per profile (a dev build is `smterm-dev`): the user-data dir — and with it the
+// Per profile (a dev build is `minmux-dev`): the user-data dir — and with it the
 // single-instance lock and localStorage — is the profile's own, unless the caller chose one.
 // The AppUserModelId stays shared: on Windows toasts only show for an id a Start Menu
-// shortcut registers, and only the installer's (com.smterm.app) exists.
-app.setName(displayName(PROFILE_NAMES)) // the menu / About name: "smterm (dev)", like the window
-app.setAppUserModelId("com.smterm.app")
+// shortcut registers, and only the installer's (com.minmux.app) exists.
+app.setName(displayName(PROFILE_NAMES)) // the menu / About name: "minmux (dev)", like the window
+app.setAppUserModelId("com.minmux.app")
 if (!app.commandLine.hasSwitch("user-data-dir")) {
   app.setPath("userData", path.join(app.getPath("appData"), PROFILE_NAMES.appName))
+}
+
+// The app was called smterm: a profile's first minmux launch copies its old state over (settings,
+// layout, resume ledger, localStorage) — at ready, before anything reads it. (legacy-migrate.ts)
+const LEGACY_DIR_NAME = profileNames(PROFILE_CHOICE.profile, LEGACY_APP_NAME).appName
+const LEGACY_USER_DATA = path.join(app.getPath("appData"), LEGACY_DIR_NAME)
+// An explicit --user-data-dir (the test driver) is fresh on purpose: carry no user data, and
+// don't look for a running smterm there — on macOS appData ignores $HOME, so a fake-HOME run
+// would find the real one. The config dir still follows $HOME.
+const CUSTOM_USER_DATA = app.commandLine.hasSwitch("user-data-dir")
+const LEGACY_PAIRS: (readonly [string, string])[] = [
+  [configDir(), configDir(LEGACY_DIR_NAME)],
+  ...(CUSTOM_USER_DATA ? [] : [[app.getPath("userData"), LEGACY_USER_DATA] as const]),
+]
+
+/** Carry the smterm state over once — but never from a running smterm: its live ledger would
+ *  resume its Claude sessions a second time here. Asks to quit it, or to start without it. */
+function migrateFromSmterm(): void {
+  if (!pendingLegacyDirs(LEGACY_PAIRS).length) return
+  while (!CUSTOM_USER_DATA && legacyInstanceRunning(LEGACY_USER_DATA)) {
+    const choice = dialog.showMessageBoxSync({
+      type: "info",
+      message: "Quit smterm to bring your sessions over",
+      detail:
+        "smterm is now minmux. On this first launch minmux brings over your smterm layout, " +
+        "settings and Claude sessions, but not while smterm is still running (its sessions " +
+        "would be resumed twice). Quit smterm, then choose Try Again.",
+      buttons: ["Try Again", "Start Without Them"],
+      defaultId: 0,
+      cancelId: 1,
+    })
+    if (choice === 1) {
+      markLegacyDirs(pendingLegacyDirs(LEGACY_PAIRS))
+      diag("legacy-migrate-declined")
+      return
+    }
+  }
+  const r = migrateLegacyDirs(LEGACY_PAIRS)
+  if (r.copied.length) diag("legacy-migrated", { copied: r.copied.join(", ") })
+  if (r.failed.length) diag("legacy-migrate-failed", { failed: r.failed.join("; ") })
 }
 
 // Single-instance guard. A second launch — an update-relaunch racing the old process, or
@@ -1219,6 +1271,7 @@ app.on("second-instance", () => {
 
 app.whenReady().then(async () => {
   if (!gotSingleInstanceLock) return // second instance — it's quitting; start nothing
+  migrateFromSmterm() // first thing: before any setting, layout or ledger is read or written
   // GUI-launched apps (Finder/Dock) inherit a bare launchd PATH, so shells can't find
   // Homebrew/cargo tools (starship, etc.). Import the login shell's real env before any
   // PTY spawns. Only when packaged — in dev the app is launched from a terminal that
@@ -1236,7 +1289,7 @@ app.whenReady().then(async () => {
   registerIpc()
   // Start the hook receiver BEFORE the window so hookSettingsPath is set before the
   // renderer can request the first pty:spawn — otherwise the initial pane launches
-  // without SMTERM_CLAUDE_SETTINGS and the `claude` wrapper never arms (M6).
+  // without MINMUX_CLAUDE_SETTINGS and the `claude` wrapper never arms (M6).
   await startAgentObservability()
   createWindow()
   startSettingsWatcher()

@@ -1,4 +1,4 @@
-# smterm
+# minmux
 
 Cross-platform terminal app (agent-runner focus). Multiple shell sessions in tabs + split panes;
 links open the OS browser; native notifications; per-session status. Docs live in `docs/` — see
@@ -17,7 +17,7 @@ Mono** (chrome) + FiraCode/JetBrains Mono (terminal). Visual design = `mux` (see
 ```
 electron/                 main process (Node) — see electron/CLAUDE.md
   main.ts                 BrowserWindow + every ipcMain handler + PTY registry + quit guard
-  preload.ts              contextBridge → window.smterm (mirrors src/lib/ipc.ts)
+  preload.ts              contextBridge → window.minmux (mirrors src/lib/ipc.ts)
   shell-integration.ts    inlined zsh/bash OSC-133/OSC-7 scripts, listShells (WSL), injection
   git.ts · pane-git.ts    changes panel (status/diff) · per-terminal branch + gh PR (sidebar)
   agent-hooks.ts          Claude hook-event file drops → AgentEvents (hook-writer builds them)
@@ -27,6 +27,7 @@ electron/                 main process (Node) — see electron/CLAUDE.md
   ssh-config.ts · ssh-service.ts  ~/.ssh/config → host list (watched) · spawn plans (trusted)
   pending-spawns.ts       one spawn per pane while an async (ssh) plan is built
   profile.ts              which profile this process is (dev build = `dev`): names + env scrub
+  legacy-migrate.ts       smterm → minmux: copy the old config / user-data dirs on first launch
 src/
   app.tsx · store.ts      compose + global effects/pollers · Zustand state + actions
   types.ts                Session, PaneLeaf/PaneNode (pane = surfaces), Tab, DropZone
@@ -37,7 +38,7 @@ src/
   settings/               schema (merge/validate) · themes (families × dark/light) · io
   components/             top-bar, sidebar, terminal-pane (surface tabs, drag & drop),
                           pane-layout, theme-picker, close-pane-dialog, palettes/panels, …
-.claude/skills/run-smterm drive the BUILT app with Playwright (real-app verification)
+.claude/skills/run-minmux drive the BUILT app with Playwright (real-app verification)
 ```
 
 ## Commands
@@ -62,12 +63,12 @@ src/
   hot path** (PTY → renderer → xterm). New background / IPC / hook / integration work must be async
   and must never block keystrokes, rendering, or (for agent integrations) the agent's own loop; keep
   it on a channel separate from terminal data and throttle it. When in doubt, measure with the
-  `SMTERM_PERF=1` harness (`docs/PERF.md`). Weigh this in every design, not as an afterthought.
+  `MINMUX_PERF=1` harness (`docs/PERF.md`). Weigh this in every design, not as an afterthought.
 - **Tests with the feature**: push logic into pure functions (pane-tree, session-status,
   shell-integration parsers) and test those; the risky code earns real tests.
 - **Lint is a gate** (pre-commit hook): `tsc` (renderer + electron), eslint, prettier. Run `make fmt` first.
 - **Verify in the real app** when a change touches terminals, focus, rendering, or Claude
-  integration (Vitest can't load node-pty/WebGL): the `run-smterm` skill. Never run the app
+  integration (Vitest can't load node-pty/WebGL): the `run-minmux` skill. Never run the app
   against the user's real `HOME` — it overwrites their saved layout and hook settings.
 
 ## Invariants
@@ -96,7 +97,7 @@ Rules the code relies on but can't enforce — most past review findings broke o
 One-line landmine flags; full _why_ + fixes in **`docs/GOTCHAS.md`** (anchors below). Main-process
 rules also in `electron/CLAUDE.md` (loaded on demand). Design detail in `docs/ARCHITECTURE.md`.
 
-- **Renderer ↔ main only via `src/lib/ipc.ts`** (preload `window.smterm`); no Electron in React.
+- **Renderer ↔ main only via `src/lib/ipc.ts`** (preload `window.minmux`); no Electron in React.
   Terminals live in `terminal-manager.ts`, outside React (re-attach, don't respawn). → GOTCHAS #seam
 - **Terminal fonts must be bundled `@font-face`**; load explicitly before the WebGL atlas builds.
   Ligatures (WebGL-only) default **off**. → GOTCHAS #fonts
@@ -110,9 +111,9 @@ rules also in `electron/CLAUDE.md` (loaded on demand). Design detail in `docs/AR
 - **zsh/bash history is shared across panes** — integration sets `SHARE_HISTORY`/`histappend`
   (incremental write → also survives close); opt-out via `shareHistory` setting. → GOTCHAS #history
 - **A dev build is the `dev` profile**: own user-data dir (the lock), config dir
-  (`~/.config/smterm-dev`) and shell-integration dir, so it runs beside the installed app;
-  `SMTERM_PROFILE=<name>` picks another (dev builds only; `--profile=<name>` for either).
-  Paths come from `configDir()`, never "smterm". → GOTCHAS #profiles
+  (`~/.config/minmux-dev`) and shell-integration dir, so it runs beside the installed app;
+  `MINMUX_PROFILE=<name>` picks another (dev builds only; `--profile=<name>` for either).
+  Paths come from `configDir()`, never "minmux". → GOTCHAS #profiles
 - **`node-pty` is a native module** — `npx electron-rebuild -o node-pty`; not unit-testable in Vitest. → GOTCHAS #node-pty
 - **On Windows the app spawns `wsl.exe`** — never runs _inside_ WSL. → GOTCHAS #windows
 - **Hidden surfaces (and visited background tabs) are parked** — opened off-screen,
