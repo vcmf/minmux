@@ -12,7 +12,7 @@ import { FilesPanel } from "./components/files-panel"
 import { PaneLayout } from "./components/pane-layout"
 import { SettingsPanel } from "./components/settings-panel"
 import { FilePreview } from "./components/file-preview"
-import { ClosePaneDialog } from "./components/close-pane-dialog"
+import { CloseConfirmDialog } from "./components/close-confirm-dialog"
 import { RightPanelResizer } from "./components/right-panel-resizer"
 import { useActiveWorkCwd, getActiveWsl } from "./lib/use-active-cwd"
 import { claudeWorkDirs, keepPrs, planGitPoll, settleInAnswers } from "./lib/agent-dirs"
@@ -490,8 +490,8 @@ function App() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const k = e.key.toLowerCase()
-      // The close-pane dialog is modal: no palette / find / new terminal behind it.
-      if (useStore.getState().closePaneConfirm) return
+      // The close confirm is modal: no palette / find / new terminal behind it.
+      if (useStore.getState().closeConfirm) return
       if (appShortcut(e, { isMac }) === "new-surface") {
         e.preventDefault()
         if (e.repeat) return // holding the chord must not spawn a shell per key-repeat
@@ -563,7 +563,7 @@ function App() {
       {hostPickerOpen && <HostPicker />}
       {settingsOpen && <SettingsPanel />}
       <FilePreview />
-      <ClosePaneDialog />
+      <CloseConfirmDialog />
     </div>
   )
 }

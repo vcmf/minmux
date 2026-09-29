@@ -13,6 +13,7 @@ import {
   Plus,
   Rows,
   Terminal,
+  X,
 } from "@phosphor-icons/react"
 import { activeTheme, useStore } from "../store"
 import { sessionColor } from "../lib/session-color"
@@ -224,9 +225,13 @@ export function Sidebar() {
                     </span>
                   )}
                 </div>
-                <span className="tree-meta status-faint">
+                <span className="tree-meta status-faint tree-swap-meta">
                   {paneCount} {paneCount === 1 ? "pane" : "panes"}
                 </span>
+                <RowClose
+                  title="Close session"
+                  onClose={() => useStore.getState().requestCloseTab(tab.id)}
+                />
               </div>
 
               {open &&
@@ -347,12 +352,16 @@ export function Sidebar() {
                       </div>
                       {(s.status !== "attention" || ui.word !== "needs input") && (
                         <span
-                          className="tree-meta"
+                          className="tree-meta tree-swap-meta"
                           style={{ color: `var(--${ui.dot === "hollow" ? "faint" : ui.dot})` }}
                         >
                           {ui.word}
                         </span>
                       )}
+                      <RowClose
+                        title="Close terminal"
+                        onClose={() => useStore.getState().requestCloseTerminal(tab.id, id)}
+                      />
                       <span className={`dot ${ui.dot}${ui.pulse ? " pulse" : ""}`} />
                     </div>
                   )
@@ -454,6 +463,35 @@ function DirLines({
       </span>
       {inGitFor(inGit, work.cwd)?.pr && <PrLine pr={inGit!.pr!} />}
     </>
+  )
+}
+
+/** A row's hover ×: takes the meta's place while the row is hovered / focused (CSS only). */
+function RowClose({ title, onClose }: { title: string; onClose: () => void }) {
+  return (
+    <button
+      className="tree-close"
+      title={title}
+      aria-label={title}
+      // The row's mousedown selects / focuses it — closing must not; nor may the button take
+      // focus (the terminal you're typing in keeps it; a dialog focuses its own button).
+      onMouseDown={(e) => {
+        e.stopPropagation()
+        e.preventDefault()
+      }}
+      onClick={(e) => {
+        e.stopPropagation()
+        onClose()
+        // Closed at once (no dialog): keep typing where you were — or in the terminal that
+        // took over if you closed the focused one.
+        const s = useStore.getState()
+        if (s.closeConfirm) return
+        const sid = s.tabs.find((t) => t.id === s.activeTabId)?.activeSessionId
+        if (sid) requestAnimationFrame(() => TerminalManager.focus(sid))
+      }}
+    >
+      <X size={12} />
+    </button>
   )
 }
 

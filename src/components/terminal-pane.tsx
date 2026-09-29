@@ -291,7 +291,7 @@ export function TerminalPane({ pane, tabId }: { pane: PaneLeaf; tabId: string })
                 }}
                 // Middle-click closes a surface (browser convention).
                 onAuxClick={(e) => {
-                  if (e.button === 1 && multi) useStore.getState().closeSurface(tabId, id)
+                  if (e.button === 1 && multi) useStore.getState().requestCloseTerminal(tabId, id)
                 }}
               >
                 {(() => {
@@ -322,7 +322,8 @@ export function TerminalPane({ pane, tabId }: { pane: PaneLeaf; tabId: string })
                     title="Close terminal"
                     onMouseDown={(e) => {
                       e.stopPropagation()
-                      if (e.button === 0) useStore.getState().closeSurface(tabId, id)
+                      e.preventDefault() // keep focus off this button: the dialog focuses its own
+                      if (e.button === 0) useStore.getState().requestCloseTerminal(tabId, id)
                     }}
                   >
                     <X size={10} />

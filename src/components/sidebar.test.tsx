@@ -560,3 +560,30 @@ describe("Sidebar — Remote header", () => {
     expect(document.querySelector(".remote-status")).toBeNull()
   })
 })
+
+describe("Sidebar — hover × closes (through the confirm rules)", () => {
+  it("session row: one idle terminal closes at once; several ask first", () => {
+    st().newTab(testShell)
+    const { unmount } = render(<Sidebar />)
+    fireEvent.click(screen.getByTitle("Close session"))
+    expect(st().tabs).toHaveLength(0)
+    unmount()
+    st().newTab(testShell)
+    st().splitActive("row")
+    render(<Sidebar />)
+    fireEvent.click(screen.getByTitle("Close session"))
+    expect(st().closeConfirm).toMatchObject({ kind: "tab", count: 2 })
+    expect(st().tabs).toHaveLength(1)
+  })
+
+  it("terminal row: closes that terminal (idle), without focusing its row first", () => {
+    st().newTab(testShell)
+    st().splitActive("row")
+    const [a] = allSessionIds(st().tabs[0]!.root)
+    render(<Sidebar />)
+    const close = screen.getAllByTitle("Close terminal")[0]!
+    fireEvent.mouseDown(close)
+    fireEvent.click(close)
+    expect(allSessionIds(st().tabs[0]!.root)).not.toContain(a)
+  })
+})
