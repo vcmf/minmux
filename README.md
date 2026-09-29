@@ -17,7 +17,7 @@
 <p align="center">If minmux looks useful to you, a ⭐ helps other people find it.</p>
 
 <p align="center">
-  <img src="docs/media/screenshot.jpg" alt="minmux running four agent sessions in split panes, with the Agents board on the right" width="100%" />
+  <img src="docs/media/screenshot.jpg" alt="minmux in the light theme: sessions with their PRs in the sidebar, a diff in split panes, and the Agents board on the right" width="100%" />
 </p>
 
 **minmux** is a fast, cross-platform terminal (tabs, split panes, real shells) for people who run
@@ -76,6 +76,10 @@ irm https://raw.githubusercontent.com/vcmf/minmux/main/install.ps1 | iex
     <td><b>Every session and pane at a glance.</b> The sidebar tree shows each session, its panes, and a status dot: running, needs input, or idle.</td>
   </tr>
   <tr>
+    <td width="42%"><img src="docs/media/feat-ssh.jpg" width="100%" alt="Connect to host picker listing hosts from ~/.ssh/config, recent first" /></td>
+    <td><b>SSH sessions.</b> Your <code>~/.ssh/config</code> hosts in one picker, recent first. Enter opens a tab, ⌥Enter splits right, ⇧Enter splits down. It runs your own <code>ssh</code>, so keys, agents and 2FA prompts work as usual, and splits stay on the host. <a href="#ssh-hosts">More below.</a></td>
+  </tr>
+  <tr>
     <td width="42%"><img src="docs/media/feat-changes.jpg" width="100%" alt="Changes panel showing a git diff" /></td>
     <td><b>Changes panel.</b> A live git diff for the focused pane's working directory, with per-file counts and the full unified diff.</td>
   </tr>
@@ -86,6 +90,10 @@ irm https://raw.githubusercontent.com/vcmf/minmux/main/install.ps1 | iex
   <tr>
     <td width="42%"><img src="docs/media/feat-file-preview.jpg" width="100%" alt="Inline file preview open over the terminal" /></td>
     <td><b>Open a file and read it.</b> Click a file to open an inline preview and read what an agent wrote, without leaving the terminal.</td>
+  </tr>
+  <tr>
+    <td width="42%"><img src="docs/media/feat-settings.jpg" width="100%" alt="Settings with the theme picker: Minimal, Tokyo Night, Catppuccin and Gruvbox in their light variants" /></td>
+    <td><b>Themes and settings.</b> Minimal, Tokyo Night, Catppuccin and Gruvbox, each in dark and light, or following the system. Fonts, size and line height sit right below, all backed by one <code>settings.json</code>.</td>
   </tr>
 </table>
 
