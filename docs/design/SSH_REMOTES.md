@@ -324,7 +324,11 @@ hosts error once), so the user chooses. To make that choice easy to find, in `as
 first split (or new terminal) of an ssh pane on a host no entry mentions shows a one-line
 hint on the new pane: **Turn on** (writes `alias`; applies from its next connection) /
 **Never** (writes `!alias`) / × (not now: not asked again for that host this run).
-The host menu's toggle and Settings → SSH → Shell integration change the same two keys.
+The host menu's toggle and Settings → SSH → Shell integration change the same two keys. The hint
+stays on the split it was offered on (a second split doesn't move it and resize that pane),
+goes when that pane closes, and hides as soon as the host is decided elsewhere. An older build
+ignores `integrationMode`: after a downgrade, "Off" falls back to the list alone (and "All
+hosts" to the list only, the safe way).
 
 **Two channels** (`electron/remote-bootstrap.ts`, pure and tested). #78 showed that nothing
 variable may travel in text the host's login shell parses (fish `\'`, cmd.exe `%VAR%`), and

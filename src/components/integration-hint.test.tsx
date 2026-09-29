@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest"
-import { fireEvent, render, screen } from "@testing-library/react"
+import { act, fireEvent, render, screen } from "@testing-library/react"
 import { IntegrationHint } from "./integration-hint"
 import { useStore } from "../store"
 import { resetStore, testHost, testShell } from "../test/helpers"
@@ -47,5 +47,18 @@ describe("IntegrationHint", () => {
     fireEvent.click(screen.getByLabelText("Not now"))
     expect(st().integrationHint).toBeNull()
     expect(st().settings.ssh.integration).toEqual([])
+  })
+
+  it("hides once the host is decided elsewhere (host menu, Settings)", () => {
+    const { container } = render(<IntegrationHint sessionId={st().integrationHint!.sessionId} />)
+    act(() => st().toggleHostIntegration("dim0")) // the host menu
+    expect(container).toBeEmptyDOMElement()
+  })
+
+  it("its buttons never take focus (keys typed next go to the shell)", () => {
+    render(<IntegrationHint sessionId={st().integrationHint!.sessionId} />)
+    for (const b of ["Turn on", "Never"]) {
+      expect(fireEvent.mouseDown(screen.getByText(b))).toBe(false) // default (focus) prevented
+    }
   })
 })

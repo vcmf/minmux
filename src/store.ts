@@ -270,6 +270,12 @@ function splitActivePane(
   }
 }
 
+/** Whether a hint for `alias` still has a question to ask: ask mode, and no entry decides it. */
+export const hintStillAsks = (
+  alias: string,
+  ssh: { integrationMode: string; integration: string[] },
+): boolean => ssh.integrationMode === "ask" && undecided(alias, ssh.integration)
+
 /** A split of an ssh pane on a host you never chose for (ask mode): offer shell integration on
  *  the new pane, once per host per run — it's what makes a split open in the same folder. */
 function hintFor(state: AppState, shell: ShellOption, next: Partial<AppState>): Partial<AppState> {
@@ -278,6 +284,11 @@ function hintFor(state: AppState, shell: ShellOption, next: Partial<AppState>): 
   const tab = next.tabs?.find((t) => t.id === state.activeTabId)
   if (!alias || !tab || ssh.integrationMode !== "ask") return {}
   if (!undecided(alias, ssh.integration) || state.hintDismissed.includes(alias)) return {}
+  // Already offered on a split of this host: it stays there (moving it would resize that pane
+  // under whatever now runs in it).
+  if (state.integrationHint?.alias === alias && state.sessions[state.integrationHint.sessionId]) {
+    return {}
+  }
   return { integrationHint: { sessionId: tab.activeSessionId, alias, state: "ask" } }
 }
 
@@ -312,7 +323,14 @@ function dropSessions(
   ids: string[],
 ): Pick<
   AppState,
-  "sessions" | "paneRoot" | "agentMeta" | "paneGit" | "resume" | "remotePhase" | "remoteDetail"
+  | "sessions"
+  | "paneRoot"
+  | "agentMeta"
+  | "paneGit"
+  | "resume"
+  | "remotePhase"
+  | "remoteDetail"
+  | "integrationHint"
 > {
   const sessions = { ...state.sessions }
   const paneRoot = { ...state.paneRoot }
@@ -331,7 +349,19 @@ function dropSessions(
     delete paneRoot[id] // don't leak the pane's root override
     delete agentMeta[id] // …or its Claude accent
   }
-  return { sessions, paneRoot, agentMeta, paneGit, resume, remotePhase, remoteDetail }
+  // The hint goes with the pane it was on (closing it isn't an answer: a later split asks again).
+  const hint = state.integrationHint
+  const integrationHint = hint && ids.includes(hint.sessionId) ? null : hint
+  return {
+    sessions,
+    paneRoot,
+    agentMeta,
+    paneGit,
+    resume,
+    remotePhase,
+    remoteDetail,
+    integrationHint,
+  }
 }
 
 /** Remove a tab; if it was active, the last remaining tab takes over. */
@@ -518,7 +548,9 @@ export const useStore = create<AppState>((set, get) => ({
     const hint = st.integrationHint
     if (!hint) return
     const ssh = st.settings.ssh
-    if (choice === "dismiss") {
+    // Decided meanwhile (the host menu, Settings): nothing left to ask; never write behind it.
+    const stale = hint.state === "ask" && !hintStillAsks(hint.alias, ssh)
+    if (choice === "dismiss" || stale) {
       return set({
         integrationHint: null,
         hintDismissed: [...st.hintDismissed.filter((a) => a !== hint.alias), hint.alias],

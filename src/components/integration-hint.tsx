@@ -1,5 +1,5 @@
 import { FolderOpen, X } from "@phosphor-icons/react"
-import { useStore } from "../store"
+import { hintStillAsks, useStore } from "../store"
 import { TerminalManager } from "../terminal/terminal-manager"
 
 /** A one-line offer on a split of an ssh pane whose host has no shell integration (ask
@@ -9,17 +9,23 @@ export function IntegrationHint({ sessionId }: { sessionId: string }) {
   const hint = useStore((s) =>
     s.integrationHint?.sessionId === sessionId ? s.integrationHint : null,
   )
-  if (!hint) return null
+  // Decided meanwhile (the host menu, Settings → Off / All hosts): the question is gone.
+  const asks = useStore((s) => !!hint && hintStillAsks(hint.alias, s.settings.ssh))
+  if (!hint || (hint.state === "ask" && !asks)) return null
   const answer = (choice: "on" | "never" | "dismiss") => {
     useStore.getState().answerIntegrationHint(choice)
-    if (choice !== "on") requestAnimationFrame(() => TerminalManager.focus(sessionId))
+    requestAnimationFrame(() => TerminalManager.focus(sessionId)) // typing goes on in the shell
   }
   const done = () => {
     useStore.getState().answerIntegrationHint("dismiss")
     requestAnimationFrame(() => TerminalManager.focus(sessionId))
   }
-  // The pane's own mousedown focuses its terminal: keep it from eating the click.
-  const stop = (e: React.MouseEvent) => e.stopPropagation()
+  // The pane's own mousedown focuses its terminal: keep it from eating the click, and keep the
+  // button from taking focus (keys typed next belong to the shell, not to "OK").
+  const stop = (e: React.MouseEvent) => {
+    e.stopPropagation()
+    e.preventDefault()
+  }
   if (hint.state === "on") {
     return (
       <div className="resume-banner ok integration-hint" role="status">
@@ -43,7 +49,7 @@ export function IntegrationHint({ sessionId }: { sessionId: string }) {
       <FolderOpen size={13} />
       <span
         className="hint-text"
-        title={`Splits of ${hint.alias} open at home. With shell integration (smterm's prompt hooks, sent inline for each session) they open in the same folder, and reconnects and relaunches do too.`}
+        title={`Splits of ${hint.alias} open at home. With shell integration (smterm's prompt hooks, sent inline for each session) they open in the same folder, and reconnects and relaunches do too — unless its ssh config runs a RemoteCommand.`}
       >
         Open splits of <b>{hint.alias}</b> in the same folder?
       </span>

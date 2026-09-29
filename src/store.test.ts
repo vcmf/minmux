@@ -1316,4 +1316,31 @@ describe("store — the shell-integration hint on an ssh split", () => {
     st().newSurface()
     expect(st().integrationHint).toBeNull()
   })
+
+  it("stays on the split it was offered on (a second split doesn't move it)", () => {
+    openWeb()
+    st().splitActive("row")
+    const first = st().integrationHint!.sessionId
+    st().splitActive("row")
+    expect(st().integrationHint!.sessionId).toBe(first)
+  })
+
+  it("goes with its pane when that pane closes (and a later split asks again)", () => {
+    openWeb()
+    st().splitActive("row")
+    const tab = st().tabs[0]!
+    st().closeSurface(tab.id, st().integrationHint!.sessionId)
+    expect(st().integrationHint).toBeNull()
+    st().splitActive("row")
+    expect(st().integrationHint).not.toBeNull()
+  })
+
+  it("decided meanwhile (Settings → Off): Turn on writes nothing", () => {
+    openWeb()
+    st().splitActive("row")
+    ssh({ integrationMode: "off" })
+    st().answerIntegrationHint("on")
+    expect(st().settings.ssh.integration).toEqual([])
+    expect(st().integrationHint).toBeNull()
+  })
 })
