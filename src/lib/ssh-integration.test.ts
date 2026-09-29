@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { integrationOn, setIntegration } from "./ssh-integration"
+import { declineIntegration, integrationOn, setIntegration, undecided } from "./ssh-integration"
 
 describe("integrationOn", () => {
   it("is off unless something matches", () => {
@@ -38,5 +38,37 @@ describe("setIntegration", () => {
         expect(integrationOn("gpu", setIntegration(list, "gpu", on))).toBe(on)
       }
     }
+  })
+})
+
+describe("integration modes", () => {
+  it("all: every host but its exceptions; off: none", () => {
+    expect(integrationOn("gpu", [], "all")).toBe(true)
+    expect(integrationOn("prod-1", ["!prod-*"], "all")).toBe(false)
+    expect(integrationOn("prod-1", ["!prod-*", "prod-1"], "all")).toBe(true) // its own entry wins
+    expect(integrationOn("gpu", ["gpu"], "off")).toBe(false)
+  })
+
+  it("toggling a host says what was asked, in every mode", () => {
+    for (const mode of ["ask", "all"] as const) {
+      for (const list of [[], ["*"], ["!*"], ["!prod-*"], ["gpu"], ["!gpu"]]) {
+        for (const on of [true, false]) {
+          expect(integrationOn("gpu", setIntegration(list, "gpu", on, mode), mode)).toBe(on)
+        }
+      }
+    }
+  })
+
+  it("undecided: no entry mentions the host (a hint may ask)", () => {
+    expect(undecided("gpu", [])).toBe(true)
+    expect(undecided("gpu", ["web"])).toBe(true)
+    expect(undecided("gpu", ["!gpu"])).toBe(false)
+    expect(undecided("gpu", ["g*"])).toBe(false)
+    expect(undecided("gpu", ["!g*"])).toBe(false)
+  })
+
+  it("declining writes an explicit !alias", () => {
+    expect(declineIntegration(["gpu", "web"], "GPU")).toEqual(["web", "!GPU"])
+    expect(integrationOn("gpu", declineIntegration(["*"], "gpu"), "all")).toBe(false)
   })
 })

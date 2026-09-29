@@ -33,6 +33,8 @@ export function resetStore() {
     settingsOpen: false,
     paletteOpen: false,
     hostPickerOpen: false,
+    integrationHint: null,
+    hintDismissed: [],
     sshRecent: [],
     searchOpen: false,
     rightView: null,

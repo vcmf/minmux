@@ -123,6 +123,7 @@ describe("ssh settings", () => {
       autoReconnect: true,
       colors: {},
       integration: [],
+      integrationMode: "ask",
     })
     expect(mergeSettings({}).ssh).toEqual(defaultSettings.ssh)
     expect(mergeSettings({ ssh: "nope" }).ssh).toEqual(defaultSettings.ssh)
@@ -148,6 +149,7 @@ describe("ssh settings", () => {
       autoReconnect: true,
       colors: { "prod-*": "red" },
       integration: ["gpu-*", "!gpu-old"],
+      integrationMode: "ask",
     })
   })
 

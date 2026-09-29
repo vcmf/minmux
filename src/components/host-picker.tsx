@@ -23,6 +23,7 @@ export function HostPicker() {
   const loaded = useStore((s) => s.sshHostsLoaded)
   const pinned = useStore((s) => s.settings.ssh.pinned)
   const integration = useStore((s) => s.settings.ssh.integration)
+  const mode = useStore((s) => s.settings.ssh.integrationMode)
   const colors = useStore((s) => s.settings.ssh.colors)
   const recent = useStore((s) => s.sshRecent)
   const connected = useStore(useShallow((s) => connectedHostIds(s.sessions, s.remotePhase)))
@@ -182,7 +183,8 @@ export function HostPicker() {
             items={hostMenuItems({
               pinned: pinned.includes(menu.host.hostId),
               native: menu.host.env === "native",
-              integration: integrationOn(menu.host.label, integration),
+              integration:
+                mode === "off" ? null : integrationOn(menu.host.label, integration, mode),
             })}
             onSelect={(id) => {
               if (id === "open" || id === "splitRight" || id === "splitDown") close()
