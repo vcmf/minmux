@@ -2,7 +2,13 @@ import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
-import { MIGRATED_MARKER, migrateLegacyDirs } from "./legacy-migrate"
+import {
+  legacyInstanceRunning,
+  markLegacyDirs,
+  MIGRATED_MARKER,
+  migrateLegacyDirs,
+  pendingLegacyDirs,
+} from "./legacy-migrate"
 
 describe("migrateLegacyDirs", () => {
   let root: string
@@ -67,20 +73,16 @@ describe("migrateLegacyDirs", () => {
   })
 
   it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
-    "keeps going past an entry it can't read, and retries next launch (dir left unmarked)",
+    "keeps going past an entry it can't read, and reports it",
     () => {
       write(at("smterm", "settings.json"), "s")
       write(at("smterm", "workspace.json"), "w")
-      fs.chmodSync(at("smterm", "settings.json"), 0o000) // as a file locked by a running smterm
+      fs.chmodSync(at("smterm", "settings.json"), 0o000) // as a file locked by another process
       const r = migrateLegacyDirs([[at("minmux"), at("smterm")]])
       fs.chmodSync(at("smterm", "settings.json"), 0o644)
       expect(r.failed).toHaveLength(1)
       expect(read(at("minmux", "workspace.json"))).toBe("w")
       expect(fs.existsSync(at("minmux", "settings.json.migrating"))).toBe(false)
-      expect(fs.existsSync(at("minmux", MIGRATED_MARKER))).toBe(false)
-      expect(migrateLegacyDirs([[at("minmux"), at("smterm")]]).copied).toEqual([
-        at("minmux", "settings.json"),
-      ])
     },
   )
 
@@ -101,5 +103,25 @@ describe("migrateLegacyDirs", () => {
       [at("minmux"), at("smterm")],
     ])
     expect(r.copied).toEqual([at("minmux", "settings.json")])
+  })
+
+  it("lists only the dirs still to carry, and a declined one stops being asked about", () => {
+    write(at("smterm", "settings.json"))
+    const pairs = [[at("minmux"), at("smterm")] as const, [at("x"), at("gone")] as const]
+    expect(pendingLegacyDirs(pairs)).toEqual([pairs[0]])
+    markLegacyDirs(pendingLegacyDirs(pairs))
+    expect(pendingLegacyDirs(pairs)).toEqual([])
+    expect(fs.existsSync(at("minmux", "settings.json"))).toBe(false) // declined: nothing copied
+  })
+
+  it.skipIf(process.platform === "win32")("sees a running smterm by its SingletonLock", () => {
+    fs.mkdirSync(at("smterm"))
+    expect(legacyInstanceRunning(at("smterm"))).toBe(false) // no lock
+    fs.symlinkSync("my-mac.local-4242", at("smterm", "SingletonLock"))
+    expect(legacyInstanceRunning(at("smterm"), (pid) => pid === 4242)).toBe(true)
+    expect(legacyInstanceRunning(at("smterm"), () => false)).toBe(false) // stale lock
+    fs.rmSync(at("smterm", "SingletonLock"))
+    fs.symlinkSync(`host-${process.pid}`, at("smterm", "SingletonLock"))
+    expect(legacyInstanceRunning(at("smterm"))).toBe(true) // the real liveness check
   })
 })

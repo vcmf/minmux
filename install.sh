@@ -43,9 +43,14 @@ case "$os" in
     mv "$tmp/$app" "$dest/$app"
     xattr -dr com.apple.quarantine "$dest/$app" 2>/dev/null || true
     # The app used to be called smterm: drop the old bundle so there's one app, not two
-    # (its settings and layout are carried over on first launch).
+    # (minmux brings its settings and layout over on first launch). Never while it runs —
+    # this script is usually pasted into one of its panes.
     if [ "$app" = minmux.app ] && [ -d "$dest/smterm.app" ]; then
-      rm -rf "$dest/smterm.app" && say "removed the old $dest/smterm.app (now minmux)"
+      if pgrep -f "$dest/smterm.app/Contents/MacOS/" >/dev/null 2>&1; then
+        say "smterm is now minmux: quit smterm, then delete $dest/smterm.app"
+      else
+        rm -rf "$dest/smterm.app" && say "removed the old $dest/smterm.app (now minmux)"
+      fi
     fi
     say "installed to $dest/$app"
     printf '\nDone. Launch it from Spotlight, or: open "%s/%s"\n\n' "$dest" "$app"

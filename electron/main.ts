@@ -57,7 +57,12 @@ import {
   resolveProfile,
   scrubParentInstanceEnv,
 } from "./profile"
-import { migrateLegacyDirs } from "./legacy-migrate"
+import {
+  legacyInstanceRunning,
+  markLegacyDirs,
+  migrateLegacyDirs,
+  pendingLegacyDirs,
+} from "./legacy-migrate"
 import { PaneGitService } from "./pane-git"
 import { SshService } from "./ssh-service"
 import { PendingSpawns, type PendingOutcome } from "./pending-spawns"
@@ -90,7 +95,7 @@ const PROFILE_CHOICE = resolveProfile({
   flag: app.commandLine.hasSwitch("profile")
     ? app.commandLine.getSwitchValue("profile")
     : undefined,
-  env: process.env.MINMUX_PROFILE,
+  env: process.env.MINMUX_PROFILE ?? process.env.SMTERM_PROFILE, // the old name still picks one
   packaged: app.isPackaged,
 })
 if ("error" in PROFILE_CHOICE) {
@@ -1211,15 +1216,44 @@ if (!app.commandLine.hasSwitch("user-data-dir")) {
 }
 
 // The app was called smterm: a profile's first minmux launch copies its old state over (settings,
-// layout, resume ledger, localStorage) before anything reads it. (electron/legacy-migrate.ts)
+// layout, resume ledger, localStorage) — at ready, before anything reads it. (legacy-migrate.ts)
 const LEGACY_DIR_NAME = profileNames(PROFILE_CHOICE.profile, LEGACY_APP_NAME).appName
-const MIGRATED = migrateLegacyDirs([
+const LEGACY_USER_DATA = path.join(app.getPath("appData"), LEGACY_DIR_NAME)
+// An explicit --user-data-dir (the test driver) is fresh on purpose: carry no user data, and
+// don't look for a running smterm there — on macOS appData ignores $HOME, so a fake-HOME run
+// would find the real one. The config dir still follows $HOME.
+const CUSTOM_USER_DATA = app.commandLine.hasSwitch("user-data-dir")
+const LEGACY_PAIRS: (readonly [string, string])[] = [
   [configDir(), configDir(LEGACY_DIR_NAME)],
-  // An explicit --user-data-dir (the test driver) is fresh on purpose: nothing to carry.
-  ...(app.commandLine.hasSwitch("user-data-dir")
-    ? []
-    : [[app.getPath("userData"), path.join(app.getPath("appData"), LEGACY_DIR_NAME)] as const]),
-])
+  ...(CUSTOM_USER_DATA ? [] : [[app.getPath("userData"), LEGACY_USER_DATA] as const]),
+]
+
+/** Carry the smterm state over once — but never from a running smterm: its live ledger would
+ *  resume its Claude sessions a second time here. Asks to quit it, or to start without it. */
+function migrateFromSmterm(): void {
+  if (!pendingLegacyDirs(LEGACY_PAIRS).length) return
+  while (!CUSTOM_USER_DATA && legacyInstanceRunning(LEGACY_USER_DATA)) {
+    const choice = dialog.showMessageBoxSync({
+      type: "info",
+      message: "Quit smterm to bring your sessions over",
+      detail:
+        "smterm is now minmux. On this first launch minmux brings over your smterm layout, " +
+        "settings and Claude sessions, but not while smterm is still running (its sessions " +
+        "would be resumed twice). Quit smterm, then choose Try Again.",
+      buttons: ["Try Again", "Start Without Them"],
+      defaultId: 0,
+      cancelId: 1,
+    })
+    if (choice === 1) {
+      markLegacyDirs(pendingLegacyDirs(LEGACY_PAIRS))
+      diag("legacy-migrate-declined")
+      return
+    }
+  }
+  const r = migrateLegacyDirs(LEGACY_PAIRS)
+  if (r.copied.length) diag("legacy-migrated", { copied: r.copied.join(", ") })
+  if (r.failed.length) diag("legacy-migrate-failed", { failed: r.failed.join("; ") })
+}
 
 // Single-instance guard. A second launch — an update-relaunch racing the old process, or
 // a stray double-click — would start a SECOND hook receiver on a different ephemeral port
@@ -1237,6 +1271,7 @@ app.on("second-instance", () => {
 
 app.whenReady().then(async () => {
   if (!gotSingleInstanceLock) return // second instance — it's quitting; start nothing
+  migrateFromSmterm() // first thing: before any setting, layout or ledger is read or written
   // GUI-launched apps (Finder/Dock) inherit a bare launchd PATH, so shells can't find
   // Homebrew/cargo tools (starship, etc.). Import the login shell's real env before any
   // PTY spawns. Only when packaged — in dev the app is launched from a terminal that
@@ -1259,8 +1294,6 @@ app.whenReady().then(async () => {
   createWindow()
   startSettingsWatcher()
   diag("boot", { pid: process.pid, version: app.getVersion() })
-  if (MIGRATED.copied.length) diag("legacy-migrated", { copied: MIGRATED.copied.join(", ") })
-  if (MIGRATED.failed.length) diag("legacy-migrate-failed", { failed: MIGRATED.failed.join("; ") })
   // Power events tell us whether a lid-close SUSPENDS the app (suspend→resume with
   // PTYs intact) or the OS TERMINATES it (suspend, then a fresh boot with no quit).
   // `.on` is overloaded per event-name literal; cast to a plain-string signature so

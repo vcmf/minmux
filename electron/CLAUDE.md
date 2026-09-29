@@ -18,7 +18,7 @@ ownership, native modules. No DOM, no React here. (Renderer rules: root `CLAUDE.
 - `profile.ts` — which profile this process is (a dev build is `dev`); resolved first thing in
   main. Every per-instance path uses `configDir()` / the profile name, never a literal "minmux".
 - `legacy-migrate.ts` — first launch after the smterm → minmux rename copies the old config /
-  user-data dirs over (runs before the single-instance lock). → `../docs/GOTCHAS.md#profiles`
+  user-data dirs over (at ready, never from a running smterm). → `../docs/GOTCHAS.md#profiles`
 - `shell-env.ts` — import the login-shell PATH/env at startup (packaged GUI launches get
   a bare launchd PATH). → `../docs/GOTCHAS.md#shell-env`
 
