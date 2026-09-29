@@ -1,4 +1,5 @@
 import { useCallback, useMemo, useState } from "react"
+import { useTabDrag } from "./use-tab-drag"
 import { useShallow } from "zustand/react/shallow"
 import {
   CaretDown,
@@ -59,6 +60,7 @@ import {
 
 /** Left sidebar: a tree of real sessions (tabs) → panes, with live status dots. */
 export function Sidebar() {
+  const tabDrag = useTabDrag("y") // reorder sessions: same order as the top bar
   const tabs = useStore((s) => s.tabs)
   const activeTabId = useStore((s) => s.activeTabId)
   const sessions = useStore((s) => s.sessions)
@@ -188,7 +190,10 @@ export function Sidebar() {
         </button>
       </div>
 
-      <div className="tree">
+      <div className="tree sidebar-sessions" {...tabDrag.listProps}>
+        {tabDrag.target && (
+          <span className="tab-drop-line y" style={{ top: tabDrag.target.offset - 1 }} />
+        )}
         {tabs.map((tab) => {
           const panes = allPanes(tab.root) // one walk → ids, pane count, visible set
           const ids = panes.flatMap((p) => p.sessionIds)
@@ -199,8 +204,13 @@ export function Sidebar() {
           const focused = sessions[tab.activeSessionId]
           const groupSub = sessionSubline(focused?.cwd, home, branchFor(tab.activeSessionId))
           return (
-            <div key={tab.id}>
+            <div
+              key={tab.id}
+              {...tabDrag.spanProps(tab.id)}
+              className={`tree-group${tabDrag.dragging === tab.id ? " dragging" : ""}`}
+            >
               <div
+                {...tabDrag.handleProps(tab.id)}
                 className={`tree-row${active ? " active" : ""}`}
                 style={{ paddingLeft: 12 }}
                 onMouseDown={() => useStore.getState().setActiveTab(tab.id)}

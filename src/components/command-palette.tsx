@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react"
 import {
+  ArrowLeft,
+  ArrowRight,
   MagnifyingGlass,
   Plus,
   Columns,
@@ -94,6 +96,20 @@ export function CommandPalette() {
           sub: newSurfaceKey,
           icon: <Terminal size={16} />,
           run: () => store.newSurface(shell),
+        },
+        {
+          group: "Session",
+          label: "Move session left",
+          sub: "reorder (or drag it)",
+          icon: <ArrowLeft size={16} />,
+          run: () => store.moveActiveTab(-1),
+        },
+        {
+          group: "Session",
+          label: "Move session right",
+          sub: "reorder (or drag it)",
+          icon: <ArrowRight size={16} />,
+          run: () => store.moveActiveTab(1),
         },
         {
           group: "Session",

@@ -2264,3 +2264,31 @@ body.resizing-col {
   color: var(--accent);
   font-variant-numeric: tabular-nums;
 }
+
+/* Reordering sessions by drag (top bar + sidebar share one order): an insertion line where the
+   dragged session will land; the dragged one dims. Compositing-free (no transforms/animation). */
+.tab-list,
+.sidebar-sessions {
+  position: relative;
+}
+.tab-drop-line {
+  position: absolute;
+  background: var(--accent);
+  border-radius: 1px;
+  pointer-events: none;
+  z-index: 3;
+}
+.tab-drop-line.x {
+  top: 6px;
+  bottom: 6px;
+  width: 2px;
+}
+.tab-drop-line.y {
+  left: 8px;
+  right: 8px;
+  height: 2px;
+}
+.tab.dragging,
+.tree-group.dragging {
+  opacity: 0.45;
+}
