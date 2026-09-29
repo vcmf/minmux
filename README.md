@@ -12,8 +12,6 @@
   <img src="https://img.shields.io/badge/platforms-macOS%20%C2%B7%20Linux%20%C2%B7%20Windows%2FWSL-informational" alt="Platforms" />
 </p>
 
-<p align="center"><sub>Formerly <b>smterm</b>. Existing installs keep their settings and layout.</sub></p>
-
 <p align="center">If minmux looks useful to you, a ⭐ helps other people find it.</p>
 
 <p align="center">
