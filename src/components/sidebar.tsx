@@ -221,6 +221,11 @@ export function Sidebar() {
                     e.stopPropagation()
                     toggle(tab.id)
                   }}
+                  // Collapsing must never also start a reorder drag of this session.
+                  onDragStart={(e) => {
+                    e.preventDefault()
+                    e.stopPropagation()
+                  }}
                 >
                   {open ? <CaretDown size={13} /> : <CaretRight size={13} />}
                 </button>

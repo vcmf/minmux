@@ -14,15 +14,5 @@ export function moveTo<T extends { id: string }>(items: T[], id: string, insertA
   return next
 }
 
-/** Where a drop at `pos` (clientX / clientY) goes, given each item's [start, end] along the
- *  axis: before the first item whose midpoint is past the pointer, else at the end. */
-export function insertIndexAt(spans: [number, number][], pos: number): number {
-  for (let i = 0; i < spans.length; i++) {
-    const [a, b] = spans[i]!
-    if (pos < (a + b) / 2) return i
-  }
-  return spans.length
-}
-
 /** The drag payload type for a session (tab) — distinct from a terminal (surface) drag. */
 export const TAB_DRAG_TYPE = "application/x-smterm-tab"

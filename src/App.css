@@ -106,7 +106,9 @@ body {
 .topbar select,
 .topbar input,
 .topbar .searchpill,
-.topbar .tab {
+.topbar .tab,
+.topbar .tab-list {
+  /* .tab-list too: its gaps between tabs must take a tab drop, not move the window */
   -webkit-app-region: no-drag;
 }
 
