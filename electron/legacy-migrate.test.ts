@@ -2,76 +2,104 @@ import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import { afterEach, beforeEach, describe, expect, it } from "vitest"
-import { copyLegacyDir, legacyAppName, migrateLegacyDirs } from "./legacy-migrate"
+import { MIGRATED_MARKER, migrateLegacyDirs } from "./legacy-migrate"
 
-describe("legacyAppName", () => {
-  it("maps each profile's name to its smterm one", () => {
-    expect(legacyAppName("minmux")).toBe("smterm")
-    expect(legacyAppName("minmux-dev")).toBe("smterm-dev")
-    expect(legacyAppName("minmux-e2e-1")).toBe("smterm-e2e-1")
-  })
-  it("has none for a name it didn't make", () => {
-    expect(legacyAppName("other")).toBeNull()
-    expect(legacyAppName("minmuxdev")).toBeNull()
-  })
-})
-
-describe("copyLegacyDir", () => {
+describe("migrateLegacyDirs", () => {
   let root: string
   const at = (...p: string[]) => path.join(root, ...p)
   const write = (p: string, body = "x") => {
     fs.mkdirSync(path.dirname(p), { recursive: true })
     fs.writeFileSync(p, body)
   }
+  const read = (p: string) => fs.readFileSync(p, "utf8")
   beforeEach(() => {
     root = fs.mkdtempSync(path.join(os.tmpdir(), "legacy-migrate-"))
   })
   afterEach(() => fs.rmSync(root, { recursive: true, force: true }))
 
-  it("copies the old dir (settings, layout, localStorage) and leaves it in place", () => {
+  it("copies the old state (settings, layout, ledger, localStorage) and leaves it in place", () => {
     write(at("smterm", "settings.json"), '{"theme":"x"}')
     write(at("smterm", "workspace.json"), "{}")
+    write(at("smterm", "agent-sessions.json"), "[]")
     write(at("smterm", "Local Storage", "leveldb", "000003.log"), "ls")
-    expect(copyLegacyDir(at("smterm"), at("minmux"))).toBe(true)
-    expect(fs.readFileSync(at("minmux", "settings.json"), "utf8")).toBe('{"theme":"x"}')
-    expect(fs.existsSync(at("minmux", "workspace.json"))).toBe(true)
-    expect(fs.existsSync(at("minmux", "Local Storage", "leveldb", "000003.log"))).toBe(true)
-    expect(fs.existsSync(at("smterm", "settings.json"))).toBe(true) // an older build still reads it
-    expect(fs.readdirSync(root).sort()).toEqual(["minmux", "smterm"]) // no temp dir left
+    const r = migrateLegacyDirs([[at("minmux"), at("smterm")]])
+    expect(r.failed).toEqual([])
+    expect(read(at("minmux", "settings.json"))).toBe('{"theme":"x"}')
+    expect(read(at("minmux", "Local Storage", "leveldb", "000003.log"))).toBe("ls")
+    expect(r.copied).toHaveLength(4)
+    expect(read(at("smterm", "settings.json"))).toBe('{"theme":"x"}') // an older build still reads it
   })
 
-  it("skips caches, the instance lock and per-launch hook state", () => {
+  it("carries only named state — no caches, locks or per-launch hook files", () => {
     write(at("smterm", "settings.json"))
     write(at("smterm", "GPUCache", "data_0"))
-    write(at("smterm", "Code Cache", "js", "index"))
     write(at("smterm", "hook-events", "abc", "e1.json"))
     write(at("smterm", "claude-hooks.json"))
-    write(at("smterm", "sub", "Cache", "kept")) // only top-level entries are skipped
     if (process.platform !== "win32") fs.symlinkSync("host-123", at("smterm", "SingletonLock"))
-    expect(copyLegacyDir(at("smterm"), at("minmux"))).toBe(true)
-    expect(fs.readdirSync(at("minmux")).sort()).toEqual(["settings.json", "sub"])
-    expect(fs.existsSync(at("minmux", "sub", "Cache", "kept"))).toBe(true)
+    migrateLegacyDirs([[at("minmux"), at("smterm")]])
+    expect(fs.readdirSync(at("minmux")).sort()).toEqual([MIGRATED_MARKER, "settings.json"])
   })
 
-  it("never touches a new dir that already exists", () => {
+  it("fills a new dir that already exists (e.g. Electron made it) without overwriting its files", () => {
     write(at("smterm", "settings.json"), "old")
+    write(at("smterm", "workspace.json"), "old layout")
     write(at("minmux", "settings.json"), "new")
-    expect(copyLegacyDir(at("smterm"), at("minmux"))).toBe(false)
-    expect(fs.readFileSync(at("minmux", "settings.json"), "utf8")).toBe("new")
+    write(at("minmux", "Crashpad", "x"))
+    migrateLegacyDirs([[at("minmux"), at("smterm")]])
+    expect(read(at("minmux", "settings.json"))).toBe("new")
+    expect(read(at("minmux", "workspace.json"))).toBe("old layout")
   })
 
-  it("does nothing when there's no old dir", () => {
-    expect(copyLegacyDir(at("smterm"), at("minmux"))).toBe(false)
+  it("runs once: a marked dir is left alone on later launches", () => {
+    write(at("smterm", "settings.json"), "old")
+    migrateLegacyDirs([[at("minmux"), at("smterm")]])
+    fs.rmSync(at("minmux", "settings.json")) // the user reset their settings since
+    expect(migrateLegacyDirs([[at("minmux"), at("smterm")]]).copied).toEqual([])
+    expect(fs.existsSync(at("minmux", "settings.json"))).toBe(false)
+  })
+
+  it("clears a killed launch's half-copied temp entry and copies it again", () => {
+    write(at("smterm", "workspace.json"), "w")
+    write(at("minmux", "workspace.json.migrating", "partial"), "killed mid-copy")
+    expect(migrateLegacyDirs([[at("minmux"), at("smterm")]]).failed).toEqual([])
+    expect(read(at("minmux", "workspace.json"))).toBe("w")
+    expect(fs.existsSync(at("minmux", "workspace.json.migrating"))).toBe(false)
+  })
+
+  it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+    "keeps going past an entry it can't read, and retries next launch (dir left unmarked)",
+    () => {
+      write(at("smterm", "settings.json"), "s")
+      write(at("smterm", "workspace.json"), "w")
+      fs.chmodSync(at("smterm", "settings.json"), 0o000) // as a file locked by a running smterm
+      const r = migrateLegacyDirs([[at("minmux"), at("smterm")]])
+      fs.chmodSync(at("smterm", "settings.json"), 0o644)
+      expect(r.failed).toHaveLength(1)
+      expect(read(at("minmux", "workspace.json"))).toBe("w")
+      expect(fs.existsSync(at("minmux", "settings.json.migrating"))).toBe(false)
+      expect(fs.existsSync(at("minmux", MIGRATED_MARKER))).toBe(false)
+      expect(migrateLegacyDirs([[at("minmux"), at("smterm")]]).copied).toEqual([
+        at("minmux", "settings.json"),
+      ])
+    },
+  )
+
+  it("reports a failure instead of throwing, and doesn't mark the dir", () => {
+    write(at("smterm", "settings.json"), "s")
+    write(at("minmux"), "a file where the dir should be") // every write under it fails
+    const r = migrateLegacyDirs([[at("minmux"), at("smterm")]])
+    expect(r.copied).toEqual([])
+    expect(r.failed.length).toBeGreaterThan(0)
+  })
+
+  it("does nothing without an old dir, and handles one dir listed twice once", () => {
+    expect(migrateLegacyDirs([[at("minmux"), at("smterm")]])).toEqual({ copied: [], failed: [] })
     expect(fs.existsSync(at("minmux"))).toBe(false)
-  })
-
-  it("copies a dir listed twice (config = user data on Linux / Windows) once", () => {
     write(at("smterm", "settings.json"))
-    expect(
-      migrateLegacyDirs([
-        [at("minmux"), at("smterm")],
-        [at("minmux"), at("smterm")],
-      ]),
-    ).toEqual([at("minmux")])
+    const r = migrateLegacyDirs([
+      [at("minmux"), at("smterm")], // Linux / Windows: config dir = user-data dir
+      [at("minmux"), at("smterm")],
+    ])
+    expect(r.copied).toEqual([at("minmux", "settings.json")])
   })
 })

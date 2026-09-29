@@ -20,3 +20,9 @@ Invoke-WebRequest $asset.browser_download_url -OutFile $out
 Write-Host "  launching the installer..."
 Start-Process -FilePath $out -Wait
 Write-Host "`nDone. minmux should be in your Start menu.`n"
+# The app used to be called smterm, a separate install: say so rather than remove it unasked
+# (minmux copies its settings and layout on first launch).
+if (Test-Path (Join-Path $env:LOCALAPPDATA "Programs\smterm")) {
+  Write-Host "The old smterm app is still installed. Once minmux has your layout, remove it in"
+  Write-Host "Settings > Apps > Installed apps (your settings stay in minmux).`n"
+}

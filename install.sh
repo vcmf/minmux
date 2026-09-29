@@ -59,9 +59,10 @@ case "$os" in
     curl -fsSL "$url" -o "$dest/minmux" || die "download failed"
     chmod +x "$dest/minmux"
     say "installed to $dest/minmux"
-    # The app used to be called smterm: drop the old binary so `smterm` doesn't linger.
-    if [ -f "$dest/smterm" ]; then
-      rm -f "$dest/smterm" && say "removed the old $dest/smterm (now minmux)"
+    # The app used to be called smterm: point the old name at the new binary, so a launcher,
+    # alias or script that runs `smterm` keeps working.
+    if [ -e "$dest/smterm" ] || [ -L "$dest/smterm" ]; then
+      ln -sf minmux "$dest/smterm" && say "$dest/smterm now runs minmux (the app's old name)"
     fi
     case ":$PATH:" in
       *":$dest:"*) : ;;

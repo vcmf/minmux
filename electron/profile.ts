@@ -37,10 +37,12 @@ export interface ProfileNames {
   label: string // shown in the UI and window title ("" for the default profile)
 }
 
-export function profileNames(profile: string): ProfileNames {
-  return profile
-    ? { appName: `minmux-${profile}`, label: profile }
-    : { appName: "minmux", label: "" }
+/** The app's name, and the one it had before the rename (its old dirs: legacy-migrate.ts). */
+export const APP_NAME = "minmux"
+export const LEGACY_APP_NAME = "smterm"
+
+export function profileNames(profile: string, base = APP_NAME): ProfileNames {
+  return profile ? { appName: `${base}-${profile}`, label: profile } : { appName: base, label: "" }
 }
 
 /** What a window, dialog or dock says this instance is: "minmux" / "minmux (dev)". */

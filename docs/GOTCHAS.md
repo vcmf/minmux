@@ -180,12 +180,13 @@ had it started, it would have overwritten the installed app's workspace and
   `MINMUX_PANE_ID`, `MINMUX_PROFILE`, …): a dev build launched from an installed pane must
   not report Claude events into the installed app's hook dir, and nothing we spawn (shells,
   editors, git) inherits our profile.
-- **The app was called smterm** (renamed after v0.1.41). A profile's first minmux launch copies
-  its old `smterm[-<profile>]` config and user-data dirs to the new names
-  (`electron/legacy-migrate.ts`, before the single-instance lock creates them), skipping
-  Chromium caches, the lock and per-launch hook state; the old dirs stay for an older build.
-  `index.html`'s pre-paint script carries `smterm*` localStorage keys over once, and the env
-  scrub also drops the old `SMTERM_*` per-pane vars.
+- **The app was called smterm** (renamed after v0.1.41). A profile's first minmux launch
+  copies its state from the old `smterm[-<profile>]` config and user-data dirs
+  (`electron/legacy-migrate.ts`: settings, workspace, resume ledger, window-bg, Local Storage;
+  never caches or locks), entry by entry and never over a file the new dir already has, then
+  drops a `.migrated-from-smterm` marker; a failed entry is logged and retried next launch. The
+  old dirs stay for an older build. `index.html`'s pre-paint script copies `smterm*`
+  localStorage keys once, and the env scrub also drops the old `SMTERM_*` per-pane vars.
 - The Windows AppUserModelId stays `com.minmux.app` for every profile: toasts only show for
   an id a Start Menu shortcut registers.
 - An explicit `--user-data-dir` (the `run-minmux` driver) still wins; the driver sets

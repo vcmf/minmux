@@ -1,69 +1,69 @@
 // One-time carry-over from the app's old name (smterm → minmux). An existing install keeps its
-// settings, layout, resume ledger and localStorage: on the first minmux launch of a profile,
-// the old profile's config and user-data dirs are COPIED to the new names (never moved, so an
-// older smterm build still finds its own). Chromium caches and per-run state are skipped —
-// they rebuild themselves. Best-effort: any failure just starts fresh, never blocks startup.
+// settings, layout, resume ledger and localStorage: a profile's first minmux launch COPIES
+// those few entries from its old smterm dirs (never moves them, so an older build still finds
+// its own). Only named state is copied — caches, locks and per-launch hook files rebuild
+// themselves — and each entry on its own, so one locked file never costs the rest. Best-effort
+// and never throws: whatever fails is reported, and startup goes on fresh for that entry.
 
 import fs from "node:fs"
 import path from "node:path"
 
-const LEGACY_NAME = "smterm"
-const NAME = "minmux"
+/** What's worth carrying: the config dir's state files + the user-data dir's localStorage. */
+export const LEGACY_ENTRIES = [
+  "settings.json",
+  "workspace.json",
+  "agent-sessions.json",
+  "window-bg",
+  "Local Storage",
+]
 
-/** The old app name for a profile's `appName`: "minmux" → "smterm", "minmux-dev" → "smterm-dev". */
-export function legacyAppName(appName: string): string | null {
-  if (appName === NAME) return LEGACY_NAME
-  if (appName.startsWith(`${NAME}-`)) return LEGACY_NAME + appName.slice(NAME.length)
-  return null
+// Written into the new dir once its entries all copied (or were already there): later launches
+// skip it. A failed entry leaves it unmarked, to retry next launch — never over a newer file.
+export const MIGRATED_MARKER = ".migrated-from-smterm"
+
+export interface MigrateResult {
+  copied: string[] // new-dir paths written
+  failed: string[] // "<path>: <error>" — this launch starts fresh for it
 }
 
-// Top-level entries not worth carrying: Chromium caches, crash dumps, the single-instance
-// lock (Linux symlinks / Windows lockfile — copying one would confuse the new lock) and the
-// per-launch hook drop dir + scoped hook settings, which startup rewrites anyway.
-const SKIP = new Set([
-  "Cache",
-  "Code Cache",
-  "GPUCache",
-  "DawnCache",
-  "DawnGraphiteCache",
-  "DawnWebGPUCache",
-  "GrShaderCache",
-  "ShaderCache",
-  "Crashpad",
-  "blob_storage",
-  "Service Worker",
-  "SingletonLock",
-  "SingletonCookie",
-  "SingletonSocket",
-  "lockfile",
-  "hook-events",
-  "claude-hooks.json",
-  "claude-hooks.wsl.json",
-])
-
-/** Copy `from` to `to` when only `from` exists (true = copied). Staged in a temp sibling and
- *  renamed into place, so a crash mid-copy never leaves a half dir that blocks a retry. */
-export function copyLegacyDir(from: string, to: string): boolean {
-  if (from === to || fs.existsSync(to) || !fs.existsSync(from)) return false
-  const tmp = `${to}.migrating-${process.pid}`
-  try {
-    fs.rmSync(tmp, { recursive: true, force: true })
-    fs.cpSync(from, tmp, {
-      recursive: true,
-      verbatimSymlinks: true,
-      filter: (src) => path.dirname(src) !== from || !SKIP.has(path.basename(src)),
-    })
-    fs.renameSync(tmp, to)
-    return true
-  } catch {
-    fs.rmSync(tmp, { recursive: true, force: true }) // a racing launch won, or the copy failed
-    return false
+/** Copy LEGACY_ENTRIES from each [to, from] dir pair where the new dir lacks them. */
+export function migrateLegacyDirs(
+  pairs: readonly (readonly [to: string, from: string])[],
+): MigrateResult {
+  const res: MigrateResult = { copied: [], failed: [] }
+  for (const [to, from] of pairs) {
+    if (from === to || !fs.existsSync(from) || fs.existsSync(path.join(to, MIGRATED_MARKER))) {
+      continue
+    }
+    const before = res.failed.length
+    for (const name of LEGACY_ENTRIES) copyEntry(path.join(from, name), path.join(to, name), res)
+    if (res.failed.length > before) continue
+    try {
+      fs.mkdirSync(to, { recursive: true })
+      fs.writeFileSync(path.join(to, MIGRATED_MARKER), `${from}\n`)
+    } catch (err) {
+      res.failed.push(`${path.join(to, MIGRATED_MARKER)}: ${String(err)}`)
+    }
   }
+  return res
 }
 
-/** Carry each old-named dir over to its new name; returns the dirs that were copied. The dirs
- *  are given as [new, old] pairs; the same dir twice (Linux / Windows: config = user data) is
- *  copied once. */
-export function migrateLegacyDirs(pairs: [to: string, from: string][]): string[] {
-  return pairs.filter(([to, from]) => copyLegacyDir(from, to)).map(([to]) => to)
+// Staged in a sibling and renamed into place: a crash mid-copy never leaves a half entry.
+function copyEntry(src: string, dst: string, res: MigrateResult): void {
+  if (!fs.existsSync(src) || fs.existsSync(dst)) return
+  const tmp = `${dst}.migrating`
+  try {
+    fs.rmSync(tmp, { recursive: true, force: true }) // a killed earlier launch's leftover
+    fs.mkdirSync(path.dirname(dst), { recursive: true })
+    fs.cpSync(src, tmp, { recursive: true, verbatimSymlinks: true })
+    fs.renameSync(tmp, dst)
+    res.copied.push(dst)
+  } catch (err) {
+    res.failed.push(`${dst}: ${String(err)}`)
+    try {
+      fs.rmSync(tmp, { recursive: true, force: true })
+    } catch {
+      // still locked (Windows) — the next attempt's rmSync clears it
+    }
+  }
 }

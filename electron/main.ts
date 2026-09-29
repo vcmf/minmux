@@ -50,8 +50,14 @@ import { TranscriptTokens } from "./transcript-tokens"
 import { tokenEventsForBatch } from "./agent-tokens"
 import { AgentMetaTracker } from "./agent-meta"
 import { SessionLedger } from "./agent-sessions"
-import { displayName, profileNames, resolveProfile, scrubParentInstanceEnv } from "./profile"
-import { legacyAppName, migrateLegacyDirs } from "./legacy-migrate"
+import {
+  displayName,
+  LEGACY_APP_NAME,
+  profileNames,
+  resolveProfile,
+  scrubParentInstanceEnv,
+} from "./profile"
+import { migrateLegacyDirs } from "./legacy-migrate"
 import { PaneGitService } from "./pane-git"
 import { SshService } from "./ssh-service"
 import { PendingSpawns, type PendingOutcome } from "./pending-spawns"
@@ -1204,18 +1210,16 @@ if (!app.commandLine.hasSwitch("user-data-dir")) {
   app.setPath("userData", path.join(app.getPath("appData"), PROFILE_NAMES.appName))
 }
 
-// The app was called smterm: a profile's first minmux launch copies its old dirs over (settings,
-// layout, resume ledger, localStorage) before anything creates the new ones — the single-instance
-// lock below does, on Linux / Windows where user data IS the config dir. (electron/legacy-migrate.ts)
-const LEGACY_APP_NAME = legacyAppName(PROFILE_NAMES.appName)
-const MIGRATED: string[] = []
-if (LEGACY_APP_NAME) {
-  const pairs: [string, string][] = [[configDir(), configDir(LEGACY_APP_NAME)]]
-  if (!app.commandLine.hasSwitch("user-data-dir")) {
-    pairs.push([app.getPath("userData"), path.join(app.getPath("appData"), LEGACY_APP_NAME)])
-  }
-  MIGRATED.push(...migrateLegacyDirs(pairs))
-}
+// The app was called smterm: a profile's first minmux launch copies its old state over (settings,
+// layout, resume ledger, localStorage) before anything reads it. (electron/legacy-migrate.ts)
+const LEGACY_DIR_NAME = profileNames(PROFILE_CHOICE.profile, LEGACY_APP_NAME).appName
+const MIGRATED = migrateLegacyDirs([
+  [configDir(), configDir(LEGACY_DIR_NAME)],
+  // An explicit --user-data-dir (the test driver) is fresh on purpose: nothing to carry.
+  ...(app.commandLine.hasSwitch("user-data-dir")
+    ? []
+    : [[app.getPath("userData"), path.join(app.getPath("appData"), LEGACY_DIR_NAME)] as const]),
+])
 
 // Single-instance guard. A second launch — an update-relaunch racing the old process, or
 // a stray double-click — would start a SECOND hook receiver on a different ephemeral port
@@ -1255,7 +1259,8 @@ app.whenReady().then(async () => {
   createWindow()
   startSettingsWatcher()
   diag("boot", { pid: process.pid, version: app.getVersion() })
-  if (MIGRATED.length) diag("legacy-migrated", { dirs: MIGRATED.join(", ") })
+  if (MIGRATED.copied.length) diag("legacy-migrated", { copied: MIGRATED.copied.join(", ") })
+  if (MIGRATED.failed.length) diag("legacy-migrate-failed", { failed: MIGRATED.failed.join("; ") })
   // Power events tell us whether a lid-close SUSPENDS the app (suspend→resume with
   // PTYs intact) or the OS TERMINATES it (suspend, then a fresh boot with no quit).
   // `.on` is overloaded per event-name literal; cast to a plain-string signature so
