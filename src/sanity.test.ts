@@ -5,7 +5,7 @@ import { describe, it, expect } from "vitest"
 describe("test harness", () => {
   it("runs in a jsdom DOM environment", () => {
     const el = document.createElement("div")
-    el.textContent = "smterm"
-    expect(el.textContent).toBe("smterm")
+    el.textContent = "minmux"
+    expect(el.textContent).toBe("minmux")
   })
 })

@@ -442,7 +442,7 @@ export function resolveTheme(name: string, appearance: Appearance, systemDark: b
 }
 
 // Read back by the inline script in index.html before the first paint (keep the shape).
-const CACHE_KEY = "smterm:theme-vars"
+const CACHE_KEY = "minmux:theme-vars"
 
 /** Push a theme's UI tokens onto :root as CSS vars (+ cache them for index.html's first paint). */
 export function applyThemeVars(theme: Theme) {

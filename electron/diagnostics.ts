@@ -3,7 +3,7 @@ import path from "node:path"
 
 // Lightweight, always-on event log for the session-survival investigation: app
 // lifecycle + macOS power events + PTY spawn/exit, appended to a file that OUTLIVES
-// the app process. If the OS terminates smterm on lid-close, the old instance's
+// the app process. If the OS terminates minmux on lid-close, the old instance's
 // last lines + a fresh `boot` with a new pid (and NO `before-quit`/`quit` between)
 // prove it was killed rather than suspended. Events are rare, so the file stays tiny.
 

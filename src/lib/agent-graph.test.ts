@@ -47,7 +47,7 @@ const EXPLORE_RUN: AgentEvent[] = [
     filePath: "/repo/docs/ROADMAP.md",
   },
   { event: "PostToolUse", sessionId: S, agentId: A, toolName: "Bash" },
-  { event: "SubagentStop", sessionId: S, agentId: A, message: "Summary: this is smterm." },
+  { event: "SubagentStop", sessionId: S, agentId: A, message: "Summary: this is minmux." },
   { event: "PostToolUse", sessionId: S, toolName: "Agent" }, // root's Agent tool completes
   { event: "Stop", sessionId: S },
   { event: "Notification", sessionId: S, message: "needs your input" },
@@ -80,7 +80,7 @@ describe("agent-graph — the interactive Explore run", () => {
     const g = reduceAgentEvents(EXPLORE_LIVE)
     expect(g.nodes[A]!.status).toBe("done")
     expect(g.nodes[A]!.currentTool).toBeUndefined()
-    expect(g.nodes[A]!.lastMessage).toBe("Summary: this is smterm.")
+    expect(g.nodes[A]!.lastMessage).toBe("Summary: this is minmux.")
   })
 })
 
@@ -321,7 +321,7 @@ describe("claudePaneIds / dropPaneSessions", () => {
     { event: "SessionStart", sessionId: "b", paneId: "p1" },
     { event: "SubagentStart", sessionId: "b", agentId: "sub", agentType: "Explore" },
     { event: "SessionStart", sessionId: "c", paneId: "p1" }, // a nested `claude -p`
-    { event: "SessionStart", sessionId: "d" }, // no pane (claude outside smterm's panes)
+    { event: "SessionStart", sessionId: "d" }, // no pane (claude outside minmux's panes)
   ])
 
   it("lists each pane with a live session once, sorted; SessionEnd removes it", () => {

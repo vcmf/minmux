@@ -1,6 +1,6 @@
 // Branch + GitHub PR per terminal for the sidebar. The renderer polls with its terminals'
 // cwds; everything here is async, cached and deduped in the main process — nowhere near the
-// PTY → renderer path. PRs come from the GitHub CLI (`gh`, the user's own login — smterm
+// PTY → renderer path. PRs come from the GitHub CLI (`gh`, the user's own login — minmux
 // stores no token); if gh is missing / logged out / there's no PR, the line just stays hidden.
 
 import { execFile } from "node:child_process"

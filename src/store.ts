@@ -372,7 +372,7 @@ function withoutTab(state: AppState, tabId: string): Pick<AppState, "tabs" | "ac
   return { tabs, activeTabId }
 }
 
-const RECENT_KEY = "smterm.ssh.recent"
+const RECENT_KEY = "minmux.ssh.recent"
 
 // Recent hosts are a convenience: storage can be missing or throw (private mode, tests).
 function readRecent(): string[] {

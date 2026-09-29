@@ -119,7 +119,7 @@ describe("applying theme tokens", () => {
 
   it("caches {vars, scheme} for index.html's pre-paint script", () => {
     applyThemeVars(resolveTheme("gruvbox", "light", true))
-    const cached = JSON.parse(localStorage.getItem("smterm:theme-vars")!)
+    const cached = JSON.parse(localStorage.getItem("minmux:theme-vars")!)
     expect(cached.scheme).toBe("light")
     expect(cached.vars["--bg"]).toBe("#f9f5d7")
     expect(cached.vars["--border2"]).toBeTruthy()

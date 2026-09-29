@@ -1,4 +1,4 @@
-# smterm — task runner
+# minmux — task runner
 # Run `make` or `make help` to see available targets.
 
 .ONESHELL:
@@ -16,7 +16,7 @@ install: ## Install deps, rebuild native modules, activate git hooks
 ## ─────────────────────────────── Run ─────────────────────────────────
 
 .PHONY: run
-run: ## Run the app in dev mode, dev profile (SMTERM_PROFILE=<name> for another)
+run: ## Run the app in dev mode, dev profile (MINMUX_PROFILE=<name> for another)
 	npm run dev
 
 .PHONY: dev

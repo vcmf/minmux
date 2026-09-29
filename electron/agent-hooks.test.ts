@@ -54,7 +54,7 @@ describe("normalizeHookEvent", () => {
 
 describe("startHookWatcher", () => {
   it("parses a dropped event file, tags the pane from its name, deletes it, and batches", async () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "smterm-watch-"))
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "minmux-watch-"))
     const batches: AgentEvent[][] = []
     const w = await startHookWatcher({ dir, onBatch: (b) => batches.push(b), coalesceMs: 10 })
     try {
@@ -80,7 +80,7 @@ describe("startHookWatcher", () => {
   })
 
   it("delivers every event under a burst (sweep backs up the OS watcher)", async () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "smterm-watch-"))
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "minmux-watch-"))
     const seen = new Set<string>()
     const w = await startHookWatcher({
       dir,
@@ -104,7 +104,7 @@ describe("startHookWatcher", () => {
   })
 
   it("skips a corrupt (non-JSON) drop without emitting", async () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "smterm-watch-"))
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "minmux-watch-"))
     const batches: AgentEvent[][] = []
     const w = await startHookWatcher({ dir, onBatch: (b) => batches.push(b), coalesceMs: 10 })
     try {

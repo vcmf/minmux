@@ -1,7 +1,7 @@
-# Competitive Landscape — smterm
+# Competitive Landscape — minmux
 
 > Who else is building "run and watch a fleet of coding agents," how they differ, and where
-> smterm's wedge is. Companion to `ARCHITECTURE.md` (design) and `ROADMAP.md` (progress).
+> minmux's wedge is. Companion to `ARCHITECTURE.md` (design) and `ROADMAP.md` (progress).
 
 Status: **living doc** — the space moves fast (tools rename, companies fold). Snapshot as of
 **2026-07-06**; re-verify names/status before citing (see §6 for known traps).
@@ -53,7 +53,7 @@ Every tool sits on two axes. This is the useful mental model.
   heavier-isolation outlier.
 
 Crowded corners: **macOS-native terminal** (cmux, Conductor, Paneflow) and **web/kanban boards**
-(Vibe Kanban, Nimbalyst). Thin corner → smterm's opening (§5).
+(Vibe Kanban, Nimbalyst). Thin corner → minmux's opening (§5).
 
 ---
 
@@ -67,14 +67,14 @@ Crowded corners: **macOS-native terminal** (cmux, Conductor, Paneflow) and **web
 >
 > When anyone says "cmux," disambiguate which. This doc's "cmux" = Manaflow's unless noted.
 
-### 3a. Terminal-native / TUI managers (smterm's direct neighbors)
+### 3a. Terminal-native / TUI managers (minmux's direct neighbors)
 
 Facts marked ✓ were confirmed 3-0 in the 2026-07-07 deep-research verification.
 
 | Tool                | Stack                                                       | Platforms                 | Isolation                                | Agents                                                                                            | License / status                                           |
 | ------------------- | ----------------------------------------------------------- | ------------------------- | ---------------------------------------- | ------------------------------------------------------------------------------------------------- | ---------------------------------------------------------- |
 | **cmux** (Manaflow) | Native, Ghostty (`libghostty`) GPU engine                   | macOS only                | worktrees                                | Claude Code (breadth uncertain — "Claude-only" claim refuted, see §6)                             | GPL/AGPL. YC S24. ~17k★ in ~2 weeks                        |
-| **ccmanager** ✓     | TUI/CLI (no tmux)                                           | Cross-platform            | **worktrees + optional devcontainers** ✓ | **8** ✓: Claude Code, Gemini CLI, Codex CLI, Cursor Agent, Copilot CLI, Cline, OpenCode, Kimi CLI | MIT. smterm's closest on breadth + cross-platform          |
+| **ccmanager** ✓     | TUI/CLI (no tmux)                                           | Cross-platform            | **worktrees + optional devcontainers** ✓ | **8** ✓: Claude Code, Gemini CLI, Codex CLI, Cursor Agent, Copilot CLI, Cline, OpenCode, Kimi CLI | MIT. minmux's closest on breadth + cross-platform          |
 | **Claude Squad** ✓  | Go TUI, tmux                                                | Cross-platform (tmux)     | worktrees ✓                              | Claude Code, Codex, Gemini, Aider, OpenCode, Amp ✓                                                | **AGPL-3.0** ✓ (smtg-ai)                                   |
 | **dmux** ✓          | Node CLI, tmux 3.0+                                         | Cross-platform (tmux)     | worktrees (pane = worktree) ✓            | **12** ✓: Claude, Codex, Gemini, Cline, OpenCode, Qwen, Cursor, Copilot, Amp, pi, Crush, Grok     | **MIT** ✓ (standardagents)                                 |
 | **craigsc/cmux**    | ~560-line pure bash                                         | Cross-platform (bash+git) | worktrees ✓                              | Claude Code (fleet on one repo)                                                                   | OSS. The _other_ cmux (see collision note)                 |
@@ -123,7 +123,7 @@ Directories to track (the field moves weekly):
 ## 4. Lessons from competitors' criticism (design constraints for us)
 
 The _idea_ is validated everywhere; execution keeps failing on the **same two things**. These are
-free lessons — bake them into smterm's design (see `ARCHITECTURE.md` §8, §9).
+free lessons — bake them into minmux's design (see `ARCHITECTURE.md` §8, §9).
 
 1. **Respect the primary surface.** Cursor's loudest complaint: the agent/chat chrome _"take[s]
    space more than the actual code."_ → For us the **terminal (PTY) must stay the star**; status is
@@ -143,7 +143,7 @@ free lessons — bake them into smterm's design (see `ARCHITECTURE.md` §8, §9)
 
 ---
 
-## 5. smterm's positioning (the wedge)
+## 5. minmux's positioning (the wedge)
 
 Against the map in §2, the thin/open corner is:
 
@@ -152,7 +152,7 @@ Against the map in §2, the thin/open corner is:
 
 How we compare to the two poles we're threading between:
 
-| Dimension                 | cmux                          | ccmanager               | **smterm (target)**                    |
+| Dimension                 | cmux                          | ccmanager               | **minmux (target)**                    |
 | ------------------------- | ----------------------------- | ----------------------- | -------------------------------------- |
 | Surface                   | Native GPU terminal           | TUI (inside a terminal) | GUI terminal (Tauri + xterm.js)        |
 | Platforms                 | macOS only                    | Cross-platform          | **mac · Linux · Windows · WSL**        |

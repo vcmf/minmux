@@ -27,7 +27,7 @@ describe("tokenEventsForBatch", () => {
   const agentTx = () => path.join(dir, "agent.jsonl")
 
   beforeEach(() => {
-    dir = fs.mkdtempSync(path.join(os.tmpdir(), "smterm-tok-"))
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), "minmux-tok-"))
   })
   afterEach(() => {
     fs.rmSync(dir, { recursive: true, force: true })

@@ -2,14 +2,14 @@
 import "@testing-library/jest-dom/vitest"
 import { vi } from "vitest"
 
-// The renderer talks to the main process only through `window.smterm` (see
+// The renderer talks to the main process only through `window.minmux` (see
 // src/lib/ipc.ts, which captures it at import time). Under jsdom there is no
 // preload, so install a stub of the whole surface with sane defaults. Tests
 // override individual methods via `vi.mocked(ipc.x).mockResolvedValue(...)`.
 const noop = () => {}
 const unsub = () => noop
 
-const smtermStub = {
+const minmuxStub = {
   ptySpawn: vi.fn(async () => {}),
   onPtyData: vi.fn(unsub),
   onPtyNonce: vi.fn(unsub),
@@ -24,7 +24,7 @@ const smtermStub = {
   listShells: vi.fn(async () => []),
   readSettings: vi.fn(async () => ""),
   writeSettings: vi.fn(async () => {}),
-  settingsPath: vi.fn(async () => "/tmp/smterm/settings.json"),
+  settingsPath: vi.fn(async () => "/tmp/minmux/settings.json"),
   onSettingsChanged: vi.fn(unsub),
   onAgentEvents: vi.fn(unsub),
   onAgentMeta: vi.fn(unsub),
@@ -83,7 +83,7 @@ const smtermStub = {
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-;(window as any).smterm = smtermStub
+;(window as any).minmux = minmuxStub
 
 // jsdom lacks ResizeObserver (used by TerminalPane).
 if (!("ResizeObserver" in globalThis)) {

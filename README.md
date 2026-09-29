@@ -1,24 +1,26 @@
 <p align="center">
-  <img src="docs/media/icon.png" alt="smterm" width="128" height="128" />
+  <img src="docs/media/icon.png" alt="minmux" width="128" height="128" />
 </p>
 
-<h1 align="center">smterm</h1>
+<h1 align="center">minmux</h1>
 
 <p align="center">A minimal terminal for agentic coding, built to keep you in the loop (yes we love reading the code).</p>
 
 <p align="center">
-  <a href="https://github.com/vcmf/smterm/actions/workflows/ci.yml"><img src="https://github.com/vcmf/smterm/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
+  <a href="https://github.com/vcmf/minmux/actions/workflows/ci.yml"><img src="https://github.com/vcmf/minmux/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License: MIT" /></a>
   <img src="https://img.shields.io/badge/platforms-macOS%20%C2%B7%20Linux%20%C2%B7%20Windows%2FWSL-informational" alt="Platforms" />
 </p>
 
-<p align="center">If smterm looks useful to you, a ⭐ helps other people find it.</p>
+<p align="center"><sub>Formerly <b>smterm</b>. Existing installs keep their settings and layout.</sub></p>
+
+<p align="center">If minmux looks useful to you, a ⭐ helps other people find it.</p>
 
 <p align="center">
-  <img src="docs/media/screenshot.jpg" alt="smterm running four agent sessions in split panes, with the Agents board on the right" width="100%" />
+  <img src="docs/media/screenshot.jpg" alt="minmux running four agent sessions in split panes, with the Agents board on the right" width="100%" />
 </p>
 
-**smterm** is a fast, cross-platform terminal (tabs, split panes, real shells) for people who run
+**minmux** is a fast, cross-platform terminal (tabs, split panes, real shells) for people who run
 coding agents all day. It stays out of your way like a normal terminal, then adds a few panels
 that show you what the agents are actually doing: git diffs, files, and a live agents board that
 works with Claude Code. If you have looked for an open-source Warp alternative, or a tmux built
@@ -31,7 +33,7 @@ for coding agents, this is that.
   what an agent just touched. Branch and ahead/behind show in the status bar.
 - 📁 **Files browser.** A lazy per-folder listing rooted at the focused pane's cwd, with git
   decorations (badges on changed files, tinted folders). Click a file to open it in your editor.
-- 🤖 **Agents board.** A live view of the Claude Code agents you launched inside smterm: the
+- 🤖 **Agents board.** A live view of the Claude Code agents you launched inside minmux: the
   root session, its sub-agents, what each is doing, its cwd, and its recent files. Click one to
   jump to its pane.
 - 🪟 **Real multiplexer.** Tabs and resizable splits. Split a pane and it keeps your shell and
@@ -49,13 +51,13 @@ for coding agents, this is that.
 macOS and Linux:
 
 ```
-curl -fsSL https://raw.githubusercontent.com/vcmf/smterm/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/vcmf/minmux/main/install.sh | sh
 ```
 
 Windows (PowerShell):
 
 ```
-irm https://raw.githubusercontent.com/vcmf/smterm/main/install.ps1 | iex
+irm https://raw.githubusercontent.com/vcmf/minmux/main/install.ps1 | iex
 ```
 
 ## A closer look
@@ -91,15 +93,15 @@ irm https://raw.githubusercontent.com/vcmf/smterm/main/install.ps1 | iex
 
 Run `claude` in any pane and the Agents board lights up: the root session, its sub-agents, what
 each is doing, its working directory, and the files it touched. It reads Claude Code's own hook
-events, so there is zero setup and no global config to edit; smterm only wires the panes it
-launches. Agents started outside smterm do not show up.
+events, so there is zero setup and no global config to edit; minmux only wires the panes it
+launches. Agents started outside minmux do not show up.
 
 ## Why I built this
 
 I love the terminal, and the easiest way to put an agent like Claude Code to work is to launch
 it from a CLI. But I also like reading the code an agent writes and making the edits myself, and
 a plain terminal makes that hard: you lose track of which session needs you, and you never
-really see what changed. smterm keeps the shell I already like and adds just enough to stay in
+really see what changed. minmux keeps the shell I already like and adds just enough to stay in
 the loop: the Changes, Files, and Agents panels show what happened, not just that something did. It also behaves the same on macOS, Linux and WSL, which helps since
 my work moves between all three.
 
@@ -109,15 +111,15 @@ Beyond the headline features above:
 
 - Copy and paste, find in scrollback (`Cmd`/`Ctrl+Shift` + `F`)
 - Collapsible sidebar and a shell picker for new tabs
-- The Agents board needs zero setup: it is wired only for panes smterm spawns
+- The Agents board needs zero setup: it is wired only for panes minmux spawns
 
 ## Configuration
 
 Settings live in a single JSON file that is the source of truth. Edit it by hand or through the
 in-app settings panel; a live watcher re-applies changes as you save.
 
-- macOS and Linux: `~/.config/smterm/settings.json`
-- Windows: `%APPDATA%\smterm\settings.json`
+- macOS and Linux: `~/.config/minmux/settings.json`
+- Windows: `%APPDATA%\minmux\settings.json`
 
 ```jsonc
 {
@@ -141,7 +143,7 @@ in-app settings panel; a live watcher re-applies changes as you save.
 
 ## SSH hosts
 
-smterm reads the hosts from your `~/.ssh/config` (including `Include`d files). **Connect to
+minmux reads the hosts from your `~/.ssh/config` (including `Include`d files). **Connect to
 host…** (the sidebar's search icon, the palette, or the new-tab menu's "All hosts…") lists them:
 pinned first, then recent, then the rest. Enter opens a tab, ⌥Enter splits right, ⇧Enter
 splits down, and right-click pins, hides or copies the `ssh` command. The sidebar's **Remote**
@@ -160,14 +162,14 @@ defaults, it doesn't replace them. Hiding is by alias, so it applies in every en
   production shell doesn't look like a scratch box.
 - **Splits stay on the host.** Splitting an SSH pane, or opening a new terminal in it, opens
   another `ssh` to the same host. "Open folder in split" stays local.
-- **Keepalive.** smterm adds `ServerAliveInterval=30` (with `ServerAliveCountMax=4`), so an idle
+- **Keepalive.** minmux adds `ServerAliveInterval=30` (with `ServerAliveCountMax=4`), so an idle
   pane survives NAT timeouts and a dead link ends in about two minutes instead of hanging.
   `"ssh": { "keepAliveSeconds": 0 }` leaves it to your config.
 - **Where you are.** If the host reports its folder (OSC 7, or the Debian/Ubuntu title
   `user@host: ~/dir`), the sidebar row shows it, with the host boxed beside it. It's display
   only: a reconnect or a relaunch opens a fresh login at home (keeping your place across drops
   is what tmux persistence will do). With shell integration on, the folder and the pane's
-  running / idle status come from smterm's own hooks on the host, and text a program prints
+  running / idle status come from minmux's own hooks on the host, and text a program prints
   can't fake them — and a split, a reconnect or a relaunch opens in that folder again (on
   the same machine; a folder that's gone just says so).
 - **Reconnect.** When `ssh` exits, the pane says why and Enter (or the **Reconnect** button)
@@ -183,14 +185,14 @@ defaults, it doesn't replace them. Hiding is by alias, so it applies in every en
   yet: the first pane per host, then the rest once it's past its password prompt, so they can
   share a ControlMaster.
 - **Shell integration.** It's what makes a split, a reconnect or a relaunch open in the same
-  folder on a host, and its status exact. By default smterm asks: the first time you split an
+  folder on a host, and its status exact. By default minmux asks: the first time you split an
   ssh pane on a host you haven't decided for, a one-line hint offers **Turn on** / **Never**. Or right-click a host → Turn on shell integration, or pick **All hosts** / **Off**
   in Settings → SSH (`ssh.integrationMode`; with "all", `!alias` entries in `ssh.integration`
-  are the exceptions). A host that has it starts your bash or zsh with smterm's prompt hooks,
+  are the exceptions). A host that has it starts your bash or zsh with minmux's prompt hooks,
   sent inline for that session: nothing is installed, your dotfiles still load, and the temp
   files are gone once the shell has started. Other shells, a `RemoteCommand` in your config,
   or a host without `sh` get the plain login shell. (sshd skips the MOTD / "Last login" lines
-  when smterm sends its command.) Details and costs: `docs/design/SSH_REMOTES.md` §8.
+  when minmux sends its command.) Details and costs: `docs/design/SSH_REMOTES.md` §8.
 - **Prompt-free splits.** Each pane is its own `ssh`. For hosts that ask for a password, let
   OpenSSH share one connection by adding this to your `~/.ssh/config`:
 
@@ -223,26 +225,26 @@ This is v0. I use it every day, and it will still surprise you sometimes.
 
 Most of these are already on the near-term roadmap, so they should not be rough for long.
 
-Found a bug? [Open an issue](https://github.com/vcmf/smterm/issues). What you did, what
+Found a bug? [Open an issue](https://github.com/vcmf/minmux/issues). What you did, what
 happened, and what you expected is all it takes for a useful report.
 
 ## Build from source
 
 ```
-git clone https://github.com/vcmf/smterm
-cd smterm
+git clone https://github.com/vcmf/minmux
+cd minmux
 make install   # deps, native module rebuild, git hooks
 make run       # dev mode
 make dist      # package an installable build for your OS
 ```
 
-`make run` uses its own **dev profile** (`~/.config/smterm-dev`, `%APPDATA%\smterm-dev` on
-Windows; a DEV badge by the logo), so it runs next to an installed smterm without touching its
+`make run` uses its own **dev profile** (`~/.config/minmux-dev`, `%APPDATA%\minmux-dev` on
+Windows; a DEV badge by the logo), so it runs next to an installed minmux without touching its
 settings or layout.
-`SMTERM_PROFILE=<name> make run` picks another profile (one per worktree, say);
-`SMTERM_PROFILE=default` uses the installed app's config, only while that app is closed. An
-installed smterm ignores `SMTERM_PROFILE`; start it with `--profile=<name>` instead (macOS:
-`open -a smterm --args --profile=qa`).
+`MINMUX_PROFILE=<name> make run` picks another profile (one per worktree, say);
+`MINMUX_PROFILE=default` uses the installed app's config, only while that app is closed. An
+installed minmux ignores `MINMUX_PROFILE`; start it with `--profile=<name>` instead (macOS:
+`open -a minmux --args --profile=qa`).
 
 Run `make help` for the full list of targets (`make check` runs lint + tests, `make fmt`
 formats). Logic lives in small pure modules with real tests (`make test`).

@@ -17,7 +17,7 @@ describe("createPathWatcher (real chokidar)", () => {
   let w: PathWatcher | null = null
   let seen: string[] = []
   beforeEach(() => {
-    dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "smterm-watch-")))
+    dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "minmux-watch-")))
     seen = []
   })
   afterEach(() => {

@@ -1,4 +1,4 @@
-# smterm — Performance & Load Testing
+# minmux — Performance & Load Testing
 
 Companion to [ROADMAP.md](./ROADMAP.md) M3.6 Track B. This is the **methodology + baselines**;
 optimizations land against these numbers (measure → fix → re-measure, never optimize blind).
@@ -6,12 +6,12 @@ optimizations land against these numbers (measure → fix → re-measure, never 
 ## How to run
 
 ```
-SMTERM_PERF=1 make run     # runs the suite once on launch, prints a [PERF] JSON line to stdout
+MINMUX_PERF=1 make run     # runs the suite once on launch, prints a [PERF] JSON line to stdout
 ```
 
-Or, in DevTools console of a normal run: `await window.__smtermPerf()`.
+Or, in DevTools console of a normal run: `await window.__minmuxPerf()`.
 
-The harness lives in [`src/lib/perf.ts`](./src/lib/perf.ts) (dev-only; gated by `SMTERM_PERF`, never
+The harness lives in [`src/lib/perf.ts`](./src/lib/perf.ts) (dev-only; gated by `MINMUX_PERF`, never
 runs in normal use). It uses the real Electron renderer (real WebGL) and the real `node-pty`/IPC path.
 
 ## What it measures
@@ -31,7 +31,7 @@ command line doesn't trip the timing — see the comment in `perf.ts`).
 
 Machine: Apple Silicon MacBook Pro, macOS, zsh (with shell integration). Dev build.
 
-**Output IPC coalescing — fair A/B** (interleaved, same machine state; `SMTERM_NO_COALESCE=1` toggles
+**Output IPC coalescing — fair A/B** (interleaved, same machine state; `MINMUX_NO_COALESCE=1` toggles
 the old per-chunk path). This is the honest comparison; absolute MB/s drifts with machine load, so
 compare the two columns to each other, not across sessions.
 
@@ -53,7 +53,7 @@ Other baselines (2026-07-08):
 1. **IPC coalescing — done ✅.** Batching PTY output in main (`electron/coalescer.ts`, 4 ms / 256 KB
    flush) cut messages ~165× and raised throughput ~1.6× (numbers above). The message-count drop also
    slashes per-byte CPU, which matters most with **many concurrent busy panes**. Toggle the old path
-   with `SMTERM_NO_COALESCE=1` for regression A/Bs.
+   with `MINMUX_NO_COALESCE=1` for regression A/Bs.
 2. **Flow control (next candidate).** Under a sustained firehose, pause `node-pty` when xterm's
    `write()` callback backlog grows and resume when drained, so the PTY can't outrun the renderer /
    balloon memory. Measure first — may not be worth it now that message overhead is gone.

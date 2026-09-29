@@ -1,11 +1,11 @@
-# smterm installer for Windows (PowerShell).
-#   irm https://raw.githubusercontent.com/vcmf/smterm/main/install.ps1 | iex
+# minmux installer for Windows (PowerShell).
+#   irm https://raw.githubusercontent.com/vcmf/minmux/main/install.ps1 | iex
 # Downloads the newest release's installer from GitHub and runs it. Fetched from the
 # terminal, so it skips the browser SmartScreen prompt you'd get from a manual download.
 $ErrorActionPreference = "Stop"
-$repo = "vcmf/smterm"
+$repo = "vcmf/minmux"
 
-Write-Host "`nInstalling smterm..."
+Write-Host "`nInstalling minmux..."
 $rel = Invoke-RestMethod "https://api.github.com/repos/$repo/releases?per_page=1"
 $release = $rel[0]
 Write-Host "  latest release: $($release.tag_name)"
@@ -19,4 +19,4 @@ Invoke-WebRequest $asset.browser_download_url -OutFile $out
 
 Write-Host "  launching the installer..."
 Start-Process -FilePath $out -Wait
-Write-Host "`nDone. smterm should be in your Start menu.`n"
+Write-Host "`nDone. minmux should be in your Start menu.`n"

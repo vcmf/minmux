@@ -92,28 +92,28 @@ describe("parseLoginShell", () => {
 })
 
 describe("wslInjection", () => {
-  const base = "/mnt/c/Users/me/AppData/Local/Temp/smterm/shell-integration"
+  const base = "/mnt/c/Users/me/AppData/Local/Temp/minmux/shell-integration"
 
   it("bash → --rcfile with the WSL-translated path", () => {
     const r = wslInjection("/bin/bash", base)
     expect(r?.args).toEqual(["--", "bash", "--rcfile", `${base}/bash/bashrc`, "-i"])
     expect(r?.wslenv).toEqual([
-      "SMTERM_SHARE_HISTORY", // opt-out crosses the boundary
-      "SMTERM_CLAUDE_SETTINGS/p", // hook settings path (path-translated)
-      "SMTERM_PANE_ID", // agents-board pane tag
+      "MINMUX_SHARE_HISTORY", // opt-out crosses the boundary
+      "MINMUX_CLAUDE_SETTINGS/p", // hook settings path (path-translated)
+      "MINMUX_PANE_ID", // agents-board pane tag
       "COLORFGBG", // light/dark theme signal for agents in WSL
     ])
   })
 
-  it("zsh → ZDOTDIR + SMTERM_ZDOTDIR forwarded across the WSL boundary", () => {
+  it("zsh → ZDOTDIR + MINMUX_ZDOTDIR forwarded across the WSL boundary", () => {
     const r = wslInjection("/usr/bin/zsh", base)
     expect(r?.args).toEqual(["--", "zsh", "-i"])
     expect(r?.env.ZDOTDIR).toBe(`${base}/zsh`)
-    expect(r?.env.SMTERM_ZDOTDIR).toBe(`${base}/zsh`) // lets the HISTFILE-repoint fire in WSL
+    expect(r?.env.MINMUX_ZDOTDIR).toBe(`${base}/zsh`) // lets the HISTFILE-repoint fire in WSL
     expect(r?.wslenv).toContain("ZDOTDIR")
-    expect(r?.wslenv).toContain("SMTERM_ZDOTDIR")
-    expect(r?.wslenv).toContain("SMTERM_CLAUDE_SETTINGS/p") // hooks reach claude inside WSL
-    expect(r?.wslenv).toContain("SMTERM_PANE_ID")
+    expect(r?.wslenv).toContain("MINMUX_ZDOTDIR")
+    expect(r?.wslenv).toContain("MINMUX_CLAUDE_SETTINGS/p") // hooks reach claude inside WSL
+    expect(r?.wslenv).toContain("MINMUX_PANE_ID")
     expect(r?.wslenv).toContain("COLORFGBG") // light/dark theme signal for agents in WSL
   })
 
@@ -126,14 +126,14 @@ describe("buildInjection", () => {
   it("zsh → ZDOTDIR wrapper, no extra args", () => {
     const inj = buildInjection("/bin/zsh")
     expect(inj?.args).toEqual([])
-    expect(inj?.env.SMTERM_SHELL_INTEGRATION).toBe("1")
+    expect(inj?.env.MINMUX_SHELL_INTEGRATION).toBe("1")
     expect(inj?.env.ZDOTDIR).toContain("zsh")
   })
 
   it("bash → --rcfile", () => {
     const inj = buildInjection("/bin/bash")
     expect(inj?.args[0]).toBe("--rcfile")
-    expect(inj?.env.SMTERM_SHELL_INTEGRATION).toBe("1")
+    expect(inj?.env.MINMUX_SHELL_INTEGRATION).toBe("1")
   })
 
   it("unsupported shells → null", () => {
@@ -162,7 +162,7 @@ describe("precmd mouse-mode reset", () => {
 describe("shared history (cmux-like)", () => {
   it("zsh enables SHARE_HISTORY, gated by the opt-out env, after the user's rc", () => {
     expect(ZSH_ZSHRC).toContain("setopt SHARE_HISTORY")
-    expect(ZSH_ZSHRC).toContain('"${SMTERM_SHARE_HISTORY:-1}" != "0"')
+    expect(ZSH_ZSHRC).toContain('"${MINMUX_SHARE_HISTORY:-1}" != "0"')
     // Must run after sourcing the user's .zshrc so our setopt wins.
     expect(ZSH_ZSHRC.indexOf('source "$ZDOTDIR/.zshrc"')).toBeLessThan(
       ZSH_ZSHRC.indexOf("setopt SHARE_HISTORY"),
@@ -172,58 +172,58 @@ describe("shared history (cmux-like)", () => {
   it("zsh repoints a HISTFILE a system zshrc pointed into our ZDOTDIR back to the real one", () => {
     // A system zshrc (e.g. macOS /etc/zshrc) runs before our rc with HISTFILE derived from
     // ZDOTDIR (= our injected dir), siloing history. Match ANY file inside our dir + keep
-    // the basename, guarded by -n so it never fires when SMTERM_ZDOTDIR is empty.
-    expect(ZSH_ZSHRC).toContain('-n "${SMTERM_ZDOTDIR-}"')
-    expect(ZSH_ZSHRC).toContain('"${HISTFILE-}" == "${SMTERM_ZDOTDIR-}"/*')
-    expect(ZSH_ZSHRC).toContain('HISTFILE="${SMTERM_USER_ZDOTDIR:-$HOME}/${HISTFILE:t}"')
+    // the basename, guarded by -n so it never fires when MINMUX_ZDOTDIR is empty.
+    expect(ZSH_ZSHRC).toContain('-n "${MINMUX_ZDOTDIR-}"')
+    expect(ZSH_ZSHRC).toContain('"${HISTFILE-}" == "${MINMUX_ZDOTDIR-}"/*')
+    expect(ZSH_ZSHRC).toContain('HISTFILE="${MINMUX_USER_ZDOTDIR:-$HOME}/${HISTFILE:t}"')
     // The repoint must run before SHARE_HISTORY is enabled (so it reads/writes the right file)…
-    expect(ZSH_ZSHRC.indexOf('"${HISTFILE-}" == "${SMTERM_ZDOTDIR-}"/*')).toBeLessThan(
+    expect(ZSH_ZSHRC.indexOf('"${HISTFILE-}" == "${MINMUX_ZDOTDIR-}"/*')).toBeLessThan(
       ZSH_ZSHRC.indexOf("setopt SHARE_HISTORY"),
     )
     // …and OUTSIDE the shared-history opt-out gate — it's a correctness fix that must run
-    // even when SMTERM_SHARE_HISTORY=0 (guards against a refactor folding it into that `if`).
-    expect(ZSH_ZSHRC.indexOf('"${HISTFILE-}" == "${SMTERM_ZDOTDIR-}"/*')).toBeLessThan(
-      ZSH_ZSHRC.indexOf('"${SMTERM_SHARE_HISTORY:-1}" != "0"'),
+    // even when MINMUX_SHARE_HISTORY=0 (guards against a refactor folding it into that `if`).
+    expect(ZSH_ZSHRC.indexOf('"${HISTFILE-}" == "${MINMUX_ZDOTDIR-}"/*')).toBeLessThan(
+      ZSH_ZSHRC.indexOf('"${MINMUX_SHARE_HISTORY:-1}" != "0"'),
     )
   })
 
   it("bash appends + re-reads history each prompt, gated by the opt-out env", () => {
     expect(BASH_RC).toContain("shopt -s histappend")
     expect(BASH_RC).toContain("history -a; history -n")
-    expect(BASH_RC).toContain('"${SMTERM_SHARE_HISTORY:-1}" != "0"')
+    expect(BASH_RC).toContain('"${MINMUX_SHARE_HISTORY:-1}" != "0"')
     // The sync runs after `local ret=$?` so it can't clobber the reported exit code.
     expect(BASH_RC.indexOf("local ret=$?")).toBeLessThan(BASH_RC.indexOf("history -a; history -n"))
   })
 
   it("bash: PROMPT_COMMAND pieces (starship, direnv…) never emit a spurious command-start", () => {
-    expect(BASH_RC).toContain('[[ "$BASH_COMMAND" == __smterm_* ]] && return')
-    expect(BASH_RC).toContain("[[ $__smterm_in_pc == 1 ]] && return")
+    expect(BASH_RC).toContain('[[ "$BASH_COMMAND" == __minmux_* ]] && return')
+    expect(BASH_RC).toContain("[[ $__minmux_in_pc == 1 ]] && return")
     // newline-joined (a user value ending in ';' must not become '; ;' — a syntax error),
     // and array-form PROMPT_COMMAND (bash 5.1+) wrapped element-wise
-    expect(BASH_RC).toContain("__smterm_pc_end'")
-    expect(BASH_RC).not.toContain("; __smterm_pc_end")
+    expect(BASH_RC).toContain("__minmux_pc_end'")
+    expect(BASH_RC).not.toContain("; __minmux_pc_end")
     expect(BASH_RC).toContain(
-      'PROMPT_COMMAND=(__smterm_precmd "${PROMPT_COMMAND[@]}" __smterm_pc_end)',
+      'PROMPT_COMMAND=(__minmux_precmd "${PROMPT_COMMAND[@]}" __minmux_pc_end)',
     )
     // starts armed: the rc's own remaining lines must not emit a C before the first prompt
-    expect(BASH_RC).toContain("__smterm_armed=1")
+    expect(BASH_RC).toContain("__minmux_armed=1")
     // precmd opens the window AFTER capturing $? (the D exit code must be the user's command's)
-    expect(BASH_RC.indexOf("local ret=$?")).toBeLessThan(BASH_RC.indexOf("__smterm_in_pc=1"))
+    expect(BASH_RC.indexOf("local ret=$?")).toBeLessThan(BASH_RC.indexOf("__minmux_in_pc=1"))
   })
 })
 
 describe("buildInjection — per-profile script dir", () => {
-  afterEach(() => setIntegrationDirName("smterm"))
+  afterEach(() => setIntegrationDirName("minmux"))
 
   it("each profile writes its own scripts (a dev build never rewrites the installed app's)", () => {
     const def = buildInjection("/bin/zsh")!
-    expect(def.env.ZDOTDIR).toBe(path.join(os.tmpdir(), "smterm", "shell-integration", "zsh"))
-    setIntegrationDirName("smterm-dev")
+    expect(def.env.ZDOTDIR).toBe(path.join(os.tmpdir(), "minmux", "shell-integration", "zsh"))
+    setIntegrationDirName("minmux-dev")
     const dev = buildInjection("/bin/zsh")!
-    expect(dev.env.ZDOTDIR).toBe(path.join(os.tmpdir(), "smterm-dev", "shell-integration", "zsh"))
+    expect(dev.env.ZDOTDIR).toBe(path.join(os.tmpdir(), "minmux-dev", "shell-integration", "zsh"))
     const bash = buildInjection("/bin/bash")!
     expect(bash.args[bash.args.length - 1]).toBe(
-      path.join(os.tmpdir(), "smterm-dev", "shell-integration", "bash", "bashrc"),
+      path.join(os.tmpdir(), "minmux-dev", "shell-integration", "bash", "bashrc"),
     )
   })
 })

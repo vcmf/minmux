@@ -9,7 +9,7 @@ const WSL_DOWN_TAIL = ") didn't answer — try again once it's running"
 export const SSH_ERRORS = {
   hostGone: "this host is no longer in your ssh config",
   noSsh: "ssh isn't installed (or isn't on PATH)",
-  newerBuild: "this pane's host was saved by a newer smterm and can't be opened here",
+  newerBuild: "this pane's host was saved by a newer minmux and can't be opened here",
   wslOffWindows: "WSL hosts can only be opened on Windows",
   cantBuild: "can't build the ssh command",
   /** A WSL distro that didn't answer in time. */

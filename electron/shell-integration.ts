@@ -15,37 +15,37 @@ import { execFileSync } from "node:child_process"
 const MOUSE_RESET = "\\033[?1000l\\033[?1002l\\033[?1003l\\033[?1006l"
 
 export const ZSH_ZSHENV = [
-  "# smterm shell integration — zsh .zshenv (loaded for every zsh invocation).",
-  'if [[ -f "${SMTERM_USER_ZDOTDIR:-$HOME}/.zshenv" ]]; then',
-  '  source "${SMTERM_USER_ZDOTDIR:-$HOME}/.zshenv"',
+  "# minmux shell integration — zsh .zshenv (loaded for every zsh invocation).",
+  'if [[ -f "${MINMUX_USER_ZDOTDIR:-$HOME}/.zshenv" ]]; then',
+  '  source "${MINMUX_USER_ZDOTDIR:-$HOME}/.zshenv"',
   "fi",
-  '[[ -n "$SMTERM_ZDOTDIR" ]] && ZDOTDIR="$SMTERM_ZDOTDIR"',
+  '[[ -n "$MINMUX_ZDOTDIR" ]] && ZDOTDIR="$MINMUX_ZDOTDIR"',
   "",
 ].join("\n")
 
 /** zsh's prompt hooks (OSC 133 marks, OSC 7, mouse reset): shared by local and remote rcs. */
 export const ZSH_HOOKS = [
-  "# Emit OSC 133 marks so smterm can track command start/finish.",
-  'if [[ -o interactive && -z "${__SMTERM_ZSH_HOOKS-}" ]]; then',
-  "  __SMTERM_ZSH_HOOKS=1",
+  "# Emit OSC 133 marks so minmux can track command start/finish.",
+  'if [[ -o interactive && -z "${__MINMUX_ZSH_HOOKS-}" ]]; then',
+  "  __MINMUX_ZSH_HOOKS=1",
   "  autoload -Uz add-zsh-hook 2>/dev/null",
-  "  __smterm_preexec() { printf '\\033]133;C\\007'; }",
-  "  __smterm_precmd() {",
+  "  __minmux_preexec() { printf '\\033]133;C\\007'; }",
+  "  __minmux_precmd() {",
   "    local ret=$?",
   "    printf '\\033]133;D;%s\\007' \"$ret\"",
   '    printf \'\\033]7;file://%s%s\\007\' "${HOST:-localhost}" "$PWD"',
   "    printf '" + MOUSE_RESET + "' # heal a crashed TUI's leftover mouse mode",
   "  }",
-  "  add-zsh-hook preexec __smterm_preexec 2>/dev/null",
-  "  add-zsh-hook precmd __smterm_precmd 2>/dev/null",
+  "  add-zsh-hook preexec __minmux_preexec 2>/dev/null",
+  "  add-zsh-hook precmd __minmux_precmd 2>/dev/null",
   "fi",
   "",
 ].join("\n")
 
 export const ZSH_ZSHRC = [
-  "# smterm shell integration — zsh .zshrc",
+  "# minmux shell integration — zsh .zshrc",
   "# Restore the user's ZDOTDIR and load their real interactive config first.",
-  'ZDOTDIR="${SMTERM_USER_ZDOTDIR:-$HOME}"',
+  'ZDOTDIR="${MINMUX_USER_ZDOTDIR:-$HOME}"',
   'if [[ -f "$ZDOTDIR/.zshrc" ]]; then',
   '  source "$ZDOTDIR/.zshrc"',
   "fi",
@@ -53,46 +53,46 @@ export const ZSH_ZSHRC = [
   "# Repoint HISTFILE to the user's real location (correctness — runs even if shared",
   "# history is opted out). We inject ZDOTDIR to load this rc, and a system zshrc runs",
   "# BEFORE us (e.g. macOS /etc/zshrc: `HISTFILE=${ZDOTDIR:-$HOME}/.zsh_history`), pointing",
-  "# HISTFILE INTO our temp ZDOTDIR — siloing smterm history from every other terminal.",
+  "# HISTFILE INTO our temp ZDOTDIR — siloing minmux history from every other terminal.",
   "# Undo it whenever HISTFILE landed inside our dir (any filename), preserving the",
   "# basename so we match what other terminals use. Never touches a HISTFILE elsewhere.",
-  'if [[ -o interactive && -n "${SMTERM_ZDOTDIR-}" && "${HISTFILE-}" == "${SMTERM_ZDOTDIR-}"/* ]]; then',
-  '  HISTFILE="${SMTERM_USER_ZDOTDIR:-$HOME}/${HISTFILE:t}"',
+  'if [[ -o interactive && -n "${MINMUX_ZDOTDIR-}" && "${HISTFILE-}" == "${MINMUX_ZDOTDIR-}"/* ]]; then',
+  '  HISTFILE="${MINMUX_USER_ZDOTDIR:-$HOME}/${HISTFILE:t}"',
   "fi",
   "",
   "# Shared, incrementally-written history across panes (cmux-like) unless opted out",
-  "# (SMTERM_SHARE_HISTORY=0). After the user's rc so our setopt wins; fills sane",
+  "# (MINMUX_SHARE_HISTORY=0). After the user's rc so our setopt wins; fills sane",
   "# HISTFILE/SAVEHIST/HISTSIZE only when unset. SHARE_HISTORY writes each command",
   "# immediately, so history also survives an abrupt close (not just a clean exit).",
-  'if [[ -o interactive && "${SMTERM_SHARE_HISTORY:-1}" != "0" ]]; then',
-  '  [[ -z "${HISTFILE-}" ]] && HISTFILE="${SMTERM_USER_ZDOTDIR:-$HOME}/.zsh_history"',
+  'if [[ -o interactive && "${MINMUX_SHARE_HISTORY:-1}" != "0" ]]; then',
+  '  [[ -z "${HISTFILE-}" ]] && HISTFILE="${MINMUX_USER_ZDOTDIR:-$HOME}/.zsh_history"',
   "  (( ${SAVEHIST:-0} < 1 )) && SAVEHIST=10000",
   "  (( ${HISTSIZE:-0} < 1 )) && HISTSIZE=10000",
   "  setopt SHARE_HISTORY",
   "fi",
   "",
   ZSH_HOOKS,
-  "# Route `claude` through smterm's scoped hook settings so the agents board can",
-  "# observe its sessions/sub-agents. Only when smterm provides the file; the user's",
+  "# Route `claude` through minmux's scoped hook settings so the agents board can",
+  "# observe its sessions/sub-agents. Only when minmux provides the file; the user's",
   "# global ~/.claude config is untouched. (M6 — docs/design/AGENT_OBSERVABILITY.md)",
-  'if [[ -o interactive && -n "${SMTERM_CLAUDE_SETTINGS-}" ]]; then',
-  '  claude() { command claude --settings "$SMTERM_CLAUDE_SETTINGS" "$@" }',
+  'if [[ -o interactive && -n "${MINMUX_CLAUDE_SETTINGS-}" ]]; then',
+  '  claude() { command claude --settings "$MINMUX_CLAUDE_SETTINGS" "$@" }',
   "fi",
   "",
 ].join("\n")
 
 export const ZSH_ZPROFILE = [
-  "# smterm shell integration — zsh .zprofile (login shells)",
-  'if [[ -f "${SMTERM_USER_ZDOTDIR:-$HOME}/.zprofile" ]]; then',
-  '  source "${SMTERM_USER_ZDOTDIR:-$HOME}/.zprofile"',
+  "# minmux shell integration — zsh .zprofile (login shells)",
+  'if [[ -f "${MINMUX_USER_ZDOTDIR:-$HOME}/.zprofile" ]]; then',
+  '  source "${MINMUX_USER_ZDOTDIR:-$HOME}/.zprofile"',
   "fi",
   "",
 ].join("\n")
 
 const ZSH_ZLOGIN = [
-  "# smterm shell integration — zsh .zlogin (login shells)",
-  'if [[ -f "${SMTERM_USER_ZDOTDIR:-$HOME}/.zlogin" ]]; then',
-  '  source "${SMTERM_USER_ZDOTDIR:-$HOME}/.zlogin"',
+  "# minmux shell integration — zsh .zlogin (login shells)",
+  'if [[ -f "${MINMUX_USER_ZDOTDIR:-$HOME}/.zlogin" ]]; then',
+  '  source "${MINMUX_USER_ZDOTDIR:-$HOME}/.zlogin"',
   "fi",
   "",
 ].join("\n")
@@ -100,7 +100,7 @@ const ZSH_ZLOGIN = [
 // Everything below runs AFTER the user's rc — which may `set -u` / `setopt nounset`: every
 // variable we read there is expanded as ${X-} so an unset one can't abort our integration.
 const BASH_LOCAL_PRELUDE = [
-  "# smterm shell integration — bash (loaded via bash --rcfile).",
+  "# minmux shell integration — bash (loaded via bash --rcfile).",
   "if [[ -f /etc/bash.bashrc ]]; then source /etc/bash.bashrc; fi",
   'if [[ -f "$HOME/.bashrc" ]]; then source "$HOME/.bashrc"; fi',
   "",
@@ -110,54 +110,54 @@ const BASH_LOCAL_PRELUDE = [
 export const BASH_HOOKS = [
   "# Only instrument interactive shells, once.",
   'case "$-" in *i*) ;; *) return ;; esac',
-  '[[ -n "${__SMTERM_BASH_HOOKS-}" ]] && return',
-  "__SMTERM_BASH_HOOKS=1",
+  '[[ -n "${__MINMUX_BASH_HOOKS-}" ]] && return',
+  "__MINMUX_BASH_HOOKS=1",
   "",
-  "# Shared history across panes (cmux-like) unless opted out (SMTERM_SHARE_HISTORY=0):",
+  "# Shared history across panes (cmux-like) unless opted out (MINMUX_SHARE_HISTORY=0):",
   "# append this session's new lines to HISTFILE and re-read others' before each prompt.",
-  'if [[ "${SMTERM_SHARE_HISTORY:-1}" != "0" ]]; then shopt -s histappend; __smterm_share_hist=1; else __smterm_share_hist=0; fi',
+  'if [[ "${MINMUX_SHARE_HISTORY:-1}" != "0" ]]; then shopt -s histappend; __minmux_share_hist=1; else __minmux_share_hist=0; fi',
   "",
   "# Start ARMED: the DEBUG trap also fires for this rc's own remaining lines — those must not",
-  "# emit a C before the first prompt. __smterm_pc_end (end of the first prompt) disarms it.",
-  "__smterm_armed=1",
-  "__smterm_in_pc=0",
+  "# emit a C before the first prompt. __minmux_pc_end (end of the first prompt) disarms it.",
+  "__minmux_armed=1",
+  "__minmux_in_pc=0",
   "",
   "# DEBUG fires for EVERY simple command, including each piece of PROMPT_COMMAND (starship,",
   "# direnv, VTE…). Only a command the user runs from the prompt is a 'command start' (C):",
-  "# skip our own functions and anything between __smterm_precmd (first in PROMPT_COMMAND)",
-  "# and __smterm_pc_end (last) — else every prompt would emit a spurious C after its D.",
-  "__smterm_preexec() {",
+  "# skip our own functions and anything between __minmux_precmd (first in PROMPT_COMMAND)",
+  "# and __minmux_pc_end (last) — else every prompt would emit a spurious C after its D.",
+  "__minmux_preexec() {",
   '  [[ "$BASH_COMMAND" == "$PROMPT_COMMAND" ]] && return',
-  '  [[ "$BASH_COMMAND" == __smterm_* ]] && return',
-  "  [[ $__smterm_in_pc == 1 ]] && return",
-  "  [[ $__smterm_armed == 1 ]] && return",
-  "  __smterm_armed=1",
+  '  [[ "$BASH_COMMAND" == __minmux_* ]] && return',
+  "  [[ $__minmux_in_pc == 1 ]] && return",
+  "  [[ $__minmux_armed == 1 ]] && return",
+  "  __minmux_armed=1",
   "  printf '\\033]133;C\\007'",
   "}",
   "",
-  "__smterm_precmd() {",
+  "__minmux_precmd() {",
   "  local ret=$?",
-  "  __smterm_in_pc=1",
-  "  [[ $__smterm_share_hist == 1 ]] && { history -a; history -n; }",
+  "  __minmux_in_pc=1",
+  "  [[ $__minmux_share_hist == 1 ]] && { history -a; history -n; }",
   "  printf '\\033]133;D;%s\\007' \"$ret\"",
   '  printf \'\\033]7;file://%s%s\\007\' "${HOSTNAME:-localhost}" "$PWD"',
   "  printf '" + MOUSE_RESET + "' # heal a crashed TUI's leftover mouse mode",
   "}",
-  "__smterm_pc_end() { __smterm_in_pc=0; __smterm_armed=0; }",
+  "__minmux_pc_end() { __minmux_in_pc=0; __minmux_armed=0; }",
   "",
   "# Wrap the user's PROMPT_COMMAND between our markers. NEWLINE-joined, not '; ': a value",
   "# ending in ';' / '&' / a newline (e.g. \"history -a; $PROMPT_COMMAND\") would make '; ;'",
   "# a syntax error at every prompt. bash 5.1+ may hold it as an ARRAY: wrap every element.",
   'if [[ "$(declare -p PROMPT_COMMAND 2>/dev/null)" == "declare -a"* ]]; then',
-  '  PROMPT_COMMAND=(__smterm_precmd "${PROMPT_COMMAND[@]}" __smterm_pc_end)',
+  '  PROMPT_COMMAND=(__minmux_precmd "${PROMPT_COMMAND[@]}" __minmux_pc_end)',
   "else",
-  "  PROMPT_COMMAND=$'__smterm_precmd\n'\"${PROMPT_COMMAND-}\"$'\n__smterm_pc_end'",
+  "  PROMPT_COMMAND=$'__minmux_precmd\n'\"${PROMPT_COMMAND-}\"$'\n__minmux_pc_end'",
   "fi",
-  "trap '__smterm_preexec' DEBUG",
+  "trap '__minmux_preexec' DEBUG",
   "",
-  "# Route `claude` through smterm's scoped hook settings (agents board — M6).",
-  'if [[ $- == *i* && -n "${SMTERM_CLAUDE_SETTINGS-}" ]]; then',
-  '  claude() { command claude --settings "$SMTERM_CLAUDE_SETTINGS" "$@"; }',
+  "# Route `claude` through minmux's scoped hook settings (agents board — M6).",
+  'if [[ $- == *i* && -n "${MINMUX_CLAUDE_SETTINGS-}" ]]; then',
+  '  claude() { command claude --settings "$MINMUX_CLAUDE_SETTINGS" "$@"; }',
   "fi",
   "",
 ].join("\n")
@@ -178,7 +178,7 @@ export interface Injection {
 
 // Per profile (main sets it at startup): each instance rewrites these scripts on every spawn,
 // so a dev build on another branch must never write the scripts an installed app's shells read.
-let integrationDirName = "smterm"
+let integrationDirName = "minmux"
 export function setIntegrationDirName(name: string): void {
   integrationDirName = name
 }
@@ -215,16 +215,16 @@ export function buildInjection(shell: string): Injection | null {
     return {
       env: {
         ZDOTDIR: ours,
-        SMTERM_ZDOTDIR: ours,
-        SMTERM_USER_ZDOTDIR: user,
-        SMTERM_SHELL_INTEGRATION: "1",
+        MINMUX_ZDOTDIR: ours,
+        MINMUX_USER_ZDOTDIR: user,
+        MINMUX_SHELL_INTEGRATION: "1",
       },
       args: [],
     }
   }
   if (name === "bash") {
     return {
-      env: { SMTERM_SHELL_INTEGRATION: "1" },
+      env: { MINMUX_SHELL_INTEGRATION: "1" },
       args: ["--rcfile", path.join(base, "bash", "bashrc")],
     }
   }
@@ -269,33 +269,33 @@ export function wslInjection(
   const name = loginShell.split("/").pop() ?? ""
   if (name === "bash") {
     // --rcfile takes a literal path (already WSL-translated); it sources ~/.bashrc.
-    // Forward SMTERM_SHARE_HISTORY so the shared-history opt-out crosses into WSL.
+    // Forward MINMUX_SHARE_HISTORY so the shared-history opt-out crosses into WSL.
     return {
       args: ["--", "bash", "--rcfile", `${wslBase}/bash/bashrc`, "-i"],
       env: {},
       // /p path-translates the (Windows) hook-settings path so claude-in-WSL can read it.
       // COLORFGBG crosses so agents in WSL can detect our light/dark theme.
-      wslenv: ["SMTERM_SHARE_HISTORY", "SMTERM_CLAUDE_SETTINGS/p", "SMTERM_PANE_ID", "COLORFGBG"],
+      wslenv: ["MINMUX_SHARE_HISTORY", "MINMUX_CLAUDE_SETTINGS/p", "MINMUX_PANE_ID", "COLORFGBG"],
     }
   }
   if (name === "zsh") {
     // zsh finds our .zshrc via $ZDOTDIR; it restores ZDOTDIR to $HOME + sources ~/.zshrc.
-    // SMTERM_ZDOTDIR lets the rc detect + undo a HISTFILE a system zshrc pointed into our
+    // MINMUX_ZDOTDIR lets the rc detect + undo a HISTFILE a system zshrc pointed into our
     // injected ZDOTDIR (same history-siloing fix as local shells — see ZSH_ZSHRC). We do
-    // NOT forward SMTERM_USER_ZDOTDIR (the distro-side ZDOTDIR is unknown at inject time),
+    // NOT forward MINMUX_USER_ZDOTDIR (the distro-side ZDOTDIR is unknown at inject time),
     // so the repoint target falls back to $HOME — matching this path's existing behaviour
     // of sourcing ~/.zshrc. Known limitation: a custom in-WSL ZDOTDIR isn't honoured here.
     const zdir = `${wslBase}/zsh`
     return {
       args: ["--", "zsh", "-i"],
-      env: { ZDOTDIR: zdir, SMTERM_ZDOTDIR: zdir, SMTERM_SHELL_INTEGRATION: "1" },
+      env: { ZDOTDIR: zdir, MINMUX_ZDOTDIR: zdir, MINMUX_SHELL_INTEGRATION: "1" },
       wslenv: [
         "ZDOTDIR",
-        "SMTERM_ZDOTDIR",
-        "SMTERM_SHELL_INTEGRATION",
-        "SMTERM_SHARE_HISTORY",
-        "SMTERM_CLAUDE_SETTINGS/p", // /p path-translates it for claude-in-WSL to read
-        "SMTERM_PANE_ID",
+        "MINMUX_ZDOTDIR",
+        "MINMUX_SHELL_INTEGRATION",
+        "MINMUX_SHARE_HISTORY",
+        "MINMUX_CLAUDE_SETTINGS/p", // /p path-translates it for claude-in-WSL to read
+        "MINMUX_PANE_ID",
         "COLORFGBG", // so agents in WSL can detect our light/dark theme
       ],
     }

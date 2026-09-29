@@ -1,4 +1,4 @@
-# smterm — Roadmap & Feature Tracker
+# minmux — Roadmap & Feature Tracker
 
 Living document. Update status as we go. Companion to [ARCHITECTURE.md](./ARCHITECTURE.md)
 (design/decisions) and [TESTING.md](./TESTING.md) (quality bar).
@@ -33,13 +33,13 @@ Living document. Update status as we go. Companion to [ARCHITECTURE.md](./ARCHIT
 > 2. **Conventions:** kebab-case filenames + no semicolons (applied during the port).
 > 3. **Design:** adopt the hi-fi `mux` design (`mux_product_spec.md`)
 >    at M3.5; agent status via output-idle heuristic; files-in-flight via **git watching only**.
->    Deferred: approvals, orchestration, persistence daemon. **Name stays `smterm`.**
+>    Deferred: approvals, orchestration, persistence daemon. **Name stays `minmux`.**
 
 ---
 
 ## v0 — First public (open-source) release 🚧 _(current focus — branch `v0`)_
 
-**Definition:** anyone can install smterm and daily-drive it as a real terminal + agent runner.
+**Definition:** anyone can install minmux and daily-drive it as a real terminal + agent runner.
 The agent-runner differentiators already work (status, notifications, git panel, splits, reskin, PTY
 reattach); v0 closes the **table-stakes gaps**, the one known **correctness bug**, and ships it
 **installable** to our audience — developers.
@@ -66,13 +66,13 @@ The attention model functions; the rewrite is polish, not a v0 blocker. Deferred
 | Item                                    | Notes                                                                                                                                 | Status |
 | --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- | ------ |
 | Attention-model rewrite (Track C / §9a) | Activity-gated `working` (`running && active`) + attention **latch** (seen-since-activity) + redraw suppression, behind a test matrix | 🧊     |
-| Diagnostics cleanup                     | Gate `electron/diagnostics.ts` behind `SMTERM_DIAG=1` (or remove) — small standalone, fold into Phase 3/4                             | ⬜     |
+| Diagnostics cleanup                     | Gate `electron/diagnostics.ts` behind `MINMUX_DIAG=1` (or remove) — small standalone, fold into Phase 3/4                             | ⬜     |
 
 ### Phase 3 — Packaging (free dev channel) 🚧
 
 | Item                 | Notes                                                                                                  | Status |
 | -------------------- | ------------------------------------------------------------------------------------------------------ | ------ |
-| App identity + icon  | `appId` com.smterm.app ✅; **placeholder icon** (real one + `AppUserModelID` TODO)                     | 🚧     |
+| App identity + icon  | `appId` com.minmux.app ✅; **placeholder icon** (real one + `AppUserModelID` TODO)                     | 🚧     |
 | `electron-builder`   | mac `.dmg`+`.zip` ✅ (node-pty asarUnpack'd + rebuilt); win nsis + linux AppImage **wired, not built** | 🚧     |
 | Ad-hoc / OSS signing | macOS **ad-hoc** ✅ (`build/after-pack.cjs`, verified launch); Windows via **SignPath** (OSS) TODO     | 🚧     |
 | Install channels     | `curl \| sh` script + **Homebrew tap** + **Scoop** bucket; GitHub Releases artifacts                   | ⬜     |
@@ -88,7 +88,7 @@ The attention model functions; the rewrite is polish, not a v0 blocker. Deferred
 | WSL / Windows   | verify on a real box or clearly mark untested                                                                      | ⬜     |
 
 **Exit criteria:** `curl | sh` (and `brew install` / `scoop install`) drop a working, launch-clean
-smterm on macOS + Windows + Linux; copy/paste + find work; lint + tests green; LICENSE + README published.
+minmux on macOS + Windows + Linux; copy/paste + find work; lint + tests green; LICENSE + README published.
 
 **Deferred to v0.1+:** attention-model rewrite (Phase 2 above — works today with the §9a flaw); notarized
 double-click `.dmg` + signed `.exe` (Apple $99/yr — M4); auto-update; detached daemon for full-quit
@@ -111,7 +111,7 @@ docs, frontend tests, shell-integration `.zsh`/`.bash` scripts.
 | #   | Phase                      | Description                                                                                        | Status |
 | --- | -------------------------- | -------------------------------------------------------------------------------------------------- | ------ |
 | 1   | Scaffold                   | `electron-vite` (main/preload/renderer); Prettier `semi:false`                                     | ✅     |
-| 2   | IPC seam                   | preload `contextBridge` → `window.smterm`; one `src/lib/ipc.ts` adapter; components call only that | ✅     |
+| 2   | IPC seam                   | preload `contextBridge` → `window.minmux`; one `src/lib/ipc.ts` adapter; components call only that | ✅     |
 | 3   | PTY                        | `node-pty` in main (spawn/write/resize/kill, `onData` stream); rewired `terminal-manager`          | ✅     |
 | 4   | Shell integration + shells | inlined `.zsh`/`.bash` scripts + `listShells` (WSL) + env/args in main                             | ✅     |
 | 5   | Settings                   | main `fs` read/write + `chokidar` watcher → `settings-changed`                                     | ✅     |
@@ -178,7 +178,7 @@ terminals — solved by decoupling terminal lifetime from the React tree via `Te
 
 ## M2 — Agent-runner headline features ✅ _(implemented; notification delivery needs signed build to fully verify on macOS)_
 
-**Goal:** the part that makes smterm _cmux-like_ rather than "just a terminal" — know when a
+**Goal:** the part that makes minmux _cmux-like_ rather than "just a terminal" — know when a
 session needs attention and tell the user via native notifications.
 
 | ID  | Feature                          | Description                                                                                                                 | Status                                      |
@@ -209,7 +209,7 @@ click → focus specific pane (cross-platform action routing); session glance/gr
 
 ### M3a — Settings, fonts & themes (next up)
 
-**Design — one source of truth, two editors:** `~/.config/smterm/settings.json` (`%APPDATA%\smterm\`
+**Design — one source of truth, two editors:** `~/.config/minmux/settings.json` (`%APPDATA%\minmux\`
 on Windows) is authoritative and hand-editable. A GUI settings panel and manual edits both write
 the same file; a live file watcher re-applies on any change. The panel is just a friendlier editor.
 
@@ -230,7 +230,7 @@ Example `settings.json`:
 | ID  | Feature               | Description                                                                                                   | Status                     |
 | --- | --------------------- | ------------------------------------------------------------------------------------------------------------- | -------------------------- |
 | —   | **Schema + defaults** | Typed settings + pure `mergeSettings` + tolerant `parseSettings` (bad JSON → defaults)                        | ✅                         |
-| —   | **File layer (Rust)** | `~/.config/smterm/settings.json`; read/write commands; `notify` watcher → `settings-changed`; open in editor  | ✅                         |
+| —   | **File layer (Rust)** | `~/.config/minmux/settings.json`; read/write commands; `notify` watcher → `settings-changed`; open in editor  | ✅                         |
 | —   | **Load + apply**      | Load on startup, subscribe to `settings-changed`, `TerminalManager.applySettings()` updates all live panes    | ✅                         |
 | F13 | **Fonts + ligatures** | Bundle JetBrains Mono (OFL); canvas renderer + custom character-joiner ligatures; family/size/lineHeight      | ✅ (visual verify pending) |
 | F13 | **Theme tokens**      | CSS variables (dark/light) as source → derived xterm theme; `theme` switches UI + terminal                    | ✅ (dark/light)            |
@@ -325,7 +325,7 @@ Applies to sidebar rows (two-line, per the mux tree spec), tab titles/tooltips, 
 ### Track B — Performance + load testing
 
 **Status:** harness + baselines **done**, and the first win landed (see [PERF.md](./PERF.md); run
-`SMTERM_PERF=1 make run`). **IPC output coalescing ✅** (`electron/coalescer.ts`, 4 ms / 256 KB flush):
+`MINMUX_PERF=1 make run`). **IPC output coalescing ✅** (`electron/coalescer.ts`, 4 ms / 256 KB flush):
 fair A/B shows **~165× fewer IPC messages** (17.7k → ~108) and **~1.6× throughput** (21 → 34 MB/s).
 **Next candidates:** flow control (pause node-pty when the renderer lags), N-busy-panes scaling.
 
@@ -394,7 +394,7 @@ delivers a notification (proving app identity is set up correctly).
 
 **Theme.** The agent-runner payoff: a board that shows, live, **which agents are running, what each
 is doing, in which worktree, and who spawned whom** — plus the file/worktree view that falls out of
-the same data. Fed by Claude Code's **official** extension points, wired only for shells smterm
+the same data. Fed by Claude Code's **official** extension points, wired only for shells minmux
 launches (zero user setup, no global-config footprint). Full design: **`design/AGENT_OBSERVABILITY.md`**.
 
 **Why it fits now:** we already have the hard parts — per-session status, OSC-7 cwd, and the
@@ -405,7 +405,7 @@ risky logic is a **pure, tested reducer** (`lib/agent-graph.ts`), matching our c
 Claude **emits** its own structure via hooks + OpenTelemetry. Ingesting those is a supported
 integration, not private-state scraping (this refines `design/AGENT_TEAMS.md` §11).
 
-**Architecture vision — agent-agnostic by design.** smterm aims to be a runner for _any_ agent, not
+**Architecture vision — agent-agnostic by design.** minmux aims to be a runner for _any_ agent, not
 just Claude. The board is built around a neutral `AgentEvent` seam: only the ingestion + normalization
 below it know an agent's specifics; the reducer, graph, panel, worktree/folder view and open-a-terminal
 action above it are all agent-agnostic. Adding opencode / codex / etc. is a per-agent adapter + normalizer

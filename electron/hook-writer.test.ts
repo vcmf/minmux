@@ -38,11 +38,11 @@ describe("buildHookSettings", () => {
 
 describe("HOOK_WRITER (end-to-end via node -e)", () => {
   it("writes stdin to a pane-id-prefixed file the watcher can parse", () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "smterm-hw-"))
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "minmux-hw-"))
     const payload = JSON.stringify({ hook_event_name: "PreToolUse", session_id: "s1" })
     execFileSync("node", ["-e", HOOK_WRITER, dir], {
       input: payload,
-      env: { ...process.env, SMTERM_PANE_ID: "pane-1" },
+      env: { ...process.env, MINMUX_PANE_ID: "pane-1" },
     })
     const files = fs.readdirSync(dir)
     expect(files).toHaveLength(1)

@@ -652,7 +652,7 @@ describe("SshService.spawnPlan", () => {
       error: "WSL hosts can only be opened on Windows",
     })
     expect(await h.svc.spawnPlan({ hostId: "unavailable" })).toEqual({
-      error: expect.stringContaining("newer smterm"),
+      error: expect.stringContaining("newer minmux"),
     })
   })
 

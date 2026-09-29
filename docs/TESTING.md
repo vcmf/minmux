@@ -1,4 +1,4 @@
-# smterm — Quality: Linting & Testing
+# minmux — Quality: Linting & Testing
 
 > A terminal app is OS-specific (macOS, Linux, Windows + WSL from one codebase), full of async
 > edges (PTY output, resize races, hook events arriving out of order) and silent failure modes
@@ -13,7 +13,7 @@
 | Pure logic (`src/lib`, `src/settings`) | Vitest                                                   | pane-tree (split / surfaces / move), workspace persistence + migration, session status, session colour, drop zones, themes (incl. contrast), schema, parsers — **test exhaustively**, including malformed input and no-op cases. |
 | Main-process modules (`electron/*`)    | Vitest, real `fs` in temp dirs                           | coalescer, output buffer, transcript folds, agent-meta tracker, pane-git service, hook writer, shell integration; `git.integration.test.ts` runs real `git` in a throwaway repo.                                                 |
 | Components + store                     | Vitest + Testing Library (jsdom)                         | most chrome components, store actions, an App smoke test.                                                                                                                                                                        |
-| The real app                           | Playwright `_electron` — the **`run-smterm` skill** (§4) | terminal-manager, real PTYs, WebGL, focus, drag & drop, themes, Claude hook/transcript flows.                                                                                                                                    |
+| The real app                           | Playwright `_electron` — the **`run-minmux` skill** (§4) | terminal-manager, real PTYs, WebGL, focus, drag & drop, themes, Claude hook/transcript flows.                                                                                                                                    |
 
 `make test` runs the first three (~600 tests, a few seconds). Not unit-testable: `node-pty`
 (an Electron-ABI native module — Vitest can't load it) and WebGL (absent in jsdom), so
@@ -32,7 +32,7 @@ Both tsconfigs are `strict`; the renderer one adds `noUncheckedIndexedAccess`.
 
 ## 3. Patterns that work here
 
-- **The ipc seam is stubbed globally.** `src/test/setup.ts` installs a `window.smterm` stub of the
+- **The ipc seam is stubbed globally.** `src/test/setup.ts` installs a `window.minmux` stub of the
   whole preload surface; override per test with `vi.mocked(ipc.x).mockResolvedValue(…)`. A new
   channel needs an entry there or components crash on mount.
 - **Mock `TerminalManager` in component tests** (`vi.mock("../terminal/terminal-manager", …)`) —
@@ -52,7 +52,7 @@ Both tsconfigs are `strict`; the renderer one adds `noUncheckedIndexedAccess`.
 ## 4. Verifying in the real app
 
 Anything touching real terminals, focus, rendering or Claude integration gets checked in the
-**built** app with the `run-smterm` skill (`.claude/skills/run-smterm/` — `SKILL.md` + a
+**built** app with the `run-minmux` skill (`.claude/skills/run-minmux/` — `SKILL.md` + a
 Playwright driver): isolated `HOME` / user-data dir (never the user's real layout or hook
 settings), DOM renderer for text assertions, screenshots for visuals, simulated Claude hook
 events. Look at the screenshots — a blank or garbled frame is a failure even if selectors matched.
@@ -66,5 +66,5 @@ not a goal: the pure modules should be near 100% including edge cases; UI glue a
 
 ## 6. Performance
 
-Hot-path changes (PTY → renderer → xterm) are measured, not guessed: `SMTERM_PERF=1` runs the
+Hot-path changes (PTY → renderer → xterm) are measured, not guessed: `MINMUX_PERF=1` runs the
 load harness — see `PERF.md`.

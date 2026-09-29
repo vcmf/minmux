@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest"
 import { parseEnvBlock } from "./shell-env"
 
-const D = "__SMTERM_ENV__"
+const D = "__MINMUX_ENV__"
 
 describe("parseEnvBlock", () => {
   it("parses KEY=VALUE lines between the delimiters", () => {

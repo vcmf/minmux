@@ -20,7 +20,7 @@ describe("TopBar", () => {
     st().newTab(testShell)
     st().renameTab(st().tabs[0]!.id, "build")
     render(<TopBar />)
-    expect(screen.getByText("smterm")).toBeInTheDocument()
+    expect(screen.getByText("minmux")).toBeInTheDocument()
     expect(screen.getByText("build")).toBeInTheDocument()
   })
 

@@ -292,7 +292,7 @@ describe("TerminalManager — what a dropped connection leaves behind", () => {
     term.buffer.active.type = "alternate"
     exitHandlers[id]!({ code: 255, signal: 0 })
     expect(term.written).toContain("\x1b[?1049l")
-    expect(term.written.indexOf("\x1b[?1049l")).toBeLessThan(term.written.indexOf("[smterm]"))
+    expect(term.written.indexOf("\x1b[?1049l")).toBeLessThan(term.written.indexOf("[minmux]"))
   })
 
   it("ends a 'running' status (nothing runs in a closed pane)", async () => {

@@ -1,4 +1,4 @@
-# Architecture — smterm (Cross-Platform Terminal App)
+# Architecture — minmux (Cross-Platform Terminal App)
 
 > A cmux-inspired terminal app for running (and watching) multiple shell/agent sessions. No embedded
 > browser — links open in the OS default browser. Native desktop notifications. Runs on **macOS,
@@ -17,7 +17,7 @@ consistency — see §3.5). Shipping as v0.x; progress in `ROADMAP.md`, traps in
 - **Shell / renderer** (2026-07-07): **Electron (Chromium) + xterm.js WebGL renderer.** Chosen over
   Tauri after Tauri's WKWebView caused recurring glyph-rendering bugs (§3.5). Chromium gives one
   consistent engine on all OSes + the fast WebGL renderer (ligatures + icons + speed).
-- **Name** (2026-07-06): stays `smterm` (the `mux` design's brand label maps to `smterm`).
+- **Name** (2026-07-06): stays `minmux` (the `mux` design's brand label maps to `minmux`).
 - **Code conventions** (2026-07-07): **kebab-case filenames** (`terminal-manager.ts`), **no
   semicolons** (Prettier `semi: false`). See §13.
 
@@ -137,7 +137,7 @@ OSes, eliminating the per-webview whack-a-mole Tauri would force (WKWebView / We
 │     │      xterm.js  ── addons: webgl, fit, web-links, unicode11          │
 │     │        ▲ bytes (WebGL render)        │ keystrokes                   │
 │     └── stores (Zustand): sessions · pane tree · settings · status        │
-│              │  window.smterm.*  (typed preload API)                      │
+│              │  window.minmux.*  (typed preload API)                      │
 └──────────────┼────────────────────────────────────────────────────────────┘
                │  contextBridge  ↕  ipcRenderer / ipcMain
 ┌──────────────┴──────────────────── Main process (Node) ───────────────────┐
@@ -245,7 +245,7 @@ Output stream: main → renderer via `webContents.send('pty:data:'+id, Uint8Arra
   (`agent-hooks.ts`) — no ports, crosses the WSL boundary. Events feed the Agents board, the
   sidebar snippet and, via the session transcript (read incrementally, best-effort —
   `transcript-fold.ts`), the token badge and the session colour.
-- **IPC:** all backend calls go through `lib/ipc.ts` → `window.smterm.*` (preload). Components never
+- **IPC:** all backend calls go through `lib/ipc.ts` → `window.minmux.*` (preload). Components never
   touch Electron directly (keeps them testable + portable).
 - **Chrome:** tab bar, sidebar tree, status bar, ⌘K palette (mux reskin — ROADMAP M3.5).
 
@@ -316,7 +316,7 @@ CI: GitHub Actions matrix (macos/ubuntu/windows). Auto-update later via `electro
 ## 11. IPC / event model
 
 - **The seam:** every channel is declared twice — the runtime in `electron/preload.ts`
-  (`window.smterm`) and the types in `src/lib/ipc.ts`; change both together. Components never
+  (`window.minmux`) and the types in `src/lib/ipc.ts`; change both together. Components never
   import Electron.
 - **Renderer → main** (`invoke` for answers, `send` for fire-and-forget), by family: `pty:*`
   (spawn = attach-or-spawn, write, resize, kill) · `shells:list` · `settings:*` / `workspace:*`
@@ -336,8 +336,8 @@ CI: GitHub Actions matrix (macos/ubuntu/windows). Auto-update later via `electro
 
 ## 12. Persistence & session lifetime
 
-Config dir: `~/.config/smterm/` (`%APPDATA%\smterm\` on Windows) — `smterm-<profile>` for a
-non-default profile; a dev build is `smterm-dev` (GOTCHAS #profiles).
+Config dir: `~/.config/minmux/` (`%APPDATA%\minmux\` on Windows) — `minmux-<profile>` for a
+non-default profile; a dev build is `minmux-dev` (GOTCHAS #profiles).
 
 - **`settings.json`** — the source of truth for preferences (font, theme family + appearance,
   renderer, shell, …). A `chokidar` watcher applies hand-edits live; the settings panel writes
@@ -350,7 +350,7 @@ non-default profile; a dev build is `smterm-dev` (GOTCHAS #profiles).
 - **`agent-sessions.json`** — which Claude session each terminal is inside, so a relaunch can
   type `claude --resume <id>` back into it (GOTCHAS #resume).
 - **Small caches:** `window-bg` (native window colour for the next launch), `claude-hooks.json`
-  and the per-launch `hook-events/` drop dir, and localStorage `smterm:theme-vars` (first paint).
+  and the per-launch `hook-events/` drop dir, and localStorage `minmux:theme-vars` (first paint).
 - **Process lifetime:** PTYs live in the main process, so they **survive a renderer reload**
   (attach-or-spawn reattach + replay). They **die on a full quit** (guarded by a confirm
   dialog); relaunch respawns shells at the saved cwd. Surviving a quit needs the daemon
@@ -365,7 +365,7 @@ Design: `docs/design/SSH_REMOTES.md`; build log: `docs/design/SSH_IMPLEMENTATION
 
 - **Hosts come from `~/.ssh/config` only** (plus each running WSL distro's). `electron/ssh-config.ts` reads it (Includes, conditional blocks, first value wins) into aliases;
   `ssh-service.ts` keeps the merged list, watched by one chokidar watcher, and tells the
-  renderer on change. No host is defined in smterm.
+  renderer on change. No host is defined in minmux.
 - **Main trusts only its own list.** A remote session carries a `RemoteRef` (host id, label,
   target, env); on `pty:spawn` main looks the id up in its list and builds the argv itself
   (`ssh [keepalive] -t -- <alias>`, or `wsl.exe -d <distro> -e ssh …`). An unknown host is
@@ -410,7 +410,7 @@ Design: `docs/design/SSH_REMOTES.md`; build log: `docs/design/SSH_IMPLEMENTATION
 ## 15. Decisions
 
 Resolved: purpose (agent-runner), React+TS+Zustand, tabs+splits, native-Win+`wsl.exe`, **Electron +
-xterm WebGL** (2026-07-07), name `smterm`, kebab-case + no-semicolons.
+xterm WebGL** (2026-07-07), name `minmux`, kebab-case + no-semicolons.
 
 Open: notification triggers to ship first (rec: OSC 9 + output-idle); whether/when to adopt
 **libghostty** (native core; would need Electron-native embedding — tracked as a future core decision).
@@ -445,7 +445,7 @@ existing `tmux` instead — A.5).
 ### A.2 The core move: split the PTY owner from the UI
 
 Today the Electron **main process** owns the `node-pty` map _and_ the window. Persistence means moving
-PTY ownership into a long-lived **detached daemon** (a separate Node process, `smterm-daemon`), with
+PTY ownership into a long-lived **detached daemon** (a separate Node process, `minmux-daemon`), with
 the Electron app as a **thin client** that connects over a socket, sends keystrokes/resizes, and
 paints byte streams. Same client/server split as tmux/zellij.
 

@@ -2,8 +2,8 @@ import { Terminal } from "@xterm/xterm"
 import { WebglAddon } from "@xterm/addon-webgl"
 import { ipc } from "./ipc"
 
-// Load-test harness (dev only). Run with `SMTERM_PERF=1 make run`, or call
-// window.__smtermPerf() from devtools. Measures the two throughput paths that
+// Load-test harness (dev only). Run with `MINMUX_PERF=1 make run`, or call
+// window.__minmuxPerf() from devtools. Measures the two throughput paths that
 // matter for a terminal + resource use, and prints a [PERF] JSON report.
 
 const now = () => performance.now()
@@ -129,5 +129,5 @@ export async function runPerfSuite() {
 
 // Expose for manual runs from devtools.
 if (typeof window !== "undefined") {
-  ;(window as unknown as { __smtermPerf: () => Promise<unknown> }).__smtermPerf = runPerfSuite
+  ;(window as unknown as { __minmuxPerf: () => Promise<unknown> }).__minmuxPerf = runPerfSuite
 }

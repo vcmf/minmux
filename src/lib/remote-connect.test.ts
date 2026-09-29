@@ -235,8 +235,8 @@ describe("cleanError", () => {
 })
 
 describe("banner", () => {
-  it("puts a dim [smterm] line on its own row", () => {
-    expect(banner("hi")).toBe("\r\n\u001b[2m[smterm] hi\u001b[0m\r\n")
+  it("puts a dim [minmux] line on its own row", () => {
+    expect(banner("hi")).toBe("\r\n\u001b[2m[minmux] hi\u001b[0m\r\n")
   })
 })
 

@@ -100,8 +100,8 @@ export function StatusBar() {
             <span className="dot accent pulse" />v{update.latest}
           </button>
         ) : (
-          <span className="sb-version status-faint" title={`smterm v${version}`}>
-            smterm {version}
+          <span className="sb-version status-faint" title={`minmux v${version}`}>
+            minmux {version}
           </span>
         ))}
     </div>

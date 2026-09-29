@@ -1,5 +1,5 @@
 // Dev-only cosmetic: rename the Electron.app bundle used by `electron-vite dev` so the
-// macOS dock/menu read "smterm" instead of "Electron". In dev the app runs from
+// macOS dock/menu read "minmux" instead of "Electron". In dev the app runs from
 // node_modules/electron/dist/Electron.app, whose Info.plist CFBundleName is fixed at launch
 // (app.setName can't override it) — packaged builds already read productName. Idempotent and
 // self-healing: runs before every `npm run dev` (predev), so a reinstall that resets the
@@ -10,7 +10,7 @@ import { createRequire } from "node:module"
 
 if (process.platform !== "darwin") process.exit(0)
 
-const NAME = "smterm"
+const NAME = "minmux"
 const require = createRequire(import.meta.url)
 
 let plist

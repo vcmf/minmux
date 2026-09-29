@@ -130,7 +130,7 @@ export function hostMenuItems(o: {
             label: o.integration ? "Turn off shell integration" : "Turn on shell integration",
           },
         ]),
-    // The ssh config smterm can open is this machine's; a WSL host's lives in its distro.
+    // The ssh config minmux can open is this machine's; a WSL host's lives in its distro.
     ...(o.native
       ? [{ id: "openConfig" as HostActionId, label: "Open ssh config", separatorBefore: true }]
       : []),

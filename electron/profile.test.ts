@@ -17,12 +17,12 @@ describe("resolveProfile", () => {
     expect(dev("  ")).toEqual({ profile: "dev" })
   })
 
-  it("an installed app ignores SMTERM_PROFILE entirely — even an invalid one", () => {
+  it("an installed app ignores MINMUX_PROFILE entirely — even an invalid one", () => {
     expect(installed("qa")).toEqual({ profile: DEFAULT_PROFILE })
     expect(installed("wt_1")).toEqual({ profile: DEFAULT_PROFILE })
   })
 
-  it("a dev build takes SMTERM_PROFILE", () => {
+  it("a dev build takes MINMUX_PROFILE", () => {
     expect(dev("wt-ssh-2")).toEqual({ profile: "wt-ssh-2" })
     expect(dev(" Dev ")).toEqual({ profile: "dev" }) // trimmed, case-folded
   })
@@ -43,7 +43,7 @@ describe("resolveProfile", () => {
   it("an invalid name is an error naming its source — never a silent fallback", () => {
     for (const bad of ["../x", "a/b", "a b", "-x", "x".repeat(40), "é", "a.b", "wt_1"]) {
       const fromEnv = dev(bad)
-      expect("error" in fromEnv && fromEnv.error).toContain("SMTERM_PROFILE=")
+      expect("error" in fromEnv && fromEnv.error).toContain("MINMUX_PROFILE=")
       for (const r of [dev(undefined, bad), installed(undefined, bad)]) {
         expect("error" in r && r.error).toContain("--profile=")
       }
@@ -59,35 +59,45 @@ describe("resolveProfile", () => {
 describe("profileNames / displayName", () => {
   it("the default profile keeps the installed app's names", () => {
     const n = profileNames(DEFAULT_PROFILE)
-    expect(n).toEqual({ appName: "smterm", label: "" })
-    expect(displayName(n)).toBe("smterm")
+    expect(n).toEqual({ appName: "minmux", label: "" })
+    expect(displayName(n)).toBe("minmux")
   })
 
   it("another profile gets its own dir name and a label", () => {
     const n = profileNames("dev")
-    expect(n).toEqual({ appName: "smterm-dev", label: "dev" })
-    expect(displayName(n)).toBe("smterm (dev)")
+    expect(n).toEqual({ appName: "minmux-dev", label: "dev" })
+    expect(displayName(n)).toBe("minmux (dev)")
   })
 })
 
 describe("scrubParentInstanceEnv", () => {
-  it("drops what a parent smterm set for its own pane, and nothing else", () => {
+  it("drops what a parent minmux set for its own pane, and nothing else", () => {
     const env: Record<string, string | undefined> = {
-      SMTERM_PROFILE: "dev",
-      SMTERM_CLAUDE_SETTINGS: "/home/me/.config/smterm/claude-hooks.json",
-      SMTERM_PANE_ID: "p1",
-      SMTERM_SHARE_HISTORY: "0",
-      SMTERM_ZDOTDIR: "/tmp/smterm/shell-integration/zsh",
-      SMTERM_PERF: "1", // a user knob: kept
+      MINMUX_PROFILE: "dev",
+      MINMUX_CLAUDE_SETTINGS: "/home/me/.config/minmux/claude-hooks.json",
+      MINMUX_PANE_ID: "p1",
+      MINMUX_SHARE_HISTORY: "0",
+      MINMUX_ZDOTDIR: "/tmp/minmux/shell-integration/zsh",
+      MINMUX_PERF: "1", // a user knob: kept
       PATH: "/usr/bin",
     }
     expect(scrubParentInstanceEnv(env).sort()).toEqual([
-      "SMTERM_CLAUDE_SETTINGS",
-      "SMTERM_PANE_ID",
-      "SMTERM_PROFILE",
-      "SMTERM_SHARE_HISTORY",
-      "SMTERM_ZDOTDIR",
+      "MINMUX_CLAUDE_SETTINGS",
+      "MINMUX_PANE_ID",
+      "MINMUX_PROFILE",
+      "MINMUX_SHARE_HISTORY",
+      "MINMUX_ZDOTDIR",
     ])
-    expect(env).toEqual({ SMTERM_PERF: "1", PATH: "/usr/bin" })
+    expect(env).toEqual({ MINMUX_PERF: "1", PATH: "/usr/bin" })
+  })
+
+  it("also drops them under the old smterm names (started from an smterm pane)", () => {
+    const env: Record<string, string | undefined> = {
+      SMTERM_PANE_ID: "p1",
+      SMTERM_CLAUDE_SETTINGS: "/home/me/.config/smterm/claude-hooks.json",
+      SMTERM_PERF: "1",
+    }
+    expect(scrubParentInstanceEnv(env).sort()).toEqual(["SMTERM_CLAUDE_SETTINGS", "SMTERM_PANE_ID"])
+    expect(env).toEqual({ SMTERM_PERF: "1" })
   })
 })

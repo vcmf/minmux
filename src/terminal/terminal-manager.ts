@@ -13,7 +13,7 @@ import { withAlpha } from "../settings/themes"
 import { displaySessionTitle } from "../lib/session-label"
 import { allPanes, allSessionIds, visibleSessionIds } from "../lib/pane-tree"
 import { canRetry, sshFailureKind, type SshFailure } from "../lib/ssh-errors"
-import { parseRemoteReport, reopenFor, SMTERM_OSC } from "../lib/remote-reports"
+import { parseRemoteReport, reopenFor, MINMUX_OSC } from "../lib/remote-reports"
 import { cwdFromOsc7, cwdFromTitle, sameMachine } from "../lib/remote-cwd"
 import { webglPanes, shouldRebuildAtlas } from "../lib/renderer-policy"
 import { appShortcut, keyAction } from "../lib/terminal-keys"
@@ -730,7 +730,7 @@ function spawn(session: Session, entry: Entry) {
     requestPty(session.id, entry, attach, session)
   } else requestPty(session.id, entry, false, session)
 
-  // This pane was inside a Claude session when smterm quit/crashed: resume it once the shell
+  // This pane was inside a Claude session when minmux quit/crashed: resume it once the shell
   // is ready. Shells with our integration (zsh/bash, incl. inside WSL) announce their first
   // prompt (OSC 133 D) — wait for it and never type blind: a slow rc may be sitting on its own
   // prompt ("update? [Y/n]") that the keystrokes would answer. If it never comes, fall back to
@@ -816,7 +816,7 @@ function spawn(session: Session, entry: Entry) {
   // An integrated ssh pane's own shell (docs/design/SSH_REMOTES.md §8): its reports carry this
   // connection's nonce, so a program printing escape codes can't pass for them. Once one has
   // come, the untagged OSC 7 / 133 / title on this pane are a program's, and ignored.
-  term.parser.registerOscHandler(SMTERM_OSC, (data) => {
+  term.parser.registerOscHandler(MINMUX_OSC, (data) => {
     if (!session.remote) return true
     const r = parseRemoteReport(data, entry.nonce)
     if (!r) return true
@@ -835,7 +835,7 @@ function spawn(session: Session, entry: Entry) {
 
   // OSC 133;C/D — command start/finish.
   term.parser.registerOscHandler(133, (data) => {
-    if (session.remote && entry.verified) return true // see the SMTERM_OSC handler
+    if (session.remote && entry.verified) return true // see the MINMUX_OSC handler
     const kind = data.charAt(0)
     if (kind === "C") store.signalSession(session.id, { type: "command-start" })
     else if (kind === "D") {

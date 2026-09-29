@@ -63,7 +63,7 @@ export function ThemePicker() {
   )
 }
 
-/** A miniature smterm window drawn in `theme`'s own colours (inline — not the live CSS vars). */
+/** A miniature minmux window drawn in `theme`'s own colours (inline — not the live CSS vars). */
 function ThemePreview({ theme }: { theme: Theme }) {
   const t = theme.terminal
   return (

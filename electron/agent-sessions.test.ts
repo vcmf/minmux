@@ -129,7 +129,7 @@ describe("SessionLedger rules", () => {
 describe("SessionLedger — round-2 rules", () => {
   let dir: string
   beforeEach(() => {
-    dir = fs.mkdtempSync(path.join(os.tmpdir(), "smterm-ledger2-"))
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), "minmux-ledger2-"))
   })
   afterEach(() => {
     vi.useRealTimers()
@@ -237,7 +237,7 @@ describe("SessionLedger.plan", () => {
   })
 
   it("consume is one-shot (the carried entry); prune drops panes no longer in the workspace", async () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "smterm-ledger-c-"))
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "minmux-ledger-c-"))
     const file = path.join(dir, "l.json")
     const a = new SessionLedger(file)
     a.apply(start())
@@ -270,7 +270,7 @@ describe("SessionLedger.plan", () => {
 describe("SessionLedger persistence", () => {
   let dir: string
   beforeEach(() => {
-    dir = fs.mkdtempSync(path.join(os.tmpdir(), "smterm-ledger-"))
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), "minmux-ledger-"))
   })
   afterEach(() => {
     vi.useRealTimers()
@@ -448,7 +448,7 @@ describe("SessionLedger — the folder must be where Claude filed the session", 
   })
 
   it("an entry recorded with a mismatching folder (before this check) is skipped, never cd'd into", async () => {
-    const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "smterm-ledger-m-")), "l.json")
+    const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "minmux-ledger-m-")), "l.json")
     fs.writeFileSync(
       file,
       JSON.stringify({ p1: { sessionId: ID, cwd: PAD, transcriptPath: T_DIMO } }),

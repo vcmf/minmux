@@ -812,7 +812,7 @@ describe("wslMiniFs", () => {
 describe("nodeMiniFs", () => {
   let dir: string
   beforeEach(() => {
-    dir = fs.mkdtempSync(path.join(os.tmpdir(), "smterm-sshcfg-"))
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), "minmux-sshcfg-"))
   })
   afterEach(() => fs.rmSync(dir, { recursive: true, force: true }))
 

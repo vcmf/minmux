@@ -23,7 +23,7 @@ connection reuse, no settings-defined hosts (see `SSH_REMOTES.md` §4b, D1/D8).
 - `electron/preload.ts` and `src/lib/ipc.ts` change together whenever a channel is added.
 - Nothing touches the PTY → renderer → xterm hot path. Host parsing and file watching run in
   main, async and cached.
-- Touching terminals, spawn or focus → verify in the real app (`run-smterm` skill).
+- Touching terminals, spawn or focus → verify in the real app (`run-minmux` skill).
 
 ---
 
@@ -126,11 +126,11 @@ target one.
 - `"auto"` (default): restored SSH panes connect as they're shown (the active tab at once,
   background tabs when first opened — the existing lazy start).
 - `"on-focus"`: a restored remote session doesn't spawn on attach; the xterm shows
-  `[smterm] gpu-box — press Enter to connect`, and Enter (or a Connect button in the pane
+  `[minmux] gpu-box — press Enter to connect`, and Enter (or a Connect button in the pane
   header) spawns it. Other keys are dropped; the Enter isn't forwarded.
 
 **Reconnect after exit.** `onPtyExit(id)` marks the entry exited. Remote sessions show
-`[smterm] connection closed (code N) — press Enter to reconnect` (`exit` → "session ended");
+`[minmux] connection closed (code N) — press Enter to reconnect` (`exit` → "session ended");
 Enter respawns the **same session id**: the xterm listeners stay wired (a second
 `term.onData` would send every key twice); only the PTY is requested again — main dropped the
 old record on exit.
@@ -172,7 +172,7 @@ Run on macOS and Linux; Windows + WSL if a machine is available (else mark untes
 - [ ] Editing `~/.ssh/config` updates the sidebar within a second; ssh writing known_hosts doesn't.
 - [ ] Key auth, passphrase-protected key, ssh-agent, password auth, 2FA prompt all work in-pane.
 - [ ] `ProxyJump` host connects.
-- [ ] A user's own `ControlMaster` config makes the second pane instant (smterm adds nothing).
+- [ ] A user's own `ControlMaster` config makes the second pane instant (minmux adds nothing).
 - [ ] Split, new surface from an SSH pane stay on the host; "open folder in split" is local.
 - [ ] Changes / Files panels show the remote notice; no local git polling for remote panes.
 - [ ] Remote output containing `/etc/hosts` is not a clickable local link.
@@ -182,7 +182,7 @@ Run on macOS and Linux; Windows + WSL if a machine is available (else mark untes
 - [ ] `exit` on the remote: "session ended", Enter starts a new one.
 - [ ] Windows native host via `ssh.exe` works.
 - [ ] WSL host: runs the distro's ssh, reads the distro's config, no `-- bash --rcfile`.
-- [ ] `SMTERM_PERF=1`: e2e throughput and idle CPU unchanged vs `main`.
+- [ ] `MINMUX_PERF=1`: e2e throughput and idle CPU unchanged vs `main`.
 
 ---
 

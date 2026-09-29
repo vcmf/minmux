@@ -6,7 +6,7 @@ import { execFileSync } from "node:child_process"
 // found". We fix it the way VS Code/iTerm do: run the login+interactive shell once at
 // startup, capture its resolved env, and import it so spawned PTYs see the real PATH.
 
-const DELIM = "__SMTERM_ENV__"
+const DELIM = "__MINMUX_ENV__"
 
 /** Extract the KEY=VALUE block our probe prints between two delimiters. Pure — tested.
  *  Ignores any prompt/init noise the interactive shell emits outside the delimiters. */

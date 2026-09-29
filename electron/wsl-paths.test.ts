@@ -25,8 +25,8 @@ describe("wslUncCandidates", () => {
 
 describe("winToMnt", () => {
   it("maps a Windows drive path to /mnt/<drive>/…", () => {
-    expect(winToMnt("C:\\Users\\me\\AppData\\Roaming\\smterm")).toBe(
-      "/mnt/c/Users/me/AppData/Roaming/smterm",
+    expect(winToMnt("C:\\Users\\me\\AppData\\Roaming\\minmux")).toBe(
+      "/mnt/c/Users/me/AppData/Roaming/minmux",
     )
     expect(winToMnt("D:/data/x")).toBe("/mnt/d/data/x")
   })

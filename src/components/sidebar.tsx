@@ -516,7 +516,7 @@ function PrLine({ pr }: { pr: PrInfo }) {
   )
 }
 
-const REMOTE_COLLAPSED_KEY = "smterm.sidebar.remoteCollapsed"
+const REMOTE_COLLAPSED_KEY = "minmux.sidebar.remoteCollapsed"
 
 // A per-window convenience: storage can be missing or throw (private mode, tests).
 // Collapsed until you open it (then your choice is remembered): the header's status says

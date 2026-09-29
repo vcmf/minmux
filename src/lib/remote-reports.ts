@@ -6,7 +6,7 @@ import { hasFormatChar } from "./remote-cwd"
 import type { Session } from "../types"
 
 /** The private OSC code the remote hooks and the bootstrap use (xterm ignores unknown codes). */
-export const SMTERM_OSC = 6973
+export const MINMUX_OSC = 6973
 
 export type RemoteReport =
   | { kind: "start" } // a command started (OSC 133;C's twin)

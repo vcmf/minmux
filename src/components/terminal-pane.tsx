@@ -277,7 +277,7 @@ export function TerminalPane({ pane, tabId }: { pane: PaneLeaf; tabId: string })
                 draggable
                 onDragStart={(e) => {
                   e.dataTransfer.effectAllowed = "move"
-                  e.dataTransfer.setData("application/x-smterm-surface", id)
+                  e.dataTransfer.setData("application/x-minmux-surface", id)
                   useStore.getState().setDragging({ tabId, sessionId: id })
                 }}
                 onDragEnd={() => useStore.getState().setDragging(null)}

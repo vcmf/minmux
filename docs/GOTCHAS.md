@@ -1,4 +1,4 @@
-# Gotchas — smterm
+# Gotchas — minmux
 
 The non-obvious traps, with the _why_. CLAUDE.md carries a one-line flag for each of
 these; this file is the detail you read when one bites. See also `ARCHITECTURE.md`
@@ -7,7 +7,7 @@ these; this file is the detail you read when one bites. See also `ARCHITECTURE.m
 ## Renderer ↔ main seam {#seam}
 
 Renderer talks to main **only via `src/lib/ipc.ts`** (preload exposes it as
-`window.smterm`). Don't import Electron in React. This one seam is also the insulation
+`window.minmux`). Don't import Electron in React. This one seam is also the insulation
 point for the out-of-process session daemon (ARCHITECTURE Appendix A).
 
 Terminals live in **`terminal/terminal-manager.ts`, OUTSIDE the React tree**, keyed by
@@ -91,7 +91,7 @@ don't emit OSC 7 (plain PowerShell/cmd, or before the first prompt) have no cwd 
 diff panel is empty and new panes fall back to `$HOME`. Not a bug — graceful degradation.
 
 **Layout is persisted, processes are not — across a full quit.** The tab/pane tree +
-each pane's `{command,args,cwd}` are saved (debounced) to `~/.config/smterm/
+each pane's `{command,args,cwd}` are saved (debounced) to `~/.config/minmux/
 workspace.json` and restored on launch (VS Code-style: fresh shells respawn in the saved
 cwds; scrollback/running programs are gone).
 
@@ -114,7 +114,7 @@ settings.json.
 
 ## zsh/bash history is shared across panes (cmux-like) {#history}
 
-**Fixed 2026-07-10.** Symptom was: unlike cmux, smterm panes didn't share command history
+**Fixed 2026-07-10.** Symptom was: unlike cmux, minmux panes didn't share command history
 live (type in pane A, reuse in pane B) and history often didn't survive closing the app —
 even with the user's `HISTFILE`/`HISTSIZE`/`SAVEHIST` set (so `.zshrc` **was** loading;
 never an rc-loading problem). Root cause: our injected integration didn't enable shared
@@ -125,15 +125,15 @@ in a cmux pane with the user's `.zshrc` having it off, so cmux enables it itself
 
 - **zsh:** after sourcing the user's `.zshrc` (so it wins), `setopt SHARE_HISTORY` + sane
   `HISTFILE`/`SAVEHIST`/`HISTSIZE` fallbacks **only when unset**.
-- **bash:** `shopt -s histappend` + `history -a; history -n` in `__smterm_precmd` (after
+- **bash:** `shopt -s histappend` + `history -a; history -n` in `__minmux_precmd` (after
   `local ret=$?` so it can't clobber the reported exit code).
 - **Why it also fixes persistence:** `SHARE_HISTORY`/`histappend` write each command to
   `HISTFILE` **immediately**, so history survives even the hard `proc.kill()` on close — we
   did **not** need to touch the PTY kill/reattach lifecycle (which session-survival depends
   on). Graceful shutdown would be a nice-to-have but is unnecessary for history.
 - **Opt-out:** it's an opinionated semantics change (cross-pane chronological interleave vs
-  per-session order), so it's gated on `SMTERM_SHARE_HISTORY` (default on). The
-  `shareHistory` setting (schema, default `true`) → `main.ts` sets `SMTERM_SHARE_HISTORY=0`
+  per-session order), so it's gated on `MINMUX_SHARE_HISTORY` (default on). The
+  `shareHistory` setting (schema, default `true`) → `main.ts` sets `MINMUX_SHARE_HISTORY=0`
   in the spawn env when off; `wslInjection` lists the var in `$WSLENV` so the opt-out
   crosses into WSL.
 - **Invariant:** all panes must keep the **same `HISTFILE`** — the injection must never set
@@ -141,27 +141,27 @@ in a cmux pane with the user's `.zshrc` having it off, so cmux enables it itself
 - **ZDOTDIR poisons `HISTFILE` (fixed 2026-07-15).** We inject `ZDOTDIR=<temp>` to load our
   rc, but a **system zshrc runs before our rc** and (macOS `/etc/zshrc`, some Linux) does
   `HISTFILE=${ZDOTDIR:-$HOME}/.zsh_history` — pointing `HISTFILE` into our **temp** dir.
-  Result: smterm panes shared history **with each other** (same temp file) but were **siloed
+  Result: minmux panes shared history **with each other** (same temp file) but were **siloed
   from every other terminal** (vscode/cmux/Terminal, which use `$HOME/.zsh_history`). Fix: our
   rc repoints `HISTFILE` whenever it landed **inside** our injected dir (`"$HISTFILE" ==
-"$SMTERM_ZDOTDIR"/*`, guarded by `-n "$SMTERM_ZDOTDIR"`), keeping the basename →
-  `${SMTERM_USER_ZDOTDIR:-$HOME}/${HISTFILE:t}` (so it matches whatever file other terminals
+"$MINMUX_ZDOTDIR"/*`, guarded by `-n "$MINMUX_ZDOTDIR"`), keeping the basename →
+  `${MINMUX_USER_ZDOTDIR:-$HOME}/${HISTFILE:t}` (so it matches whatever file other terminals
   use; never a `HISTFILE` the user set elsewhere on purpose). Runs even when shared-history is
   opted out — a file-location correctness fix, not a sharing opt-in. **Cross-platform:** local
-  zsh (macOS/Linux) sets `SMTERM_ZDOTDIR` via `buildInjection`; **WSL** sets it in
+  zsh (macOS/Linux) sets `MINMUX_ZDOTDIR` via `buildInjection`; **WSL** sets it in
   `wslInjection` and forwards it over `$WSLENV`, so the repoint fires there too. bash is
   unaffected (no ZDOTDIR).
 
 ## Profiles: a dev build is its own app {#profiles}
 
 An unpackaged build (`make run`) runs as the **`dev` profile**; the installed app keeps the
-plain `smterm` names. A profile owns every piece of per-instance state:
+plain `minmux` names. A profile owns every piece of per-instance state:
 
-- **Electron user-data dir** (`~/Library/Application Support/smterm-dev`, `%APPDATA%\smterm-dev`,
-  `~/.config/smterm-dev` on Linux): the **single-instance lock** and localStorage.
-- **Config dir** (`~/.config/smterm-dev`, `%APPDATA%\smterm-dev`): settings, workspace,
+- **Electron user-data dir** (`~/Library/Application Support/minmux-dev`, `%APPDATA%\minmux-dev`,
+  `~/.config/minmux-dev` on Linux): the **single-instance lock** and localStorage.
+- **Config dir** (`~/.config/minmux-dev`, `%APPDATA%\minmux-dev`): settings, workspace,
   Claude hook files and ledger, diagnostics.
-- **Shell-integration dir** (`$TMPDIR/smterm-dev/shell-integration`): rewritten on every
+- **Shell-integration dir** (`$TMPDIR/minmux-dev/shell-integration`): rewritten on every
   spawn, so a shared one would feed an installed app's new shells another branch's scripts
   (or a half-written `.zshrc`).
 
@@ -170,20 +170,26 @@ had it started, it would have overwritten the installed app's workspace and
 `claude-hooks.json` (the ECONNREFUSED hook spam the lock exists to prevent).
 
 - `--profile=<name>` (lowercase, digits, `-`; the `=` is required — Chromium's switch syntax)
-  picks a profile for either build. **`SMTERM_PROFILE` works for a dev build only**: an
+  picks a profile for either build. **`MINMUX_PROFILE` works for a dev build only**: an
   installed app ignores ambient env, so an export meant for dev runs can never move it.
   `default` / `prod` is the installed app's. An **invalid** name stops main synchronously
   (stderr + an error box on macOS/Windows; Linux has no dialog before ready) before any name,
   path or lock is set, so it never falls back to some profile's real data. Resolved once, first thing in
   `main.ts` (`electron/profile.ts`), before any path is read.
-- **A parent smterm's per-pane env is scrubbed at startup** (`SMTERM_CLAUDE_SETTINGS`,
-  `SMTERM_PANE_ID`, `SMTERM_PROFILE`, …): a dev build launched from an installed pane must
+- **A parent minmux's per-pane env is scrubbed at startup** (`MINMUX_CLAUDE_SETTINGS`,
+  `MINMUX_PANE_ID`, `MINMUX_PROFILE`, …): a dev build launched from an installed pane must
   not report Claude events into the installed app's hook dir, and nothing we spawn (shells,
   editors, git) inherits our profile.
-- The Windows AppUserModelId stays `com.smterm.app` for every profile: toasts only show for
+- **The app was called smterm** (renamed after v0.1.41). A profile's first minmux launch copies
+  its old `smterm[-<profile>]` config and user-data dirs to the new names
+  (`electron/legacy-migrate.ts`, before the single-instance lock creates them), skipping
+  Chromium caches, the lock and per-launch hook state; the old dirs stay for an older build.
+  `index.html`'s pre-paint script carries `smterm*` localStorage keys over once, and the env
+  scrub also drops the old `SMTERM_*` per-pane vars.
+- The Windows AppUserModelId stays `com.minmux.app` for every profile: toasts only show for
   an id a Start Menu shortcut registers.
-- An explicit `--user-data-dir` (the `run-smterm` driver) still wins; the driver sets
-  `SMTERM_PROFILE=default` (its HOME is throwaway) unless given `profile`, **and a scratch
+- An explicit `--user-data-dir` (the `run-minmux` driver) still wins; the driver sets
+  `MINMUX_PROFILE=default` (its HOME is throwaway) unless given `profile`, **and a scratch
   `TMPDIR`**: the shell-integration dir lives there, and the real one is the installed app's.
 - The login-shell env import (packaged builds) re-adds any var we lack, so the scrub runs
   again after it. `ELECTRON_RENDERER_URL` is read once (honoured only unpackaged) and
@@ -205,7 +211,7 @@ quit and drains `livePtys` — every node-pty not yet exited, closed panes still
 included (`pty-drain.ts`: SIGHUP, SIGKILL after 1.5 s; Windows: no signals + a 300 ms settle;
 always resolves), refusing new spawns meanwhile. The decision is the pure, tested
 `quit-plan.ts`. Two exceptions: an OS logout/restart (powerMonitor `shutdown`) is **not** held
-— macOS would report "smterm cancelled restart" — so it kills without waiting; and the shutdown
+— macOS would report "minmux cancelled restart" — so it kills without waiting; and the shutdown
 event itself never drains (it can be cancelled; the app must stay usable). Known gap: a
 Windows logoff that skips `before-quit`.
 
@@ -286,7 +292,7 @@ canvas that gets reparented can lose its context. Keyboard focus follows the sto
 Three pieces, all needed:
 
 1. **`index.html` inline script** applies the last theme's CSS vars (localStorage
-   `smterm:theme-vars`, written by `applyThemeVars`) before first paint. Doing it in
+   `minmux:theme-vars`, written by `applyThemeVars`) before first paint. Doing it in
    `main.tsx` is too late — module scripts are deferred.
 2. **The theme effect waits for `settingsLoaded`** — running once with defaults would
    overwrite the cache with dark. Settings also load _before_ the workspace restore, so
@@ -308,7 +314,7 @@ best-effort and ignore what you don't recognize; never throw (`transcript-fold.t
   latest wins, `default` = reset). Claude sends no terminal escape for either, and **slash
   commands fire no hook** — `agent-meta.ts` finds the transcript via the pane's hook events,
   then `fs.watch`es that one file. `/rename` never sets a colour in Claude itself; the
-  name-derived colour is smterm's (cmux does the same).
+  name-derived colour is minmux's (cmux does the same).
 - The transcript is read incrementally in bounded chunks (`TranscriptFold`) — a resumed session
   can be 90 MB+, and a synchronous parse would stall PTY forwarding.
 - Hook-event drops are ingested **unordered**: a late `SessionEnd` of the previous session in a
@@ -322,7 +328,7 @@ renderer asks for a plan **before** restoring the workspace (so the shell spawns
 session's own cwd — `claude --resume <id>` only finds transcripts of the current project dir),
 and `terminal-manager` types `claude --resume <id> [--permission-mode m]` at the first prompt.
 
-- **Any `SessionEnd` while smterm runs clears the entry** — double Ctrl-C can report reason
+- **Any `SessionEnd` while minmux runs clears the entry** — double Ctrl-C can report reason
   `other`, so reasons can't tell "user quit Claude" from anything else. Only a quit (the ledger
   is **frozen and flushed before** `killAllPtys`, whose kills would fire SessionEnds) or a
   crash (no SessionEnd at all; the ledger is write-through) leaves entries to resume.
@@ -356,7 +362,7 @@ and `terminal-manager` types `claude --resume <id> [--permission-mode m]` at the
   (a session re-filed under a worktree); `plan()` skips a mismatching entry instead of
   `cd`-ing into it (`src/lib/claude-project.ts`).
 - **Background agents inherit the pane.** Claude's named agents run as separate `claude`
-  processes with our `SMTERM_PANE_ID` + hooks. **One classifier decides the pane's lead: the
+  processes with our `MINMUX_PANE_ID` + hooks. **One classifier decides the pane's lead: the
   ledger** — while a live lead exists, any other session's `SessionStart` (startup, compact,
   resume) is nested, and stays nested until it ends (an agent outlives its lead); a real switch
   ends the old session first, and `/clear` / `fork` count as one regardless. Main rewrites a
@@ -377,7 +383,7 @@ and `terminal-manager` types `claude --resume <id> [--permission-mode m]` at the
   venv comes back as whatever the rc activates (could record `CONDA_DEFAULT_ENV` /
   `VIRTUAL_ENV` from the hook process's env, if it ever matters).
 - **Delivery by typing is deliberate — revisit only if a shell becomes a pain point.**
-  Alternatives weighed (2026-09): (a) the integration runs `SMTERM_RESUME_ID` at the first
+  Alternatives weighed (2026-09): (a) the integration runs `MINMUX_RESUME_ID` at the first
   prompt — nothing typed, but native only on zsh; (b) spawn the pane as
   `$SHELL -ic 'claude --resume X; exec $SHELL -i'` — no typing, fixes fish/pwsh quoting, but
   the rc runs twice, no history entry, weaker job control, and no prompt marks to detect a
@@ -414,7 +420,7 @@ and `terminal-manager` types `claude --resume <id> [--permission-mode m]` at the
 - **Only a verified folder is ever reopened, and never through the command line.** A pane's
   `reopenCwd` (a split's source's verified folder, a relaunch's saved one; `lib/remote-reports`
   `reopenFor`) goes to main in `pty:spawn`, is validated again there, and travels hex-encoded
-  in the handshake answer (`smterm:<nonce>:<host label>:<hex>`). The host's `sh` decodes it
+  in the handshake answer (`minmux:<nonce>:<host label>:<hex>`). The host's `sh` decodes it
   with arithmetic, drops it on another machine (`uname -n`), and the user's shell `builtin cd`s
   after its own startup files. A plain host never gets it: the "nothing derived from a
   display-only folder is sent" rule above still holds for everything unverified.

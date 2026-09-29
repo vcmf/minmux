@@ -85,7 +85,7 @@ function App() {
         }
         if (cancelled) return
         if (restored) {
-          // Panes that were inside a Claude session when smterm quit/crashed: ask main what
+          // Panes that were inside a Claude session when minmux quit/crashed: ask main what
           // to resume BEFORE restoring, so those shells spawn in the session's own cwd.
           const plans =
             loaded.resumeAgents === "off"
@@ -444,7 +444,7 @@ function App() {
     void ipc.editorInfo().then((e) => useStore.getState().setEditor(e))
   }, [])
 
-  // Load-test mode (SMTERM_PERF=1): run the perf suite once, then report.
+  // Load-test mode (MINMUX_PERF=1): run the perf suite once, then report.
   useEffect(() => {
     void ipc.perfMode().then((on) => {
       if (on) void import("./lib/perf").then((m) => m.runPerfSuite())

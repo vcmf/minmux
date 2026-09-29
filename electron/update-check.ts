@@ -5,7 +5,7 @@
 
 import { isNewer, type UpdateStatus } from "../src/lib/version"
 
-const REPO = "vcmf/smterm"
+const REPO = "vcmf/minmux"
 const RELEASES = `https://github.com/${REPO}/releases/latest`
 
 /** Pull `tag_name` (+ `html_url`) out of a GitHub release JSON. Pure — tested. */
@@ -20,7 +20,7 @@ export async function checkForUpdate(current: string): Promise<UpdateStatus> {
   const quiet: UpdateStatus = { current, latest: null, updateAvailable: false, url: RELEASES }
   try {
     const res = await fetch(`https://api.github.com/repos/${REPO}/releases/latest`, {
-      headers: { Accept: "application/vnd.github+json", "User-Agent": "smterm" },
+      headers: { Accept: "application/vnd.github+json", "User-Agent": "minmux" },
       signal: AbortSignal.timeout(8000),
     })
     if (!res.ok) return quiet

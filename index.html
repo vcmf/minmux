@@ -4,13 +4,24 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <link rel="icon" type="image/png" href="/icon.png" />
-    <title>smterm</title>
+    <title>minmux</title>
     <!-- Last-used theme tokens, applied before the first paint (the module bundle is deferred,
          so doing this in main.tsx is too late — a light theme would flash the dark CSS
-         defaults). Written by applyThemeVars (src/settings/themes.ts, key "smterm:theme-vars"). -->
+         defaults). Written by applyThemeVars (src/settings/themes.ts, key "minmux:theme-vars"). -->
     <script>
+      // The app was called smterm: carry its localStorage keys over once (the storage itself is
+      // copied by electron/legacy-migrate.ts). Old keys stay, for an older build to read.
       try {
-        var c = JSON.parse(localStorage.getItem("smterm:theme-vars") || "null")
+        var ks = []
+        for (var i = 0; i < localStorage.length; i++) ks.push(localStorage.key(i))
+        ks.forEach(function (o) {
+          var n = o && o.indexOf("smterm") === 0 ? "minmux" + o.slice(6) : null
+          if (n && localStorage.getItem(n) === null)
+            localStorage.setItem(n, localStorage.getItem(o))
+        })
+      } catch (e) {}
+      try {
+        var c = JSON.parse(localStorage.getItem("minmux:theme-vars") || "null")
         if (c && c.vars) {
           var r = document.documentElement
           for (var k in c.vars) r.style.setProperty(k, c.vars[k])
