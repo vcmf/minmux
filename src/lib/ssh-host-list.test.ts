@@ -107,5 +107,9 @@ describe("hostMenuItems", () => {
     expect(wsl).not.toContain("Open ssh config")
     expect(native).toContain("Turn on shell integration")
     expect(wsl).toContain("Turn off shell integration")
+    const off = hostMenuItems({ pinned: false, native: true, integration: null }).map(
+      (i) => i.label,
+    )
+    expect(off.some((l) => l.includes("shell integration"))).toBe(false) // Settings → Off
   })
 })

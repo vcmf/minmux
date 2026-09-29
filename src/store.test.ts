@@ -1250,3 +1250,97 @@ describe("closing a session / a terminal asks first when it'd kill work", () => 
     expect(allSessionIds(firstTab().root)).not.toContain(b)
   })
 })
+
+describe("store — the shell-integration hint on an ssh split", () => {
+  beforeEach(() => resetStore())
+  const ssh = (over: object) => {
+    const settings = st().settings
+    useStore.setState({ settings: { ...settings, ssh: { ...settings.ssh, ...over } } })
+  }
+  const openWeb = () => {
+    st().setShells([shell])
+    st().newTab(hostShellOption(testHost("web")))
+  }
+
+  it("a split of a host you never chose for offers it, on the new pane", () => {
+    openWeb()
+    const src = st().tabs[0]!.activeSessionId
+    st().splitActive("row")
+    const split = st().tabs[0]!.activeSessionId
+    expect(split).not.toBe(src)
+    expect(st().integrationHint).toEqual({ sessionId: split, alias: "web", state: "ask" })
+  })
+
+  it("never on a local split, a hand-picked host, a host you decided for, or when not asking", () => {
+    st().setShells([shell])
+    st().newTab(shell)
+    st().splitActive("row")
+    expect(st().integrationHint).toBeNull()
+    openWeb()
+    st().splitWith("row", hostShellOption(testHost("web"))) // picked from the host list
+    expect(st().integrationHint).toBeNull()
+    for (const over of [
+      { integration: ["web"] },
+      { integration: ["!web"] },
+      { integrationMode: "all" },
+      { integrationMode: "off" },
+    ]) {
+      resetStore()
+      ssh(over)
+      openWeb()
+      st().splitActive("row")
+      expect(st().integrationHint).toBeNull()
+    }
+  })
+
+  it("Turn on writes the host's entry and says when it applies; Don't ask again writes !alias", () => {
+    openWeb()
+    st().splitActive("row")
+    st().answerIntegrationHint("on")
+    expect(st().settings.ssh.integration).toEqual(["web"])
+    expect(st().integrationHint).toMatchObject({ alias: "web", state: "on" })
+    resetStore()
+    openWeb()
+    st().splitActive("row")
+    st().answerIntegrationHint("never")
+    expect(st().settings.ssh.integration).toEqual(["!web"])
+    expect(st().integrationHint).toBeNull()
+  })
+
+  it("Not now: gone, and not asked again for that host this run", () => {
+    openWeb()
+    st().splitActive("row")
+    st().answerIntegrationHint("dismiss")
+    expect(st().integrationHint).toBeNull()
+    expect(st().settings.ssh.integration).toEqual([])
+    st().newSurface()
+    expect(st().integrationHint).toBeNull()
+  })
+
+  it("stays on the split it was offered on (a second split doesn't move it)", () => {
+    openWeb()
+    st().splitActive("row")
+    const first = st().integrationHint!.sessionId
+    st().splitActive("row")
+    expect(st().integrationHint!.sessionId).toBe(first)
+  })
+
+  it("goes with its pane when that pane closes (and a later split asks again)", () => {
+    openWeb()
+    st().splitActive("row")
+    const tab = st().tabs[0]!
+    st().closeSurface(tab.id, st().integrationHint!.sessionId)
+    expect(st().integrationHint).toBeNull()
+    st().splitActive("row")
+    expect(st().integrationHint).not.toBeNull()
+  })
+
+  it("decided meanwhile (Settings → Off): Turn on writes nothing", () => {
+    openWeb()
+    st().splitActive("row")
+    ssh({ integrationMode: "off" })
+    st().answerIntegrationHint("on")
+    expect(st().settings.ssh.integration).toEqual([])
+    expect(st().integrationHint).toBeNull()
+  })
+})

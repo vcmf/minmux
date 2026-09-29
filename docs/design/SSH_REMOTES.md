@@ -315,10 +315,20 @@ folder and status is exact. Built on the `epic/ssh-integration` branch in three 
 **P3a** the bootstrap and handshake, **P3b** trusting only nonce-tagged reports (folder,
 status), **P3c** reopening a verified folder on split, reconnect and restore.
 
-**Opt-in per host**: `"ssh": { "integration": ["gpu-*", "!gpu-old"] }` (ssh-style patterns; a
-host's own `alias` / `!alias` entry beats any pattern), or right-click a host → Turn on shell
-integration. Remote environments vary (busybox, restricted shells, `ForceCommand`), so it is
-never on by default.
+**Which hosts** (`lib/ssh-integration.ts`): `ssh.integrationMode` is `ask` (default), `all` or
+`off`, and `ssh.integration` holds ssh-style patterns inside it (a host's own `alias` / `!alias`
+entry beats any pattern). `ask`: only the hosts listed; `all`: every host but `!alias` ones;
+`off`: none. It's never simply on for everyone by default: it runs our script on every host
+you reach (audit logs and session recorders see it, the MOTD goes, network gear and git-only
+hosts error once), so the user chooses. To make that choice easy to find, in `ask` mode the
+first split (or new terminal) of an ssh pane on a host no entry mentions shows a one-line
+hint on the new pane: **Turn on** (writes `alias`; applies from its next connection) /
+**Never** (writes `!alias`) / × (not now: not asked again for that host this run).
+The host menu's toggle and Settings → SSH → Shell integration change the same two keys. The hint
+stays on the split it was offered on (a second split doesn't move it and resize that pane),
+goes when that pane closes, and hides as soon as the host is decided elsewhere. An older build
+ignores `integrationMode`: after a downgrade, "Off" falls back to the list alone (and "All
+hosts" to the list only, the safe way).
 
 **Two channels** (`electron/remote-bootstrap.ts`, pure and tested). #78 showed that nothing
 variable may travel in text the host's login shell parses (fish `\'`, cmd.exe `%VAR%`), and

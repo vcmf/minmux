@@ -151,6 +151,28 @@ export function SettingsPanel() {
         </label>
 
         <label className="settings-row">
+          <span title="Runs smterm's prompt hooks on the host, so splits, reconnects and relaunches open in the same folder and status is exact. Nothing is installed there.">
+            Shell integration
+          </span>
+          <select
+            value={settings.ssh.integrationMode}
+            onChange={(e) =>
+              update({
+                ...settings,
+                ssh: {
+                  ...settings.ssh,
+                  integrationMode: e.target.value as Settings["ssh"]["integrationMode"],
+                },
+              })
+            }
+          >
+            <option value="ask">Ask per host</option>
+            <option value="all">All hosts</option>
+            <option value="off">Off</option>
+          </select>
+        </label>
+
+        <label className="settings-row">
           <span>Reconnect a dropped connection</span>
           <input
             type="checkbox"

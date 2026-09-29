@@ -515,6 +515,16 @@ describe("SshService watching", () => {
     expect(await h.svc.spawnPlan(web)).toHaveProperty("integration", true)
   })
 
+  it("integrationMode: all hosts but their exceptions, or none", async () => {
+    let raw = JSON.stringify({ ssh: { integrationMode: "all", integration: ["!db"] } })
+    const h = harness({ readSettings: () => raw })
+    expect(await h.svc.spawnPlan(web)).toHaveProperty("integration", true)
+    expect(await h.svc.spawnPlan({ hostId: "native:db" })).not.toHaveProperty("integration")
+    raw = JSON.stringify({ ssh: { integrationMode: "off", integration: ["web"] } })
+    h.svc.settingsChanged()
+    expect(await h.svc.spawnPlan(web)).not.toHaveProperty("integration")
+  })
+
   it("toggling integration doesn't reload the host list", async () => {
     let raw = "{}"
     const h = harness({ readSettings: () => raw })

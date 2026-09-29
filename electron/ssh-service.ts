@@ -137,7 +137,8 @@ export class SshService {
     const next = this.readSettings()
     if (!next) return
     const key = mainKey(next)
-    if (JSON.stringify(next.integration) !== JSON.stringify(this.current.integration)) {
+    const integ = (x: SshSettings) => JSON.stringify([x.integration, x.integrationMode])
+    if (integ(next) !== integ(this.current)) {
       this.plain.clear() // switched off and on again: try again
     }
     this.current = next
@@ -182,7 +183,8 @@ export class SshService {
     const { platform } = this.deps
     const keepAliveSeconds = this.current.keepAliveSeconds
     const integration =
-      integrationOn(remote.label, this.current.integration) && !this.plain.has(remote.hostId)
+      integrationOn(remote.label, this.current.integration, this.current.integrationMode) &&
+      !this.plain.has(remote.hostId)
     if (parseSshEnv(remote.env)?.kind === "wsl") {
       const plan = buildSshSpawn(remote, { platform, sshPath: "ssh", keepAliveSeconds })
       return plan ? this.withIntegration(plan, integration) : { error: SSH_ERRORS.wslOffWindows }

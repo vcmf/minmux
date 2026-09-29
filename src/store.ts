@@ -17,7 +17,7 @@ import {
 import { inheritShell, resolveDefaultShell } from "./lib/shells"
 import { hostShellOption, sameHosts } from "./lib/ssh-hosts-ui"
 import { pushRecent, toggleHidden, togglePinned } from "./lib/ssh-host-list"
-import { integrationOn, setIntegration } from "./lib/ssh-integration"
+import { declineIntegration, integrationOn, setIntegration, undecided } from "./lib/ssh-integration"
 import { reopenFor, type ReopenCwd } from "./lib/remote-reports"
 import { DEFAULT_HIDDEN_HOSTS } from "./lib/ssh-validate"
 import type { RemotePhase } from "./lib/remote-connect"
@@ -101,6 +101,11 @@ interface AppState {
   settingsOpen: boolean
   paletteOpen: boolean
   hostPickerOpen: boolean // the "Connect to host" picker
+  // The one-line "open splits in the same folder?" hint, on the split that prompted it
+  // (runtime only). `on` = just turned on: it says when it takes effect.
+  integrationHint: { sessionId: string; alias: string; state: "ask" | "on" } | null
+  hintDismissed: string[] // aliases whose hint was closed this run ("not now")
+  answerIntegrationHint: (choice: "on" | "never" | "dismiss") => void
   sshRecent: string[] // hostIds, newest first (a convenience: localStorage, last writer wins)
   searchOpen: boolean
   rightView: RightView // which view the single right-side panel shows (null = hidden)
@@ -265,6 +270,28 @@ function splitActivePane(
   }
 }
 
+/** Whether a hint for `alias` still has a question to ask: ask mode, and no entry decides it. */
+export const hintStillAsks = (
+  alias: string,
+  ssh: { integrationMode: string; integration: string[] },
+): boolean => ssh.integrationMode === "ask" && undecided(alias, ssh.integration)
+
+/** A split of an ssh pane on a host you never chose for (ask mode): offer shell integration on
+ *  the new pane, once per host per run — it's what makes a split open in the same folder. */
+function hintFor(state: AppState, shell: ShellOption, next: Partial<AppState>): Partial<AppState> {
+  const alias = shell.remote?.label
+  const ssh = state.settings.ssh
+  const tab = next.tabs?.find((t) => t.id === state.activeTabId)
+  if (!alias || !tab || ssh.integrationMode !== "ask") return {}
+  if (!undecided(alias, ssh.integration) || state.hintDismissed.includes(alias)) return {}
+  // Already offered on a split of this host: it stays there (moving it would resize that pane
+  // under whatever now runs in it).
+  if (state.integrationHint?.alias === alias && state.sessions[state.integrationHint.sessionId]) {
+    return {}
+  }
+  return { integrationHint: { sessionId: tab.activeSessionId, alias, state: "ask" } }
+}
+
 /** Make `sessionId` the tab's focus and its pane's visible surface (same tab if unchanged). */
 function focusIn(tab: Tab, sessionId: string): Tab {
   const root = selectSurface(tab.root, sessionId)
@@ -296,7 +323,14 @@ function dropSessions(
   ids: string[],
 ): Pick<
   AppState,
-  "sessions" | "paneRoot" | "agentMeta" | "paneGit" | "resume" | "remotePhase" | "remoteDetail"
+  | "sessions"
+  | "paneRoot"
+  | "agentMeta"
+  | "paneGit"
+  | "resume"
+  | "remotePhase"
+  | "remoteDetail"
+  | "integrationHint"
 > {
   const sessions = { ...state.sessions }
   const paneRoot = { ...state.paneRoot }
@@ -315,7 +349,19 @@ function dropSessions(
     delete paneRoot[id] // don't leak the pane's root override
     delete agentMeta[id] // …or its Claude accent
   }
-  return { sessions, paneRoot, agentMeta, paneGit, resume, remotePhase, remoteDetail }
+  // The hint goes with the pane it was on (closing it isn't an answer: a later split asks again).
+  const hint = state.integrationHint
+  const integrationHint = hint && ids.includes(hint.sessionId) ? null : hint
+  return {
+    sessions,
+    paneRoot,
+    agentMeta,
+    paneGit,
+    resume,
+    remotePhase,
+    remoteDetail,
+    integrationHint,
+  }
 }
 
 /** Remove a tab; if it was active, the last remaining tab takes over. */
@@ -365,6 +411,8 @@ export const useStore = create<AppState>((set, get) => ({
   settingsOpen: false,
   paletteOpen: false,
   hostPickerOpen: false,
+  integrationHint: null,
+  hintDismissed: [],
   sshRecent: readRecent(),
   searchOpen: false,
   rightView: null,
@@ -486,11 +534,34 @@ export const useStore = create<AppState>((set, get) => ({
   toggleHostIntegration: (alias) => {
     const st = get()
     const ssh = st.settings.ssh
-    const on = !integrationOn(alias, ssh.integration)
+    const on = !integrationOn(alias, ssh.integration, ssh.integrationMode)
     st.updateSettings({
       ...st.settings,
-      ssh: { ...ssh, integration: setIntegration(ssh.integration, alias, on) },
+      ssh: {
+        ...ssh,
+        integration: setIntegration(ssh.integration, alias, on, ssh.integrationMode),
+      },
     })
+  },
+  answerIntegrationHint: (choice) => {
+    const st = get()
+    const hint = st.integrationHint
+    if (!hint) return
+    const ssh = st.settings.ssh
+    // Decided meanwhile (the host menu, Settings): nothing left to ask; never write behind it.
+    const stale = hint.state === "ask" && !hintStillAsks(hint.alias, ssh)
+    if (choice === "dismiss" || stale) {
+      return set({
+        integrationHint: null,
+        hintDismissed: [...st.hintDismissed.filter((a) => a !== hint.alias), hint.alias],
+      })
+    }
+    const integration =
+      choice === "on"
+        ? setIntegration(ssh.integration, hint.alias, true, ssh.integrationMode)
+        : declineIntegration(ssh.integration, hint.alias)
+    st.updateSettings({ ...st.settings, ssh: { ...ssh, integration } })
+    set({ integrationHint: choice === "on" ? { ...hint, state: "on" } : null })
   },
   setHostHidden: (alias, hide) => {
     const st = get()
@@ -615,7 +686,8 @@ export const useStore = create<AppState>((set, get) => ({
       if (!shell) return {}
       // An ssh pane's split opens where it verifiably is (its host's shell integration).
       const reopen = shell.remote ? reopenFor(src) : undefined
-      return splitActivePane(state, { shell, cwd: src?.cwd, direction, reopen })
+      const next = splitActivePane(state, { shell, cwd: src?.cwd, direction, reopen })
+      return { ...next, ...hintFor(state, shell, next) }
     }),
 
   // Open a folder (an agent's cwd / worktree from the board) as a split beside the active
@@ -662,10 +734,11 @@ export const useStore = create<AppState>((set, get) => ({
       if (!shell) return {}
       const session = makeSession(shell, src?.cwd, shell.remote ? reopenFor(src) : undefined)
       const root = addSurface(tab.root, pane.id, session.id)
-      return {
+      const next = {
         sessions: { ...state.sessions, [session.id]: session },
         tabs: replaceTab(state.tabs, tab.id, (t) => ({ ...t, root, activeSessionId: session.id })),
       }
+      return { ...next, ...hintFor(state, shell, next) }
     }),
 
   closeSurface: (tabId, sessionId) =>
