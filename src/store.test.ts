@@ -1344,3 +1344,30 @@ describe("store — the shell-integration hint on an ssh split", () => {
     expect(st().integrationHint).toBeNull()
   })
 })
+
+describe("reordering sessions", () => {
+  beforeEach(() => resetStore())
+  const order = () => st().tabs.map((t) => t.id)
+  it("moveTab lands before the given index; a no-op keeps the same tabs array", () => {
+    st().newTab(shell)
+    st().newTab(shell)
+    st().newTab(shell)
+    const [a, b, c] = order()
+    st().moveTab(a!, 3)
+    expect(order()).toEqual([b, c, a])
+    const before = st().tabs
+    st().moveTab(c!, 1) // c is at 1: before or after itself → nothing
+    expect(st().tabs).toBe(before)
+  })
+  it("moveActiveTab steps the focused session left / right, stopping at the ends", () => {
+    st().newTab(shell)
+    st().newTab(shell) // active = the second
+    const [a, b] = order()
+    st().moveActiveTab(-1)
+    expect(order()).toEqual([b, a])
+    st().moveActiveTab(-1) // already first
+    expect(order()).toEqual([b, a])
+    st().moveActiveTab(1)
+    expect(order()).toEqual([a, b])
+  })
+})

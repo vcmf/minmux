@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react"
+import { useTabDrag } from "./use-tab-drag"
 import {
   Plus,
   CaretDown,
@@ -36,6 +37,7 @@ const QUICK_HOSTS = 6
 
 /** The mux top bar: brand · session tabs · search pill · window controls. */
 export function TopBar() {
+  const tabDrag = useTabDrag("x") // reorder sessions by dragging a tab
   const tabs = useStore((s) => s.tabs)
   const activeTabId = useStore((s) => s.activeTabId)
   const shells = useStore((s) => s.shells)
@@ -151,7 +153,10 @@ export function TopBar() {
       <div className="vdivider" />
 
       <div className="tabs">
-        <div className="tab-list">
+        <div className="tab-list" {...tabDrag.listProps}>
+          {tabDrag.target && (
+            <span className="tab-drop-line x" style={{ left: tabDrag.target.offset - 1 }} />
+          )}
           {tabs.map((tab) => {
             const ids = allSessionIds(tab.root)
             const badge = aggregateBadge(
@@ -176,7 +181,10 @@ export function TopBar() {
             return (
               <div
                 key={tab.id}
-                className={`tab${tab.id === activeTabId ? " active" : ""}`}
+                {...tabDrag.itemProps(tab.id, editingId !== tab.id)}
+                className={`tab${tab.id === activeTabId ? " active" : ""}${
+                  tabDrag.dragging === tab.id ? " dragging" : ""
+                }`}
                 // The focused pane's host colour, as an underline (a prod tab reads as prod).
                 style={(() => {
                   const r = sessions[tab.activeSessionId]?.remote

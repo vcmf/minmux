@@ -1,4 +1,5 @@
 import { create } from "zustand"
+import { moveTo } from "./lib/tab-order"
 import type { Session, ShellOption, SshHost, Tab } from "./types"
 import {
   addSurface,
@@ -170,6 +171,8 @@ interface AppState {
   newTab: (shell: ShellOption) => void
   splitWith: (direction: "row" | "column", shell: ShellOption) => void // a new tab if none
   closeTab: (tabId: string) => void
+  moveTab: (tabId: string, insertAt: number) => void // reorder (drag & drop; lands before insertAt)
+  moveActiveTab: (delta: -1 | 1) => void // ⌘K "Move session left/right"
   setActiveTab: (tabId: string) => void
   renameTab: (tabId: string, title: string) => void
   splitActive: (direction: "row" | "column", fallback?: ShellOption) => void
@@ -659,6 +662,20 @@ export const useStore = create<AppState>((set, get) => ({
         return { ...dropSessions(state, allSessionIds(tab.root)), ...withoutTab(state, tabId) }
       }),
     ),
+
+  moveTab: (tabId, insertAt) =>
+    set((state) => {
+      const tabs = moveTo(state.tabs, tabId, insertAt)
+      return tabs === state.tabs ? {} : { tabs }
+    }),
+
+  moveActiveTab: (delta) => {
+    const { tabs, activeTabId } = get()
+    const i = tabs.findIndex((t) => t.id === activeTabId)
+    if (i < 0) return
+    // insertAt is "before the item now at": one step right = past the next item.
+    get().moveTab(tabs[i]!.id, delta < 0 ? i - 1 : i + 2)
+  },
 
   setActiveTab: (tabId) => {
     set({ activeTabId: tabId })
