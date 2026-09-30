@@ -55,7 +55,6 @@ export interface AgentEvent {
   paneId?: string // the minmux pane (session id) this agent session runs in
   agentId?: string // absent ⇒ the session root; present ⇒ a sub-agent
   parentAgentId?: string // a sub-agent's parent sub-agent (absent ⇒ the session root)
-  pid?: number // the agent process, when the adapter knows it (OpenCode's lead rule)
   agentType?: string // e.g. "Explore", "general-purpose" (sub-agents only)
   cwd?: string
   toolName?: string // tool_name on Pre/PostToolUse
@@ -126,7 +125,6 @@ export function reduceAgentEvent(graph: AgentGraph, ev: AgentEvent): AgentGraph 
   const nodes = { ...graph.nodes }
   let rootIds = graph.rootIds
   const rid = rootId(ev.sessionId)
-  const agent = ev.agent ?? "claude"
   // Every id read below is ensured to exist first (root always; sub-agent when
   // agentId is present), so this accessor is safe despite noUncheckedIndexedAccess.
   const at = (id: string) => nodes[id] as AgentNode
@@ -135,7 +133,7 @@ export function reduceAgentEvent(graph: AgentGraph, ev: AgentEvent): AgentGraph 
   if (!nodes[rid]) {
     nodes[rid] = {
       id: rid,
-      agent,
+      agent: ev.agent ?? "claude",
       sessionId: ev.sessionId,
       paneId: ev.paneId,
       agentType: "root",
@@ -145,6 +143,10 @@ export function reduceAgentEvent(graph: AgentGraph, ev: AgentEvent): AgentGraph 
       childIds: [],
     }
     rootIds = [...rootIds, rid]
+  } else if (ev.agent && !ev.agentId && at(rid).agent !== ev.agent) {
+    // A tagged root event settles the session's kind (a root first created by an untagged
+    // stray event defaulted to Claude).
+    nodes[rid] = { ...at(rid), agent: ev.agent }
   }
 
   // A sub-agent event may arrive before its SubagentStart — create it lazily and attach
@@ -152,10 +154,10 @@ export function reduceAgentEvent(graph: AgentGraph, ev: AgentEvent): AgentGraph 
   // session root (Claude/Codex never report a parent: two levels).
   if (ev.agentId && !nodes[ev.agentId]) {
     const p = ev.parentAgentId ? nodes[ev.parentAgentId] : undefined
-    const parentId = p && p.sessionId === ev.sessionId && p.id !== ev.agentId ? p.id : rid
+    const parentId = p && p.sessionId === ev.sessionId ? p.id : rid
     nodes[ev.agentId] = {
       id: ev.agentId,
-      agent,
+      agent: ev.agent ?? at(rid).agent, // a sub-agent is its session's kind
       sessionId: ev.sessionId,
       agentType: ev.agentType ?? "agent",
       status: "working",
@@ -168,6 +170,10 @@ export function reduceAgentEvent(graph: AgentGraph, ev: AgentEvent): AgentGraph 
     if (!parent.childIds.includes(ev.agentId)) {
       nodes[parentId] = { ...parent, childIds: [...parent.childIds, ev.agentId] }
     }
+  } else if (ev.agentId && ev.parentAgentId) {
+    // Drops arrive unordered: a sub-agent first seen before its parent sits under the root
+    // until an event names the parent — then it moves there.
+    reparent(nodes, ev.agentId, ev.parentAgentId)
   }
 
   // Main decides which session leads the pane (one classifier, shared with resume + accent):
@@ -215,9 +221,8 @@ export function reduceAgentEvent(graph: AgentGraph, ev: AgentEvent): AgentGraph 
       })
       break
     case "PostToolUse":
+      // Status stays: a parallel tool finishing doesn't mean a pending approval was answered.
       set(targetId, {
-        // A tool finishing means the agent got past what it was waiting on (an approval).
-        ...(at(targetId).status === "waiting" ? { status: "working" as const } : {}),
         currentTool: undefined,
         recentFiles: withFile(at(targetId).recentFiles, ev.filePath),
       })
@@ -241,8 +246,9 @@ export function reduceAgentEvent(graph: AgentGraph, ev: AgentEvent): AgentGraph 
       set(rid, { status: "waiting", lastMessage: ev.message ?? at(rid).lastMessage })
       break
     case "PermissionRequest":
-      // An approval prompt (Codex): the agent asking is blocked on the user.
+      // An approval prompt (Codex): the agent asking — and so its session — waits on the user.
       set(targetId, { status: "waiting" })
+      if (targetId !== rid) set(rid, { status: "waiting" })
       break
     case "CwdChanged":
       if (ev.cwd) set(targetId, { cwd: ev.cwd })
@@ -280,6 +286,24 @@ export function reduceAgentEvent(graph: AgentGraph, ev: AgentEvent): AgentGraph 
   return { nodes, rootIds }
 }
 
+/** Move sub-agent `id` under `parentId` (mutates `nodes`) when that is a live node of the same
+ *  session and not `id` itself or one of its descendants (no cycles). */
+function reparent(nodes: Record<string, AgentNode>, id: string, parentId: string): void {
+  const node = nodes[id]
+  const parent = nodes[parentId]
+  if (!node || !parent || node.parentId === parentId || parent.sessionId !== node.sessionId) return
+  for (
+    let up: AgentNode | undefined = parent;
+    up;
+    up = up.parentId ? nodes[up.parentId] : undefined
+  )
+    if (up.id === id) return
+  const old = node.parentId ? nodes[node.parentId] : undefined
+  if (old) nodes[old.id] = { ...old, childIds: old.childIds.filter((c) => c !== id) }
+  nodes[parentId] = { ...parent, childIds: [...parent.childIds, id] }
+  nodes[id] = { ...node, parentId }
+}
+
 /** Delete a node and all its descendants from `nodes` (mutated). */
 function deleteSubtree(nodes: Record<string, AgentNode>, id: string): void {
   for (const cid of nodes[id]?.childIds ?? []) deleteSubtree(nodes, cid)
@@ -307,22 +331,6 @@ function pruneDone(nodes: Record<string, AgentNode>, id: string): boolean {
   return keep.length > 0
 }
 
-const paneIdsMemo = new WeakMap<AgentGraph, string[]>()
-
-/** Panes with a live Claude session, sorted; memoized per graph (selectors run on every set). */
-export function claudePaneIds(graph: AgentGraph): string[] {
-  const hit = paneIdsMemo.get(graph)
-  if (hit) return hit
-  const ids = new Set<string>()
-  for (const rid of graph.rootIds) {
-    const n = graph.nodes[rid]
-    if (n?.paneId && !n.nested) ids.add(n.paneId) // a background agent alone isn't "Claude here"
-  }
-  const out = [...ids].sort()
-  paneIdsMemo.set(graph, out)
-  return out
-}
-
 const panesMemo = new WeakMap<AgentGraph, string[]>()
 
 /** Panes with a live lead session and its agent, flat `[paneId, kind, …]` sorted by pane
@@ -341,6 +349,19 @@ export function agentPanes(graph: AgentGraph): string[] {
     .sort()
     .flatMap((id) => [id, lead[id]!.agent])
   panesMemo.set(graph, out)
+  return out
+}
+
+const paneIdsMemo = new WeakMap<AgentGraph, string[]>()
+
+/** Panes whose lead session is Claude, sorted (agentPanes filtered); memoized per graph. */
+export function claudePaneIds(graph: AgentGraph): string[] {
+  const hit = paneIdsMemo.get(graph)
+  if (hit) return hit
+  const flat = agentPanes(graph)
+  const out: string[] = []
+  for (let i = 0; i + 1 < flat.length; i += 2) if (flat[i + 1] === "claude") out.push(flat[i]!)
+  paneIdsMemo.set(graph, out)
   return out
 }
 

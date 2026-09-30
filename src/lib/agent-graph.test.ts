@@ -440,15 +440,78 @@ describe("agent kinds + explicit parents (multi-agent)", () => {
     expect(Object.keys(dropped.nodes)).toEqual([])
   })
 
-  it("PermissionRequest waits; the tool finishing resumes work", () => {
+  it("PermissionRequest waits; a parallel tool finishing keeps it waiting; the next tool resumes", () => {
     const g1 = reduceAgentEvents([
       { agent: "codex", event: "SessionStart", sessionId: "c" },
-      { agent: "codex", event: "PreToolUse", sessionId: "c", toolName: "Bash" },
+      { agent: "codex", event: "PreToolUse", sessionId: "c", toolName: "Read" },
       { agent: "codex", event: "PermissionRequest", sessionId: "c", toolName: "Bash" },
     ])
     expect(g1.nodes["root:c"]!.status).toBe("waiting")
     const g2 = reduceAgentEvent(g1, { agent: "codex", event: "PostToolUse", sessionId: "c" })
-    expect(g2.nodes["root:c"]!.status).toBe("working")
+    expect(g2.nodes["root:c"]!.status).toBe("waiting") // the approval is still pending
+    const g3 = reduceAgentEvent(g2, { agent: "codex", event: "PreToolUse", sessionId: "c" })
+    expect(g3.nodes["root:c"]!.status).toBe("working")
+  })
+
+  it("a sub-agent's PermissionRequest marks both it and its session waiting", () => {
+    const g = reduceAgentEvents([
+      { agent: "codex", event: "SessionStart", sessionId: "c" },
+      { agent: "codex", event: "UserPromptSubmit", sessionId: "c" },
+      { agent: "codex", event: "PermissionRequest", sessionId: "c", agentId: "a1" },
+    ])
+    expect(g.nodes.a1!.status).toBe("waiting")
+    expect(g.nodes["root:c"]!.status).toBe("waiting")
+  })
+
+  it("moves a sub-agent under its parent once a later event names it (unordered drops)", () => {
+    const g = reduceAgentEvents([
+      { agent: "opencode", event: "SessionStart", sessionId: "r" },
+      { agent: "opencode", event: "PreToolUse", sessionId: "r", agentId: "g1" }, // parent unknown yet
+      { agent: "opencode", event: "SubagentStart", sessionId: "r", agentId: "c1" },
+      {
+        agent: "opencode",
+        event: "PostToolUse",
+        sessionId: "r",
+        agentId: "g1",
+        parentAgentId: "c1",
+      },
+    ])
+    expect(g.nodes["root:r"]!.childIds).toEqual(["c1"])
+    expect(g.nodes.c1!.childIds).toEqual(["g1"])
+    expect(g.nodes.g1!.parentId).toBe("c1")
+  })
+
+  it("never re-parents into its own subtree", () => {
+    const g = reduceAgentEvents([
+      ...deep(),
+      {
+        agent: "opencode",
+        event: "PreToolUse",
+        sessionId: "r",
+        agentId: "c1",
+        parentAgentId: "g1",
+      },
+    ])
+    expect(g.nodes.c1!.parentId).toBe("root:r")
+    expect(g.nodes.g1!.parentId).toBe("c1")
+  })
+
+  it("sub-agents take their session's kind; a tagged root event corrects a defaulted root", () => {
+    const g = reduceAgentEvents([
+      { event: "CwdChanged", sessionId: "k", cwd: "/x" }, // untagged stray → defaults to claude
+      { agent: "codex", event: "SessionStart", sessionId: "k" },
+      { event: "SubagentStart", sessionId: "k", agentId: "s1" }, // untagged sub-agent event
+    ])
+    expect(g.nodes["root:k"]!.agent).toBe("codex")
+    expect(g.nodes.s1!.agent).toBe("codex")
+  })
+
+  it("claudePaneIds only counts panes whose lead is Claude", () => {
+    const g = reduceAgentEvents([
+      { event: "SessionStart", sessionId: "a", paneId: "p1" },
+      { agent: "codex", event: "SessionStart", sessionId: "b", paneId: "p2" },
+    ])
+    expect(claudePaneIds(g)).toEqual(["p1"])
   })
 
   it("agentPanes lists each pane's lead agent, sorted, skipping nested sessions; memoized", () => {
