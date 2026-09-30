@@ -27,6 +27,7 @@ export function normalizeHookEvent(raw: unknown, paneId?: string): AgentEvent | 
     string | undefined
   const str = (v: unknown) => (typeof v === "string" ? v : undefined)
   return {
+    agent: "claude",
     event: r.hook_event_name,
     sessionId: r.session_id,
     paneId: paneId || undefined,

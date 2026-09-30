@@ -1,12 +1,14 @@
-// Pure reducer that folds a stream of Claude Code hook events into a live tree of
+// Pure reducer that folds a stream of coding-agent events (Claude Code, Codex, OpenCode —
+// each normalised to Claude's hook vocabulary by its adapter in main) into a live tree of
 // agents + their status/cwd/recent-files. The risky logic of M6 lives here, tested
 // against real captured hook streams (see agent-graph.test.ts). No I/O, no time —
 // the receiver normalises raw hook JSON into AgentEvent and calls reduceAgentEvent.
 //
 // Correlation model (validated by the 6a spike — see docs/design/AGENT_OBSERVABILITY.md):
 //   - root agent  = events with NO agent_id (the session itself)
-//   - sub-agent   = events carrying an agent_id (attach to their session's root)
-// Two levels (root → sub-agents); deeper nesting needs OTEL's parent_agent_id (6c).
+//   - sub-agent   = events carrying an agent_id (attach to their session's root, or to
+//                   `parentAgentId` when the agent reports one — OpenCode's child sessions)
+// Claude and Codex give two levels (root → sub-agents); an explicit parent gives depth.
 //
 // Lifecycle (keeps the board "live", not a growing history): a new turn
 // (UserPromptSubmit) drops the previous turn's finished sub-agents, and SessionEnd
@@ -23,12 +25,37 @@ export interface TokenUsage {
   output: number
 }
 
+/** Which coding agent an event / node belongs to (one adapter each in main). */
+export type AgentKind = "claude" | "codex" | "opencode"
+
+/** The canonical event names: Claude Code's hook names (Codex uses the same contract), plus
+ *  PermissionRequest (Codex) and the synthetic TokenUsage. Adapters map onto these. */
+export type AgentEventName =
+  | "SessionStart"
+  | "SessionEnd"
+  | "UserPromptSubmit"
+  | "Stop"
+  | "Notification"
+  | "PermissionRequest"
+  | "PreToolUse"
+  | "PostToolUse"
+  | "SubagentStart"
+  | "SubagentStop"
+  | "CwdChanged"
+  | "FileChanged"
+  | "WorktreeCreate"
+  | "WorktreeRemove"
+  | "TokenUsage"
+
 /** A hook event normalised down to the fields the graph needs. */
 export interface AgentEvent {
-  event: string // hook_event_name (SessionStart, PreToolUse, SubagentStart, …)
+  agent?: AgentKind // the adapter that produced it; absent ⇒ "claude" (older drops, fixtures)
+  event: AgentEventName | (string & {}) // unknown names pass through and change nothing
   sessionId: string
-  paneId?: string // the minmux pane (session id) this claude session runs in
+  paneId?: string // the minmux pane (session id) this agent session runs in
   agentId?: string // absent ⇒ the session root; present ⇒ a sub-agent
+  parentAgentId?: string // a sub-agent's parent sub-agent (absent ⇒ the session root)
+  pid?: number // the agent process, when the adapter knows it (OpenCode's lead rule)
   agentType?: string // e.g. "Explore", "general-purpose" (sub-agents only)
   cwd?: string
   toolName?: string // tool_name on Pre/PostToolUse
@@ -53,6 +80,7 @@ export interface Worktree {
 
 export interface AgentNode {
   id: string // agent_id, or `root:<sessionId>` for a session root
+  agent: AgentKind
   sessionId: string
   paneId?: string // the minmux pane this session runs in (roots) — for focus/grouping
   agentType: string // "root" for the session root, else the sub-agent type
@@ -65,8 +93,8 @@ export interface AgentNode {
   nested?: boolean // root: launched inside the pane's lead (background agent) — main decides
   lastMessage?: string
   tokens?: TokenUsage // cumulative token usage (session root or sub-agent), off-band via hooks
-  parentId?: string // undefined for a root
-  childIds: string[] // sub-agents, in order of appearance
+  parentId?: string // undefined for a root; the root or (explicit parent) a sub-agent
+  childIds: string[] // direct sub-agents, in order of appearance
 }
 
 export interface AgentGraph {
@@ -98,6 +126,7 @@ export function reduceAgentEvent(graph: AgentGraph, ev: AgentEvent): AgentGraph 
   const nodes = { ...graph.nodes }
   let rootIds = graph.rootIds
   const rid = rootId(ev.sessionId)
+  const agent = ev.agent ?? "claude"
   // Every id read below is ensured to exist first (root always; sub-agent when
   // agentId is present), so this accessor is safe despite noUncheckedIndexedAccess.
   const at = (id: string) => nodes[id] as AgentNode
@@ -106,6 +135,7 @@ export function reduceAgentEvent(graph: AgentGraph, ev: AgentEvent): AgentGraph 
   if (!nodes[rid]) {
     nodes[rid] = {
       id: rid,
+      agent,
       sessionId: ev.sessionId,
       paneId: ev.paneId,
       agentType: "root",
@@ -117,22 +147,26 @@ export function reduceAgentEvent(graph: AgentGraph, ev: AgentEvent): AgentGraph 
     rootIds = [...rootIds, rid]
   }
 
-  // A sub-agent event may arrive before its SubagentStart — create it lazily and
-  // attach it to the session root (two-level tree).
+  // A sub-agent event may arrive before its SubagentStart — create it lazily and attach
+  // it to its reported parent when that one is a live node of this session, else to the
+  // session root (Claude/Codex never report a parent: two levels).
   if (ev.agentId && !nodes[ev.agentId]) {
+    const p = ev.parentAgentId ? nodes[ev.parentAgentId] : undefined
+    const parentId = p && p.sessionId === ev.sessionId && p.id !== ev.agentId ? p.id : rid
     nodes[ev.agentId] = {
       id: ev.agentId,
+      agent,
       sessionId: ev.sessionId,
       agentType: ev.agentType ?? "agent",
       status: "working",
       cwd: ev.cwd,
       recentFiles: [],
-      parentId: rid,
+      parentId,
       childIds: [],
     }
-    const root = at(rid)
-    if (!root.childIds.includes(ev.agentId)) {
-      nodes[rid] = { ...root, childIds: [...root.childIds, ev.agentId] }
+    const parent = at(parentId)
+    if (!parent.childIds.includes(ev.agentId)) {
+      nodes[parentId] = { ...parent, childIds: [...parent.childIds, ev.agentId] }
     }
   }
 
@@ -157,16 +191,14 @@ export function reduceAgentEvent(graph: AgentGraph, ev: AgentEvent): AgentGraph 
         started: Math.max(0, ...rootIds.map((id) => nodes[id]?.started ?? 0)) + 1,
       })
       break
-    case "UserPromptSubmit": {
+    case "UserPromptSubmit":
       // New turn: drop the previous turn's FINISHED sub-agents (they're per-turn), so
       // the board shows the current turn, not a growing pile of done ones. Keep any
-      // still-active sub-agent. Then mark the session working.
-      const root = at(rid)
-      const keep = root.childIds.filter((cid) => nodes[cid]?.status !== "done")
-      for (const cid of root.childIds) if (nodes[cid]?.status === "done") delete nodes[cid]
-      nodes[rid] = { ...root, childIds: keep, status: "working" }
+      // still-active sub-agent (and the finished ancestors it hangs under). Then mark
+      // the session working.
+      pruneDone(nodes, rid)
+      set(rid, { status: "working" })
       break
-    }
     case "SubagentStart":
       if (ev.agentId)
         set(ev.agentId, {
@@ -184,6 +216,8 @@ export function reduceAgentEvent(graph: AgentGraph, ev: AgentEvent): AgentGraph 
       break
     case "PostToolUse":
       set(targetId, {
+        // A tool finishing means the agent got past what it was waiting on (an approval).
+        ...(at(targetId).status === "waiting" ? { status: "working" as const } : {}),
         currentTool: undefined,
         recentFiles: withFile(at(targetId).recentFiles, ev.filePath),
       })
@@ -205,6 +239,10 @@ export function reduceAgentEvent(graph: AgentGraph, ev: AgentEvent): AgentGraph 
       break
     case "Notification":
       set(rid, { status: "waiting", lastMessage: ev.message ?? at(rid).lastMessage })
+      break
+    case "PermissionRequest":
+      // An approval prompt (Codex): the agent asking is blocked on the user.
+      set(targetId, { status: "waiting" })
       break
     case "CwdChanged":
       if (ev.cwd) set(targetId, { cwd: ev.cwd })
@@ -242,11 +280,31 @@ export function reduceAgentEvent(graph: AgentGraph, ev: AgentEvent): AgentGraph 
   return { nodes, rootIds }
 }
 
+/** Delete a node and all its descendants from `nodes` (mutated). */
+function deleteSubtree(nodes: Record<string, AgentNode>, id: string): void {
+  for (const cid of nodes[id]?.childIds ?? []) deleteSubtree(nodes, cid)
+  delete nodes[id]
+}
+
 /** Delete a session root + its sub-agents from `nodes` (mutated); returns the new rootIds. */
 function evictRoot(nodes: Record<string, AgentNode>, rootIds: string[], rid: string): string[] {
-  for (const cid of nodes[rid]?.childIds ?? []) delete nodes[cid]
-  delete nodes[rid]
+  deleteSubtree(nodes, rid)
   return rootIds.filter((id) => id !== rid)
+}
+
+/** Remove `id`'s finished sub-agents whose whole subtree is finished (mutates `nodes`, only
+ *  replacing nodes whose child list changed); returns whether anything under `id` stays active. */
+function pruneDone(nodes: Record<string, AgentNode>, id: string): boolean {
+  const node = nodes[id]
+  if (!node) return false
+  const keep: string[] = []
+  for (const cid of node.childIds) {
+    const activeBelow = pruneDone(nodes, cid)
+    if (activeBelow || nodes[cid]?.status !== "done") keep.push(cid)
+    else deleteSubtree(nodes, cid)
+  }
+  if (keep.length !== node.childIds.length) nodes[id] = { ...node, childIds: keep }
+  return keep.length > 0
 }
 
 const paneIdsMemo = new WeakMap<AgentGraph, string[]>()
@@ -262,6 +320,27 @@ export function claudePaneIds(graph: AgentGraph): string[] {
   }
   const out = [...ids].sort()
   paneIdsMemo.set(graph, out)
+  return out
+}
+
+const panesMemo = new WeakMap<AgentGraph, string[]>()
+
+/** Panes with a live lead session and its agent, flat `[paneId, kind, …]` sorted by pane
+ *  (primitives for useShallow); the newest-started lead wins; memoized per graph. */
+export function agentPanes(graph: AgentGraph): string[] {
+  const hit = panesMemo.get(graph)
+  if (hit) return hit
+  const lead: Record<string, AgentNode> = {}
+  for (const rid of graph.rootIds) {
+    const n = graph.nodes[rid]
+    if (!n?.paneId || n.nested) continue // a background agent alone isn't the pane's agent
+    const cur = lead[n.paneId]
+    if (!cur || (n.started ?? 0) >= (cur.started ?? 0)) lead[n.paneId] = n
+  }
+  const out = Object.keys(lead)
+    .sort()
+    .flatMap((id) => [id, lead[id]!.agent])
+  panesMemo.set(graph, out)
   return out
 }
 

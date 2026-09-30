@@ -26,6 +26,7 @@ describe("normalizeHookEvent", () => {
       "pane-7",
     )
     expect(ev).toEqual({
+      agent: "claude",
       event: "PreToolUse",
       sessionId: "s1",
       paneId: "pane-7",
