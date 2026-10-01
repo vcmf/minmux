@@ -1,5 +1,12 @@
 import { describe, it, expect } from "vitest"
-import { parseBranchLine, statusOf, parseNumstat, parseDiff, wslGitArgs } from "./git"
+import {
+  parseStatusEntries,
+  parseBranchLine,
+  statusOf,
+  parseNumstat,
+  parseDiff,
+  wslGitArgs,
+} from "./git"
 
 describe("parseBranchLine", () => {
   it("reads branch + ahead/behind", () => {
@@ -87,5 +94,24 @@ describe("wslGitArgs", () => {
       "diff",
       "HEAD",
     ])
+  })
+})
+
+describe("parseStatusEntries", () => {
+  it("an untracked folder is one entry, flagged isDir, without its trailing slash", () => {
+    const r = parseStatusEntries("## main\n M a.ts\n?? docs/node_modules/\n?? new.md\n")
+    expect(r.header).toBe("## main")
+    expect(r.entries).toEqual([
+      { xy: " M", path: "a.ts", isDir: false },
+      { xy: "??", path: "docs/node_modules", isDir: true },
+      { xy: "??", path: "new.md", isDir: false },
+    ])
+    expect(r.total).toBe(3)
+  })
+  it("caps the entries but counts them all", () => {
+    const lines = Array.from({ length: 12 }, (_, i) => ` M f${i}.ts`).join("\n")
+    const r = parseStatusEntries(`## main\n${lines}\n`, 5)
+    expect(r.entries).toHaveLength(5)
+    expect(r.total).toBe(12)
   })
 })

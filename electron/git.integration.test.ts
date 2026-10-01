@@ -105,3 +105,24 @@ describe.skipIf(!hasGit)("git module (real repo)", () => {
     expect((await gitStatus("")).isRepo).toBe(false)
   })
 })
+
+describe("gitStatus — an untracked folder (e.g. an un-ignored node_modules)", () => {
+  it("is reported once as a folder, not file by file; tracked changes still listed", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "minmux-untracked-"))
+    const git = (...a: string[]) => execFileSync("git", a, { cwd: dir, stdio: "ignore" })
+    git("init", "-q", "-b", "main")
+    git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init")
+    fs.writeFileSync(path.join(dir, "tracked.txt"), "a\n")
+    git("add", "tracked.txt")
+    git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "t")
+    fs.writeFileSync(path.join(dir, "tracked.txt"), "a\nb\n")
+    const nm = path.join(dir, "docs", "node_modules", ".pnpm")
+    fs.mkdirSync(nm, { recursive: true })
+    for (let i = 0; i < 300; i++) fs.writeFileSync(path.join(nm, `f${i}.js`), "x\n")
+    const st = await gitStatus(dir)
+    const paths = st.files.map((f) => `${f.path}${f.isDir ? "/" : ""}`)
+    expect(paths.sort()).toEqual(["docs/", "tracked.txt"])
+    expect(st.files.find((f) => f.isDir)?.add).toBe(0) // a folder is never line-counted
+    fs.rmSync(dir, { recursive: true, force: true })
+  })
+})

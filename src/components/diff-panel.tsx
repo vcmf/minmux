@@ -1,11 +1,13 @@
 import { useEffect, useMemo, useState } from "react"
-import { FileText, FilePlus, FileX, X } from "@phosphor-icons/react"
+import { CaretDown, CaretRight, FileText, FilePlus, FileX, Folder, X } from "@phosphor-icons/react"
 import { useStore } from "../store"
 import { ipc } from "../lib/ipc"
 import { useActiveRemote, useActiveWorkCwd, getActiveWsl } from "../lib/use-active-cwd"
 import { RemoteNotice } from "./remote-notice"
 import { useFileMenu } from "./use-file-menu"
 import type { ChangeStatus, DiffLine } from "../lib/ipc"
+import { previewEntries, type DirListing } from "../lib/dir-listing"
+import { isAbsoluteHostPath, revealLabel } from "../lib/file-actions"
 
 const fileIcon = (status: ChangeStatus) => {
   if (status === "?" || status === "A")
@@ -24,10 +26,13 @@ export function DiffPanel() {
 
   const files = useMemo(() => git?.files ?? [], [git])
 
-  // Keep a valid selection as the file list changes.
+  // Keep a valid selection as the file list changes: a listed file, or one inside an
+  // untracked folder (picked from its expanded listing). A folder row has no diff of its own.
   useEffect(() => {
-    if (files.length === 0) setSelected(null)
-    else if (!selected || !files.some((f) => f.path === selected)) setSelected(files[0]!.path)
+    const valid = (p: string) =>
+      files.some((f) => (f.isDir ? p.startsWith(`${f.path}/`) : f.path === p))
+    if (selected && valid(selected)) return
+    setSelected(files.find((f) => !f.isDir)?.path ?? null)
   }, [files, selected])
 
   // Load the unified diff for the selected file (refresh when totals change).
@@ -59,7 +64,8 @@ export function DiffPanel() {
             <>
               <span className="add">+{git.add}</span> <span className="del">−{git.del}</span>{" "}
               <span className="status-faint">
-                · {files.length} {files.length === 1 ? "file" : "files"}
+                · {(git.total ?? files.length).toLocaleString("en-US")}{" "}
+                {(git.total ?? files.length) === 1 ? "file" : "files"}
               </span>
             </>
           ) : (
@@ -74,28 +80,44 @@ export function DiffPanel() {
       {remote && <RemoteNotice remote={remote} what="changes" />}
       <div className="diff-files">
         {!remote &&
-          files.map((f) => (
-            <div
-              key={f.path}
-              className={`diff-file${f.path === selected ? " selected" : ""}`}
-              onMouseDown={(e) => e.button === 0 && setSelected(f.path)}
-              onContextMenu={(e) =>
-                openFileMenu(e, {
-                  abs: root ? `${root}/${f.path}` : f.path,
-                  rel: f.path,
-                  isDir: false,
-                })
-              }
-            >
-              <span className="tree-icon">{fileIcon(f.status)}</span>
-              <div className="tree-labels">
-                <span className="tree-primary">{f.name}</span>
-                <span className="tree-sub">{f.dir === "." ? "" : f.dir}</span>
+          files.map((f) =>
+            f.isDir ? (
+              <UntrackedFolder
+                key={f.path}
+                root={root}
+                rel={f.path}
+                depth={0}
+                selected={selected}
+                onSelect={setSelected}
+              />
+            ) : (
+              <div
+                key={f.path}
+                className={`diff-file${f.path === selected ? " selected" : ""}`}
+                onMouseDown={(e) => e.button === 0 && setSelected(f.path)}
+                onContextMenu={(e) =>
+                  openFileMenu(e, {
+                    abs: root ? `${root}/${f.path}` : f.path,
+                    rel: f.path,
+                    isDir: false,
+                  })
+                }
+              >
+                <span className="tree-icon">{fileIcon(f.status)}</span>
+                <div className="tree-labels">
+                  <span className="tree-primary">{f.name}</span>
+                  <span className="tree-sub">{f.dir === "." ? "" : f.dir}</span>
+                </div>
+                <span className="add">+{f.add}</span>
+                <span className="del">−{f.del}</span>
               </div>
-              <span className="add">+{f.add}</span>
-              <span className="del">−{f.del}</span>
-            </div>
-          ))}
+            ),
+          )}
+        {!remote && git?.total && (
+          <div className="diff-empty status-faint">
+            {(git.total - files.length).toLocaleString("en-US")} more changes not shown
+          </div>
+        )}
         {!remote && git?.isRepo && files.length === 0 && (
           <div className="diff-empty status-faint">Working tree clean</div>
         )}
@@ -117,5 +139,106 @@ export function DiffPanel() {
       )}
       {menu}
     </div>
+  )
+}
+
+/** An untracked folder (git reports it once): expands on click into its direct contents,
+ *  listed lazily — a big one previews its first 10 (lib/dir-listing). Files open their diff. */
+function UntrackedFolder({
+  root,
+  rel,
+  depth,
+  selected,
+  onSelect,
+}: {
+  root: string
+  rel: string // repo-relative path
+  depth: number
+  selected: string | null
+  onSelect: (rel: string) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const [listing, setListing] = useState<DirListing | null>(null)
+  const [showAll, setShowAll] = useState(false)
+  const platform = useStore((s) => s.platform)
+  const abs = root ? `${root}/${rel}` : rel
+  const name = rel.split("/").pop() ?? rel
+
+  const toggle = () => {
+    const next = !open
+    setOpen(next)
+    if (next && !listing) {
+      void ipc
+        .readdir(abs, getActiveWsl())
+        .then(setListing)
+        .catch(() => setListing({ entries: [], truncated: false, total: 0 }))
+    }
+  }
+
+  const total = listing ? (listing.total ?? listing.entries.length) : 0
+  const { shown, hidden } = listing
+    ? previewEntries(listing.entries, total, showAll)
+    : { shown: [], hidden: 0 }
+  const canReveal = !getActiveWsl() && isAbsoluteHostPath(abs, platform)
+  const pad = { paddingLeft: 12 + depth * 14 }
+
+  return (
+    <>
+      <div
+        className="diff-file"
+        style={pad}
+        title="Untracked folder"
+        onMouseDown={(e) => e.button === 0 && toggle()}
+      >
+        <span className="tree-icon">
+          {open ? <CaretDown size={12} /> : <CaretRight size={12} />}
+        </span>
+        <Folder size={14} weight="fill" color="var(--accent)" />
+        <div className="tree-labels">
+          <span className="tree-primary">{name}/</span>
+          <span className="tree-sub">untracked folder</span>
+        </div>
+      </div>
+      {open &&
+        shown.map((e) =>
+          e.isDir ? (
+            <UntrackedFolder
+              key={e.name}
+              root={root}
+              rel={`${rel}/${e.name}`}
+              depth={depth + 1}
+              selected={selected}
+              onSelect={onSelect}
+            />
+          ) : (
+            <div
+              key={e.name}
+              className={`diff-file${selected === `${rel}/${e.name}` ? " selected" : ""}`}
+              style={{ paddingLeft: 12 + (depth + 1) * 14 }}
+              onMouseDown={(ev) => ev.button === 0 && onSelect(`${rel}/${e.name}`)}
+            >
+              <span className="tree-icon">{fileIcon("?")}</span>
+              <div className="tree-labels">
+                <span className="tree-primary">{e.name}</span>
+              </div>
+            </div>
+          ),
+        )}
+      {open && listing && hidden > 0 && (
+        <div className="status-faint more-row" style={{ paddingLeft: 12 + (depth + 1) * 14 }}>
+          <span>{hidden.toLocaleString("en-US")} more</span>
+          {shown.length < listing.entries.length && (
+            <button className="link-btn" onClick={() => setShowAll(true)}>
+              Show all
+            </button>
+          )}
+          {canReveal && (
+            <button className="link-btn" onClick={() => ipc.revealPath(abs)}>
+              {revealLabel(platform)}
+            </button>
+          )}
+        </div>
+      )}
+    </>
   )
 }

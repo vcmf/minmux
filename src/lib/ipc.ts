@@ -115,6 +115,7 @@ export interface GitFile {
   status: ChangeStatus
   add: number
   del: number
+  isDir?: boolean // an untracked folder, reported once (git's default untracked mode)
 }
 
 export interface GitStatus {
@@ -126,6 +127,7 @@ export interface GitStatus {
   files: GitFile[]
   add: number
   del: number
+  total?: number // set when `files` was capped: how many changes there really are
 }
 
 export interface DiffLine {

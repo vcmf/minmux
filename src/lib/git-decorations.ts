@@ -8,6 +8,7 @@ import { joinPath } from "./file-tree"
 export interface GitDecorations {
   file: Map<string, ChangeStatus> // absolute file path → its status
   dir: Map<string, ChangeStatus> // absolute folder path → most-severe status inside it
+  untrackedDirs: string[] // wholly-untracked folders (git reports each once): all inside is "?"
 }
 
 // Folder aggregate severity, low → high. A folder shows the most severe change it
@@ -28,10 +29,14 @@ const parentDir = (p: string) => {
 export function buildGitDecorations(repoRoot: string, files: GitFile[]): GitDecorations {
   const file = new Map<string, ChangeStatus>()
   const dir = new Map<string, ChangeStatus>()
-  if (!repoRoot) return { file, dir }
+  const untrackedDirs: string[] = []
+  if (!repoRoot) return { file, dir, untrackedDirs }
   for (const f of files) {
     const abs = joinPath(repoRoot, f.path)
-    file.set(abs, f.status)
+    if (f.isDir) {
+      untrackedDirs.push(abs)
+      dir.set(abs, f.status) // the folder itself is untracked…
+    } else file.set(abs, f.status)
     // Roll the status up through ancestor folders, up to and including repoRoot.
     let d = parentDir(abs)
     while (d === repoRoot || d.startsWith(`${repoRoot}/`)) {
@@ -41,7 +46,18 @@ export function buildGitDecorations(repoRoot: string, files: GitFile[]): GitDeco
       d = parentDir(d)
     }
   }
-  return { file, dir }
+  return { file, dir, untrackedDirs }
+}
+
+/** A path's badge: its own status, else "?" when it sits inside a wholly-untracked folder. */
+export function statusAt(
+  deco: GitDecorations,
+  abs: string,
+  isDir: boolean,
+): ChangeStatus | undefined {
+  const own = isDir ? deco.dir.get(abs) : deco.file.get(abs)
+  if (own) return own
+  return deco.untrackedDirs.some((d) => abs.startsWith(`${d}/`)) ? "?" : undefined
 }
 
 /** Single-letter badge for a status (untracked shows as U). */

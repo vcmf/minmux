@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest"
-import { buildGitDecorations, statusLetter, statusColor } from "./git-decorations"
+import { statusAt, buildGitDecorations, statusLetter, statusColor } from "./git-decorations"
 import type { GitFile, ChangeStatus } from "./ipc"
 
 const f = (p: string, status: ChangeStatus): GitFile => ({
@@ -88,5 +88,26 @@ describe("statusLetter / statusColor", () => {
     expect(statusColor("?")).toContain("--accent")
     expect(statusColor("D")).toContain("--red")
     expect(statusColor("R")).toContain("--blue")
+  })
+})
+
+describe("untracked folders (git reports each once)", () => {
+  const f = (path: string, status: ChangeStatus, isDir = false) => ({
+    path,
+    name: path,
+    dir: ".",
+    status,
+    add: 0,
+    del: 0,
+    isDir,
+  })
+  it("the folder and everything inside it read as untracked; ancestors roll it up", () => {
+    const d = buildGitDecorations("/r", [f("docs/node_modules", "?", true), f("a.ts", "M")])
+    expect(statusAt(d, "/r/docs/node_modules", true)).toBe("?")
+    expect(statusAt(d, "/r/docs/node_modules/.pnpm/x.js", false)).toBe("?")
+    expect(statusAt(d, "/r/docs/node_modules/.pnpm", true)).toBe("?")
+    expect(statusAt(d, "/r/docs", true)).toBe("?") // rolled up
+    expect(statusAt(d, "/r/docs-other/x", false)).toBeUndefined() // a prefix, not inside
+    expect(statusAt(d, "/r/a.ts", false)).toBe("M")
   })
 })
