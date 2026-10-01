@@ -5,6 +5,7 @@ import { ipc } from "../lib/ipc"
 import { useActiveRemote, useActiveWorkCwd, getActiveWsl } from "../lib/use-active-cwd"
 import { RemoteNotice } from "./remote-notice"
 import { useFileMenu } from "./use-file-menu"
+import { joinPath } from "../lib/file-tree"
 import type { ChangeStatus, DiffLine } from "../lib/ipc"
 
 const fileIcon = (status: ChangeStatus) => {
@@ -52,7 +53,7 @@ export function DiffPanel() {
     const s = useStore.getState()
     const sid = s.tabs.find((t) => t.id === s.activeTabId)?.activeSessionId
     if (!sid || !root) return
-    s.setPaneRoot(sid, `${root}/${rel}`)
+    s.setPaneRoot(sid, joinPath(root, rel))
     s.setRightView("files")
   }
 

@@ -154,4 +154,9 @@ describe("renames and quoting (status ↔ numstat must agree)", () => {
     const m = parseNumstat('3\t1\t"say \\"hi\\".txt"\n')
     expect(m.get('say "hi".txt')).toEqual({ add: 3, del: 1 })
   })
+  it("a brace rename with an empty side keys on a clean path", () => {
+    const m = parseNumstat("2\t0\tlib/{sub => }/x.ts\n4\t1\t{ => src}/y.ts\n")
+    expect(m.get("lib/x.ts")).toEqual({ add: 2, del: 0 })
+    expect(m.get("src/y.ts")).toEqual({ add: 4, del: 1 })
+  })
 })

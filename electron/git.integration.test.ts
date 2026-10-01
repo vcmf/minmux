@@ -169,6 +169,19 @@ describe.skipIf(!hasGit)("gitDiff in a repo with no commits yet", () => {
       fs.rmSync(d, { recursive: true, force: true })
     }
   })
+
+  it("a STAGED file in a repo with no commits still shows its content", async () => {
+    const d = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "minmux-nohead-")))
+    try {
+      execFileSync("git", ["init", "-q", "-b", "main"], { cwd: d })
+      fs.writeFileSync(path.join(d, "s.txt"), "staged\n")
+      execFileSync("git", ["add", "s.txt"], { cwd: d })
+      const out = await gitDiff(d, "s.txt")
+      expect(out.some((l) => l.type === "add" && l.text === "staged")).toBe(true)
+    } finally {
+      fs.rmSync(d, { recursive: true, force: true })
+    }
+  })
 })
 
 describe.skipIf(!hasGit)("gitDiff is bounded and honest", () => {
@@ -182,6 +195,20 @@ describe.skipIf(!hasGit)("gitDiff is bounded and honest", () => {
     git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "t")
   })
   afterAll(() => fs.rmSync(d, { recursive: true, force: true }))
+
+  it("a glob-looking name (app/[id]) diffs only that file", async () => {
+    fs.mkdirSync(path.join(d, "app", "[id]"), { recursive: true })
+    fs.mkdirSync(path.join(d, "app", "i"), { recursive: true })
+    fs.writeFileSync(path.join(d, "app", "[id]", "p.ts"), "a\n")
+    fs.writeFileSync(path.join(d, "app", "i", "p.ts"), "b\n")
+    git("add", "app")
+    git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "app")
+    fs.writeFileSync(path.join(d, "app", "[id]", "p.ts"), "a2\n")
+    fs.writeFileSync(path.join(d, "app", "i", "p.ts"), "b2\n")
+    const out = await gitDiff(d, "app/[id]/p.ts")
+    expect(out.map((l) => l.text)).not.toContain("b2")
+    expect(out.map((l) => l.text)).toContain("a2")
+  })
 
   it("a tracked file that matches HEAD is not shown as wholly added", async () => {
     fs.writeFileSync(path.join(d, "t.txt"), "changed\n")

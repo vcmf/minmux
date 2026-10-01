@@ -81,7 +81,11 @@ export function parseNumstat(out: string): Map<string, { add: number; del: numbe
     const split = file.includes(" => ") ? splitRename(file.replace(" => ", " -> ")) : null
     if (split && !file.includes("{")) file = split[1]
     else if (file.includes(" => "))
-      file = file.replace(/\{.*? => (.*?)\}/g, "$1").replace(/.* => /, "")
+      file = file
+        .replace(/\{.*? => (.*?)\}/g, "$1")
+        .replace(/.* => /, "")
+        .replace(/\/{2,}/g, "/") // "lib/{sub => }/x.ts" → "lib/x.ts", not "lib//x.ts"
+        .replace(/^\//, "")
     file = unquotePath(file)
     map.set(file, { add: add === "-" ? 0 : Number(add), del: del === "-" ? 0 : Number(del) })
   }
@@ -158,7 +162,9 @@ const NULL_DEVICE = process.platform === "win32" ? "NUL" : "/dev/null"
 
 // A repo with more changes than this reports the first STATUS_CAP (+ the real total):
 // shipping and rendering tens of thousands of rows every poll would stall the app.
-export const STATUS_CAP = 5000
+export // A hung git (network mount, fsmonitor, lock wait) mustn't stop the sequential poll for good.
+const STATUS_LIMITS = { timeout: 20_000 }
+const STATUS_CAP = 5000
 // Untracked files get a "+N lines" count read off disk; only this many per poll (async).
 const COUNT_UNTRACKED = 200
 
@@ -248,7 +254,14 @@ export async function gitStatus(cwd: string, wsl?: WslCtx): Promise<GitStatus> {
   try {
     // Git's default untracked mode: a wholly-untracked folder is ONE entry (`dir/`). With
     // --untracked-files=all, an un-ignored node_modules meant 35k entries per poll.
-    porcelain = await run(cwd, ["status", "--porcelain=v1", "-b"], wsl)
+    // Explicit, so a user's status.showUntrackedFiles (no / all) can't hide them or bring the
+    // 35k entries back.
+    porcelain = await run(
+      cwd,
+      ["status", "--porcelain=v1", "-b", "--untracked-files=normal"],
+      wsl,
+      STATUS_LIMITS,
+    )
   } catch {
     return empty // not a git repo (or git missing)
   }
@@ -260,8 +273,8 @@ export async function gitStatus(cwd: string, wsl?: WslCtx): Promise<GitStatus> {
   // numstat may fail with no HEAD yet (empty repo); root is best-effort ("" if it fails).
   // Porcelain paths are relative to the repo root, not to cwd (which may be a subfolder).
   const [numstatOut, rootOut] = await Promise.all([
-    run(cwd, ["diff", "--numstat", "HEAD"], wsl).catch(() => ""),
-    run(cwd, ["rev-parse", "--show-toplevel"], wsl).catch(() => ""),
+    run(cwd, ["diff", "--numstat", "HEAD"], wsl, STATUS_LIMITS).catch(() => ""),
+    run(cwd, ["rev-parse", "--show-toplevel"], wsl, STATUS_LIMITS).catch(() => ""),
   ])
   const numstat = parseNumstat(numstatOut)
   const root = rootOut.trim()
@@ -292,8 +305,14 @@ export async function gitStatus(cwd: string, wsl?: WslCtx): Promise<GitStatus> {
     }
   })
 
-  const add = files.reduce((n, f) => n + f.add, 0)
-  const del = files.reduce((n, f) => n + f.del, 0)
+  // Totals over every change (numstat isn't capped), not just the files listed.
+  let add = 0
+  let del = 0
+  for (const c of numstat.values()) {
+    add += c.add
+    del += c.del
+  }
+  for (const n of counts.values()) add += n
   return {
     isRepo: true,
     root,
@@ -323,12 +342,15 @@ export async function gitDiff(cwd: string, file: string, wsl?: WslCtx): Promise<
     return null
   }
   let out: string
+  let noHead = false
   try {
-    out = await run(cwd, ["diff", "HEAD", "--", file], wsl, DIFF_LIMITS)
+    // Literal: a path like app/[id]/page.tsx is a file name, not a glob.
+    out = await run(cwd, ["--literal-pathspecs", "diff", "HEAD", "--", file], wsl, DIFF_LIMITS)
   } catch (e) {
     const cut = limited(e)
     if (cut) return cut
     out = "" // bad revision HEAD (no commits yet)
+    noHead = true
   }
   if (out.trim()) return parseDiff(out)
   // Nothing vs HEAD: an untracked file (or no HEAD yet) → diff against the null device. A
@@ -340,7 +362,7 @@ export async function gitDiff(cwd: string, file: string, wsl?: WslCtx): Promise<
   } catch {
     // treat as untracked
   }
-  if (tracked.trim()) return []
+  if (tracked.trim() && !noHead) return [] // with no HEAD, a staged file is all new
   try {
     return parseDiff(await run(cwd, ["diff", "--no-index", "--", nul, file], wsl, DIFF_LIMITS))
   } catch (e) {
