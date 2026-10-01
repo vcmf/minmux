@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process"
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
-import { gitStatus, gitDiff } from "./git"
+import { gitUntrackedListing, gitStatus, gitDiff } from "./git"
 
 // Real-git integration: build a throwaway repo and exercise gitStatus/gitDiff
 // end-to-end (the pure parsers are covered separately in git.test.ts).
@@ -106,23 +106,50 @@ describe.skipIf(!hasGit)("git module (real repo)", () => {
   })
 })
 
-describe("gitStatus — an untracked folder (e.g. an un-ignored node_modules)", () => {
-  it("is reported once as a folder, not file by file; tracked changes still listed", async () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "minmux-untracked-"))
+describe.skipIf(!hasGit)(
+  "gitStatus — an untracked folder (e.g. an un-ignored node_modules)",
+  () => {
+    let dir = ""
     const git = (...a: string[]) => execFileSync("git", a, { cwd: dir, stdio: "ignore" })
-    git("init", "-q", "-b", "main")
-    git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init")
-    fs.writeFileSync(path.join(dir, "tracked.txt"), "a\n")
-    git("add", "tracked.txt")
-    git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "t")
-    fs.writeFileSync(path.join(dir, "tracked.txt"), "a\nb\n")
-    const nm = path.join(dir, "docs", "node_modules", ".pnpm")
-    fs.mkdirSync(nm, { recursive: true })
-    for (let i = 0; i < 300; i++) fs.writeFileSync(path.join(nm, `f${i}.js`), "x\n")
-    const st = await gitStatus(dir)
-    const paths = st.files.map((f) => `${f.path}${f.isDir ? "/" : ""}`)
-    expect(paths.sort()).toEqual(["docs/", "tracked.txt"])
-    expect(st.files.find((f) => f.isDir)?.add).toBe(0) // a folder is never line-counted
-    fs.rmSync(dir, { recursive: true, force: true })
-  })
-})
+    const commit = (m: string) =>
+      git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", m)
+    beforeAll(() => {
+      dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "minmux-untracked-")))
+      git("init", "-q", "-b", "main")
+      fs.writeFileSync(path.join(dir, ".gitignore"), ".env\n")
+      fs.writeFileSync(path.join(dir, "tracked.txt"), "a\n")
+      fs.mkdirSync(path.join(dir, "sub"))
+      fs.writeFileSync(path.join(dir, "sub", "kept.txt"), "k\n")
+      git("add", ".")
+      commit("init")
+      fs.writeFileSync(path.join(dir, "tracked.txt"), "a\nb\n")
+      const nm = path.join(dir, "docs", "node_modules", ".pnpm")
+      fs.mkdirSync(nm, { recursive: true })
+      for (let i = 0; i < 300; i++) fs.writeFileSync(path.join(nm, `f${i}.js`), "x\n")
+      fs.writeFileSync(path.join(dir, "docs", "README.md"), "1\n2\n3\n")
+      fs.writeFileSync(path.join(dir, "docs", ".env"), "SECRET=1\n") // ignored
+      fs.writeFileSync(path.join(dir, "sub", "new.txt"), "1\n2\n")
+    })
+    afterAll(() => fs.rmSync(dir, { recursive: true, force: true }))
+
+    it("is reported once as a folder, not file by file; tracked changes still listed", async () => {
+      const st = await gitStatus(dir)
+      const paths = st.files.map((f) => `${f.path}${f.isDir ? "/" : ""}`)
+      expect(paths.sort()).toEqual(["docs/", "sub/new.txt", "tracked.txt"])
+      expect(st.files.find((f) => f.isDir)?.add).toBe(0) // a folder is never line-counted
+    })
+
+    it("from a terminal in a subfolder, untracked counts still resolve from the repo root", async () => {
+      const st = await gitStatus(path.join(dir, "sub"))
+      expect(st.files.find((f) => f.path === "sub/new.txt")?.add).toBe(2)
+    })
+
+    it("listing it goes through git: ignored files (.env) never show", async () => {
+      const l = await gitUntrackedListing(dir, "docs")
+      expect(l.entries).toEqual([
+        { name: "node_modules", isDir: true },
+        { name: "README.md", isDir: false },
+      ])
+    })
+  },
+)

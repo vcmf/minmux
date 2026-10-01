@@ -42,13 +42,15 @@ export function DiffPanel() {
       return
     }
     let cancelled = false
-    void ipc.gitDiff(cwd, selected, getActiveWsl()).then((d) => {
+    // Porcelain paths (and those picked inside an untracked folder) are relative to the repo
+    // root, not to the terminal's cwd, which may be a subfolder.
+    void ipc.gitDiff(git?.root || cwd, selected, getActiveWsl()).then((d) => {
       if (!cancelled) setDiff(d)
     })
     return () => {
       cancelled = true
     }
-  }, [cwd, selected, git?.add, git?.del])
+  }, [cwd, git?.root, selected, git?.add, git?.del])
 
   const close = () => useStore.getState().setRightView(null)
 
@@ -85,10 +87,13 @@ export function DiffPanel() {
               <UntrackedFolder
                 key={f.path}
                 root={root}
+                cwd={cwd ?? root}
                 rel={f.path}
                 depth={0}
                 selected={selected}
                 onSelect={setSelected}
+                onMenu={openFileMenu}
+                refresh={git}
               />
             ) : (
               <div
@@ -146,16 +151,22 @@ export function DiffPanel() {
  *  listed lazily — a big one previews its first 10 (lib/dir-listing). Files open their diff. */
 function UntrackedFolder({
   root,
+  cwd,
   rel,
   depth,
   selected,
   onSelect,
+  onMenu,
+  refresh,
 }: {
   root: string
+  cwd: string
   rel: string // repo-relative path
   depth: number
   selected: string | null
   onSelect: (rel: string) => void
+  onMenu: (e: React.MouseEvent, t: { abs: string; rel: string; isDir: boolean }) => void
+  refresh: unknown // the latest git status: an open folder re-lists on each poll
 }) {
   const [open, setOpen] = useState(false)
   const [listing, setListing] = useState<DirListing | null>(null)
@@ -164,16 +175,22 @@ function UntrackedFolder({
   const abs = root ? `${root}/${rel}` : rel
   const name = rel.split("/").pop() ?? rel
 
-  const toggle = () => {
-    const next = !open
-    setOpen(next)
-    if (next && !listing) {
-      void ipc
-        .readdir(abs, getActiveWsl())
-        .then(setListing)
-        .catch(() => setListing({ entries: [], truncated: false, total: 0 }))
+  // Through git, not readdir: what's inside an untracked folder that git ignores (an `.env`,
+  // a nested node_modules) must never show as a change — nor its contents as a diff.
+  useEffect(() => {
+    if (!open) return
+    let cancelled = false
+    void ipc
+      .gitUntrackedList(cwd, rel, getActiveWsl())
+      .then((l) => !cancelled && setListing(l))
+      .catch(() => !cancelled && setListing({ entries: [], truncated: false, total: 0 }))
+    return () => {
+      cancelled = true
     }
-  }
+  }, [open, cwd, rel, refresh])
+  const toggle = () => setOpen((o) => !o)
+  const menu = (e: React.MouseEvent, relPath: string, isDir: boolean) =>
+    onMenu(e, { abs: root ? `${root}/${relPath}` : relPath, rel: relPath, isDir })
 
   const total = listing ? (listing.total ?? listing.entries.length) : 0
   const { shown, hidden } = listing
@@ -189,6 +206,7 @@ function UntrackedFolder({
         style={pad}
         title="Untracked folder"
         onMouseDown={(e) => e.button === 0 && toggle()}
+        onContextMenu={(e) => menu(e, rel, true)}
       >
         <span className="tree-icon">
           {open ? <CaretDown size={12} /> : <CaretRight size={12} />}
@@ -205,10 +223,13 @@ function UntrackedFolder({
             <UntrackedFolder
               key={e.name}
               root={root}
+              cwd={cwd}
               rel={`${rel}/${e.name}`}
               depth={depth + 1}
               selected={selected}
               onSelect={onSelect}
+              onMenu={onMenu}
+              refresh={refresh}
             />
           ) : (
             <div
@@ -216,6 +237,7 @@ function UntrackedFolder({
               className={`diff-file${selected === `${rel}/${e.name}` ? " selected" : ""}`}
               style={{ paddingLeft: 12 + (depth + 1) * 14 }}
               onMouseDown={(ev) => ev.button === 0 && onSelect(`${rel}/${e.name}`)}
+              onContextMenu={(ev) => menu(ev, `${rel}/${e.name}`, false)}
             >
               <span className="tree-icon">{fileIcon("?")}</span>
               <div className="tree-labels">

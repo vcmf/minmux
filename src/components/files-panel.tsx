@@ -150,7 +150,7 @@ export function FilesPanel() {
               <div
                 key={r.path}
                 className="status-faint more-row"
-                style={{ ...pad, padding: "2px 10px" }}
+                style={{ ...pad, paddingTop: 2, paddingBottom: 2, paddingRight: 10 }}
               >
                 <span>{r.name}</span>
                 {r.kind === "more" && (

@@ -104,14 +104,14 @@ describe("DiffPanel — an untracked folder (reported once by git)", () => {
 
   it("expands on click into its contents; a big one previews 10 + 'N more · Show all'", async () => {
     st().setGit(withFolder)
-    vi.mocked(ipc.readdir).mockResolvedValueOnce({
+    vi.mocked(ipc.gitUntrackedList).mockResolvedValueOnce({
       entries: entries(150),
       truncated: false,
       total: 150,
     })
     render(<DiffPanel />)
     fireEvent.mouseDown(screen.getByText("node_modules/"), { button: 0 })
-    expect(ipc.readdir).toHaveBeenCalledWith("/repo/docs/node_modules", undefined)
+    expect(ipc.gitUntrackedList).toHaveBeenCalledWith("/repo", "docs/node_modules", undefined)
     expect(await screen.findByText("140 more")).toBeInTheDocument()
     expect(screen.getAllByText(/^f0\d\d\.js$/)).toHaveLength(10)
     fireEvent.click(screen.getByText("Show all"))
@@ -120,7 +120,7 @@ describe("DiffPanel — an untracked folder (reported once by git)", () => {
 
   it("a file inside it can be selected (its diff opens, the selection sticks)", async () => {
     st().setGit(withFolder)
-    vi.mocked(ipc.readdir).mockResolvedValueOnce({
+    vi.mocked(ipc.gitUntrackedList).mockResolvedValueOnce({
       entries: entries(3),
       truncated: false,
       total: 3,

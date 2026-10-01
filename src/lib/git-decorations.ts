@@ -8,7 +8,6 @@ import { joinPath } from "./file-tree"
 export interface GitDecorations {
   file: Map<string, ChangeStatus> // absolute file path → its status
   dir: Map<string, ChangeStatus> // absolute folder path → most-severe status inside it
-  untrackedDirs: string[] // wholly-untracked folders (git reports each once): all inside is "?"
 }
 
 // Folder aggregate severity, low → high. A folder shows the most severe change it
@@ -29,14 +28,12 @@ const parentDir = (p: string) => {
 export function buildGitDecorations(repoRoot: string, files: GitFile[]): GitDecorations {
   const file = new Map<string, ChangeStatus>()
   const dir = new Map<string, ChangeStatus>()
-  const untrackedDirs: string[] = []
-  if (!repoRoot) return { file, dir, untrackedDirs }
+  if (!repoRoot) return { file, dir }
   for (const f of files) {
     const abs = joinPath(repoRoot, f.path)
-    if (f.isDir) {
-      untrackedDirs.push(abs)
-      dir.set(abs, f.status) // the folder itself is untracked…
-    } else file.set(abs, f.status)
+    if (f.isDir)
+      dir.set(abs, f.status) // a wholly-untracked folder (git reports it once)
+    else file.set(abs, f.status)
     // Roll the status up through ancestor folders, up to and including repoRoot.
     let d = parentDir(abs)
     while (d === repoRoot || d.startsWith(`${repoRoot}/`)) {
@@ -46,18 +43,17 @@ export function buildGitDecorations(repoRoot: string, files: GitFile[]): GitDeco
       d = parentDir(d)
     }
   }
-  return { file, dir, untrackedDirs }
+  return { file, dir }
 }
 
-/** A path's badge: its own status, else "?" when it sits inside a wholly-untracked folder. */
+/** A path's badge. A wholly-untracked folder is badged itself; what's inside isn't, since
+ *  git doesn't say which of those files it ignores (an `.env` must not read as a change). */
 export function statusAt(
   deco: GitDecorations,
   abs: string,
   isDir: boolean,
 ): ChangeStatus | undefined {
-  const own = isDir ? deco.dir.get(abs) : deco.file.get(abs)
-  if (own) return own
-  return deco.untrackedDirs.some((d) => abs.startsWith(`${d}/`)) ? "?" : undefined
+  return isDir ? deco.dir.get(abs) : deco.file.get(abs)
 }
 
 /** Single-letter badge for a status (untracked shows as U). */

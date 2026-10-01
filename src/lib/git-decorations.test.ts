@@ -101,13 +101,11 @@ describe("untracked folders (git reports each once)", () => {
     del: 0,
     isDir,
   })
-  it("the folder and everything inside it read as untracked; ancestors roll it up", () => {
+  it("the folder itself is badged and rolls up; what's inside isn't (git may ignore it)", () => {
     const d = buildGitDecorations("/r", [f("docs/node_modules", "?", true), f("a.ts", "M")])
     expect(statusAt(d, "/r/docs/node_modules", true)).toBe("?")
-    expect(statusAt(d, "/r/docs/node_modules/.pnpm/x.js", false)).toBe("?")
-    expect(statusAt(d, "/r/docs/node_modules/.pnpm", true)).toBe("?")
     expect(statusAt(d, "/r/docs", true)).toBe("?") // rolled up
-    expect(statusAt(d, "/r/docs-other/x", false)).toBeUndefined() // a prefix, not inside
+    expect(statusAt(d, "/r/docs/node_modules/.env", false)).toBeUndefined()
     expect(statusAt(d, "/r/a.ts", false)).toBe("M")
   })
 })

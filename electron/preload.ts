@@ -131,6 +131,8 @@ const api = {
   paneGitInfo: (reqs: PaneGitRequest[]) =>
     ipcRenderer.invoke("pane:git-info", reqs) as Promise<Record<string, PaneGitInfo>>,
   gitStatus: (cwd: string, wsl?: { distro?: string }) => ipcRenderer.invoke("git:status", cwd, wsl),
+  gitUntrackedList: (cwd: string, dirRel: string, wsl?: { distro?: string }) =>
+    ipcRenderer.invoke("git:untracked-list", cwd, dirRel, wsl),
   gitDiff: (cwd: string, file: string, wsl?: { distro?: string }) =>
     ipcRenderer.invoke("git:diff", cwd, file, wsl),
 

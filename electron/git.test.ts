@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest"
 import {
+  unquotePath,
   parseStatusEntries,
   parseBranchLine,
   statusOf,
@@ -113,5 +114,19 @@ describe("parseStatusEntries", () => {
     const r = parseStatusEntries(`## main\n${lines}\n`, 5)
     expect(r.entries).toHaveLength(5)
     expect(r.total).toBe(12)
+  })
+})
+
+describe("unquotePath", () => {
+  it("undoes git's C-quoting (spaces, quotes, escapes, octal UTF-8)", () => {
+    expect(unquotePath("plain/path")).toBe("plain/path")
+    expect(unquotePath('"my dir/"')).toBe("my dir/")
+    expect(unquotePath('"say \\"hi\\".txt"')).toBe('say "hi".txt')
+    expect(unquotePath('"tab\\there"')).toBe("tab\there")
+    expect(unquotePath('"caf\\303\\251"')).toBe("café")
+  })
+  it("a quoted untracked folder is still a folder", () => {
+    const r = parseStatusEntries('## main\n?? "my dir/"\n')
+    expect(r.entries).toEqual([{ xy: "??", path: "my dir", isDir: true }])
   })
 })

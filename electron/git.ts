@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process"
+import { toDirListing, type DirListing } from "../src/lib/dir-listing"
 import { promisify } from "node:util"
 import fs from "node:fs"
 import path from "node:path"
@@ -127,7 +128,7 @@ export function wslGitArgs(distro: string | undefined, cwd: string, gitArgs: str
 }
 
 async function run(cwd: string, args: string[], wsl?: WslCtx): Promise<string> {
-  const maxBuffer = 20 * 1024 * 1024
+  const maxBuffer = 64 * 1024 * 1024 // a mass rename can print a lot; the rows are capped after
   if (wsl) {
     // cwd is a Linux path valid only inside WSL — run git there, not on the host.
     const { stdout } = await exec("wsl.exe", wslGitArgs(wsl.distro, cwd, args), { maxBuffer })
@@ -145,6 +146,40 @@ export const STATUS_CAP = 5000
 // Untracked files get a "+N lines" count read off disk; only this many per poll (async).
 const COUNT_UNTRACKED = 200
 
+/** A porcelain path as git prints it: C-quoted ("…") when it has spaces, quotes or escapes. */
+export function unquotePath(p: string): string {
+  if (p.length < 2 || !p.startsWith('"') || !p.endsWith('"')) return p
+  const body = p.slice(1, -1)
+  const bytes: number[] = []
+  const esc: Record<string, number> = {
+    n: 10,
+    t: 9,
+    r: 13,
+    '"': 34,
+    "\\": 92,
+    a: 7,
+    b: 8,
+    f: 12,
+    v: 11,
+  }
+  for (let i = 0; i < body.length; i++) {
+    const c = body[i]!
+    if (c !== "\\") {
+      bytes.push(...Buffer.from(c, "utf8"))
+      continue
+    }
+    const n = body[i + 1] ?? ""
+    if (/[0-7]/.test(n)) {
+      bytes.push(parseInt(body.slice(i + 1, i + 4), 8)) // \ooo: one byte of a UTF-8 sequence
+      i += 3
+    } else {
+      bytes.push(esc[n] ?? n.charCodeAt(0))
+      i += 1
+    }
+  }
+  return Buffer.from(bytes).toString("utf8")
+}
+
 /** `git status --porcelain=v1 -b` → header + capped entries (`dir/` = an untracked folder). */
 export function parseStatusEntries(
   porcelain: string,
@@ -161,7 +196,7 @@ export function parseStatusEntries(
     }
     total++
     if (entries.length >= cap) continue
-    const p = line.slice(3)
+    const p = unquotePath(line.slice(3))
     const isDir = p.endsWith("/")
     entries.push({ xy: line.slice(0, 2), path: isDir ? p.slice(0, -1) : p, isDir })
   }
@@ -190,38 +225,43 @@ export async function gitStatus(cwd: string, wsl?: WslCtx): Promise<GitStatus> {
     // no HEAD yet (empty repo) — counts come from file reads below
   }
 
-  const files: GitFile[] = []
-  let counted = 0
-  for (const { xy, path: p, isDir } of entries) {
-    const status = statusOf(xy)
-    let counts = numstat.get(p)
-    // Untracked files: count lines off disk — async and only the first COUNT_UNTRACKED (this
-    // used to read every untracked file synchronously, blocking the main process — the one
-    // carrying terminal I/O). Never for a folder; never on WSL (Linux path, not on the host).
-    if (!counts) {
-      const read = status === "?" && !isDir && !wsl && counted++ < COUNT_UNTRACKED
-      counts = { add: read ? await countLines(path.join(cwd, p)) : 0, del: 0 }
-    }
-    files.push({
-      path: p,
-      name: path.basename(p),
-      dir: path.dirname(p),
-      status,
-      ...counts,
-      ...(isDir ? { isDir } : {}),
-    })
-  }
-
-  const add = files.reduce((n, f) => n + f.add, 0)
-  const del = files.reduce((n, f) => n + f.del, 0)
-  // Repo toplevel — resolves the repo-relative file paths to absolute (files browser
-  // decorations, worktree label). Best-effort: "" if it somehow fails.
+  // Repo toplevel — porcelain paths are relative to it (not to cwd, which may be a subfolder);
+  // also resolves them to absolute for the files browser. Best-effort: "" if it fails.
   let root = ""
   try {
     root = (await run(cwd, ["rev-parse", "--show-toplevel"], wsl)).trim()
   } catch {
     // leave root empty
   }
+  const base = root || cwd
+
+  // Untracked files get a "+N lines" count off disk: only the first COUNT_UNTRACKED per poll,
+  // a few at a time, cached by size+mtime, counting newline bytes (no decode). Never a folder,
+  // never on WSL (a Linux path isn't on the host). This used to read every untracked file
+  // synchronously — the main process carries terminal I/O.
+  const toCount = entries
+    .filter((e) => statusOf(e.xy) === "?" && !e.isDir && !numstat.has(e.path) && !wsl)
+    .slice(0, COUNT_UNTRACKED)
+  const counts = new Map<string, number>()
+  await inBatches(toCount, 8, async (e) =>
+    counts.set(e.path, await countLines(path.join(base, e.path))),
+  )
+
+  const files: GitFile[] = entries.map(({ xy, path: p, isDir }) => {
+    const status = statusOf(xy)
+    const c = numstat.get(p) ?? { add: counts.get(p) ?? 0, del: 0 }
+    return {
+      path: p,
+      name: path.basename(p),
+      dir: path.dirname(p),
+      status,
+      ...c,
+      ...(isDir ? { isDir } : {}),
+    }
+  })
+
+  const add = files.reduce((n, f) => n + f.add, 0)
+  const del = files.reduce((n, f) => n + f.del, 0)
   return {
     isRepo: true,
     root,
@@ -256,12 +296,68 @@ export async function gitDiff(cwd: string, file: string, wsl?: WslCtx): Promise<
   }
 }
 
+const lineCache = new Map<string, { key: string; lines: number }>() // path → by size+mtime
+const LINE_CACHE_MAX = 2000
+
 async function countLines(file: string): Promise<number> {
   try {
-    if ((await fs.promises.stat(file)).size > 2 * 1024 * 1024) return 0
-    const text = await fs.promises.readFile(file, "utf8")
-    return text.length ? text.split("\n").length : 0
+    const st = await fs.promises.stat(file)
+    if (st.size > 1024 * 1024) return 0 // big files: no count (not worth reading per poll)
+    const key = `${st.size}:${st.mtimeMs}`
+    const hit = lineCache.get(file)
+    if (hit?.key === key) return hit.lines
+    const buf = await fs.promises.readFile(file)
+    let lines = 0
+    for (let i = buf.indexOf(10); i !== -1; i = buf.indexOf(10, i + 1)) lines++
+    if (buf.length && buf[buf.length - 1] !== 10) lines++ // a last line without a newline
+    if (lineCache.size >= LINE_CACHE_MAX) lineCache.delete(lineCache.keys().next().value!)
+    lineCache.set(file, { key, lines })
+    return lines
   } catch {
     return 0
   }
+}
+
+/** Run `fn` over `items`, at most `n` at a time. */
+async function inBatches<T>(items: T[], n: number, fn: (x: T) => Promise<unknown>): Promise<void> {
+  for (let i = 0; i < items.length; i += n) await Promise.all(items.slice(i, i + n).map(fn))
+}
+
+/** An untracked folder's direct contents as git sees them (gitignored entries left out, a
+ *  subfolder as one entry) — so a new folder never surfaces an ignored `.env` as a change. */
+export async function gitUntrackedListing(
+  cwd: string,
+  dirRel: string,
+  wsl?: WslCtx,
+): Promise<DirListing> {
+  let root: string
+  try {
+    root = (await run(cwd, ["rev-parse", "--show-toplevel"], wsl)).trim() || cwd
+  } catch {
+    return toDirListing([])
+  }
+  let out: string
+  try {
+    // From the root, so the pathspec is root-relative like every porcelain path. Recursive
+    // (--directory would collapse this very folder to one entry); only on a click, ~60 ms for
+    // 35k files, and reduced to the first level below.
+    out = await run(
+      root,
+      ["ls-files", "--others", "--exclude-standard", "-z", "--", `${dirRel}/`],
+      wsl,
+    )
+  } catch {
+    return toDirListing([])
+  }
+  const prefix = `${dirRel}/`
+  const seen = new Map<string, boolean>()
+  for (const p of out.split("\0")) {
+    if (!p.startsWith(prefix)) continue
+    const rest = p.slice(prefix.length)
+    if (!rest) continue
+    const slash = rest.indexOf("/")
+    if (slash === -1) seen.set(rest, false)
+    else seen.set(rest.slice(0, slash), true) // a deeper path → its first segment is a folder
+  }
+  return toDirListing([...seen].map(([name, isDir]) => ({ name, isDir })))
 }

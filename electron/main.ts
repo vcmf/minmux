@@ -30,7 +30,7 @@ import {
   parseWslDistros,
   setIntegrationDirName,
 } from "./shell-integration"
-import { gitStatus, gitDiff } from "./git"
+import { gitUntrackedListing, gitStatus, gitDiff } from "./git"
 import { OutputCoalescer } from "./coalescer"
 import { OutputBuffer } from "./output-buffer"
 import { drainPtys, type Drainable } from "./pty-drain"
@@ -910,6 +910,11 @@ function registerIpc() {
   )
   ipcMain.handle("git:status", async (_e, cwd: string, wsl?: { distro?: string }) =>
     gitStatus(cwd, wsl),
+  )
+  ipcMain.handle(
+    "git:untracked-list",
+    async (_e, cwd: string, dirRel: string, wsl?: { distro?: string }) =>
+      gitUntrackedListing(cwd, dirRel, wsl),
   )
   ipcMain.handle("git:diff", async (_e, cwd: string, file: string, wsl?: { distro?: string }) =>
     gitDiff(cwd, file, wsl),
