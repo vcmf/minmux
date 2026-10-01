@@ -1,414 +1,236 @@
 # Implementation plan — Multi-agent support (Codex, OpenCode)
 
-> How to build `MULTI_AGENT.md`, as a sequence of PR-sized steps. Each step lists files, the
-> change, tests, real-app verification (`run-minmux` skill, never against the real `HOME`),
-> and what "done" means. Feature ids (F1–F18) and spikes (S1–S3) refer to the design doc.
+> How to build `MULTI_AGENT.md`, as PR-sized steps. Each step names its scope, the files it
+> touches, the constraints it must meet, its tests and its real-app check. Mechanics (exact
+> code, syntax, layouts) are decided in the PR itself. Feature ids (F1–F18) and spikes
+> (S1–S3) refer to the design doc.
 
-Status: **PLAN** (2026-09-30). Order: **Phase 0 spikes → Phase 1 refactor (Claude only, no
-behaviour change) → Phase 2 Codex → Phase 3 OpenCode → Phase 4 polish**. Phases 2 and 3 are
-independent once Phase 1 lands and can run in parallel.
+Status: **PLAN** (2026-10-01). Order: Phase 0 spikes (done) → Phase 1 refactor (Claude only)
+→ Phase 2 Codex → Phase 3 OpenCode → Phase 4 docs. Phases 2 and 3 are independent once
+Phase 1 lands.
 
-Ground rules for every PR:
+## Ground rules for every PR
 
 - `make fmt && make check` green (tsc renderer + electron, eslint, prettier, Vitest).
-- Conventional commit / PR title per CLAUDE.md (e.g. `refactor(agents): …`, `feat(codex): …`).
-- Performance: nothing on the PTY → renderer path; new main-process work is async and
-  coalesced; the OpenCode plugin never awaits I/O in a handler.
-- The existing invariants hold: same-reference store returns when unchanged, `useShallow`
-  selectors return primitives, persisted files stay readable by older builds.
+- Conventional commit; PR title with its emoji (CLAUDE.md).
+- Performance: nothing on the PTY → renderer path; main-process work async and coalesced;
+  hooks never block an agent's loop; the OpenCode plugin never awaits I/O in a handler.
+- Invariants: same-reference store returns when unchanged, `useShallow` selectors return
+  primitives, persisted files stay readable by older builds and never lose what a newer build
+  wrote.
 
-**Workflow per PR:** plan → implement → `/code-review high`. One review round to start; a
-round that finds any **severe** issue means fix + another round; only moderate/low findings
-→ fix what's worth it and stop. **Three or more rounds → stop and check whether the design
-needs rework** rather than patching further. Before pushing, verify in the real app
-(`run-minmux`) when the PR touches terminals, rendering or agent integration.
+**Workflow per PR:** plan → implement → `/code-review high`. One round to start. A round that
+finds a **severe problem in the code** means fix + another round; moderate/low findings → fix
+what's worth it and stop. Three or more rounds → stop and check the design. Findings against
+docs never trigger another round. Before pushing, verify in the real app (`run-minmux`) when
+the PR touches terminals, rendering or agent integration.
 
 ## PR plan (13 PRs)
 
-The steps below merge into these PRs. Phases 1–3 are stacked (each PR branches off the
-previous); Codex (#5–7) and OpenCode (#8–11) are independent once #4 lands.
+| #   | PR (title without emoji)                                                     | Steps   | Depends on | Status     |
+| --- | ---------------------------------------------------------------------------- | ------- | ---------- | ---------- |
+| 0   | `docs(agents): multi-agent design, implementation plan and spike results`    | Phase 0 | —          | in review  |
+| 1   | `refactor(agents): tag events and nodes with the agent kind`                 | 1a      | 0          | open (#90) |
+| 2   | `refactor(agents): per-agent drop folders, drop root from env`               | 1b      | 1          |            |
+| 3   | `refactor(agents): move claude specifics behind an adapter`                  | 1c      | 2          |            |
+| 4   | `refactor(ui): agent-neutral presence, icon and labels` + per-agent settings | 1d + 1e | 3          |            |
+| 5   | `feat(codex): agents board for codex sessions`                               | 2a      | 4          |            |
+| 6   | `feat(codex): token badge and thread name`                                   | 2b      | 5          |            |
+| 7   | `feat(codex): resume codex sessions and hint when hooks aren't approved`     | 2c + 2d | 5          |            |
+| 8   | `feat(opencode): minmux plugin and scoped loading`                           | 3a      | 4          |            |
+| 9   | `feat(opencode): agents board for opencode sessions`                         | 3b      | 8          |            |
+| 10  | `feat(opencode): token badge and session title`                              | 3c      | 9          |            |
+| 11  | `feat(opencode): resume opencode sessions on relaunch`                       | 3d      | 9          |            |
+| 12  | `docs: architecture, gotchas, claude.md, roadmap and readme for multi-agent` | Phase 4 | all        |            |
 
-| #   | PR (title without emoji)                                                     | Steps   | Depends on | Status                         |
-| --- | ---------------------------------------------------------------------------- | ------- | ---------- | ------------------------------ |
-| 0   | `docs(agents): multi-agent design, implementation plan and spike results`    | Phase 0 | —          | spikes S1 + S2 done, in review |
-| 1   | `refactor(agents): tag events and nodes with the agent kind`                 | 1a      | 0          | implemented, in review         |
-| 2   | `refactor(agents): per-agent drop folders, drop root from env`               | 1b      | 1          |                                |
-| 3   | `refactor(agents): move claude specifics behind an adapter`                  | 1c      | 2          |                                |
-| 4   | `refactor(ui): agent-neutral presence, icon and labels` + per-agent settings | 1d + 1e | 3          |                                |
-| 5   | `feat(codex): agents board for codex sessions`                               | 2a      | 4          |                                |
-| 6   | `feat(codex): token badge and thread name`                                   | 2b      | 5          |                                |
-| 7   | `feat(codex): resume codex sessions and hint when hooks aren't approved`     | 2c + 2d | 5          |                                |
-| 8   | `feat(opencode): minmux plugin and scoped loading`                           | 3a      | 4          |                                |
-| 9   | `feat(opencode): agents board with multi-level sub-agents`                   | 3b      | 8          |                                |
-| 10  | `feat(opencode): token badge and session title`                              | 3c      | 9          |                                |
-| 11  | `feat(opencode): resume opencode sessions on relaunch`                       | 3d      | 9          |                                |
-| 12  | `docs: architecture, gotchas, claude.md, roadmap and readme for multi-agent` | Phase 4 | all        |                                |
-
-Rough size, production / test LOC: refactor ~600 new + ~350 moved / ~740; Codex ~600 / ~650;
-OpenCode ~700 / ~680. Hardest parts: the OpenCode plugin (runs inside the agent), the
-lead-vs-nested rules, and the meta tracker rework.
+Rough size (production / test LOC): refactor ~600 new + ~350 moved / ~740; Codex ~600 / ~650;
+OpenCode ~700 / ~680. Hardest parts: the OpenCode plugin, the lead rules, the meta tracker.
 
 ---
 
-## Phase 0 — Spikes (throwaway; outputs = findings + captured fixtures)
+## Phase 0 — Spikes (done)
 
-Output of each spike: a short "Spike results" section appended to `MULTI_AGENT.md` (like
-AGENT_OBSERVABILITY §7) + raw event streams saved as fixtures under
-`src/test/fixtures/agents/<agent>-<scenario>.jsonl` (new dir; content scrubbed of prompts and
-file contents before commit).
+Results in `MULTI_AGENT.md` §9; captured streams in `src/test/fixtures/agents/`.
 
-### S1 — Codex hooks (half a day)
-
-**Done 2026-09-30** except S1-e/f/g. Results: `MULTI_AGENT.md` §9 (additive `-c` hooks, env
-inherited, trust keyed by definition hash with no folder, sub-agent tool events carry `agent_id`).
-
-Install the current Codex CLI in a sandbox `HOME` (`HOME=$(mktemp -d)`, copy auth only if
-needed; never the real `~/.codex`). Use a throwaway writer that dumps stdin + `env` to a dir.
-
-| Question                                                                                                                                                                                                                                                                            | How                                                                                         | Blocks             |
-| ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- | ------------------ |
-| **S1-a** Does `-c hooks.<Event>=[…]` add to or replace `[hooks.<Event>]` in config.toml and `hooks.json`?                                                                                                                                                                           | put a user hook in `~/.codex/hooks.json` and config.toml, add ours via `-c`, see which fire | 2a design          |
-| **S1-b** Do hook commands inherit the parent env (`MINMUX_PANE_ID`, `MINMUX_AGENT_EVENTS`)?                                                                                                                                                                                         | writer dumps `process.env`                                                                  | **all of Phase 2** |
-| **S1-c** Trust UX: warning text, does `/hooks` trust persist across launches, and across a changed `MINMUX_AGENT_EVENTS` value? Is the trust hash over the definition only?                                                                                                         | trust once, relaunch with a different env value                                             | D1, 2d             |
-| **S1-d** Real payloads: SessionStart/End, UserPromptSubmit, Pre/PostToolUse (`Bash`, `apply_patch`), PermissionRequest (approval mode on), Stop, Interrupt (Esc mid-turn), SubagentStart/Stop (a turn that spawns an agent); `permission_mode` values; `transcript_path` = rollout? | capture a scripted session                                                                  | 2a/2b fixtures     |
-| **S1-e** Quoting: a hook `command` string with a quoted path containing spaces, on macOS/Linux, native Windows (which shell runs it?) and WSL                                                                                                                                       | vary the cfg path                                                                           | 2a                 |
-| **S1-f** `codex resume <id>` from a different cwd: does it work, and which cwd does the session use?                                                                                                                                                                                | resume from `/tmp`                                                                          | 2c                 |
-| **S1-g** `thread_name`: how is it set (`/rename`? auto?), and does `session_index.jsonl` get a line per change?                                                                                                                                                                     | rename twice, watch the file                                                                | 2b                 |
-
-**Exit:** S1-b answered yes, and S1-a gives a non-destructive scoping path (either `-c` adds
-to the user's hooks, or a plugin/alt path does). If S1-b is "no", switch Phase 2 to the
-notify-only fallback (D1) and re-plan 2a.
-
-### S2 — OpenCode plugin (half a day)
-
-**Done 2026-10-01.** Results: `MULTI_AGENT.md` §9 (inline config merges plugins, two-level
-tree by default, no quit event, resume confirmed by the plugin starting, renames detectable by order).
-
-Sandbox via `XDG_CONFIG_HOME` / `XDG_DATA_HOME` in a temp dir (OpenCode ≥ 1.18.0 for the free models; S2 ran 1.18.34).
-
-| Question                                                                                                                                                                                                        | How                                                             | Blocks      |
-| --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------- | ----------- |
-| **S2-a** Does `OPENCODE_CONFIG_CONTENT='{"plugin":["file:///…/p.js"]}'` load the plugin, and does it **merge** with a user config that lists its own plugins?                                                   | user config with plugin A + our inline plugin B; log which init | 3a          |
-| **S2-b** Real event stream: the root turn, a `task` sub-agent (and nested sub-agent if the agent does it), permission ask/reply, question tool, `/new`, the session picker, compaction, quit (Ctrl-C / `/exit`) | plugin logs every `event.type` + key ids                        | 3b fixtures |
-| **S2-c** On quit, does `server.instance.disposed` fire, and does the plugin get time to write a file?                                                                                                           | as above                                                        | F5          |
-| **S2-d** `opencode --session <id>`: what events fire when a session is resumed (confirm signal)? Session id format (regex)? Does it work from another cwd?                                                      | resume from another dir                                         | 3d          |
-| **S2-e** Cost: time spent in our `event` handler under a long streaming turn                                                                                                                                    | `performance.now()` around the handler, histogram               | 3a          |
-| **S2-f** Does a user-renamed title differ from an auto one (a flag/field)?                                                                                                                                      | rename a session, diff `Session`                                | D3, 3c      |
-
-**Exit:** a working, merging arming path (inline config, or `OPENCODE_CONFIG_DIR` fallback)
-and a captured stream covering root + child sessions.
-
-### S3 — Terminal ergonomics in both TUIs (1–2 hours, in the dev build)
-
-Inside `make run` (dev profile, sandbox HOME): Shift+Enter newline, Ctrl+V image paste,
-light/dark detection (COLORFGBG / OSC 11), mouse selection + click-to-open while the TUI holds
-the mouse, window title updates, bell/OSC 9 on turn end (Codex with `tui.notifications`),
-focus reporting across split panes. File issues for anything off. No code is planned here
-unless something breaks.
+- **S1 Codex hooks** (2026-09-30): additive `-c` hooks, env inherited, trust keyed by
+  definition hash with no folder, sub-agent tool events carry `agent_id`. **Open:** S1-e
+  (quoting on native Windows / WSL, before PR #5 ships Windows), S1-f (`codex resume` from
+  another folder) and S1-g (user rename vs automatic name), both before PR #7.
+- **S2 OpenCode plugin** (2026-10-01): inline config merges plugins, two-level tree by default,
+  no quit event, resume visible only as the plugin starting, renames detectable by order.
+  **Open:** whether `opencode --session <bad id>` exits (before PR #11).
+- **S3 Terminal ergonomics** (1–2 h, in the dev build, any time before Phase 4): Shift+Enter,
+  image paste, light/dark, mouse + click-to-open, titles, bell / OSC 9, focus across splits in
+  both TUIs. Code only if something breaks.
 
 ---
 
-## Phase 1 — Refactor to the abstraction (Claude only, zero behaviour change)
+## Phase 1 — Refactor (Claude only)
 
-Gate for every PR in this phase: the **existing** tests pass unchanged except for mechanical
-renames, and a `run-minmux` pass shows Claude still gets board, icon, `in`, PR, accent,
-tokens and resume. No user-visible change.
+Gate: existing tests pass (renames aside) and a `run-minmux` pass shows Claude unchanged:
+board, sub-agents, icon, snippet, `in` + PR, `/color` + `/rename` accent, tokens, quit →
+relaunch → resume. User-visible exceptions are named in the PR: PR #1's waiting-state fix and
+PR #4's Settings group.
 
-### 1a. Agent kind in the event and graph (`refactor(agents): tag events and nodes with the agent kind`)
+### 1a. Agent kind in the graph — PR #1 (open, #90)
 
-- `src/lib/agent-graph.ts`: add `AgentKind`, `AgentEventName` union (§4.1 of the design),
-  `AgentEvent.agent`, `parentAgentId?`, `pid?`; `AgentNode.agent`. Reducer: set `agent` on node
-  creation; `PermissionRequest` → `waiting` (unused by Claude but harmless);
-  `PostToolUse` on a `waiting` node → `working`; attach to `parentAgentId` when that node
-  exists (recursive `childIds`); `evictRoot` and the `UserPromptSubmit` prune walk the subtree.
-- `electron/agent-hooks.ts`: `normalizeHookEvent` returns `agent: "claude"`; the `event`
-  field is narrowed to the union (unknown names still pass through as-is at runtime and fall
-  to `default:`, so keep the type `AgentEventName | (string & {})`).
-- `claudePaneIds` → `agentPanes(graph): string[]` flat `[paneId, kind, …]`, memoised the same
-  way. Keep `claudePaneIds` as a thin wrapper for this PR only if it shrinks the diff.
-- Tests: `agent-graph.test.ts` fixtures get `agent: "claude"` (a helper); new cases: a
-  three-level tree via `parentAgentId`; prune/evict of a deep subtree; PermissionRequest →
-  waiting → PostToolUse → working; `agentPanes` memo identity.
+Done: agent kind on events and nodes, canonical event names, explicit parents with
+re-parenting, subtree prune/evict, PermissionRequest → waiting, `agentPanes`.
 
-### 1b. Transport: per-agent subfolder and dir from env (`refactor(agents): per-agent drop folders`)
+### 1b. Per-agent drop folders, drop root from env — PR #2
 
-- `electron/hook-writer.ts` → `electron/agents/drop-writer.ts`: `HOOK_WRITER` reads the root
-  from `process.env.MINMUX_AGENT_EVENTS` and the agent from `argv[1]`, writes
-  `<root>/<agent>/<paneId>.<pid>.<ts>.<rand>.json`. If the env var is missing it writes nothing
-  (the hook is a no-op outside minmux panes, e.g. a stale shell).
-- `startHookWatcher`: watch the root with `depth: 1`; the agent is the parent folder name
-  (ignore unknown folders); the sweep reads each known subfolder; `onBatch` receives
-  `{ agent, raw, file }` records, or keep the signature and pass a `normalize(agent, raw, file)`
-  callback (preferred: the watcher stays agent-free).
-- `main.ts` `startAgentObservability`: create `<nonce>/claude/`, set `MINMUX_AGENT_EVENTS` per
-  pane. WSL panes get the **Windows** path, forwarded as `MINMUX_AGENT_EVENTS/p` so WSL
-  translates it (no `/mnt/c` form anywhere; unit-test the wslenv list). Add the var to `wslInjection` wslenv and to
-  `PARENT_INSTANCE_VARS` (profile.ts).
-- `buildHookSettings` no longer takes a dir: the settings file is now constant per profile.
-  The `.wsl.json` variant goes away if the env path translation covers it (it should: the
-  writer resolves the env var inside WSL).
-- Tests: `hook-writer.test.ts` → the writer builds the right path from env + argv, and is a
-  no-op without env (run the `-e` source with a fake env in Vitest via `node:vm` or a child
-  `node`, since plain Node is fine in Vitest); `agent-hooks.test.ts`: files in `claude/` are
-  tagged, unknown folders are ignored, claim/sweep dedup still holds across subfolders.
-- Verify: the Claude board fills in native and (if a Windows box is available) WSL panes.
+- **Scope:** `hook-writer.ts` (writer takes the root from the env and the agent from its
+  arguments; no-op without the env), `agent-hooks.ts` (watch one level of subfolders; the
+  folder names the agent; unknown folders ignored; the watcher stays agent-free), `main.ts`
+  (create the agent folders, set `MINMUX_AGENT_EVENTS` per pane), `shell-integration.ts`
+  (forward it into WSL), `profile.ts` (scrub list), the `run-minmux` driver's `dropHook`.
+- **Constraints:** Claude's hook definition stays valid in WSL panes (keep a WSL definition if
+  it embeds a path); the WSL value of `MINMUX_AGENT_EVENTS` is the translated Windows path.
+- **Tests:** writer path from env + agent, no-op without env; watcher tagging, unknown folders,
+  claim/sweep dedup across subfolders; the WSL env list.
+- **Verify:** the Claude board fills in a native pane (and a WSL pane if a Windows box is
+  available).
 
-### 1c. Adapter registry in main (`refactor(agents): move claude specifics behind an adapter`)
+### 1c. Adapter registry in main — PR #3
 
-- New `electron/agents/`: `types.ts` (`AgentAdapter`, `SessionRules`, `MetaSource`),
-  `registry.ts` (`adapters: AgentAdapter[]`, `adapterFor(kind)`), `claude.ts` holding:
-  `buildHookSettings` + `install`, `arm` (`MINMUX_CLAUDE_SETTINGS`), `normalize` (the old
-  `normalizeHookEvent`), `usage` (from `agent-tokens.ts` + `transcript-tokens.ts`), `meta`
-  (file-watch source wrapping `transcript-meta.ts`), `session` (`SAFE_ID`, `resumeCommand`,
-  `cwdFits` = `cwdMatchesTranscript`, `isSwitch` = the `clear`/`fork` rule).
-- `main.ts`: `startAgentObservability` loops the registry (install, subfolder, normaliser by
-  folder); `pty:spawn` merges `arm()` of every enabled adapter; `onBatch` calls
-  `adapterFor(ev.agent).usage` and meta routing; `TRACED_HOOKS` unchanged (canonical names).
-- `electron/agent-sessions.ts`: `SessionLedger` takes the registry. `apply` uses
-  `rules.isSwitch` / `rules.cwdFits` of the event's agent. A root SessionStart from a
-  **different agent** than the live lead is nested. `resumeCommand` comes from
-  `rules.resumeCommand`. `LedgerEntry.agent` (missing on load ⇒ `"claude"`). Claude entries stay in
-  `agent-sessions.json`, byte-for-byte as today; Codex/OpenCode entries go in
-  `agent-sessions.<agent>.json`, which older builds never read or rewrite (one ledger in
-  memory, one file per agent, same temp + rename and freeze).
-- `shell-integration.ts`: generate the wrapper lines from `[{ command, envVar }]` (still line
-  arrays; one generated block per agent that needs a wrapper; Claude's output identical to
-  today, asserted by a snapshot test).
-- Tests: move existing tests alongside (`claude.test.ts` gets the normaliser + hook-settings
-  tests); `agent-sessions.test.ts` all green plus: an entry without `agent` loads as Claude; a
-  Codex/OpenCode entry lands in its own file and round-trips, and a ledger built from only the
-  Claude file (an older build's view) leaves the other files untouched; a Claude SessionStart while
-  a (fake) other-agent lead is live → nested. `shell-integration.test.ts`: the generated zsh
-  and bash rc are byte-identical to the current strings for Claude-only.
+- **Scope:** new `electron/agents/` (adapter types, registry, `claude.ts` holding today's hook
+  settings, arming, normaliser, token and name sources, resume rules); `main.ts` loops the
+  registry; `agent-sessions.ts` takes per-agent rules and the per-agent files (design §4.5);
+  `shell-integration.ts` generates wrapper blocks from adapter metadata.
+- **Constraints:** Claude's generated rc text is byte-identical to today's; Claude's ledger file
+  is byte-identical; a pane with entries in two files resolves to the newest.
+- **Tests:** existing Claude tests move alongside; ledger: an entry without `agent` loads as
+  Claude, other agents' entries live in their own file and survive a Claude-only rewrite,
+  newest-wins across files, a different agent's SessionStart while a lead is live is nested;
+  rc snapshot.
 
-### 1d. Renderer naming + agent kinds (`refactor(ui): agent-neutral presence, icon and labels`)
+### 1d + 1e. Agent-neutral renderer + per-agent settings — PR #4
 
-- New `src/lib/agent-kinds.ts`: `{ claude: { label, command, worktreeMarkers: ["/.claude/worktrees/"] } }`
-  (icons live in components; map kind → icon in `components/agent-icon.tsx`, with
-  `ClaudeIcon` kept as the Claude entry).
-- Renames: `claudeWorkDirs/claudeWorkFlat` → `agentWorkDirs/agentWorkFlat` (`agent-dirs.ts`,
-  `inGitFor` reads markers from `agent-kinds` by the node's agent: `WorkDir` gains `agent`);
-  `TerminalManager.claudeActive/claudeStarted` → `agentActive/agentStarted`;
-  `ShellFlow.claudeSeen` → `agentSeen`; `store.claudeExited` → `agentExited`;
-  `close-confirm.ts` `claude: boolean` → `agent?: AgentKind` + strings from `agent-kinds`
-  (tab form: "2 are running agents" when mixed, else "running Codex"); `CLAUDE_COLORS` →
-  `ACCENT_COLORS`; resume banner strings via `agent-kinds` (`ResumePlan.agent`, defaulting to
-  Claude); agents-panel icon per root + empty-state text; sidebar/terminal-pane icon by kind.
-- Tests: rename-only updates to `agent-dirs.test.ts`, `close-confirm.test.ts`,
-  `resume-flow.test.ts`, `sidebar.test.tsx`, `terminal-pane.test.tsx`, `resume-banner.test.tsx`,
-  `session-color.test.ts`; one new test each: the close text for a Codex/mixed tab, the
-  worktree marker only applying to its own agent.
+- **Scope:** `src/lib/agent-kinds.ts` (labels, commands, worktree layouts), an agent icon
+  component, renames (`claudeWorkDirs`, `claudeActive/Started/Exited`, `claudeSeen`,
+  `CLAUDE_COLORS`, close-confirm and resume-banner strings, agents-panel icon and empty state);
+  settings `agents.<kind>.enabled` (default on, D2) read at spawn; Settings "Agents" group;
+  `resumeBypassPermissions` labelled Claude-only.
+- **Tests:** rename-only updates; close text for a Codex and a mixed tab; worktree layout
+  applies only to its own agent; settings merge/validate; spawn env includes only enabled
+  agents.
 
-### 1e. Settings (`feat(settings): per-agent enable switches`)
-
-- `src/settings/schema.ts`: `agents: { claude: { enabled: true }, codex: { enabled: D2 },
-opencode: { enabled: D2 } }` with merge/validate; main reads it at spawn (`arm` only for
-  enabled adapters; a change applies to **new** panes, stated in the UI).
-- Settings panel "Agents" group; `resumeBypassPermissions` label → "Claude: restore bypass
-  permission mode".
-- Tests: schema merge/validate (unknown agent keys dropped, missing ones defaulted); spawn
-  env includes only enabled agents (unit-test the env builder, not a PTY).
-
-**Phase 1 exit:** Claude-only behaviour identical (full `run-minmux` pass: board, sub-agents,
-icon, snippet, `in` + PR, accent via `/color` + `/rename`, tokens, quit → relaunch → resume);
-ROADMAP 6d updated to "in progress".
+**Phase 1 exit:** the gate above; ROADMAP 6d → in progress.
 
 ---
 
-## Phase 2 — Codex adapter
+## Phase 2 — Codex
 
-Depends on S1 (+ Phase 1). Fixtures from S1-d drive every test.
+Fixtures: `codex-exec.jsonl`, `codex-tui.jsonl`.
 
-### 2a. Arm + normalise (`feat(codex): agents board for codex sessions`)
+### 2a. Arming + normaliser — PR #5
 
-- `electron/agents/codex.ts`:
-  - `install`: nothing beyond the shared `drop.js` (written once to `<cfg>/agents/drop.js`,
-    shared with Claude if 1b moved Claude to it).
-  - `arm`: `MINMUX_CODEX_ARGS` = the `-c` overrides per S1-a (one per event in §4.1's Codex
-    column: SessionStart, SessionEnd, UserPromptSubmit, PreToolUse, PostToolUse,
-    PermissionRequest, Stop, Interrupt, SubagentStart, SubagentStop), each
-    `{type="command", command="node \"<cfg>/agents/drop.js\" codex", async=true, timeout=5}`
-    (SessionEnd and Interrupt: `timeout=3`, no `async`, or `/hooks` lists them under "Issues"); tool events with `matcher=""`. Pure builder, and the output must be
-    byte-stable across launches (trust hash; asserted in a test).
-  - `normalize`: Claude-compatible fields + `Interrupt → Stop`, `apply_patch` path scan
-    (`/^\*\*\* (Add|Update|Delete) File: (.+)$/m`, max 20 paths, input capped at 256 KiB before
-    scanning), per-session last-cwd → synthetic `CwdChanged`, `agent: "codex"`.
-  - `session.isSwitch`: Claude's rule (`clear`) (no `fork` in Codex's sources).
-- `shell-integration.ts`: generated `codex()` wrapper (zsh: `command codex ${(z)MINMUX_CODEX_ARGS} "$@"`
-  or, safer, store the args as a newline-separated list and split into an array; bash: `read -ra`
-  / `mapfile`). Pick the variant with no word-splitting pitfalls in review and test it with a
-  path containing a space. It also prints the launch marker `OSC 6974;agent;codex`.
-- terminal-manager: parse `OSC 6974;agent;<kind>` (display-only) → `entry.flow.agentLaunched = kind`
-  (+ timestamp) for the hint in 2d.
-- Tests: `codex.test.ts` (normaliser over the S1 fixture: event mapping, patch path extraction,
-  size cap, no throw on junk; `arm` output stable and quoting-safe); `agent-graph` over the
-  Codex fixture (root + a sub-agent, the sub-agent's tool events land on the sub-agent via `agent_id` (codex-exec.jsonl), waiting on
-  PermissionRequest, idle on Interrupt); `shell-integration` generated wrappers.
-- Verify (`run-minmux`, sandbox HOME with Codex authed): a Codex session shows on the board
-  with status transitions, sub-agent row, Codex icon in the sidebar/tab, `in` line when started
-  in a subfolder, PR line, close-confirm text; `claude` in another pane unaffected.
+- **Scope:** `electron/agents/codex.ts` (hook overrides for the events in design §4.1,
+  normaliser, lead rule by process), the generated `codex()` wrapper, the launch marker in
+  terminal-manager (display-only).
+- **Constraints:** hook definitions byte-stable across launches and panes (trust); arguments
+  reach Codex intact (paths with spaces and quotes); the marker goes only to the terminal,
+  never into stdout or `$(…)`; no hook blocks an interactive key; settings `/hooks` would list
+  as "Issues" avoided; Windows quoting per S1-e before Windows ships.
+- **Tests:** normaliser over both fixtures (mapping, `apply_patch` paths, bounded input, junk →
+  no throw); graph over the fixtures (sub-agent tools on the sub-agent, waiting on
+  PermissionRequest, idle on Interrupt, a stray SessionEnd ignored); definition stability;
+  wrapper argument round-trip; lead rule (`/new` in the same process = switch, another process
+  = nested).
+- **Verify:** sandbox HOME with Codex authed and hooks approved: board with status and
+  sub-agent, Codex icon, `in`, PR, close text; Claude in another pane unaffected.
 
-### 2b. Tokens + name/colour (`feat(codex): token badge and thread name`)
+### 2b. Tokens + thread name — PR #6
 
-- `codex.ts` `usage`: `TranscriptFold` with a Codex line fold (`event_msg`/`token_count` →
-  `{ context: last.input_tokens, output: total.output_tokens, window: model_context_window }`),
-  triggered on Stop / SubagentStop (`agent_transcript_path`); `forget` on SessionEnd.
-- `TokenUsage.window?` (agent-graph) + `tokens.ts` / agents-panel: show `context / window` %
-  in the tooltip when `window` is known.
-- `codex.ts` `meta`: shared-file source over `<codex home>/session_index.jsonl` (derive home
-  from `transcript_path`), fold `Map<id, thread_name>` (latest wins), one `fs.watch`; the
-  tracker fans out to panes whose lead is that session id. Generalise `AgentMetaTracker` to take
-  a `MetaSource` (per-pane file vs shared file vs pushed).
-- Tests: token fold over fixture lines (cumulative overwrite, not add; context includes cached;
-  partial tail line), index fold (latest wins, bad lines ignored); tracker fan-out: two panes,
-  two sessions, one file change → only the renamed pane emits.
-- Verify: badge after a turn; rename a thread → pane colour appears (hash) + board/banner name.
+- **Scope:** Codex token source from the rollout (incl. the context window shown as fill), a
+  shared-index name source (one watcher, fan-out by session), the meta tracker generalised to
+  per-pane, shared and pushed sources.
+- **Constraints:** D3: names shown, no colour until S1-g settles user renames.
+- **Tests:** token fold (cumulative output, context incl. cache, partial last line); index fold
+  (latest wins, junk ignored); fan-out to the right pane only.
+- **Verify:** badge after a turn; thread name on board and banner; no colour from an automatic
+  name.
 
-### 2c. Resume (`feat(codex): resume codex sessions on relaunch`)
+### 2c + 2d. Resume + approval hint — PR #7
 
-- `codex.ts` `session`: `safeId` UUID regex, `resumeCommand` = `codex resume <id>` (no mode in
-  v1, per S1-d), no `cwdFits`.
-- `ResumePlan.agent` flows to the banner (label, "Start Codex here", picker command
-  `codex resume`).
-- Confirm: `app.tsx` already matches `SessionStart` + same `sessionId` from the pane (now any
-  agent); for Codex, S1 must show `source: "resume"` keeps the id.
-- Preflight in `agents:resume-plan`: transcript exists check works unchanged (the rollout path).
-- Tests: ledger with a Codex entry (serialize without `sessionId`, plan builds `codex resume`,
-  bad id → skip); `resume-flow` unchanged.
-- Verify: Codex in a pane → quit minmux → relaunch → banner → resumed in the right folder.
+- **Scope:** Codex resume rules (`codex resume <id>` after `cd`), banner labels per kind; the
+  approval hint (design F18) with its timer logic and per-definition seen-set.
+- **Constraints:** S1-f checked first; the hint never writes to the PTY.
+- **Tests:** ledger/plan for Codex entries (bad id → skip); hint logic as a pure function
+  (launch, event, prompt return, dismissals, definition change); component render.
+- **Verify:** quit → relaunch → resumed in the right folder; unapproved hooks → hint; approve →
+  hint gone; changed definition → hint back.
 
-### 2d. Trust hint (`feat(codex): hint when codex skipped minmux hooks`)
-
-- Store: `agentHint?: { sessionId, kind: "codex-trust" }` + `settings.agents.codex.hintDismissed`.
-- terminal-manager: after `agentLaunched = "codex"`, arm a 10 s timer; any Codex hook event
-  from that pane cancels it, as does the prompt returning (Codex exited). On fire, set the hint.
-  Main persists the sha256 of each hook definition it arms (native, WSL) and a seen-set of
-  those hashes (marked when a Codex event arrives through that definition); the timer only
-  arms while the pane's definition hash is unseen, so a changed definition (new release, first
-  WSL pane) can show the hint again.
-- Component: `agent-hint.tsx` modelled on `integration-hint.tsx`, copy per design F18
-  ("Approve minmux in Codex to see every running agent live on the Agents board…").
-  It **never writes to the PTY**: **Show me** focuses the pane and copies `/hooks` to the
-  clipboard (Codex may be on its own trust screens or mid-turn). A dismissal counter in the
-  store becomes **Don't ask again** after three.
-- Tests: the timer logic as a pure function (launch, event, prompt-return, dismissed →
-  show/don't show); component render + dismiss.
-- Verify: untrusted hooks → hint appears; trust via `/hooks` → relaunch Codex → board fills,
-  hint gone for good.
-
-**Phase 2 exit:** F1–F15 for Codex as marked in the design (no worktree chips), documented in GOTCHAS `#codex`.
+**Phase 2 exit:** design F1–F15 for Codex (no worktree chips); GOTCHAS `#codex`.
 
 ---
 
-## Phase 3 — OpenCode adapter
+## Phase 3 — OpenCode
 
-Depends on S2 (+ Phase 1). Fixture from S2-b drives the tests.
+Fixtures: the S2 streams for designing the projection; PR #8 regenerates them through the real
+plugin.
 
-### 3a. Plugin + arming (`feat(opencode): minmux plugin and scoped loading`)
+### 3a. Plugin + arming — PR #8
 
-- `electron/agents/opencode-plugin.ts`: the plugin source as a **line array** (like the shell
-  scripts), written by `install` to `<cfg>/agents/opencode-plugin.js` (WSL panes reference it by its
-  `/mnt/c` path in their `OPENCODE_CONFIG_CONTENT`). Plugin behaviour:
-  - reads `MINMUX_AGENT_EVENTS` + `MINMUX_PANE_ID` once; absent ⇒ returns `{}` (inert);
-  - `event`: switch on `event.type` over the allow-list (`session.created/updated/deleted/
-status/idle/error/compacted`, `permission.asked/replied`, `question.asked`, `file.edited`,
-    `message.updated`), everything else returns at once; repeated `session.status busy` is
-    reported only on change;
-  - `tool.execute.before/after`: record `{tool, sessionID, callID, filePath?}` only;
-  - keeps small maps: session → parentID/root, message id → output tokens, root → last
-    assistant text (≤200 chars);
-  - sends a `started` drop at init (resume confirm, lead pid), and title changes as
-    `{before, after, hadPrompt}` (main decides `userNamed`);
-  - writes `{v:1, type, sessionID, rootID, parentID?, directory, …projected fields, pid: process.pid}`
-    (`directory` on **every** root event, from `Session.directory` or the init `directory`,
-    so a root first seen through `session.status` still gets a ledger entry)
-    with `fs.promises.writeFile(...).catch(() => {})`, **not awaited**; filename identical to
-    the writer's (`<pane>.<pid>.<ts>.<rand>.json`) into `<root>/opencode/`.
-- `electron/agents/opencode.ts` `arm`: `OPENCODE_CONFIG_CONTENT` (S2-a: plugin lists merge).
-  If the user's env already has one (main sees `process.env` after `shell-env.ts` imported
-  the login env), parse it and append our plugin to its `plugin` array; unparseable → leave
-  it and don't arm OpenCode in that pane. Tests: absent / present with plugins / present
-  without `plugin` / unparseable.
-- Tests: build the plugin source, load it in Vitest via a data-URL `import()` with a fake
-  `MINMUX_*` env and a temp dir: feed it synthetic bus events → assert the files written
-  (projection has no content fields, filters work, handlers return synchronously / resolve
-  without awaiting the write, inert without env).
-- Verify + perf (S2-e numbers re-measured with the real plugin): long OpenCode turn, no
-  visible slowdown, handler p99 ≪ 1 ms.
+- **Scope:** the plugin source (kept as reviewable text in `electron/agents/`, written once per
+  launch), `opencode.ts` arming, the merge of a user's own `OPENCODE_CONFIG_CONTENT` (rc tail
+  for zsh/bash, env for other shells).
+- **Constraints:** filter first, never await I/O, report busy/idle on change only, project
+  (no content beyond the bounded last reply), versioned drops, a `started` drop at init,
+  session directory on every root event, parent id whenever known, a proper `file:` URL;
+  inert without the minmux env.
+- **Tests:** the plugin loaded in Vitest with a fake env: projection has no content, filters,
+  handlers don't await writes, inert without env; config merge (absent, present, no `plugin`,
+  unparseable, re-exported by the user's rc).
+- **Verify + perf:** long OpenCode turn, handler p99 ≪ 1 ms; user plugins still load.
 
-### 3b. Normalise + multi-level tree (`feat(opencode): agents board for opencode sessions`)
+### 3b. Normaliser, tree and lead rules — PR #9
 
-- `opencode.ts` `normalize`: validate `v:1`, map per design §4.1 (root/child, `parentAgentId`,
-  `SubagentStop` on child idle, `pid`), `agent: "opencode"`.
-- `session.isSwitch` + lead rule (design F14): ledger learns a per-pane **lead pid** for
-  OpenCode; roots from another pid are nested; within the lead pid, the most recently active
-  root leads (`UserPromptSubmit` re-points the lead, so the ledger's "switch" needs an
-  "activity" input, not only SessionStart; add `SessionRules.leadOnActivity: true`).
-- Lead liveness (design F14): main checks the OpenCode lead pid with `process.kill(pid, 0)`
-  when another agent's SessionStart arrives in that pane, in `plan()`, and on a 10 s timer
-  while an OpenCode lead exists in a pane without prompt marks; dead → clear the lead + emit a
-  synthetic SessionEnd for its roots. Skipped for WSL panes (pid not visible). Pure part
-  (`isLive` injected) unit-tested: fish pane, quit OpenCode, then `claude` → Claude leads.
-- agents-panel: recursive children (indent + connectors per depth, cap 4 levels, "+N").
-- Tests: normaliser over the S2 fixture; graph: the default two-level `task` tree, plus a synthetic 3-level stream (custom agents), child
-  tools attributed to the child; ledger: `/new` switches the lead, a second pid is nested, the
-  session picker (activity on an older root) re-points the lead; panel renders depth.
-- Verify: an OpenCode run that spawns sub-agents → tree on the board; icon; `in`; PR.
+- **Scope:** `opencode.ts` normaliser, the lead rule by process with switches on activity, the
+  process liveness check (design §4.4), recursive children in the agents panel.
+- **Tests:** normaliser over regenerated fixtures; graph: two-level default plus a synthetic
+  three-level stream; ledger: `/new` switches, a picked older session leads once active, a
+  second process is nested, a dead process frees the pane (fish case); panel depth.
+- **Verify:** sub-agents on the board; icon; `in`; PR; quit OpenCode in a fish pane, then run
+  `claude` there → Claude leads.
 
-### 3c. Tokens + title (`feat(opencode): token badge and session title`)
+### 3c. Tokens + title — PR #10
 
-- Plugin emits `TokenUsage` drops (accumulated per session, on completed assistant messages)
-  and `meta` drops (root `session.updated` title). `opencode.ts` `meta` = pushed source (no
-  file watch). Colour per **D3** (default: only a user-set title, per S2-f, else none).
-- Tests: accumulation dedupes repeated `message.updated` for the same id; child tokens go to the
-  child node; meta routing to the lead pane only.
-- Verify: badge, title on board/banner, colour per D3.
+- **Scope:** plugin token accumulation and title reporting; pushed name source; main decides and
+  persists "user-named" (design F12).
+- **Tests:** dedupe per message; child tokens on the child; user-named rules (before/after first
+  prompt, after resume).
+- **Verify:** badge; title on board/banner; colour only after `/rename`, kept after relaunch.
 
-### 3d. Resume (`feat(opencode): resume opencode sessions on relaunch`)
+### 3d. Resume — PR #11
 
-- `session`: `safeId` from S2-d, `resumeCommand` = `opencode --session <id>`, `cd` to the
-  recorded directory. Confirm per S2-d; if no signal exists, the banner goes to `sent` for
-  OpenCode (new `ResumePlan.confirmable: false` → terminal-manager skips the failure timer and
-  shows "sent"; the machinery exists for shells without integration).
-- Tests: ledger/plan for OpenCode entries; `resume-flow` with `confirmable: false`.
-- Verify: quit → relaunch → OpenCode reopens the same session in the right folder.
+- **Scope:** OpenCode resume rules (`opencode --session <id>` after `cd`), confirm on "started
+  and kept running".
+- **Constraints:** check what a bad id does first.
+- **Tests:** ledger/plan for OpenCode entries; confirm logic.
+- **Verify:** quit → relaunch → the same session reopens in the right folder.
 
-**Phase 3 exit:** F1–F15 for OpenCode per the design, GOTCHAS `#opencode`.
+**Phase 3 exit:** design F1–F15 for OpenCode; GOTCHAS `#opencode`.
 
 ---
 
-## Phase 4 — Polish and docs
+## Phase 4 — Docs and the mixed pass — PR #12
 
-- **Docs:** `ARCHITECTURE.md` (agent adapters in §4/§11), `GOTCHAS.md` (`#codex`, `#opencode`;
-  rename `#claude-transcript` scope to "agent internal formats"), `CLAUDE.md` (structure:
-  `electron/agents/`; invariant: agent specifics live only in adapters + `agent-kinds.ts`),
-  `electron/CLAUDE.md` file list, `ROADMAP.md` 6d → done, README "Agents" row + the Codex
-  `tui.notifications` tip, `AGENT_OBSERVABILITY.md` §9 "non-Claude agents" pointer here.
-- **Diagnostics:** `hookTrace` includes `agent`; `agent-hooks-up` logs the adapters armed.
-- **Mixed-agent pass (`run-minmux`):** Claude, Codex and OpenCode in three panes of one tab,
-  plus Claude running `codex exec` (nested, must not steal the pane); close-confirm text for
-  the tab; quit → relaunch resumes all three.
-- **Follow-ups (separate designs, not in this plan):** hook-driven pane status (fixes §9a,
-  needs the test matrix); OpenCode cost display; SSH-pane agents; OTEL for any agent.
-
----
-
-## Sizing (rough, one engineer)
-
-| Step            | Size    | Notes                                                         |
-| --------------- | ------- | ------------------------------------------------------------- |
-| Phase 0 (S1–S3) | 1–1.5 d | S1-b / S2-a are the go/no-go answers                          |
-| 1a–1e           | 3–4 d   | mostly mechanical; 1c (ledger + shell gen) is the careful one |
-| 2a–2d           | 3 d     | small because Codex speaks Claude's hook contract             |
-| 3a–3d           | 4 d     | the plugin + multi-level tree + lead-by-pid                   |
-| Phase 4         | 1 d     |                                                               |
+- `ARCHITECTURE.md`, `GOTCHAS.md` (`#codex`, `#opencode`; widen `#claude-transcript` to agent
+  internal formats), `CLAUDE.md` (structure + the adapter invariant), `electron/CLAUDE.md`,
+  `ROADMAP.md` 6d → done, README (agents row, Codex notifications tip),
+  `AGENT_OBSERVABILITY.md` pointer.
+- Diagnostics name the agent.
+- Mixed pass (`run-minmux`): Claude, Codex and OpenCode in one tab; close text; quit →
+  relaunch resumes all three.
+- Follow-ups, separate designs: hook-driven pane status (ARCHITECTURE §9a), OpenCode cost,
+  SSH-pane agents, OTEL.
 
 ## Definition of done
 
-- Each agent has a captured-fixture test suite (normaliser → graph → ledger).
-- No agent name outside `electron/agents/*`, `src/lib/agent-kinds.ts`, the icons and
-  user-facing strings (a `grep -ri claude src electron` review at the end of Phase 1 lists
-  every remaining hit with a reason).
-- Missing agent binary, untrusted hooks, `--pure`, a disabled switch → empty board and plain
+- Each agent has a fixture-driven test suite (normaliser → graph → ledger).
+- No agent name outside `electron/agents/*`, `src/lib/agent-kinds.ts`, icons and user-facing
+  strings (a grep at the end of Phase 1 lists every remaining hit with a reason).
+- Missing binary, unapproved hooks, `--pure`, a disabled switch → empty board and a plain
   terminal, never an error or a delay.
-- Perf: `MINMUX_PERF=1` harness unchanged with all three agents running (`docs/PERF.md`).
+- `MINMUX_PERF=1` harness unchanged with all three agents running.
