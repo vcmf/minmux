@@ -25,11 +25,20 @@ what's worth it and stop. Three or more rounds → stop and check the design. Fi
 docs never trigger another round. Before pushing, verify in the real app (`run-minmux`) when
 the PR touches terminals, rendering or agent integration.
 
+## Branching: the `epic/multi-agent` branch
+
+Every PR in this plan targets **`epic/multi-agent`**, not `main`. Stacked PRs branch off the
+previous PR's branch and still target the epic; once the previous one merges into the epic,
+the next one's diff shrinks to its own change. When the epic is complete (Phase 4 merged), one
+PR merges `epic/multi-agent` into `main`. The epic is protected by the repo's "epic branch"
+ruleset (required checks on every push, no deletion); `main` is merged into the epic when it
+moves on.
+
 ## PR plan (13 PRs)
 
 | #   | PR (title without emoji)                                                     | Steps   | Depends on | Status     |
 | --- | ---------------------------------------------------------------------------- | ------- | ---------- | ---------- |
-| 0   | `docs(agents): multi-agent design, implementation plan and spike results`    | Phase 0 | —          | in review  |
+| 0   | `docs(agents): multi-agent design, implementation plan and spike results`    | Phase 0 | —          | open (#91) |
 | 1   | `refactor(agents): tag events and nodes with the agent kind`                 | 1a      | 0          | open (#90) |
 | 2   | `refactor(agents): per-agent drop folders, drop root from env`               | 1b      | 1          |            |
 | 3   | `refactor(agents): move claude specifics behind an adapter`                  | 1c      | 2          |            |
