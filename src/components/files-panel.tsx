@@ -15,7 +15,7 @@ import {
   openDirs,
   type FileTreeState,
 } from "../lib/file-tree"
-import { buildGitDecorations, statusAt, statusLetter, statusColor } from "../lib/git-decorations"
+import { buildGitDecorations, statusLetter, statusColor } from "../lib/git-decorations"
 import { useFileMenu } from "./use-file-menu"
 import { RootBreadcrumb } from "./root-breadcrumb"
 
@@ -167,7 +167,7 @@ export function FilesPanel() {
             )
           }
           if (r.kind === "dir") {
-            const st = deco ? statusAt(deco, r.path, true) : undefined
+            const st = deco?.dir.get(r.path)
             return (
               <div
                 key={r.path}
@@ -188,7 +188,7 @@ export function FilesPanel() {
               </div>
             )
           }
-          const st = deco ? statusAt(deco, r.path, false) : undefined
+          const st = deco?.file.get(r.path)
           const color = st ? statusColor(st) : undefined
           return (
             <div

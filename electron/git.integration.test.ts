@@ -144,6 +144,16 @@ describe.skipIf(!hasGit)(
       expect(st.files.find((f) => f.path === "sub/new.txt")?.add).toBe(2)
     })
 
+    it("an untracked symlink to a device (/dev/zero) is never read (no hang, no OOM)", async () => {
+      if (process.platform === "win32") return
+      fs.symlinkSync("/dev/zero", path.join(dir, "zero"))
+      const t0 = Date.now()
+      const st = await gitStatus(dir)
+      expect(Date.now() - t0).toBeLessThan(5000)
+      expect(st.files.find((f) => f.path === "zero")?.add).toBe(0)
+      fs.rmSync(path.join(dir, "zero"))
+    })
+
     it("listing it goes through git: ignored files (.env) never show", async () => {
       const l = await gitUntrackedListing(dir, "docs")
       expect(l.entries).toEqual([

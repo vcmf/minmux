@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process"
-import { toDirListing, type DirListing } from "../src/lib/dir-listing"
+import { READDIR_CAP, toDirListing, type DirListing } from "../src/lib/dir-listing"
 import { promisify } from "node:util"
 import fs from "node:fs"
 import path from "node:path"
@@ -76,7 +76,7 @@ export function parseNumstat(out: string): Map<string, { add: number; del: numbe
   for (const line of out.split("\n")) {
     if (!line.trim()) continue
     const [add, del, ...rest] = line.split("\t")
-    let file = rest.join("\t")
+    let file = unquotePath(rest.join("\t")) // C-quoted like porcelain (", \\, control chars)
     // Renames: "old => new" or "dir/{a => b}/f" — take the resulting path.
     if (file.includes(" => ")) file = file.replace(/\{.*? => (.*?)\}/g, "$1").replace(/.* => /, "")
     map.set(file, { add: add === "-" ? 0 : Number(add), del: del === "-" ? 0 : Number(del) })
@@ -146,6 +146,24 @@ export const STATUS_CAP = 5000
 // Untracked files get a "+N lines" count read off disk; only this many per poll (async).
 const COUNT_UNTRACKED = 200
 
+/** `old -> new` from a porcelain rename line, split outside quotes (raw, still quoted). */
+export function splitRename(s: string): [string, string] | null {
+  let i: number
+  if (s.startsWith('"')) {
+    for (i = 1; i < s.length; i++) {
+      if (s[i] === "\\") i++
+      else if (s[i] === '"') break
+    }
+    i++
+  } else {
+    const at = s.indexOf(" -> ")
+    if (at < 0) return null
+    i = at
+  }
+  if (s.slice(i, i + 4) !== " -> ") return null
+  return [s.slice(0, i), s.slice(i + 4)]
+}
+
 /** A porcelain path as git prints it: C-quoted ("…") when it has spaces, quotes or escapes. */
 export function unquotePath(p: string): string {
   if (p.length < 2 || !p.startsWith('"') || !p.endsWith('"')) return p
@@ -196,9 +214,13 @@ export function parseStatusEntries(
     }
     total++
     if (entries.length >= cap) continue
-    const p = unquotePath(line.slice(3))
+    // A rename/copy is `old -> new` (each side quoted on its own): the row is the new path,
+    // as in numstat.
+    const xy = line.slice(0, 2)
+    const raw = /[RC]/.test(xy) ? (splitRename(line.slice(3))?.[1] ?? line.slice(3)) : line.slice(3)
+    const p = unquotePath(raw)
     const isDir = p.endsWith("/")
-    entries.push({ xy: line.slice(0, 2), path: isDir ? p.slice(0, -1) : p, isDir })
+    entries.push({ xy, path: isDir ? p.slice(0, -1) : p, isDir })
   }
   return { header, entries, total }
 }
@@ -218,21 +240,15 @@ export async function gitStatus(cwd: string, wsl?: WslCtx): Promise<GitStatus> {
   const { header, entries, total } = parseStatusEntries(porcelain)
   const { branch, ahead, behind } = parseBranchLine(header)
 
-  let numstat = new Map<string, { add: number; del: number }>()
-  try {
-    numstat = parseNumstat(await run(cwd, ["diff", "--numstat", "HEAD"], wsl))
-  } catch {
-    // no HEAD yet (empty repo) — counts come from file reads below
-  }
-
-  // Repo toplevel — porcelain paths are relative to it (not to cwd, which may be a subfolder);
-  // also resolves them to absolute for the files browser. Best-effort: "" if it fails.
-  let root = ""
-  try {
-    root = (await run(cwd, ["rev-parse", "--show-toplevel"], wsl)).trim()
-  } catch {
-    // leave root empty
-  }
+  // Independent: run both at once (each is a process spawn — a wsl.exe round trip on WSL).
+  // numstat may fail with no HEAD yet (empty repo); root is best-effort ("" if it fails).
+  // Porcelain paths are relative to the repo root, not to cwd (which may be a subfolder).
+  const [numstatOut, rootOut] = await Promise.all([
+    run(cwd, ["diff", "--numstat", "HEAD"], wsl).catch(() => ""),
+    run(cwd, ["rev-parse", "--show-toplevel"], wsl).catch(() => ""),
+  ])
+  const numstat = parseNumstat(numstatOut)
+  const root = rootOut.trim()
   const base = root || cwd
 
   // Untracked files get a "+N lines" count off disk: only the first COUNT_UNTRACKED per poll,
@@ -301,8 +317,9 @@ const LINE_CACHE_MAX = 2000
 
 async function countLines(file: string): Promise<number> {
   try {
-    const st = await fs.promises.stat(file)
-    if (st.size > 1024 * 1024) return 0 // big files: no count (not worth reading per poll)
+    // lstat + isFile: a symlink to /dev/zero or a FIFO must never be read (it would never end).
+    const st = await fs.promises.lstat(file)
+    if (!st.isFile() || st.size > 1024 * 1024) return 0 // big files: no count per poll
     const key = `${st.size}:${st.mtimeMs}`
     const hit = lineCache.get(file)
     if (hit?.key === key) return hit.lines
@@ -323,8 +340,7 @@ async function inBatches<T>(items: T[], n: number, fn: (x: T) => Promise<unknown
   for (let i = 0; i < items.length; i += n) await Promise.all(items.slice(i, i + n).map(fn))
 }
 
-/** An untracked folder's direct contents as git sees them (gitignored entries left out, a
- *  subfolder as one entry) — so a new folder never surfaces an ignored `.env` as a change. */
+/** An untracked folder's direct contents minus what git ignores (an `.env` never surfaces). */
 export async function gitUntrackedListing(
   cwd: string,
   dirRel: string,
@@ -336,14 +352,48 @@ export async function gitUntrackedListing(
   } catch {
     return toDirListing([])
   }
+  if (wsl) return wslUntrackedListing(root, dirRel, wsl)
+  // Host: read just this level (cheap, no recursion — an open node_modules re-lists each
+  // poll), then one `check-ignore` over those names drops what git ignores.
+  let ents: fs.Dirent[]
+  try {
+    ents = await fs.promises.readdir(path.join(root, dirRel), { withFileTypes: true })
+  } catch {
+    return toDirListing([])
+  }
+  const all = ents
+    .filter((e) => e.name !== ".git")
+    .slice(0, READDIR_CAP * 2) // bounded argv; the listing is capped to READDIR_CAP anyway
+    .map((e) => ({ name: e.name, isDir: e.isDirectory(), rel: `${dirRel}/${e.name}` }))
+  let ignoredOut: string
+  try {
+    ignoredOut = await run(root, ["check-ignore", "--", ...all.map((e) => e.rel)])
+  } catch (e) {
+    ignoredOut = (e as { stdout?: string }).stdout ?? "" // exit 1 = nothing ignored
+  }
+  const ignored = new Set(ignoredOut.split("\n").filter(Boolean).map(unquotePath))
+  const listing = toDirListing(
+    all.filter((e) => !ignored.has(e.rel)).map(({ name, isDir }) => ({ name, isDir })),
+  )
+  return ents.length > all.length ? { ...listing, total: ents.length, truncated: true } : listing
+}
+
+// WSL: the folder is a Linux path the host can't read — a recursive ls-files inside the distro,
+// reduced to the first level (slower, but WSL panes are the minority and it's only while open).
+async function wslUntrackedListing(root: string, dirRel: string, wsl: WslCtx): Promise<DirListing> {
   let out: string
   try {
-    // From the root, so the pathspec is root-relative like every porcelain path. Recursive
-    // (--directory would collapse this very folder to one entry); only on a click, ~60 ms for
-    // 35k files, and reduced to the first level below.
     out = await run(
       root,
-      ["ls-files", "--others", "--exclude-standard", "-z", "--", `${dirRel}/`],
+      [
+        "--literal-pathspecs",
+        "ls-files",
+        "--others",
+        "--exclude-standard",
+        "-z",
+        "--",
+        `${dirRel}/`,
+      ],
       wsl,
     )
   } catch {

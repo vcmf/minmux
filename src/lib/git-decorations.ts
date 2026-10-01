@@ -46,16 +46,6 @@ export function buildGitDecorations(repoRoot: string, files: GitFile[]): GitDeco
   return { file, dir }
 }
 
-/** A path's badge. A wholly-untracked folder is badged itself; what's inside isn't, since
- *  git doesn't say which of those files it ignores (an `.env` must not read as a change). */
-export function statusAt(
-  deco: GitDecorations,
-  abs: string,
-  isDir: boolean,
-): ChangeStatus | undefined {
-  return isDir ? deco.dir.get(abs) : deco.file.get(abs)
-}
-
 /** Single-letter badge for a status (untracked shows as U). */
 export const statusLetter = (s: ChangeStatus): string => (s === "?" ? "U" : s)
 

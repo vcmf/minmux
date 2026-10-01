@@ -35,7 +35,11 @@ export function DiffPanel() {
     setSelected(files.find((f) => !f.isDir)?.path ?? null)
   }, [files, selected])
 
-  // Load the unified diff for the selected file (refresh when totals change).
+  // Load the unified diff for the selected file. A listed file refreshes when the totals
+  // change; one picked inside an untracked folder adds nothing to them, so it refreshes on
+  // every poll — and once it's gone (empty diff), the selection falls back to a listed file.
+  const inFolder = !!selected && !files.some((f) => !f.isDir && f.path === selected)
+  const refreshKey = inFolder ? git : `${git?.add}/${git?.del}`
   useEffect(() => {
     if (!cwd || !selected) {
       setDiff([])
@@ -45,12 +49,15 @@ export function DiffPanel() {
     // Porcelain paths (and those picked inside an untracked folder) are relative to the repo
     // root, not to the terminal's cwd, which may be a subfolder.
     void ipc.gitDiff(git?.root || cwd, selected, getActiveWsl()).then((d) => {
-      if (!cancelled) setDiff(d)
+      if (cancelled) return
+      if (inFolder && d.length === 0) setSelected(files.find((f) => !f.isDir)?.path ?? null)
+      else setDiff(d)
     })
     return () => {
       cancelled = true
     }
-  }, [cwd, git?.root, selected, git?.add, git?.del])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cwd, git?.root, selected, refreshKey])
 
   const close = () => useStore.getState().setRightView(null)
 
@@ -147,8 +154,7 @@ export function DiffPanel() {
   )
 }
 
-/** An untracked folder (git reports it once): expands on click into its direct contents,
- *  listed lazily — a big one previews its first 10 (lib/dir-listing). Files open their diff. */
+/** An untracked folder row: click to list its direct contents (big ones preview 10). */
 function UntrackedFolder({
   root,
   cwd,

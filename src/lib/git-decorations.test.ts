@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest"
-import { statusAt, buildGitDecorations, statusLetter, statusColor } from "./git-decorations"
+import { buildGitDecorations, statusLetter, statusColor } from "./git-decorations"
 import type { GitFile, ChangeStatus } from "./ipc"
 
 const f = (p: string, status: ChangeStatus): GitFile => ({
@@ -103,9 +103,9 @@ describe("untracked folders (git reports each once)", () => {
   })
   it("the folder itself is badged and rolls up; what's inside isn't (git may ignore it)", () => {
     const d = buildGitDecorations("/r", [f("docs/node_modules", "?", true), f("a.ts", "M")])
-    expect(statusAt(d, "/r/docs/node_modules", true)).toBe("?")
-    expect(statusAt(d, "/r/docs", true)).toBe("?") // rolled up
-    expect(statusAt(d, "/r/docs/node_modules/.env", false)).toBeUndefined()
-    expect(statusAt(d, "/r/a.ts", false)).toBe("M")
+    expect(d.dir.get("/r/docs/node_modules")).toBe("?")
+    expect(d.dir.get("/r/docs")).toBe("?") // rolled up
+    expect(d.file.get("/r/docs/node_modules/.env")).toBeUndefined()
+    expect(d.file.get("/r/a.ts")).toBe("M")
   })
 })

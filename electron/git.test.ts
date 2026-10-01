@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest"
 import {
+  splitRename,
   unquotePath,
   parseStatusEntries,
   parseBranchLine,
@@ -128,5 +129,19 @@ describe("unquotePath", () => {
   it("a quoted untracked folder is still a folder", () => {
     const r = parseStatusEntries('## main\n?? "my dir/"\n')
     expect(r.entries).toEqual([{ xy: "??", path: "my dir", isDir: true }])
+  })
+})
+
+describe("renames and quoting (status ↔ numstat must agree)", () => {
+  it("splitRename splits outside quotes; the row is the new path", () => {
+    expect(splitRename("a.ts -> b.ts")).toEqual(["a.ts", "b.ts"])
+    expect(splitRename('"q\\"t" -> "n\\"w"')).toEqual(['"q\\"t"', '"n\\"w"'])
+    expect(splitRename("no-arrow")).toBeNull()
+    const r = parseStatusEntries('## main\nR  "q\\"t" -> "n\\"w"\nR  ab/h -> "ab/h 2"\n')
+    expect(r.entries.map((e) => e.path)).toEqual(['n"w', "ab/h 2"])
+  })
+  it("numstat keys are unquoted like porcelain paths", () => {
+    const m = parseNumstat('3\t1\t"say \\"hi\\".txt"\n')
+    expect(m.get('say "hi".txt')).toEqual({ add: 3, del: 1 })
   })
 })
