@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useMemo, useRef, useState } from "react"
 import { CaretDown, CaretRight, FileText, FilePlus, FileX, Folder, X } from "@phosphor-icons/react"
 import { useStore } from "../store"
 import { ipc } from "../lib/ipc"
@@ -154,6 +154,8 @@ export function DiffPanel() {
   )
 }
 
+const RELIST_MS = 15_000 // an open untracked folder re-lists at most this often
+
 /** An untracked folder row: click to list its direct contents (big ones preview 10). */
 function UntrackedFolder({
   root,
@@ -181,19 +183,26 @@ function UntrackedFolder({
   const abs = root ? `${root}/${rel}` : rel
   const name = rel.split("/").pop() ?? rel
 
-  // Through git, not readdir: what's inside an untracked folder that git ignores (an `.env`,
-  // a nested node_modules) must never show as a change — nor its contents as a diff.
+  // Through git (ignore rules, no special files). Listed when opened, then re-listed on a
+  // poll at most every RELIST_MS — it's a recursive scan, so not on every 2.5 s poll.
+  const listedAt = useRef(0)
+  const repo = root || cwd
   useEffect(() => {
-    if (!open) return
+    if (!open) {
+      listedAt.current = 0
+      return
+    }
+    if (listedAt.current && Date.now() - listedAt.current < RELIST_MS) return
+    listedAt.current = Date.now()
     let cancelled = false
     void ipc
-      .gitUntrackedList(cwd, rel, getActiveWsl())
+      .gitUntrackedList(repo, rel, getActiveWsl())
       .then((l) => !cancelled && setListing(l))
       .catch(() => !cancelled && setListing({ entries: [], truncated: false, total: 0 }))
     return () => {
       cancelled = true
     }
-  }, [open, cwd, rel, refresh])
+  }, [open, repo, rel, refresh])
   const toggle = () => setOpen((o) => !o)
   const menu = (e: React.MouseEvent, relPath: string, isDir: boolean) =>
     onMenu(e, { abs: root ? `${root}/${relPath}` : relPath, rel: relPath, isDir })

@@ -913,8 +913,8 @@ function registerIpc() {
   )
   ipcMain.handle(
     "git:untracked-list",
-    async (_e, cwd: string, dirRel: string, wsl?: { distro?: string }) =>
-      gitUntrackedListing(cwd, dirRel, wsl),
+    async (_e, root: string, dirRel: string, wsl?: { distro?: string }) =>
+      gitUntrackedListing(root, dirRel, wsl),
   )
   ipcMain.handle("git:diff", async (_e, cwd: string, file: string, wsl?: { distro?: string }) =>
     gitDiff(cwd, file, wsl),

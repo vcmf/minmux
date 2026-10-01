@@ -140,6 +140,16 @@ describe("renames and quoting (status ↔ numstat must agree)", () => {
     const r = parseStatusEntries('## main\nR  "q\\"t" -> "n\\"w"\nR  ab/h -> "ab/h 2"\n')
     expect(r.entries.map((e) => e.path)).toEqual(['n"w', "ab/h 2"])
   })
+  it("a numstat rename with quoted sides keys on the unquoted new path", () => {
+    expect(parseNumstat('2\t0\t"x\\"y.txt" => "z\\"w.txt"\n').get('z"w.txt')).toEqual({
+      add: 2,
+      del: 0,
+    })
+    expect(parseNumstat('1\t1\tplain.txt => "p\\"q.txt"\n').get('p"q.txt')).toEqual({
+      add: 1,
+      del: 1,
+    })
+  })
   it("numstat keys are unquoted like porcelain paths", () => {
     const m = parseNumstat('3\t1\t"say \\"hi\\".txt"\n')
     expect(m.get('say "hi".txt')).toEqual({ add: 3, del: 1 })

@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process"
-import { READDIR_CAP, toDirListing, type DirListing } from "../src/lib/dir-listing"
+import { toDirListing, type DirListing } from "../src/lib/dir-listing"
 import { promisify } from "node:util"
 import fs from "node:fs"
 import path from "node:path"
@@ -76,9 +76,14 @@ export function parseNumstat(out: string): Map<string, { add: number; del: numbe
   for (const line of out.split("\n")) {
     if (!line.trim()) continue
     const [add, del, ...rest] = line.split("\t")
-    let file = unquotePath(rest.join("\t")) // C-quoted like porcelain (", \\, control chars)
-    // Renames: "old => new" or "dir/{a => b}/f" — take the resulting path.
-    if (file.includes(" => ")) file = file.replace(/\{.*? => (.*?)\}/g, "$1").replace(/.* => /, "")
+    let file = rest.join("\t")
+    // Renames: "old => new" (each side quoted on its own) or "dir/{a => b}/f" — take the new
+    // path; then unquote it like porcelain (", \\, control chars).
+    const split = splitRename(file.replace(" => ", " -> "))
+    if (split && !file.includes("{")) file = split[1]
+    else if (file.includes(" => "))
+      file = file.replace(/\{.*? => (.*?)\}/g, "$1").replace(/.* => /, "")
+    file = unquotePath(file)
     map.set(file, { add: add === "-" ? 0 : Number(add), del: del === "-" ? 0 : Number(del) })
   }
   return map
@@ -295,21 +300,21 @@ export async function gitStatus(cwd: string, wsl?: WslCtx): Promise<GitStatus> {
 export async function gitDiff(cwd: string, file: string, wsl?: WslCtx): Promise<DiffLine[]> {
   if (!cwd || !file) return []
   const nul = wsl ? "/dev/null" : NULL_DEVICE // git runs inside Linux when wsl is set
-  try {
-    let out = await run(cwd, ["diff", "HEAD", "--", file], wsl)
-    if (!out.trim()) {
-      // untracked / new file — diff against the null device
-      try {
-        out = await run(cwd, ["diff", "--no-index", "--", nul, file], wsl)
-      } catch (e) {
-        // --no-index exits 1 when files differ but still prints the diff
-        out = (e as { stdout?: string }).stdout ?? ""
-      }
+  // Untracked / new file — or no HEAD yet (a repo without commits): diff against the null device.
+  const vsNull = async () => {
+    try {
+      return await run(cwd, ["diff", "--no-index", "--", nul, file], wsl)
+    } catch (e) {
+      return (e as { stdout?: string }).stdout ?? "" // --no-index exits 1 when files differ
     }
-    return parseDiff(out)
-  } catch (e) {
-    return parseDiff((e as { stdout?: string }).stdout ?? "")
   }
+  let out: string
+  try {
+    out = await run(cwd, ["diff", "HEAD", "--", file], wsl)
+  } catch {
+    out = "" // bad revision HEAD (no commits yet)
+  }
+  return parseDiff(out.trim() ? out : await vsNull())
 }
 
 const lineCache = new Map<string, { key: string; lines: number }>() // path → by size+mtime
@@ -319,6 +324,7 @@ async function countLines(file: string): Promise<number> {
   try {
     // lstat + isFile: a symlink to /dev/zero or a FIFO must never be read (it would never end).
     const st = await fs.promises.lstat(file)
+    if (st.isSymbolicLink()) return 1 // its diff is one line: the link's target
     if (!st.isFile() || st.size > 1024 * 1024) return 0 // big files: no count per poll
     const key = `${st.size}:${st.mtimeMs}`
     const hit = lineCache.get(file)
@@ -340,47 +346,16 @@ async function inBatches<T>(items: T[], n: number, fn: (x: T) => Promise<unknown
   for (let i = 0; i < items.length; i += n) await Promise.all(items.slice(i, i + n).map(fn))
 }
 
-/** An untracked folder's direct contents minus what git ignores (an `.env` never surfaces). */
+/** An untracked folder's direct contents, as git sees them (ignored, special files left out). */
 export async function gitUntrackedListing(
-  cwd: string,
+  root: string, // the repo's top-level folder: dirRel is relative to it
   dirRel: string,
   wsl?: WslCtx,
 ): Promise<DirListing> {
-  let root: string
-  try {
-    root = (await run(cwd, ["rev-parse", "--show-toplevel"], wsl)).trim() || cwd
-  } catch {
-    return toDirListing([])
-  }
-  if (wsl) return wslUntrackedListing(root, dirRel, wsl)
-  // Host: read just this level (cheap, no recursion — an open node_modules re-lists each
-  // poll), then one `check-ignore` over those names drops what git ignores.
-  let ents: fs.Dirent[]
-  try {
-    ents = await fs.promises.readdir(path.join(root, dirRel), { withFileTypes: true })
-  } catch {
-    return toDirListing([])
-  }
-  const all = ents
-    .filter((e) => e.name !== ".git")
-    .slice(0, READDIR_CAP * 2) // bounded argv; the listing is capped to READDIR_CAP anyway
-    .map((e) => ({ name: e.name, isDir: e.isDirectory(), rel: `${dirRel}/${e.name}` }))
-  let ignoredOut: string
-  try {
-    ignoredOut = await run(root, ["check-ignore", "--", ...all.map((e) => e.rel)])
-  } catch (e) {
-    ignoredOut = (e as { stdout?: string }).stdout ?? "" // exit 1 = nothing ignored
-  }
-  const ignored = new Set(ignoredOut.split("\n").filter(Boolean).map(unquotePath))
-  const listing = toDirListing(
-    all.filter((e) => !ignored.has(e.rel)).map(({ name, isDir }) => ({ name, isDir })),
-  )
-  return ents.length > all.length ? { ...listing, total: ents.length, truncated: true } : listing
-}
-
-// WSL: the folder is a Linux path the host can't read — a recursive ls-files inside the distro,
-// reduced to the first level (slower, but WSL panes are the minority and it's only while open).
-async function wslUntrackedListing(root: string, dirRel: string, wsl: WslCtx): Promise<DirListing> {
+  // git, not readdir: git applies the ignore rules (an `.env` never surfaces), skips FIFOs /
+  // sockets / devices and empty folders, the same on every platform. Recursive — --directory
+  // would collapse this very folder to one entry — then reduced to the first level; the
+  // renderer re-lists an open folder only every few seconds. Any error → empty (fail closed).
   let out: string
   try {
     out = await run(

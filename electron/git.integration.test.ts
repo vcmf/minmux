@@ -150,8 +150,16 @@ describe.skipIf(!hasGit)(
       const t0 = Date.now()
       const st = await gitStatus(dir)
       expect(Date.now() - t0).toBeLessThan(5000)
-      expect(st.files.find((f) => f.path === "zero")?.add).toBe(0)
+      expect(st.files.find((f) => f.path === "zero")?.add).toBe(1) // one line (the link), target unread
       fs.rmSync(path.join(dir, "zero"))
+    })
+
+    it("special files (a FIFO) inside an untracked folder are never listed", async () => {
+      if (process.platform === "win32") return
+      execFileSync("mkfifo", [path.join(dir, "docs", "pipe")])
+      const l = await gitUntrackedListing(dir, "docs")
+      expect(l.entries.map((e) => e.name)).not.toContain("pipe")
+      fs.rmSync(path.join(dir, "docs", "pipe"))
     })
 
     it("listing it goes through git: ignored files (.env) never show", async () => {
@@ -163,3 +171,18 @@ describe.skipIf(!hasGit)(
     })
   },
 )
+
+describe.skipIf(!hasGit)("gitDiff in a repo with no commits yet", () => {
+  it("diffs a new file against the null device instead of returning nothing", async () => {
+    const d = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "minmux-nohead-")))
+    try {
+      execFileSync("git", ["init", "-q", "-b", "main"], { cwd: d })
+      fs.mkdirSync(path.join(d, "d"))
+      fs.writeFileSync(path.join(d, "d", "f"), "one\ntwo\n")
+      const diff = await gitDiff(d, "d/f")
+      expect(diff.filter((l) => l.type === "add").map((l) => l.text)).toEqual(["one", "two"])
+    } finally {
+      fs.rmSync(d, { recursive: true, force: true })
+    }
+  })
+})
