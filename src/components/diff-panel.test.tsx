@@ -89,50 +89,21 @@ describe("DiffPanel — an untracked folder (reported once by git)", () => {
       { path: "src/a.ts", name: "a.ts", dir: "src", status: "M", add: 6, del: 2 },
     ],
   }
-  const entries = (n: number) =>
-    Array.from({ length: n }, (_, i) => ({
-      name: `f${String(i).padStart(3, "0")}.js`,
-      isDir: false,
-    }))
 
-  it("is one row; selection skips it (no diff of its own)", () => {
+  it("is one row; the selection skips it (a folder has no diff of its own)", () => {
     st().setGit(withFolder)
     render(<DiffPanel />)
     expect(screen.getByText("node_modules/")).toBeInTheDocument()
-    expect(ipc.gitDiff).toHaveBeenCalledWith(expect.anything(), "src/a.ts", undefined)
+    expect(ipc.gitDiff).toHaveBeenCalledWith("/repo", "src/a.ts", undefined)
   })
 
-  it("expands on click into its contents; a big one previews 10 + 'N more · Show all'", async () => {
+  it("clicking it opens that folder in the Files panel (browsed there, one level at a time)", () => {
     st().setGit(withFolder)
-    vi.mocked(ipc.gitUntrackedList).mockResolvedValueOnce({
-      entries: entries(150),
-      truncated: false,
-      total: 150,
-    })
     render(<DiffPanel />)
     fireEvent.mouseDown(screen.getByText("node_modules/"), { button: 0 })
-    expect(ipc.gitUntrackedList).toHaveBeenCalledWith("/repo", "docs/node_modules", undefined)
-    expect(await screen.findByText("140 more")).toBeInTheDocument()
-    expect(screen.getAllByText(/^f0\d\d\.js$/)).toHaveLength(10)
-    fireEvent.click(screen.getByText("Show all"))
-    expect(screen.getAllByText(/^f\d\d\d\.js$/)).toHaveLength(150)
-  })
-
-  it("a file inside it can be selected (its diff opens, the selection sticks)", async () => {
-    st().setGit(withFolder)
-    vi.mocked(ipc.gitUntrackedList).mockResolvedValueOnce({
-      entries: entries(3),
-      truncated: false,
-      total: 3,
-    })
-    render(<DiffPanel />)
-    fireEvent.mouseDown(screen.getByText("node_modules/"), { button: 0 })
-    fireEvent.mouseDown(await screen.findByText("f001.js"), { button: 0 })
-    expect(ipc.gitDiff).toHaveBeenLastCalledWith(
-      expect.anything(),
-      "docs/node_modules/f001.js",
-      undefined,
-    )
+    const sid = st().tabs[0]!.activeSessionId
+    expect(st().paneRoot[sid]).toBe("/repo/docs/node_modules")
+    expect(st().rightView).toBe("files")
   })
 
   it("a capped status says how many changes aren't shown", () => {

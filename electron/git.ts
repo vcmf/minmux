@@ -1,5 +1,4 @@
 import { execFile } from "node:child_process"
-import { toDirListing, type DirListing } from "../src/lib/dir-listing"
 import { promisify } from "node:util"
 import fs from "node:fs"
 import path from "node:path"
@@ -79,7 +78,7 @@ export function parseNumstat(out: string): Map<string, { add: number; del: numbe
     let file = rest.join("\t")
     // Renames: "old => new" (each side quoted on its own) or "dir/{a => b}/f" — take the new
     // path; then unquote it like porcelain (", \\, control chars).
-    const split = splitRename(file.replace(" => ", " -> "))
+    const split = file.includes(" => ") ? splitRename(file.replace(" => ", " -> ")) : null
     if (split && !file.includes("{")) file = split[1]
     else if (file.includes(" => "))
       file = file.replace(/\{.*? => (.*?)\}/g, "$1").replace(/.* => /, "")
@@ -132,14 +131,26 @@ export function wslGitArgs(distro: string | undefined, cwd: string, gitArgs: str
   return wslArgs(distro, cwd, "git", ["-c", "core.quotepath=false", ...gitArgs])
 }
 
-async function run(cwd: string, args: string[], wsl?: WslCtx): Promise<string> {
-  const maxBuffer = 64 * 1024 * 1024 // a mass rename can print a lot; the rows are capped after
+async function run(
+  cwd: string,
+  args: string[],
+  wsl?: WslCtx,
+  // A mass rename can print a lot (status rows are capped after); a diff passes tighter limits.
+  { maxBuffer = 64 * 1024 * 1024, timeout = 0 }: { maxBuffer?: number; timeout?: number } = {},
+): Promise<string> {
   if (wsl) {
     // cwd is a Linux path valid only inside WSL — run git there, not on the host.
-    const { stdout } = await exec("wsl.exe", wslGitArgs(wsl.distro, cwd, args), { maxBuffer })
+    const { stdout } = await exec("wsl.exe", wslGitArgs(wsl.distro, cwd, args), {
+      maxBuffer,
+      timeout,
+    })
     return stdout
   }
-  const { stdout } = await exec("git", ["-c", "core.quotepath=false", ...args], { cwd, maxBuffer })
+  const { stdout } = await exec("git", ["-c", "core.quotepath=false", ...args], {
+    cwd,
+    maxBuffer,
+    timeout,
+  })
   return stdout
 }
 
@@ -297,24 +308,44 @@ export async function gitStatus(cwd: string, wsl?: WslCtx): Promise<GitStatus> {
 }
 
 /** Unified diff for one file (handles untracked via --no-index). */
+// A diff that runs too long (a symlink to a FIFO makes `--no-index` read forever) or prints too
+// much (a multi-MB file) is cut off with a note: never a hung git, never a frozen panel.
+const DIFF_LIMITS = { maxBuffer: 4 * 1024 * 1024, timeout: 10_000 }
+
 export async function gitDiff(cwd: string, file: string, wsl?: WslCtx): Promise<DiffLine[]> {
   if (!cwd || !file) return []
   const nul = wsl ? "/dev/null" : NULL_DEVICE // git runs inside Linux when wsl is set
-  // Untracked / new file — or no HEAD yet (a repo without commits): diff against the null device.
-  const vsNull = async () => {
-    try {
-      return await run(cwd, ["diff", "--no-index", "--", nul, file], wsl)
-    } catch (e) {
-      return (e as { stdout?: string }).stdout ?? "" // --no-index exits 1 when files differ
-    }
+  const note = (text: string): DiffLine[] => [{ type: "hunk", text }]
+  const limited = (e: unknown): DiffLine[] | null => {
+    const err = e as { code?: string; killed?: boolean; signal?: string }
+    if (err.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER") return note("… diff too large to show")
+    if (err.killed || err.signal === "SIGTERM") return note("… diff took too long to show")
+    return null
   }
   let out: string
   try {
-    out = await run(cwd, ["diff", "HEAD", "--", file], wsl)
-  } catch {
+    out = await run(cwd, ["diff", "HEAD", "--", file], wsl, DIFF_LIMITS)
+  } catch (e) {
+    const cut = limited(e)
+    if (cut) return cut
     out = "" // bad revision HEAD (no commits yet)
   }
-  return parseDiff(out.trim() ? out : await vsNull())
+  if (out.trim()) return parseDiff(out)
+  // Nothing vs HEAD: an untracked file (or no HEAD yet) → diff against the null device. A
+  // TRACKED file that matches HEAD (edited back, a phantom CRLF change) stays empty — never
+  // shown as wholly added.
+  let tracked = ""
+  try {
+    tracked = await run(cwd, ["--literal-pathspecs", "ls-files", "--", file], wsl)
+  } catch {
+    // treat as untracked
+  }
+  if (tracked.trim()) return []
+  try {
+    return parseDiff(await run(cwd, ["diff", "--no-index", "--", nul, file], wsl, DIFF_LIMITS))
+  } catch (e) {
+    return limited(e) ?? parseDiff((e as { stdout?: string }).stdout ?? "") // exit 1 = differs
+  }
 }
 
 const lineCache = new Map<string, { key: string; lines: number }>() // path → by size+mtime
@@ -344,45 +375,4 @@ async function countLines(file: string): Promise<number> {
 /** Run `fn` over `items`, at most `n` at a time. */
 async function inBatches<T>(items: T[], n: number, fn: (x: T) => Promise<unknown>): Promise<void> {
   for (let i = 0; i < items.length; i += n) await Promise.all(items.slice(i, i + n).map(fn))
-}
-
-/** An untracked folder's direct contents, as git sees them (ignored, special files left out). */
-export async function gitUntrackedListing(
-  root: string, // the repo's top-level folder: dirRel is relative to it
-  dirRel: string,
-  wsl?: WslCtx,
-): Promise<DirListing> {
-  // git, not readdir: git applies the ignore rules (an `.env` never surfaces), skips FIFOs /
-  // sockets / devices and empty folders, the same on every platform. Recursive — --directory
-  // would collapse this very folder to one entry — then reduced to the first level; the
-  // renderer re-lists an open folder only every few seconds. Any error → empty (fail closed).
-  let out: string
-  try {
-    out = await run(
-      root,
-      [
-        "--literal-pathspecs",
-        "ls-files",
-        "--others",
-        "--exclude-standard",
-        "-z",
-        "--",
-        `${dirRel}/`,
-      ],
-      wsl,
-    )
-  } catch {
-    return toDirListing([])
-  }
-  const prefix = `${dirRel}/`
-  const seen = new Map<string, boolean>()
-  for (const p of out.split("\0")) {
-    if (!p.startsWith(prefix)) continue
-    const rest = p.slice(prefix.length)
-    if (!rest) continue
-    const slash = rest.indexOf("/")
-    if (slash === -1) seen.set(rest, false)
-    else seen.set(rest.slice(0, slash), true) // a deeper path → its first segment is a folder
-  }
-  return toDirListing([...seen].map(([name, isDir]) => ({ name, isDir })))
 }

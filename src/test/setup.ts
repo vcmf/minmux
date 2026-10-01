@@ -69,7 +69,6 @@ const minmuxStub = {
     del: 0,
   })),
   gitDiff: vi.fn(async () => []),
-  gitUntrackedList: vi.fn(async () => ({ entries: [], truncated: false, total: 0 })),
   readWorkspace: vi.fn(async () => ""),
   writeWorkspace: vi.fn(),
   appMetrics: vi.fn(async () => []),

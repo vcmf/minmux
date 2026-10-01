@@ -1,13 +1,11 @@
-import { useEffect, useMemo, useRef, useState } from "react"
-import { CaretDown, CaretRight, FileText, FilePlus, FileX, Folder, X } from "@phosphor-icons/react"
+import { useEffect, useMemo, useState } from "react"
+import { CaretRight, FileText, FilePlus, FileX, Folder, X } from "@phosphor-icons/react"
 import { useStore } from "../store"
 import { ipc } from "../lib/ipc"
 import { useActiveRemote, useActiveWorkCwd, getActiveWsl } from "../lib/use-active-cwd"
 import { RemoteNotice } from "./remote-notice"
 import { useFileMenu } from "./use-file-menu"
 import type { ChangeStatus, DiffLine } from "../lib/ipc"
-import { previewEntries, type DirListing } from "../lib/dir-listing"
-import { isAbsoluteHostPath, revealLabel } from "../lib/file-actions"
 
 const fileIcon = (status: ChangeStatus) => {
   if (status === "?" || status === "A")
@@ -26,38 +24,37 @@ export function DiffPanel() {
 
   const files = useMemo(() => git?.files ?? [], [git])
 
-  // Keep a valid selection as the file list changes: a listed file, or one inside an
-  // untracked folder (picked from its expanded listing). A folder row has no diff of its own.
+  // Keep a valid selection as the file list changes (a folder row has no diff of its own).
   useEffect(() => {
-    const valid = (p: string) =>
-      files.some((f) => (f.isDir ? p.startsWith(`${f.path}/`) : f.path === p))
-    if (selected && valid(selected)) return
+    if (selected && files.some((f) => !f.isDir && f.path === selected)) return
     setSelected(files.find((f) => !f.isDir)?.path ?? null)
   }, [files, selected])
 
-  // Load the unified diff for the selected file. A listed file refreshes when the totals
-  // change; one picked inside an untracked folder adds nothing to them, so it refreshes on
-  // every poll — and once it's gone (empty diff), the selection falls back to a listed file.
-  const inFolder = !!selected && !files.some((f) => !f.isDir && f.path === selected)
-  const refreshKey = inFolder ? git : `${git?.add}/${git?.del}`
+  // Load the unified diff for the selected file (refresh when totals change). Porcelain paths
+  // are relative to the repo root, not to the terminal's cwd (which may be a subfolder).
   useEffect(() => {
     if (!cwd || !selected) {
       setDiff([])
       return
     }
     let cancelled = false
-    // Porcelain paths (and those picked inside an untracked folder) are relative to the repo
-    // root, not to the terminal's cwd, which may be a subfolder.
     void ipc.gitDiff(git?.root || cwd, selected, getActiveWsl()).then((d) => {
-      if (cancelled) return
-      if (inFolder && d.length === 0) setSelected(files.find((f) => !f.isDir)?.path ?? null)
-      else setDiff(d)
+      if (!cancelled) setDiff(d)
     })
     return () => {
       cancelled = true
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cwd, git?.root, selected, refreshKey])
+  }, [cwd, git?.root, selected, git?.add, git?.del])
+
+  // An untracked folder isn't browsed here: it opens in the Files panel, which lists one level
+  // at a time and previews big folders.
+  const openFolder = (rel: string) => {
+    const s = useStore.getState()
+    const sid = s.tabs.find((t) => t.id === s.activeTabId)?.activeSessionId
+    if (!sid || !root) return
+    s.setPaneRoot(sid, `${root}/${rel}`)
+    s.setRightView("files")
+  }
 
   const close = () => useStore.getState().setRightView(null)
 
@@ -91,17 +88,30 @@ export function DiffPanel() {
         {!remote &&
           files.map((f) =>
             f.isDir ? (
-              <UntrackedFolder
+              <div
                 key={f.path}
-                root={root}
-                cwd={cwd ?? root}
-                rel={f.path}
-                depth={0}
-                selected={selected}
-                onSelect={setSelected}
-                onMenu={openFileMenu}
-                refresh={git}
-              />
+                className="diff-file"
+                title="Untracked folder — open it in Files"
+                onMouseDown={(e) => e.button === 0 && openFolder(f.path)}
+                onContextMenu={(e) =>
+                  openFileMenu(e, {
+                    abs: root ? `${root}/${f.path}` : f.path,
+                    rel: f.path,
+                    isDir: true,
+                  })
+                }
+              >
+                <span className="tree-icon">
+                  <Folder size={14} weight="fill" color="var(--accent)" />
+                </span>
+                <div className="tree-labels">
+                  <span className="tree-primary">{f.name}/</span>
+                  <span className="tree-sub">
+                    {f.dir === "." ? "untracked folder" : `${f.dir} · untracked folder`}
+                  </span>
+                </div>
+                <CaretRight size={12} color="var(--dim)" />
+              </div>
             ) : (
               <div
                 key={f.path}
@@ -151,131 +161,5 @@ export function DiffPanel() {
       )}
       {menu}
     </div>
-  )
-}
-
-const RELIST_MS = 15_000 // an open untracked folder re-lists at most this often
-
-/** An untracked folder row: click to list its direct contents (big ones preview 10). */
-function UntrackedFolder({
-  root,
-  cwd,
-  rel,
-  depth,
-  selected,
-  onSelect,
-  onMenu,
-  refresh,
-}: {
-  root: string
-  cwd: string
-  rel: string // repo-relative path
-  depth: number
-  selected: string | null
-  onSelect: (rel: string) => void
-  onMenu: (e: React.MouseEvent, t: { abs: string; rel: string; isDir: boolean }) => void
-  refresh: unknown // the latest git status: an open folder re-lists on each poll
-}) {
-  const [open, setOpen] = useState(false)
-  const [listing, setListing] = useState<DirListing | null>(null)
-  const [showAll, setShowAll] = useState(false)
-  const platform = useStore((s) => s.platform)
-  const abs = root ? `${root}/${rel}` : rel
-  const name = rel.split("/").pop() ?? rel
-
-  // Through git (ignore rules, no special files). Listed when opened, then re-listed on a
-  // poll at most every RELIST_MS — it's a recursive scan, so not on every 2.5 s poll.
-  const listedAt = useRef(0)
-  const repo = root || cwd
-  useEffect(() => {
-    if (!open) {
-      listedAt.current = 0
-      return
-    }
-    if (listedAt.current && Date.now() - listedAt.current < RELIST_MS) return
-    listedAt.current = Date.now()
-    let cancelled = false
-    void ipc
-      .gitUntrackedList(repo, rel, getActiveWsl())
-      .then((l) => !cancelled && setListing(l))
-      .catch(() => !cancelled && setListing({ entries: [], truncated: false, total: 0 }))
-    return () => {
-      cancelled = true
-    }
-  }, [open, repo, rel, refresh])
-  const toggle = () => setOpen((o) => !o)
-  const menu = (e: React.MouseEvent, relPath: string, isDir: boolean) =>
-    onMenu(e, { abs: root ? `${root}/${relPath}` : relPath, rel: relPath, isDir })
-
-  const total = listing ? (listing.total ?? listing.entries.length) : 0
-  const { shown, hidden } = listing
-    ? previewEntries(listing.entries, total, showAll)
-    : { shown: [], hidden: 0 }
-  const canReveal = !getActiveWsl() && isAbsoluteHostPath(abs, platform)
-  const pad = { paddingLeft: 12 + depth * 14 }
-
-  return (
-    <>
-      <div
-        className="diff-file"
-        style={pad}
-        title="Untracked folder"
-        onMouseDown={(e) => e.button === 0 && toggle()}
-        onContextMenu={(e) => menu(e, rel, true)}
-      >
-        <span className="tree-icon">
-          {open ? <CaretDown size={12} /> : <CaretRight size={12} />}
-        </span>
-        <Folder size={14} weight="fill" color="var(--accent)" />
-        <div className="tree-labels">
-          <span className="tree-primary">{name}/</span>
-          <span className="tree-sub">untracked folder</span>
-        </div>
-      </div>
-      {open &&
-        shown.map((e) =>
-          e.isDir ? (
-            <UntrackedFolder
-              key={e.name}
-              root={root}
-              cwd={cwd}
-              rel={`${rel}/${e.name}`}
-              depth={depth + 1}
-              selected={selected}
-              onSelect={onSelect}
-              onMenu={onMenu}
-              refresh={refresh}
-            />
-          ) : (
-            <div
-              key={e.name}
-              className={`diff-file${selected === `${rel}/${e.name}` ? " selected" : ""}`}
-              style={{ paddingLeft: 12 + (depth + 1) * 14 }}
-              onMouseDown={(ev) => ev.button === 0 && onSelect(`${rel}/${e.name}`)}
-              onContextMenu={(ev) => menu(ev, `${rel}/${e.name}`, false)}
-            >
-              <span className="tree-icon">{fileIcon("?")}</span>
-              <div className="tree-labels">
-                <span className="tree-primary">{e.name}</span>
-              </div>
-            </div>
-          ),
-        )}
-      {open && listing && hidden > 0 && (
-        <div className="status-faint more-row" style={{ paddingLeft: 12 + (depth + 1) * 14 }}>
-          <span>{hidden.toLocaleString("en-US")} more</span>
-          {shown.length < listing.entries.length && (
-            <button className="link-btn" onClick={() => setShowAll(true)}>
-              Show all
-            </button>
-          )}
-          {canReveal && (
-            <button className="link-btn" onClick={() => ipc.revealPath(abs)}>
-              {revealLabel(platform)}
-            </button>
-          )}
-        </div>
-      )}
-    </>
   )
 }

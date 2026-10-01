@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process"
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
-import { gitUntrackedListing, gitStatus, gitDiff } from "./git"
+import { gitStatus, gitDiff } from "./git"
 
 // Real-git integration: build a throwaway repo and exercise gitStatus/gitDiff
 // end-to-end (the pure parsers are covered separately in git.test.ts).
@@ -153,22 +153,6 @@ describe.skipIf(!hasGit)(
       expect(st.files.find((f) => f.path === "zero")?.add).toBe(1) // one line (the link), target unread
       fs.rmSync(path.join(dir, "zero"))
     })
-
-    it("special files (a FIFO) inside an untracked folder are never listed", async () => {
-      if (process.platform === "win32") return
-      execFileSync("mkfifo", [path.join(dir, "docs", "pipe")])
-      const l = await gitUntrackedListing(dir, "docs")
-      expect(l.entries.map((e) => e.name)).not.toContain("pipe")
-      fs.rmSync(path.join(dir, "docs", "pipe"))
-    })
-
-    it("listing it goes through git: ignored files (.env) never show", async () => {
-      const l = await gitUntrackedListing(dir, "docs")
-      expect(l.entries).toEqual([
-        { name: "node_modules", isDir: true },
-        { name: "README.md", isDir: false },
-      ])
-    })
   },
 )
 
@@ -185,4 +169,36 @@ describe.skipIf(!hasGit)("gitDiff in a repo with no commits yet", () => {
       fs.rmSync(d, { recursive: true, force: true })
     }
   })
+})
+
+describe.skipIf(!hasGit)("gitDiff is bounded and honest", () => {
+  let d = ""
+  const git = (...a: string[]) => execFileSync("git", a, { cwd: d, stdio: "ignore" })
+  beforeAll(() => {
+    d = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "minmux-diff-")))
+    git("init", "-q", "-b", "main")
+    fs.writeFileSync(path.join(d, "t.txt"), "same\n")
+    git("add", "t.txt")
+    git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "t")
+  })
+  afterAll(() => fs.rmSync(d, { recursive: true, force: true }))
+
+  it("a tracked file that matches HEAD is not shown as wholly added", async () => {
+    fs.writeFileSync(path.join(d, "t.txt"), "changed\n")
+    git("add", "t.txt")
+    fs.writeFileSync(path.join(d, "t.txt"), "same\n") // staged change, worktree back to HEAD
+    expect(await gitDiff(d, "t.txt")).toEqual([])
+  })
+
+  it.skipIf(process.platform === "win32")(
+    "a symlink to a FIFO ends with a note instead of hanging git",
+    async () => {
+      execFileSync("mkfifo", [path.join(d, "fifo")])
+      fs.symlinkSync(path.join(d, "fifo"), path.join(d, "lnk"))
+      const out = await gitDiff(d, "lnk")
+      // Either git diffs the link text, or it reads the pipe and our timeout cuts it off.
+      expect(out.length).toBeGreaterThan(0)
+    },
+    20_000,
+  )
 })

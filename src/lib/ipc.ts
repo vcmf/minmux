@@ -81,8 +81,6 @@ export interface Ipc {
   onMaximizeChange: (cb: (max: boolean) => void) => () => void
   platformInfo: () => Promise<PlatformInfo>
   gitStatus: (cwd: string, wsl?: WslContext) => Promise<GitStatus>
-  // An untracked folder's direct contents as git sees them (gitignored entries left out).
-  gitUntrackedList: (root: string, dirRel: string, wsl?: WslContext) => Promise<DirListing>
   paneGitInfo: (reqs: PaneGitRequest[]) => Promise<Record<string, PaneGitInfo>> // sidebar PRs
   gitDiff: (cwd: string, file: string, wsl?: WslContext) => Promise<DiffLine[]>
   readWorkspace: () => Promise<string>
