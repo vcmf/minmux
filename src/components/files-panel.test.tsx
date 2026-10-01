@@ -87,3 +87,27 @@ describe("FilesPanel — remote session", () => {
     expect(ipc.readdir).not.toHaveBeenCalled()
   })
 })
+
+describe("FilesPanel — a big folder", () => {
+  beforeEach(() => resetStore())
+  it("previews its first 10 entries, then 'N more · Show all · Reveal'", async () => {
+    vi.mocked(ipc.readdir).mockResolvedValue({
+      entries: Array.from({ length: 150 }, (_, i) => ({
+        name: `f${String(i).padStart(3, "0")}`,
+        isDir: false,
+      })),
+      truncated: false,
+      total: 150,
+    })
+    st().newTab(testShell)
+    const id = allSessionIds(st().tabs[0]!.root)[0]!
+    st().setSessionCwd(id, "/repo-bigfolder")
+    const { container } = render(<FilesPanel />)
+    await waitFor(() => expect(container.textContent).toContain("140 more"))
+    expect(screen.getAllByText(/^f0\d\d$/)).toHaveLength(10)
+    fireEvent.click(screen.getByText(/Reveal in|Show in/))
+    expect(ipc.revealPath).toHaveBeenCalledWith("/repo-bigfolder")
+    fireEvent.click(screen.getByText("Show all"))
+    expect(screen.getAllByText(/^f\d\d\d$/)).toHaveLength(150)
+  })
+})

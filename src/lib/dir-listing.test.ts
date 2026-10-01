@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest"
-import { toDirListing, READDIR_CAP } from "./dir-listing"
+import { previewEntries, toDirListing, READDIR_CAP } from "./dir-listing"
 import type { DirEntry } from "./dir-listing"
 
 const e = (name: string, isDir = false): DirEntry => ({ name, isDir })
@@ -35,11 +35,24 @@ describe("toDirListing", () => {
   })
 
   it("empty input → empty, not truncated", () => {
-    expect(toDirListing([])).toEqual({ entries: [], truncated: false })
+    expect(toDirListing([])).toEqual({ entries: [], truncated: false, total: 0 })
   })
 
   it("defaults to READDIR_CAP", () => {
     const many = Array.from({ length: READDIR_CAP + 1 }, (_, i) => e(`f${i}`))
     expect(toDirListing(many).truncated).toBe(true)
+  })
+})
+
+describe("previewEntries", () => {
+  const xs = Array.from({ length: 150 }, (_, i) => i)
+  it("a folder of ≤100 shows everything; a bigger one previews 10 until 'show all'", () => {
+    expect(previewEntries(xs.slice(0, 100), 100, false)).toEqual({
+      shown: xs.slice(0, 100),
+      hidden: 0,
+    })
+    expect(previewEntries(xs, 150, false)).toEqual({ shown: xs.slice(0, 10), hidden: 140 })
+    expect(previewEntries(xs, 150, true)).toEqual({ shown: xs, hidden: 0 })
+    expect(previewEntries(xs.slice(0, 50), 1240, true).hidden).toBe(1190) // past the backend cap
   })
 })

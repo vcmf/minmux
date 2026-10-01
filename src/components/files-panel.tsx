@@ -4,13 +4,14 @@ import { useStore } from "../store"
 import { ipc } from "../lib/ipc"
 import { useActiveRemote, useFilesRoot, getActiveWsl } from "../lib/use-active-cwd"
 import { RemoteNotice } from "./remote-notice"
-import { isAbsoluteHostPath } from "../lib/file-actions"
+import { isAbsoluteHostPath, revealLabel } from "../lib/file-actions"
 import {
   FileTreeCache,
   emptyTree,
   setListing,
   toggleDir,
   visibleRows,
+  showAllIn,
   openDirs,
   type FileTreeState,
 } from "../lib/file-tree"
@@ -97,6 +98,17 @@ export function FilesPanel() {
     if (needsLoad) load(root, needsLoad)
   }
 
+  // "Show all" on a big folder's "N more" row (past the first-10 preview).
+  const showAll = (dir: string) => {
+    if (!root) return
+    const cur = cache.get(root) ?? tree
+    if (!cur) return
+    const state = showAllIn(cur, dir)
+    cache.set(root, state)
+    setTree(state)
+  }
+  const platform = useStore((s) => s.platform)
+
   const rows = useMemo(() => (tree ? visibleRows(tree) : []), [tree])
 
   const { menu, openFileMenu } = useFileMenu()
@@ -131,10 +143,26 @@ export function FilesPanel() {
         )}
         {rows.map((r) => {
           const pad = { paddingLeft: 8 + r.depth * 14 }
-          if (r.kind === "note") {
+          if (r.kind === "note" || r.kind === "more") {
+            // "N more" for a big folder: Show all (up to the listing cap) · Open in Finder.
+            const canReveal = !!r.dir && !getActiveWsl() && isAbsoluteHostPath(r.dir, platform)
             return (
-              <div key={r.path} className="status-faint" style={{ ...pad, padding: "2px 10px" }}>
-                {r.name}
+              <div
+                key={r.path}
+                className="status-faint more-row"
+                style={{ ...pad, paddingTop: 2, paddingBottom: 2, paddingRight: 10 }}
+              >
+                <span>{r.name}</span>
+                {r.kind === "more" && (
+                  <button className="link-btn" onClick={() => r.dir && showAll(r.dir)}>
+                    Show all
+                  </button>
+                )}
+                {canReveal && (
+                  <button className="link-btn" onClick={() => r.dir && ipc.revealPath(r.dir)}>
+                    {revealLabel(platform)}
+                  </button>
+                )}
               </div>
             )
           }

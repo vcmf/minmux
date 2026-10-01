@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from "vitest"
-import { render, screen } from "@testing-library/react"
+import { render, screen, fireEvent } from "@testing-library/react"
 import { DiffPanel } from "./diff-panel"
 import { useStore } from "../store"
 import { ipc } from "../lib/ipc"
@@ -69,5 +69,47 @@ describe("DiffPanel — remote session", () => {
     expect(screen.queryByText("a.ts")).not.toBeInTheDocument()
     expect(screen.queryByText("+9")).not.toBeInTheDocument()
     expect(ipc.gitDiff).not.toHaveBeenCalled()
+  })
+})
+
+describe("DiffPanel — an untracked folder (reported once by git)", () => {
+  const withFolder: GitStatus = {
+    ...status,
+    root: "/repo",
+    files: [
+      {
+        path: "docs/node_modules",
+        name: "node_modules",
+        dir: "docs",
+        status: "?",
+        add: 0,
+        del: 0,
+        isDir: true,
+      },
+      { path: "src/a.ts", name: "a.ts", dir: "src", status: "M", add: 6, del: 2 },
+    ],
+  }
+
+  it("is one row; the selection skips it (a folder has no diff of its own)", () => {
+    st().setGit(withFolder)
+    render(<DiffPanel />)
+    expect(screen.getByText("node_modules/")).toBeInTheDocument()
+    expect(ipc.gitDiff).toHaveBeenCalledWith("/repo", "src/a.ts", undefined)
+  })
+
+  it("clicking it opens that folder in the Files panel (browsed there, one level at a time)", () => {
+    st().setGit(withFolder)
+    render(<DiffPanel />)
+    fireEvent.mouseDown(screen.getByText("node_modules/"), { button: 0 })
+    const sid = st().tabs[0]!.activeSessionId
+    expect(st().paneRoot[sid]).toBe("/repo/docs/node_modules")
+    expect(st().rightView).toBe("files")
+  })
+
+  it("a capped status says how many changes aren't shown", () => {
+    st().setGit({ ...status, total: 7000 })
+    render(<DiffPanel />)
+    expect(screen.getByText("6,998 more changes not shown")).toBeInTheDocument()
+    expect(screen.getByText(/7,000 files/)).toBeInTheDocument()
   })
 })

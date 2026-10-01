@@ -3,7 +3,7 @@
 // here and is unit-tested; the panel component is a thin shell that does the I/O
 // (readdir) and renders visibleRows(). No React, no IPC, no time.
 
-import type { DirListing } from "./dir-listing"
+import { previewEntries, type DirListing } from "./dir-listing"
 
 /** Join a dir + entry name into a path (no double slash at the root). */
 export const joinPath = (dir: string, name: string) =>
@@ -18,6 +18,7 @@ export interface FileTreeState {
   root: string
   listings: Record<string, DirListing> // dir path → its (capped) listing
   expanded: ReadonlySet<string> // expanded dir paths
+  showAll?: ReadonlySet<string> // big folders the user chose to see in full
 }
 
 export const emptyTree = (root: string): FileTreeState => ({
@@ -53,8 +54,15 @@ export interface VisibleRow {
   path: string // unique key + (for files/dirs) the absolute path
   name: string
   depth: number
-  kind: "dir" | "file" | "note"
+  kind: "dir" | "file" | "note" | "more"
   expanded: boolean // meaningful for dirs
+  dir?: string // "more" / "note" rows: the folder they belong to
+  hidden?: number // "more" rows: how many entries aren't shown
+}
+
+/** Show every entry of a big folder (past the first-10 preview). Pure. */
+export function showAllIn(s: FileTreeState, dir: string): FileTreeState {
+  return { ...s, showAll: new Set([...(s.showAll ?? []), dir]) }
 }
 
 /** Flatten the tree into the rows to render, honoring expanded + loaded listings
@@ -66,7 +74,9 @@ export function visibleRows(s: FileTreeState): VisibleRow[] {
   const walk = (dir: string, depth: number) => {
     const listing = s.listings[dir]
     if (!listing) return
-    for (const e of listing.entries) {
+    const total = listing.total ?? listing.entries.length
+    const { shown, hidden } = previewEntries(listing.entries, total, !!s.showAll?.has(dir))
+    for (const e of shown) {
       const path = joinPath(dir, e.name)
       if (e.isDir) {
         const expanded = s.expanded.has(path)
@@ -76,13 +86,27 @@ export function visibleRows(s: FileTreeState): VisibleRow[] {
         out.push({ path, name: e.name, depth, kind: "file", expanded: false })
       }
     }
-    if (listing.truncated) {
+    // A previewed big folder: "N more · Show all · Open in Finder".
+    if (shown.length < listing.entries.length) {
+      out.push({
+        path: `more:${dir}`,
+        name: `${hidden.toLocaleString("en-US")} more`,
+        depth,
+        kind: "more",
+        expanded: false,
+        dir,
+        hidden,
+      })
+    } else if (listing.truncated) {
+      // Past the backend's cap: only the file manager can show the rest.
       out.push({
         path: `note:${dir}`,
-        name: "… more (truncated)",
+        name: hidden > 0 ? `${hidden.toLocaleString("en-US")} more` : "… more (truncated)",
         depth,
         kind: "note",
         expanded: false,
+        dir,
+        hidden,
       })
     }
   }
