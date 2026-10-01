@@ -53,6 +53,7 @@ export const displayName = (n: ProfileNames): string => (n.label ? `minmux (${n.
 const PARENT_INSTANCE_VARS = [
   "MINMUX_PROFILE",
   "MINMUX_CLAUDE_SETTINGS",
+  "MINMUX_AGENT_EVENTS",
   "MINMUX_PANE_ID",
   "MINMUX_SHARE_HISTORY",
   "MINMUX_SHELL_INTEGRATION",

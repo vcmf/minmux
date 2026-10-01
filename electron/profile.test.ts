@@ -75,6 +75,7 @@ describe("scrubParentInstanceEnv", () => {
     const env: Record<string, string | undefined> = {
       MINMUX_PROFILE: "dev",
       MINMUX_CLAUDE_SETTINGS: "/home/me/.config/minmux/claude-hooks.json",
+      MINMUX_AGENT_EVENTS: "/home/me/.config/minmux/hook-events/n",
       MINMUX_PANE_ID: "p1",
       MINMUX_SHARE_HISTORY: "0",
       MINMUX_ZDOTDIR: "/tmp/minmux/shell-integration/zsh",
@@ -82,6 +83,7 @@ describe("scrubParentInstanceEnv", () => {
       PATH: "/usr/bin",
     }
     expect(scrubParentInstanceEnv(env).sort()).toEqual([
+      "MINMUX_AGENT_EVENTS",
       "MINMUX_CLAUDE_SETTINGS",
       "MINMUX_PANE_ID",
       "MINMUX_PROFILE",

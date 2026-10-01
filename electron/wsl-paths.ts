@@ -17,14 +17,6 @@ export function wslUncCandidates(distro: string | undefined, linuxPath: string):
   return WSL_UNC_PREFIXES.map((prefix) => `${prefix}${distro}${tail}`)
 }
 
-/** `/mnt/<drive>/<path>` for a Windows drive path, so a process INSIDE WSL can reach a
- *  file on a Windows drive (the hook-events dir under %APPDATA%). null if not a drive path. */
-export function winToMnt(windowsPath: string): string | null {
-  const m = /^([A-Za-z]):[\\/](.*)$/.exec(windowsPath)
-  if (!m) return null
-  return `/mnt/${m[1]!.toLowerCase()}/${m[2]!.replace(/\\/g, "/")}`
-}
-
 /** Linux path for a WSL UNC path (`\\wsl.localhost\<distro>\home\me` → `/home/me`), so a
  *  path the native folder picker returned from a distro share becomes the distro-native
  *  form our tree/breadcrumb/git decorations use. null if it isn't a WSL UNC path. */

@@ -55,7 +55,8 @@ try {
 - **`gh` loses its login under a fake HOME** (macOS Keychain lookup goes through `$HOME`) —
   pass `launch({ gh: true })` for PR/sidebar checks (token stays in the process env).
 - **Simulate Claude Code** with `s.dropHook(paneId, payload)` — the same file drop the injected
-  hook command performs. Payload = Claude's raw hook JSON (`hook_event_name`, `session_id`,
+  hook command performs (into `hook-events/<nonce>/claude/`; a third argument picks another
+  agent's folder). Payload = Claude's raw hook JSON (`hook_event_name`, `session_id`,
   `transcript_path`, `last_assistant_message`, …). For `/color` / `/rename`, point
   `transcript_path` at a scratch JSONL and append `{"type":"agent-color","agentColor":"orange"}`
   / `{"type":"custom-title","customTitle":"…"}` lines (slash commands fire no hook — the
