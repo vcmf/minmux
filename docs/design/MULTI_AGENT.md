@@ -40,10 +40,10 @@ WSL panes. The generic abstraction in main and renderer.
 
 ## 2. The three agents' extension points (researched 2026-09-30)
 
-| Capability             | Claude Code (today)                                            | Codex CLI                                                                                                                                                                                                                | OpenCode (1.17.9 ✅)                                                                                      |
+| Capability             | Claude Code (today)                                            | Codex CLI                                                                                                                                                                                                                | OpenCode (1.18.34 ✅)                                                                                     |
 | ---------------------- | -------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------- |
 | Event source           | hooks (`--settings` file), `command` type                      | **hooks**, same names and fields as Claude 📄; `command` is a **string** (no args) 📄                                                                                                                                    | **JS plugin**: `event` hook for bus events + `tool.execute.before/after` ✅ (`@opencode-ai/plugin` types) |
-| Scoping to our panes   | shell wrapper → `claude --settings <file>`                     | shell wrapper → `codex -c <hooks override>` ❓ (does a `-c` hook list add to or replace the user's?)                                                                                                                     | env **`OPENCODE_CONFIG_CONTENT`** (inline config) ✅ exists; plugin merge semantics ❓                    |
+| Scoping to our panes   | shell wrapper → `claude --settings <file>`                     | shell wrapper → `codex -c <hooks override>`; **additive** to the user's hooks ✅ (S1-a)                                                                                                                                  | env **`OPENCODE_CONFIG_CONTENT`** (inline config); plugin list **merges** with the user's ✅ (S2-a)       |
 | Friction               | none                                                           | ⚠️ **hook trust**: an unreviewed hook is **skipped** with a startup warning to open `/hooks` 📄; trust is keyed on the hook definition's hash 📄                                                                         | `--pure` disables external plugins ✅ (user's choice → no board)                                          |
 | Session lifecycle      | SessionStart(source) / SessionEnd(reason)                      | SessionStart(`startup│resume│clear│compact`) / SessionEnd(`other`) 📄                                                                                                                                                    | `session.created/updated/deleted`, `session.status`, `session.idle`, `server.instance.disposed` ✅        |
 | Turn                   | UserPromptSubmit / Stop                                        | UserPromptSubmit / Stop (+`last_assistant_message`) / **Interrupt** 📄                                                                                                                                                   | `session.status` busy↔idle, `session.idle` ✅                                                             |
@@ -143,21 +143,21 @@ export interface AgentEvent {
 
 Mapping (normalisers own this table; the reducer only sees the left column):
 
-| Canonical         | Claude                | Codex                                                              | OpenCode (plugin projection)                                                                        |
-| ----------------- | --------------------- | ------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------- |
-| SessionStart      | SessionStart          | SessionStart                                                       | first event of a **root** session in this process (`session.created` w/o `parentID`, or first seen) |
-| SessionEnd        | SessionEnd            | SessionEnd                                                         | `session.deleted`; every live root on `server.instance.disposed` ❓                                 |
-| UserPromptSubmit  | UserPromptSubmit      | UserPromptSubmit                                                   | `session.status` → busy (root)                                                                      |
-| Stop              | Stop                  | Stop, **Interrupt**                                                | `session.idle` / `session.status` → idle (root)                                                     |
-| Notification      | Notification          | —                                                                  | `question.asked`                                                                                    |
-| PermissionRequest | —                     | PermissionRequest                                                  | `permission.asked`                                                                                  |
-| Pre/PostToolUse   | Pre/PostToolUse       | Pre/PostToolUse                                                    | `tool.execute.before/after`                                                                         |
-| SubagentStart     | SubagentStart         | SubagentStart                                                      | `session.created` **with** `parentID` (`parentAgentId` = parent unless it's the root)               |
-| SubagentStop      | SubagentStop          | SubagentStop                                                       | child `session.idle`                                                                                |
-| CwdChanged        | CwdChanged            | synthesised when `cwd` changes (normaliser keeps last per session) | —                                                                                                   |
-| FileChanged       | FileChanged           | from `apply_patch`/`Edit`/`Write` input (paths only)               | `file.edited`                                                                                       |
-| Worktree*         | Worktree*             | —                                                                  | —                                                                                                   |
-| TokenUsage        | main, from transcript | main, from rollout                                                 | plugin, from `message.updated` (accumulated in-plugin)                                              |
+| Canonical         | Claude                | Codex                                                              | OpenCode (plugin projection)                                                                                   |
+| ----------------- | --------------------- | ------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------- |
+| SessionStart      | SessionStart          | SessionStart                                                       | first event of a **root** session in this process (`session.created` w/o `parentID`, or first seen)            |
+| SessionEnd        | SessionEnd            | SessionEnd                                                         | `session.deleted` only. Quitting fires nothing ✅: the prompt returning or the plugin's pid dying ends it (F5) |
+| UserPromptSubmit  | UserPromptSubmit      | UserPromptSubmit                                                   | `session.status` → busy (root)                                                                                 |
+| Stop              | Stop                  | Stop, **Interrupt**                                                | `session.idle` / `session.status` → idle (root)                                                                |
+| Notification      | Notification          | —                                                                  | `question.asked`                                                                                               |
+| PermissionRequest | —                     | PermissionRequest                                                  | `permission.asked`                                                                                             |
+| Pre/PostToolUse   | Pre/PostToolUse       | Pre/PostToolUse                                                    | `tool.execute.before/after`                                                                                    |
+| SubagentStart     | SubagentStart         | SubagentStart                                                      | `session.created` **with** `parentID` (`parentAgentId` = parent unless it's the root)                          |
+| SubagentStop      | SubagentStop          | SubagentStop                                                       | child `session.idle`                                                                                           |
+| CwdChanged        | CwdChanged            | synthesised when `cwd` changes (normaliser keeps last per session) | —                                                                                                              |
+| FileChanged       | FileChanged           | from `apply_patch`/`Edit`/`Write` input (paths only)               | `file.edited`                                                                                                  |
+| Worktree*         | Worktree*             | —                                                                  | —                                                                                                              |
+| TokenUsage        | main, from transcript | main, from rollout                                                 | plugin, from `message.updated` (accumulated in-plugin)                                                         |
 
 `AgentNode` gains `agent: AgentKind`. A sub-agent attaches to `parentAgentId` when that node
 exists, else to its session root (two-level stays the default; OpenCode gets depth).
@@ -204,8 +204,10 @@ functions. OpenCode needs no function (env only).
 
 - `hook-events/<nonce>/<agent>/<paneId>.<pid>.<ts>.<rand>.json`, so the agent comes from the
   folder. The filename format is unchanged and `startHookWatcher` gets `depth: 1`.
-- **The drop root moves from the hook definition to an env var** `MINMUX_AGENT_EVENTS`
-  (WSLENV `/p`). Two reasons:
+- **The drop root moves from the hook definition to an env var** `MINMUX_AGENT_EVENTS`.
+  WSL panes get the **Windows** path, forwarded as `MINMUX_AGENT_EVENTS/p` so WSL translates
+  it (`C:\…` → `/mnt/c/…`) for writers inside the distro. This replaces today's separate
+  `/mnt/c`-addressed `claude-hooks.wsl.json`. Two reasons:
   1. Codex trusts a hook by the hash of its definition. Today the per-launch nonce dir is
      baked into the command, which would ask for a re-review on **every launch**. With the
      dir in the env, the definition is constant per profile: review once.
@@ -261,10 +263,15 @@ Generate the rc functions from adapter metadata. Add every new var to
   feeds the ledger or resume.
 - **OpenCode.** No function. Env
   `OPENCODE_CONFIG_CONTENT='{"plugin":["file://<cfg>/agents/opencode-plugin.js"]}'`
-  (WSL panes: a `/mnt/c` form, forwarded without `/p` since it's JSON, not a path).
+  (WSL panes: the plugin URL as a `/mnt/c` path, forwarded without `/p` since it's JSON, not a
+  path). **If the user already exports `OPENCODE_CONFIG_CONTENT`** (seen in main's env after
+  `shell-env.ts`), main parses it and appends our plugin to its `plugin` array instead of
+  replacing it; an unparseable value is left alone and OpenCode isn't armed in that pane.
   ✅ **S2-a**: the inline config's `plugin` list **merges** with the user's (a stand-in user
   plugin from their config loaded next to ours), and the plugin process sees
-  `MINMUX_PANE_ID`. No fallback needed. Works in fish/pwsh/nushell too, since no shell function is needed.
+  `MINMUX_PANE_ID`. No fallback needed. Arming works in fish/pwsh/nushell too, since no shell
+  function is needed. Ending a session there relies on the plugin pid check (F14), because
+  those shells send no "prompt returned" mark.
 
 ### F2. Event transport (file drops)
 
@@ -448,7 +455,12 @@ drop). `CLAUDE_COLORS` → `ACCENT_COLORS` (same eight).
   **set** with `/rename`, else none; always show the title as the name (banner, board).
   ✅ OpenCode stores no "renamed" flag (its `session` table has only `title`), but titles go
   `"New session - <date>"` → one automatic title → so **any later change is the user's**. The
-  plugin tracks that per session and sends `userNamed: true`.
+  plugin sends each title change with `{before, after, hadPrompt}`, and **main** decides and
+  persists it in the session's ledger entry (`userNamed`), so the answer survives a resume
+  (a new plugin process only sees the stored title). Rules: default → X before the first
+  prompt = user (OpenCode only auto-titles a default title after a prompt); default → X after
+  a prompt = automatic; any change from a non-default title = user. Limit: a session renamed
+  in an OpenCode run outside minmux comes back uncoloured.
 
 ### F13. Last reply snippet (sidebar)
 
@@ -476,7 +488,14 @@ Claude agent running `codex exec`).
 - **OpenCode.** The pane's lead is **the first opencode process (pid)** seen there. Its
   sessions switch freely (`/new`, session picker: the most recently _active_ root session
   leads). Sessions from another pid (an `opencode run` launched by the agent) are nested.
-  Child sessions are never roots.
+  Child sessions are never roots. **The lead also ends when its process is gone:** OpenCode
+  fires nothing on quit (S2-c), and shells without our integration (fish, pwsh, a cold WSL)
+  never send the returning-prompt mark. So main checks the lead pid with
+  `process.kill(pid, 0)` when another agent's SessionStart arrives in that pane, on each
+  resume plan, and every 10 s while an OpenCode lead without a prompt mark exists (one
+  syscall, off the hot path). A dead pid clears the lead and evicts its sessions. WSL pids
+  aren't visible from Windows: there the check is skipped and the prompt mark (zsh/bash in
+  WSL are integrated) stays the only signal.
 
 ### F15. Resume on relaunch
 
@@ -489,9 +508,12 @@ and the confirm signal are Claude's.
 **Add.** `LedgerEntry.agent`; `SessionRules.resumeCommand/safeId/cwdFits`; `ResumePlan.agent`;
 the banner uses `agent-kinds` labels and the picker command (`claude --resume`, `codex
 resume`, `opencode` + session list). **Compatibility (invariant: older builds read our
-files):** a non-Claude entry is written with `id` instead of `sessionId`, which the old
-loader requires, so an older build skips it instead of typing `claude --resume <codex-id>`.
-Claude entries are written exactly as today.
+files, and never lose what a newer build wrote):** Claude entries stay in
+`agent-sessions.json`, written exactly as today. Codex and OpenCode entries go in
+`agent-sessions.codex.json` / `agent-sessions.opencode.json`, which older builds never read
+or rewrite. So a downgrade neither types `claude --resume <codex-id>` nor deletes the other
+agents' entries. One `SessionLedger` keeps all three in memory and writes each file
+separately (same temp + rename, same freeze).
 
 - **Claude.** Unchanged.
 - **Codex.** `codex resume <id>`, `safeId` = the UUID regex (UUIDv7 fits ✅). No `cwdFits`:
@@ -535,13 +557,19 @@ light/dark, precmd mouse reset, click-to-open paths while mouse tracking is on. 
   no Codex hook event for 10 s gets a one-line hint above the terminal:
 
   > **Approve minmux in Codex to see every running agent live on the Agents board:** status,
-  > sub-agents, tokens, and resume after restart. One-time. [**Approve in Codex**] [Not now]
+  > sub-agents, tokens, and resume after restart. One-time: type **`/hooks`** in Codex, then
+  > press **t**. [**Show me**] [Not now]
 
-  **Approve in Codex** types `/hooks` into Codex (the one exception to "never type into a
-  running program": an explicit click, only while Codex sits at its input). **Not now** hides
-  it for this pane; after three dismissals it offers **Don't ask again** (stored in settings).
-  It uses the `integration-hint.tsx` pattern (in the pane's flow, never over the prompt).
-  Once any Codex hook event arrives on this profile, it never shows again.
+  minmux **never types** this for the user: it can't tell whether Codex sits at its input box
+  or at its own "Trust this folder?" / "Hooks need review" screens or mid-turn, where the
+  keys would pick an option or reach the model. **Show me** focuses the pane and copies
+  `/hooks` to the clipboard. **Not now** hides it for this pane; after three dismissals it
+  offers **Don't ask again** (stored in settings). It uses the `integration-hint.tsx`
+  pattern (in the pane's flow, never over the prompt).
+  It stops showing once a Codex hook event arrives **for the current definition**: main
+  stores the sha256 of each hook definition it arms (native and WSL differ: their paths
+  differ), and a seen-set of those hashes. A new minmux release that changes the definition,
+  or a first WSL pane, has an unseen hash, so the hint can return when it's needed.
 
 - Docs: GOTCHAS gets `#codex` and `#opencode` anchors; CLAUDE.md gains the invariant
   "**agent specifics live only in `electron/agents/<kind>.ts` + `src/lib/agent-kinds.ts`**".
@@ -571,33 +599,36 @@ light/dark, precmd mouse reset, click-to-open paths while mouse tracking is on. 
 
 | Risk                                                                                     | Mitigation                                                                                                                     |
 | ---------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
-| Codex `-c` hooks replace the user's own hooks                                            | S1-a before building; fallback Codex plugin; never ship a replacing override                                                   |
+| Codex `-c` hooks replace the user's own hooks                                            | ruled out by S1-a (additive); a fixture test asserts we only ever pass `-c hooks.<Event>` keys                                 |
 | Codex trust prompt confuses users ("minmux hooks need review")                           | a one-time hint in the pane when a Codex session starts but no hook event arrives (reuse the `integration-hint` pattern); docs |
 | Codex/OpenCode formats change (rollout "not stable" 📄)                                  | parse best-effort, never throw (GOTCHAS #claude-transcript rules extended); version-tagged fixtures                            |
-| OpenCode plugin merge semantics (inline config replaces plugins)                         | S2-a; fallback `OPENCODE_CONFIG_DIR` only when the user hasn't set it                                                          |
+| OpenCode arming clobbers the user's config                                               | S2-a showed plugin lists merge; a user-exported `OPENCODE_CONFIG_CONTENT` is merged, not replaced (F1)                         |
 | Plugin slows OpenCode                                                                    | filter-first, no awaited I/O; perf check in S2                                                                                 |
 | Renaming churn breaks invariants (same-reference store returns, `useShallow` primitives) | the refactor phase is behaviour-neutral with the existing test suite as the gate                                               |
-| Older build types `claude --resume <codex-id>`                                           | non-Claude ledger entries omit `sessionId` (§F15)                                                                              |
+| Older build types `claude --resume <codex-id>`, or deletes other agents' entries         | non-Claude entries live in their own ledger files (§F15)                                                                       |
+| A quit OpenCode keeps leading a pane without a prompt mark                               | lead pid liveness check (F14)                                                                                                  |
 
 ---
 
-## 8. Decisions needed
+## 8. Decisions (settled 2026-10-01)
 
-- **D1 — Codex hook trust.** Accept a one-time `/hooks` review (recommended: full feature
-  set), or ship "notify-only" (turn done + reply snippet via `-c notify=…`, no tree)?
-  Proposal: hooks, plus the review hint (F18) when Codex was launched but no hook event came.
-- **D2 — Defaults.** Codex and OpenCode arming on by default like Claude (recommended: yes,
-  since both are scoped and remove nothing), or opt-in?
-- **D3 — Colour from session names.** Codex names threads automatically too ✅ ("Run curl
-  HEAD request"), not only OpenCode. Colour from auto names (every pane coloured), only from
-  names the user set (recommended), or never?
+- **D1 — Codex hook trust: one-time `/hooks` approval.** Full feature set, plus the approval
+  hint (F18) when Codex was launched but no hook event came. Not the notify-only fallback, and
+  never `--dangerously-bypass-hook-trust` (it would also skip review of repo-provided hooks).
+- **D2 — On by default.** Codex and OpenCode are armed like Claude: scoped to minmux panes,
+  additive to the user's own hooks/plugins, no global config written. Settings keeps a
+  per-agent switch.
+- **D3 — Colour only from names the user set.** Codex and OpenCode both name sessions
+  automatically, so colouring from any name would colour every pane. Always show the name
+  (board, banner); colour only after a user rename (OpenCode: a title change after the
+  automatic one; Codex: per S1-g).
 
 ## 9. Spike results
 
 ### S1 — Codex hooks (2026-09-30, Codex CLI 0.159.2, sandboxed `CODEX_HOME`)
 
 Captured with a throwaway writer (stdin + env → file), once via `codex exec` and once in the
-interactive UI. Fixtures: 17 events from `exec` (Bash, `apply_patch`, one sub-agent) and 14
+interactive UI. Fixtures: 17 events from `exec` (Bash, `apply_patch`, one sub-agent) and 16
 from the UI (approval, Esc interrupt, stand-in user hooks).
 
 - ✅ **Scoping works and is additive (S1-a).** `-c hooks.<Event>=[…]` shows up as its own
