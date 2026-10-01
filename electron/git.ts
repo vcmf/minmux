@@ -160,19 +160,22 @@ async function run(
 
 const NULL_DEVICE = process.platform === "win32" ? "NUL" : "/dev/null"
 
+// A hung git (network mount, fsmonitor, lock wait) mustn't stop the sequential poll for good.
+const STATUS_LIMITS = { timeout: 20_000 }
 // A repo with more changes than this reports the first STATUS_CAP (+ the real total):
 // shipping and rendering tens of thousands of rows every poll would stall the app.
-export // A hung git (network mount, fsmonitor, lock wait) mustn't stop the sequential poll for good.
-const STATUS_LIMITS = { timeout: 20_000 }
-const STATUS_CAP = 5000
+export const STATUS_CAP = 5000
 // Untracked files get a "+N lines" count read off disk; only this many per poll (async).
 const COUNT_UNTRACKED = 200
 // A new folder with at most SMALL_DIR files (git's view: ignored ones excluded) lists them
 // as rows with diffs, like any change; a bigger one (node_modules) stays one row. Checked for
-// the first EXPAND_DIRS folders per poll; a listing past SMALL_DIR_BYTES is cut off early.
-export const SMALL_DIR = 50
+// the first EXPAND_DIRS folders per poll; a listing past maxBuffer is cut off early. A folder
+// found big isn't re-walked for BIG_DIR_TTL (node_modules would cost a full walk every poll).
+const SMALL_DIR = 50
 const EXPAND_DIRS = 20
-const SMALL_DIR_LIMITS = { maxBuffer: 32 * 1024, timeout: 3000 }
+const SMALL_DIR_LIMITS = { maxBuffer: 64 * 1024, timeout: 3000 }
+const BIG_DIR_TTL = 60_000
+const bigDirs = new Map<string, number>() // abs folder → when to check again
 
 /** `old -> new` from a porcelain rename line, split outside quotes (raw, still quoted). */
 export function splitRename(s: string): [string, string] | null {
@@ -262,12 +265,25 @@ export function expandDirs(
 ): StatusEntry[] {
   return entries.flatMap((e) => {
     const files = e.isDir ? listings.get(e.path) : null
-    return files?.length ? files.map((f) => ({ xy: "??", path: f, isDir: false })) : [e]
+    if (!files?.length) return [e]
+    // A nested repo (its own .git) is listed as "dir/": it stays a folder row.
+    return files.map((f) =>
+      f.endsWith("/")
+        ? { xy: "??", path: f.slice(0, -1), isDir: true }
+        : { xy: "??", path: f, isDir: false },
+    )
   })
 }
 
 /** Files git would report under an untracked `dir` (root-relative), or null if > SMALL_DIR. */
 async function smallDirFiles(base: string, dir: string, wsl?: WslCtx): Promise<string[] | null> {
+  const key = `${wsl ? `wsl:${wsl.distro ?? ""}:` : ""}${base}/${dir}`
+  if ((bigDirs.get(key) ?? 0) > Date.now()) return null
+  const big = () => {
+    if (bigDirs.size >= 500) bigDirs.delete(bigDirs.keys().next().value!)
+    bigDirs.set(key, Date.now() + BIG_DIR_TTL)
+    return null
+  }
   try {
     const out = await run(
       base,
@@ -276,9 +292,9 @@ async function smallDirFiles(base: string, dir: string, wsl?: WslCtx): Promise<s
       SMALL_DIR_LIMITS,
     )
     const files = out.split("\0").filter(Boolean)
-    return files.length <= SMALL_DIR ? files : null
+    return files.length <= SMALL_DIR ? files : big()
   } catch {
-    return null // too big (cut off at maxBuffer), too slow, or failed: keep the folder row
+    return big() // too big (cut off at maxBuffer), too slow, or failed: keep the folder row
   }
 }
 
@@ -297,12 +313,14 @@ export async function gitStatus(cwd: string, wsl?: WslCtx): Promise<GitStatus> {
       wsl,
       STATUS_LIMITS,
     )
-  } catch {
+  } catch (e) {
+    // Timed out: not "not a repo" — reject, and the poller keeps the last status.
+    if ((e as { killed?: boolean }).killed) throw e
     return empty // not a git repo (or git missing)
   }
 
   const parsed = parseStatusEntries(porcelain)
-  const { header, total } = parsed
+  const { header } = parsed
   const { branch, ahead, behind } = parseBranchLine(header)
 
   // Independent: run both at once (each is a process spawn — a wsl.exe round trip on WSL).
@@ -321,7 +339,10 @@ export async function gitStatus(cwd: string, wsl?: WslCtx): Promise<GitStatus> {
   await inBatches(dirs, 4, async (e) =>
     listings.set(e.path, await smallDirFiles(base, e.path, wsl)),
   )
-  const entries = expandDirs(parsed.entries, listings)
+  const expanded = expandDirs(parsed.entries, listings)
+  // A folder's files are rows like any other: count them, and keep the row cap.
+  const total = parsed.total + expanded.length - parsed.entries.length
+  const entries = expanded.slice(0, STATUS_CAP)
 
   // Untracked files get a "+N lines" count off disk: only the first COUNT_UNTRACKED per poll,
   // a few at a time, cached by size+mtime, counting newline bytes (no decode). Never a folder,
@@ -385,15 +406,15 @@ export async function gitDiff(cwd: string, file: string, wsl?: WslCtx): Promise<
     return null
   }
   let out: string
-  let noHead = false
+  let failed = false
   try {
     // Literal: a path like app/[id]/page.tsx is a file name, not a glob.
     out = await run(cwd, ["--literal-pathspecs", "diff", "HEAD", "--", file], wsl, DIFF_LIMITS)
   } catch (e) {
     const cut = limited(e)
     if (cut) return cut
-    out = "" // bad revision HEAD (no commits yet)
-    noHead = true
+    out = "" // bad revision HEAD (no commits yet) — checked below
+    failed = true
   }
   if (out.trim()) return parseDiff(out)
   // Nothing vs HEAD: an untracked file (or no HEAD yet) → diff against the null device. A
@@ -405,7 +426,16 @@ export async function gitDiff(cwd: string, file: string, wsl?: WslCtx): Promise<
   } catch {
     // treat as untracked
   }
-  if (tracked.trim() && !noHead) return [] // with no HEAD, a staged file is all new
+  if (tracked.trim()) {
+    // With no HEAD (no commits yet) a staged file is all new; any other failure: no diff.
+    const noHead =
+      failed &&
+      (await run(cwd, ["rev-parse", "--verify", "-q", "HEAD"], wsl).then(
+        () => false,
+        () => true,
+      ))
+    if (!noHead) return []
+  }
   try {
     return parseDiff(await run(cwd, ["diff", "--no-index", "--", nul, file], wsl, DIFF_LIMITS))
   } catch (e) {

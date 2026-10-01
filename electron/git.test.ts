@@ -179,6 +179,13 @@ describe("expandDirs (small new folders list their files)", () => {
     expect(out.map((x) => x.path)).toEqual(["a.ts", "feat/x.ts", "feat/y/z.ts", "docs"])
     expect(out[1]).toEqual({ xy: "??", path: "feat/x.ts", isDir: false })
   })
+  it("a nested repo inside (listed as dir/) stays a folder row", () => {
+    const out = expandDirs(e, new Map([["feat", ["feat/a.ts", "feat/vendor/"]]]))
+    expect(out.filter((x) => x.path.startsWith("feat"))).toEqual([
+      { xy: "??", path: "feat/a.ts", isDir: false },
+      { xy: "??", path: "feat/vendor", isDir: true },
+    ])
+  })
   it("an unchecked or empty listing keeps the row", () => {
     expect(expandDirs(e, new Map([["feat", []]]))).toEqual(e)
   })

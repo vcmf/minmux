@@ -96,7 +96,7 @@ export function DiffPanel() {
                 onMouseDown={(e) => e.button === 0 && openFolder(f.path)}
                 onContextMenu={(e) =>
                   openFileMenu(e, {
-                    abs: root ? `${root}/${f.path}` : f.path,
+                    abs: root ? joinPath(root, f.path) : f.path,
                     rel: f.path,
                     isDir: true,
                   })
@@ -120,7 +120,7 @@ export function DiffPanel() {
                 onMouseDown={(e) => e.button === 0 && setSelected(f.path)}
                 onContextMenu={(e) =>
                   openFileMenu(e, {
-                    abs: root ? `${root}/${f.path}` : f.path,
+                    abs: root ? joinPath(root, f.path) : f.path,
                     rel: f.path,
                     isDir: false,
                   })
