@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest"
 import {
+  expandDirs,
   splitRename,
   unquotePath,
   parseStatusEntries,
@@ -158,5 +159,27 @@ describe("renames and quoting (status ↔ numstat must agree)", () => {
     const m = parseNumstat("2\t0\tlib/{sub => }/x.ts\n4\t1\t{ => src}/y.ts\n")
     expect(m.get("lib/x.ts")).toEqual({ add: 2, del: 0 })
     expect(m.get("src/y.ts")).toEqual({ add: 4, del: 1 })
+  })
+})
+
+describe("expandDirs (small new folders list their files)", () => {
+  const e = [
+    { xy: " M", path: "a.ts", isDir: false },
+    { xy: "??", path: "feat", isDir: true },
+    { xy: "??", path: "docs", isDir: true },
+  ]
+  it("puts a small folder's files in its place; a big (null) one stays one row", () => {
+    const out = expandDirs(
+      e,
+      new Map([
+        ["feat", ["feat/x.ts", "feat/y/z.ts"]],
+        ["docs", null],
+      ]),
+    )
+    expect(out.map((x) => x.path)).toEqual(["a.ts", "feat/x.ts", "feat/y/z.ts", "docs"])
+    expect(out[1]).toEqual({ xy: "??", path: "feat/x.ts", isDir: false })
+  })
+  it("an unchecked or empty listing keeps the row", () => {
+    expect(expandDirs(e, new Map([["feat", []]]))).toEqual(e)
   })
 })

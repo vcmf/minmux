@@ -139,6 +139,25 @@ describe.skipIf(!hasGit)(
       expect(st.files.find((f) => f.isDir)?.add).toBe(0) // a folder is never line-counted
     })
 
+    it("a small new folder lists its files (diffable, counted); ignored ones stay out", async () => {
+      const feat = path.join(dir, "feat")
+      fs.mkdirSync(path.join(feat, "b"), { recursive: true })
+      fs.writeFileSync(path.join(feat, "a.ts"), "1\n2\n")
+      fs.writeFileSync(path.join(feat, "b", "c.ts"), "1\n")
+      fs.writeFileSync(path.join(feat, ".env"), "SECRET=1\n")
+      try {
+        const st = await gitStatus(path.join(dir, "sub")) // listed from the repo root
+        const got = st.files.filter((f) => f.path.startsWith("feat"))
+        expect(got.map((f) => [f.path, f.status, f.add, !!f.isDir])).toEqual([
+          ["feat/a.ts", "?", 2, false],
+          ["feat/b/c.ts", "?", 1, false],
+        ])
+        expect(st.files.some((f) => f.path === "docs" && f.isDir)).toBe(true) // 300 files: one row
+      } finally {
+        fs.rmSync(feat, { recursive: true, force: true })
+      }
+    })
+
     it("from a terminal in a subfolder, untracked counts still resolve from the repo root", async () => {
       const st = await gitStatus(path.join(dir, "sub"))
       expect(st.files.find((f) => f.path === "sub/new.txt")?.add).toBe(2)

@@ -167,6 +167,12 @@ const STATUS_LIMITS = { timeout: 20_000 }
 const STATUS_CAP = 5000
 // Untracked files get a "+N lines" count read off disk; only this many per poll (async).
 const COUNT_UNTRACKED = 200
+// A new folder with at most SMALL_DIR files (git's view: ignored ones excluded) lists them
+// as rows with diffs, like any change; a bigger one (node_modules) stays one row. Checked for
+// the first EXPAND_DIRS folders per poll; a listing past SMALL_DIR_BYTES is cut off early.
+export const SMALL_DIR = 50
+const EXPAND_DIRS = 20
+const SMALL_DIR_LIMITS = { maxBuffer: 32 * 1024, timeout: 3000 }
 
 /** `old -> new` from a porcelain rename line, split outside quotes (raw, still quoted). */
 export function splitRename(s: string): [string, string] | null {
@@ -220,13 +226,15 @@ export function unquotePath(p: string): string {
   return Buffer.from(bytes).toString("utf8")
 }
 
+type StatusEntry = { xy: string; path: string; isDir: boolean }
+
 /** `git status --porcelain=v1 -b` → header + capped entries (`dir/` = an untracked folder). */
 export function parseStatusEntries(
   porcelain: string,
   cap = STATUS_CAP,
-): { header: string; entries: { xy: string; path: string; isDir: boolean }[]; total: number } {
+): { header: string; entries: StatusEntry[]; total: number } {
   let header = "## "
-  const entries: { xy: string; path: string; isDir: boolean }[] = []
+  const entries: StatusEntry[] = []
   let total = 0
   for (const line of porcelain.split("\n")) {
     if (!line) continue
@@ -245,6 +253,33 @@ export function parseStatusEntries(
     entries.push({ xy, path: isDir ? p.slice(0, -1) : p, isDir })
   }
   return { header, entries, total }
+}
+
+/** Replace each listed untracked folder by its files (in its place); null = keep the row. */
+export function expandDirs(
+  entries: StatusEntry[],
+  listings: Map<string, string[] | null>,
+): StatusEntry[] {
+  return entries.flatMap((e) => {
+    const files = e.isDir ? listings.get(e.path) : null
+    return files?.length ? files.map((f) => ({ xy: "??", path: f, isDir: false })) : [e]
+  })
+}
+
+/** Files git would report under an untracked `dir` (root-relative), or null if > SMALL_DIR. */
+async function smallDirFiles(base: string, dir: string, wsl?: WslCtx): Promise<string[] | null> {
+  try {
+    const out = await run(
+      base,
+      ["--literal-pathspecs", "ls-files", "-z", "--others", "--exclude-standard", "--", dir],
+      wsl,
+      SMALL_DIR_LIMITS,
+    )
+    const files = out.split("\0").filter(Boolean)
+    return files.length <= SMALL_DIR ? files : null
+  } catch {
+    return null // too big (cut off at maxBuffer), too slow, or failed: keep the folder row
+  }
 }
 
 /** Working-tree status for a directory: branch, ahead/behind, changed files. */
@@ -266,7 +301,8 @@ export async function gitStatus(cwd: string, wsl?: WslCtx): Promise<GitStatus> {
     return empty // not a git repo (or git missing)
   }
 
-  const { header, entries, total } = parseStatusEntries(porcelain)
+  const parsed = parseStatusEntries(porcelain)
+  const { header, total } = parsed
   const { branch, ahead, behind } = parseBranchLine(header)
 
   // Independent: run both at once (each is a process spawn — a wsl.exe round trip on WSL).
@@ -279,6 +315,13 @@ export async function gitStatus(cwd: string, wsl?: WslCtx): Promise<GitStatus> {
   const numstat = parseNumstat(numstatOut)
   const root = rootOut.trim()
   const base = root || cwd
+
+  const dirs = parsed.entries.filter((e) => e.isDir && statusOf(e.xy) === "?").slice(0, EXPAND_DIRS)
+  const listings = new Map<string, string[] | null>()
+  await inBatches(dirs, 4, async (e) =>
+    listings.set(e.path, await smallDirFiles(base, e.path, wsl)),
+  )
+  const entries = expandDirs(parsed.entries, listings)
 
   // Untracked files get a "+N lines" count off disk: only the first COUNT_UNTRACKED per poll,
   // a few at a time, cached by size+mtime, counting newline bytes (no decode). Never a folder,
