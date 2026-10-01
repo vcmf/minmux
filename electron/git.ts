@@ -160,8 +160,9 @@ async function run(
 
 const NULL_DEVICE = process.platform === "win32" ? "NUL" : "/dev/null"
 
-// A hung git (network mount, fsmonitor, lock wait) mustn't stop the sequential poll for good.
-const STATUS_LIMITS = { timeout: 20_000 }
+// A hung git (network mount, fsmonitor, lock wait) mustn't stop the sequential poll for good;
+// generous, so only a truly stuck git hits it (then it reads like any git failure).
+const STATUS_LIMITS = { timeout: 60_000 }
 // A repo with more changes than this reports the first STATUS_CAP (+ the real total):
 // shipping and rendering tens of thousands of rows every poll would stall the app.
 export const STATUS_CAP = 5000
@@ -169,12 +170,12 @@ export const STATUS_CAP = 5000
 const COUNT_UNTRACKED = 200
 // A new folder with at most SMALL_DIR files (git's view: ignored ones excluded) lists them
 // as rows with diffs, like any change; a bigger one (node_modules) stays one row. Checked for
-// the first EXPAND_DIRS folders per poll; a listing past maxBuffer is cut off early. A folder
-// found big isn't re-walked for BIG_DIR_TTL (node_modules would cost a full walk every poll).
+// the first EXPAND_DIRS folders per poll (an output past maxBuffer is dropped). git walks a
+// folder in full before printing, so one found big isn't re-walked for BIG_DIR_TTL.
 const SMALL_DIR = 50
-const EXPAND_DIRS = 20
+const EXPAND_DIRS = 10
 const SMALL_DIR_LIMITS = { maxBuffer: 64 * 1024, timeout: 3000 }
-const BIG_DIR_TTL = 60_000
+const BIG_DIR_TTL = 5 * 60_000
 const bigDirs = new Map<string, number>() // abs folder → when to check again
 
 /** `old -> new` from a porcelain rename line, split outside quotes (raw, still quoted). */
@@ -275,11 +276,23 @@ export function expandDirs(
   })
 }
 
+const dirKey = (base: string, dir: string, wsl?: WslCtx) =>
+  `${wsl ? `wsl:${wsl.distro ?? ""}:` : ""}${base}/${dir}`
+
+/** Still inside its BIG_DIR_TTL (an expired entry is dropped). */
+function knownBig(key: string): boolean {
+  const until = bigDirs.get(key)
+  if (until === undefined) return false
+  if (until > Date.now()) return true
+  bigDirs.delete(key)
+  return false
+}
+
 /** Files git would report under an untracked `dir` (root-relative), or null if > SMALL_DIR. */
 async function smallDirFiles(base: string, dir: string, wsl?: WslCtx): Promise<string[] | null> {
-  const key = `${wsl ? `wsl:${wsl.distro ?? ""}:` : ""}${base}/${dir}`
-  if ((bigDirs.get(key) ?? 0) > Date.now()) return null
+  const key = dirKey(base, dir, wsl)
   const big = () => {
+    bigDirs.delete(key) // re-insert at the end: eviction drops the least recently found
     if (bigDirs.size >= 500) bigDirs.delete(bigDirs.keys().next().value!)
     bigDirs.set(key, Date.now() + BIG_DIR_TTL)
     return null
@@ -313,10 +326,8 @@ export async function gitStatus(cwd: string, wsl?: WslCtx): Promise<GitStatus> {
       wsl,
       STATUS_LIMITS,
     )
-  } catch (e) {
-    // Timed out: not "not a repo" — reject, and the poller keeps the last status.
-    if ((e as { killed?: boolean }).killed) throw e
-    return empty // not a git repo (or git missing)
+  } catch {
+    return empty // not a git repo, git missing, or stuck past STATUS_LIMITS
   }
 
   const parsed = parseStatusEntries(porcelain)
@@ -334,7 +345,12 @@ export async function gitStatus(cwd: string, wsl?: WslCtx): Promise<GitStatus> {
   const root = rootOut.trim()
   const base = root || cwd
 
-  const dirs = parsed.entries.filter((e) => e.isDir && statusOf(e.xy) === "?").slice(0, EXPAND_DIRS)
+  // Root-relative folder paths need the root; folders already known big don't take a slot.
+  const dirs = root
+    ? parsed.entries
+        .filter((e) => e.isDir && statusOf(e.xy) === "?" && !knownBig(dirKey(root, e.path, wsl)))
+        .slice(0, EXPAND_DIRS)
+    : []
   const listings = new Map<string, string[] | null>()
   await inBatches(dirs, 4, async (e) =>
     listings.set(e.path, await smallDirFiles(base, e.path, wsl)),
@@ -422,7 +438,7 @@ export async function gitDiff(cwd: string, file: string, wsl?: WslCtx): Promise<
   // shown as wholly added.
   let tracked = ""
   try {
-    tracked = await run(cwd, ["--literal-pathspecs", "ls-files", "--", file], wsl)
+    tracked = await run(cwd, ["--literal-pathspecs", "ls-files", "--", file], wsl, DIFF_LIMITS)
   } catch {
     // treat as untracked
   }
@@ -430,7 +446,7 @@ export async function gitDiff(cwd: string, file: string, wsl?: WslCtx): Promise<
     // With no HEAD (no commits yet) a staged file is all new; any other failure: no diff.
     const noHead =
       failed &&
-      (await run(cwd, ["rev-parse", "--verify", "-q", "HEAD"], wsl).then(
+      (await run(cwd, ["rev-parse", "--verify", "-q", "HEAD"], wsl, DIFF_LIMITS).then(
         () => false,
         () => true,
       ))
