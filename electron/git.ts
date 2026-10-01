@@ -306,8 +306,10 @@ async function smallDirFiles(base: string, dir: string, wsl?: WslCtx): Promise<s
     )
     const files = out.split("\0").filter(Boolean)
     return files.length <= SMALL_DIR ? files : big()
-  } catch {
-    return big() // too big (cut off at maxBuffer), too slow, or failed: keep the folder row
+  } catch (e) {
+    // Too much output = big (remembered); slow or failed: keep the row, try again next poll.
+    const code = (e as { code?: string }).code
+    return code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER" ? big() : null
   }
 }
 
@@ -322,7 +324,7 @@ export async function gitStatus(cwd: string, wsl?: WslCtx): Promise<GitStatus> {
     // 35k entries back.
     porcelain = await run(
       cwd,
-      ["status", "--porcelain=v1", "-b", "--untracked-files=normal"],
+      ["--no-optional-locks", "status", "--porcelain=v1", "-b", "--untracked-files=normal"],
       wsl,
       STATUS_LIMITS,
     )
@@ -436,11 +438,11 @@ export async function gitDiff(cwd: string, file: string, wsl?: WslCtx): Promise<
   // Nothing vs HEAD: an untracked file (or no HEAD yet) → diff against the null device. A
   // TRACKED file that matches HEAD (edited back, a phantom CRLF change) stays empty — never
   // shown as wholly added.
-  let tracked = ""
+  let tracked: string
   try {
     tracked = await run(cwd, ["--literal-pathspecs", "ls-files", "--", file], wsl, DIFF_LIMITS)
   } catch {
-    // treat as untracked
+    return [] // can't tell: never risk showing a tracked file as wholly added
   }
   if (tracked.trim()) {
     // With no HEAD (no commits yet) a staged file is all new; any other failure: no diff.
@@ -448,7 +450,7 @@ export async function gitDiff(cwd: string, file: string, wsl?: WslCtx): Promise<
       failed &&
       (await run(cwd, ["rev-parse", "--verify", "-q", "HEAD"], wsl, DIFF_LIMITS).then(
         () => false,
-        () => true,
+        (e: { code?: unknown }) => e.code === 1, // exit 1 = no HEAD; a kill/error isn't
       ))
     if (!noHead) return []
   }
