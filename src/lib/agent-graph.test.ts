@@ -444,7 +444,7 @@ describe("agent kinds + explicit parents (multi-agent)", () => {
     expect(Object.keys(dropped.nodes)).toEqual([])
   })
 
-  it("PermissionRequest waits; a parallel tool finishing keeps it waiting; the next tool resumes", () => {
+  it("PermissionRequest waits; a parallel tool finishing keeps it waiting; the approved one resumes", () => {
     const g1 = reduceAgentEvents([
       { agent: "codex", event: "SessionStart", sessionId: "c" },
       { agent: "codex", event: "PreToolUse", sessionId: "c", toolName: "Read" },
@@ -453,7 +453,12 @@ describe("agent kinds + explicit parents (multi-agent)", () => {
     expect(g1.nodes["root:c"]!.status).toBe("waiting")
     const g2 = reduceAgentEvent(g1, { agent: "codex", event: "PostToolUse", sessionId: "c" })
     expect(g2.nodes["root:c"]!.status).toBe("waiting") // the approval is still pending
-    const g3 = reduceAgentEvent(g2, { agent: "codex", event: "PreToolUse", sessionId: "c" })
+    const g3 = reduceAgentEvent(g2, {
+      agent: "codex",
+      event: "PostToolUse",
+      sessionId: "c",
+      toolName: "Bash",
+    })
     expect(g3.nodes["root:c"]!.status).toBe("working")
   })
 
@@ -542,5 +547,45 @@ describe("agentByPane / paneAgents", () => {
   it("decodes agentPanes' flat list back into the same lookup", () => {
     expect(paneAgents(agentPanes(g))).toEqual(agentByPane(g))
     expect(paneAgents([])).toEqual({})
+  })
+})
+
+describe("a pending approval vs racing hook drops (Codex)", () => {
+  const S = { agent: "codex" as const, sessionId: "c" }
+  const call = (event: string, key: string, more: Partial<AgentEvent> = {}): AgentEvent => ({
+    ...S,
+    event,
+    toolName: "Bash",
+    toolKey: key,
+    ...more,
+  })
+  const perm = call("PermissionRequest", "Bash:rm")
+  const pre = call("PreToolUse", "Bash:rm")
+  const status = (evs: AgentEvent[], id = "root:c") =>
+    reduceAgentEvents([{ ...S, event: "SessionStart" }, ...evs]).nodes[id]!.status
+  it("waits whichever of the call's PreToolUse / PermissionRequest lands first", () => {
+    expect(status([pre, perm])).toBe("waiting")
+    expect(status([perm, pre])).toBe("waiting")
+  })
+  it("another call (even of the same tool) finishing leaves it waiting; the call itself ends it", () => {
+    expect(status([perm, pre, call("PostToolUse", "Bash:ls")])).toBe("waiting")
+    expect(status([perm, pre, call("PostToolUse", "Bash:rm")])).toBe("working")
+  })
+  it("a different call starting means the agent moved on (approved or denied)", () => {
+    expect(status([perm, pre, call("PreToolUse", "Read:x", { toolName: "Read" })])).toBe("working")
+  })
+  it("the turn ending, a new prompt or a restart forgets it", () => {
+    expect(status([perm, { ...S, event: "Stop" }])).toBe("idle")
+    expect(status([perm, { ...S, event: "Stop" }, { ...S, event: "UserPromptSubmit" }, pre])).toBe(
+      "working",
+    )
+    expect(status([perm, { ...S, event: "SessionStart", source: "resume" }, pre])).toBe("working")
+  })
+  it("a sub-agent's approval waits it and its session; Stop forgets it for the next turn", () => {
+    const sub = (e: AgentEvent): AgentEvent => ({ ...e, agentId: "a1" })
+    const evs = [{ ...S, event: "SubagentStart", agentId: "a1" }, sub(perm), sub(pre)]
+    expect(status(evs, "a1")).toBe("waiting")
+    expect(status(evs)).toBe("waiting")
+    expect(status([...evs, { ...S, event: "Stop" }, sub(pre)], "a1")).toBe("working")
   })
 })

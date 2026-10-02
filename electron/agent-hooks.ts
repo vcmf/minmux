@@ -83,14 +83,20 @@ export async function startHookWatcher(opts: HookWatcherOptions): Promise<HookWa
           } catch {
             return // partial/corrupt drop — skip
           }
-          // Filename is `<paneId>.<pid>.<ts>.<rand>.json`; pane ids are UUIDs (no dots).
+          // Filename is `<paneId>.<agent pid>.<ts>.<rand>.json`; pane ids are UUIDs (no dots).
           const parts = path.basename(file).split(".")
           const paneId = parts[0] || undefined
           let ev: AgentEvent | null = null
           try {
             const out = agent.normalize(raw, paneId)
-            // The folder says which agent wrote it — never trust a normaliser to say so.
-            ev = out && { ...out, agent: agent.kind }
+            const pid = Number(parts[1])
+            // The folder says which agent wrote it — never trust a normaliser to say so — and
+            // the filename which process ran the hook (an agent's lead rule may need it).
+            ev = out && {
+              ...out,
+              agent: agent.kind,
+              ...(Number.isInteger(pid) && pid > 1 ? { pid } : {}), // 1: orphaned, unknown
+            }
           } catch {
             // a normaliser must never take down the watcher
           }

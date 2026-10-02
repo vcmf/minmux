@@ -5,11 +5,12 @@ import { mergeSettings } from "../settings/schema"
 import type { Settings } from "../settings/schema"
 import { useEffect, useState } from "react"
 import { ThemePicker } from "./theme-picker"
-import { AVAILABLE_AGENTS, agentInfo } from "../lib/agent-kinds"
+import { agentInfo, agentsOn } from "../lib/agent-kinds"
 
 export function SettingsPanel() {
   const settings = useStore((s) => s.settings)
   const shells = useStore((s) => s.shells)
+  const platform = useStore((s) => s.platform)
   const [path, setPath] = useState("")
 
   useEffect(() => {
@@ -135,7 +136,7 @@ export function SettingsPanel() {
         </label>
 
         <h3 className="settings-section">Agents</h3>
-        {AVAILABLE_AGENTS.map((k) => (
+        {agentsOn(platform).map((k) => (
           <label
             className="settings-row"
             key={k}

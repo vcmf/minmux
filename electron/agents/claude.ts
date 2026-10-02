@@ -3,6 +3,7 @@
 // where its tokens come from, and its resume / lead rules. Everything Claude-specific in the
 // main process lives here.
 
+import { createHash } from "node:crypto"
 import fs from "node:fs"
 import path from "node:path"
 import type { AgentEvent } from "../../src/lib/agent-graph"
@@ -54,6 +55,19 @@ export function buildHookSettings(): string {
 // tool_input keys that carry a file path, across the file-touching tools.
 const FILE_TOOL_KEYS = ["file_path", "path", "notebook_path"] as const
 
+/** One tool call's identity: its name + a hash of what it runs. An approval prompt carries no
+ *  call id, but the same input (Codex adds a `description` to it, left out here), so this
+ *  matches a PermissionRequest to its PreToolUse / PostToolUse. Bounded, content-free. */
+export function toolCallKey(toolName: string, input: Record<string, unknown>): string {
+  const { description, ...rest } = input
+  void description
+  const what = typeof rest.command === "string" ? rest.command : JSON.stringify(rest)
+  return `${toolName}:${createHash("sha1")
+    .update(what.slice(0, 64 * 1024))
+    .digest("hex")
+    .slice(0, 16)}`
+}
+
 /** Raw hook JSON (+ the pane id parsed from the drop file's name) → the normalised
  *  AgentEvent; null if the payload lacks the minimum (event name + session id). */
 export function normalizeHookEvent(raw: unknown, paneId?: string): AgentEvent | null {
@@ -67,6 +81,7 @@ export function normalizeHookEvent(raw: unknown, paneId?: string): AgentEvent | 
   const filePath = FILE_TOOL_KEYS.map((k) => ti[k]).find((v) => typeof v === "string") as
     string | undefined
   const str = (v: unknown) => (typeof v === "string" ? v : undefined)
+  const toolName = str(r.tool_name)
   return {
     agent: "claude",
     event: r.hook_event_name,
@@ -75,7 +90,8 @@ export function normalizeHookEvent(raw: unknown, paneId?: string): AgentEvent | 
     agentId: str(r.agent_id),
     agentType: str(r.agent_type),
     cwd: str(r.cwd),
-    toolName: str(r.tool_name),
+    toolName,
+    toolKey: toolName && r.tool_input !== undefined ? toolCallKey(toolName, ti) : undefined,
     filePath,
     message: str(r.message) ?? str(r.last_assistant_message),
     worktreePath: str(r.worktree_path),
@@ -90,7 +106,7 @@ export function normalizeHookEvent(raw: unknown, paneId?: string): AgentEvent | 
 
 // Claude session ids are UUIDs; permission modes are single words. Anything else never
 // reaches a command line we type into a shell.
-const SAFE_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+export const SAFE_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const SAFE_MODE = /^[A-Za-z]{1,32}$/
 
 /** The resume command for an entry (null if its id can't be trusted). */
@@ -119,13 +135,15 @@ export const claudeShell: AgentShell = {
     "# observe its sessions/sub-agents. Only when minmux provides the file; the user's",
     "# global ~/.claude config is untouched. (M6 — docs/design/AGENT_OBSERVABILITY.md)",
     'if [[ -o interactive && -n "${MINMUX_CLAUDE_SETTINGS-}" ]]; then',
-    '  claude() { command claude --settings "$MINMUX_CLAUDE_SETTINGS" "$@" }',
+    // `function name`, not `name()`: a user alias of the same name would be expanded inside
+    // `name() {` and fail the whole rc with a parse error.
+    '  function claude { command claude --settings "$MINMUX_CLAUDE_SETTINGS" "$@" }',
     "fi",
   ],
   bash: [
     "# Route `claude` through minmux's scoped hook settings (agents board — M6).",
     'if [[ $- == *i* && -n "${MINMUX_CLAUDE_SETTINGS-}" ]]; then',
-    '  claude() { command claude --settings "$MINMUX_CLAUDE_SETTINGS" "$@"; }',
+    '  function claude { command claude --settings "$MINMUX_CLAUDE_SETTINGS" "$@"; }',
     "fi",
   ],
   env: ["MINMUX_CLAUDE_SETTINGS"],

@@ -4,6 +4,7 @@ import os from "node:os"
 import path from "node:path"
 import { SessionLedger } from "./agent-sessions"
 import { claudeSessionRules, resumeCommand } from "./agents/claude"
+import { codexSessionRules } from "./agents/codex"
 import { claudeProjectDirName } from "../src/lib/claude-project"
 import type { AgentEvent } from "../src/lib/agent-graph"
 
@@ -567,6 +568,21 @@ describe("per-agent rules and files (multi-agent)", () => {
     const THIRD = "88888888-2222-4333-8444-555555555555"
     l.apply(codexStart({ sessionId: THIRD, source: "new" }))
     expect(l.get("p1")?.sessionId).toBe(THIRD) // a fresh session that is a switch replaces it
+  })
+
+  it("Codex: a new thread in the leading process switches; another process's is nested", () => {
+    const l = new SessionLedger(null, Date.now, {
+      claude: claudeSessionRules,
+      codex: codexSessionRules,
+    })
+    const T2 = "22222222-2222-4333-8444-555555555555"
+    const T3 = "33333333-2222-4333-8444-555555555555"
+    l.apply(codexStart({ pid: 100 }))
+    l.apply(codexStart({ sessionId: T2, pid: 100 })) // `/new` in the same TUI
+    expect(l.get("p1")?.sessionId).toBe(T2)
+    l.apply(codexStart({ sessionId: T3, pid: 200 })) // `codex exec` started by the agent
+    expect(l.get("p1")?.sessionId).toBe(T2)
+    expect(l.isNested("p1", T3)).toBe(true)
   })
 
   it("never records an agent it has no rules for", () => {

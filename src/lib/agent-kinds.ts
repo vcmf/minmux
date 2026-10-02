@@ -8,6 +8,7 @@ export interface AgentKindInfo {
   command: string // what starts it in a shell
   resumePicker: string // opens the agent's own session picker
   worktreeMarkers: string[] // path parts of worktrees the agent lays out inside a repo
+  windows?: false // not integrated on Windows (nor its WSL panes) yet
 }
 
 export const AGENT_KINDS: Record<AgentKind, AgentKindInfo> = {
@@ -22,6 +23,7 @@ export const AGENT_KINDS: Record<AgentKind, AgentKindInfo> = {
     command: "codex",
     resumePicker: "codex resume",
     worktreeMarkers: [],
+    windows: false, // hook quoting there is unverified (MULTI_AGENT.md S1-e)
   },
   opencode: {
     label: "OpenCode",
@@ -32,7 +34,14 @@ export const AGENT_KINDS: Record<AgentKind, AgentKindInfo> = {
 }
 
 /** Agents minmux integrates today (settings switches, the empty board's hint), in order. */
-export const AVAILABLE_AGENTS: AgentKind[] = ["claude"]
+export const AVAILABLE_AGENTS: AgentKind[] = ["claude", "codex"]
+
+/** The agents integrated on this platform (`process.platform`-style; "" = not known yet, so
+ *  only the agents integrated everywhere). */
+export const agentsOn = (platform: string): AgentKind[] =>
+  AVAILABLE_AGENTS.filter(
+    (k) => (platform !== "win32" && platform !== "") || AGENT_KINDS[k].windows !== false,
+  )
 
 /** The UI info for an agent (absent = Claude). */
 export const agentInfo = (kind?: AgentKind): AgentKindInfo => AGENT_KINDS[kind ?? "claude"]

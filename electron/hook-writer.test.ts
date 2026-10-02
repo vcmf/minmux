@@ -68,6 +68,19 @@ describe("HOOK_WRITER (end-to-end via node -e)", () => {
       ).toMatchObject({ session_id: "s1" })
     }))
 
+  it("takes the agent from the last argument and names the drop after the agent process", () =>
+    withRoot((root) => {
+      const script = path.join(root, "drop.js")
+      fs.writeFileSync(script, HOOK_WRITER) // the `node <script> <agent>` form (Codex)
+      fs.mkdirSync(path.join(root, "codex"))
+      execFileSync("node", [script, "codex"], {
+        input: JSON.stringify({ hook_event_name: "Stop", session_id: "s1" }),
+        env: { ...process.env, MINMUX_AGENT_EVENTS: root, MINMUX_PANE_ID: "p" },
+      })
+      const [f] = fs.readdirSync(path.join(root, "codex"))
+      expect(f!.split(".")[1]).toBe(String(process.pid)) // the hook's parent: here, this test
+    }))
+
   it("writes nothing outside a minmux pane (no drop root in the env)", () =>
     withRoot((root) => {
       run("claude", { MINMUX_PANE_ID: "pane-1" })

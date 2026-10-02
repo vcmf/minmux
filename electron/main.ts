@@ -45,6 +45,7 @@ import { createAdapters, type AgentAdapter } from "./agents"
 import { agentOf, type AgentEvent, type AgentKind } from "../src/lib/agent-graph"
 import { disabledAgentsIn, mergeAgentSwitches } from "../src/settings/agent-switches"
 import { agentPaneEnv, resumablePanes } from "./agents/arming"
+import { findOnPath, pathCandidates } from "./path-lookup"
 import { toDirListing } from "../src/lib/dir-listing"
 import { wslUncCandidates, uncToWslPath } from "./wsl-paths"
 import { colorfgbg } from "./color"
@@ -664,28 +665,6 @@ function execQuiet(
       },
     )
   })
-}
-
-// Where `cmd` could be on PATH (PATHEXT on Windows), in lookup order.
-function pathCandidates(cmd: string): string[] {
-  if (path.isAbsolute(cmd)) return [cmd]
-  const exts =
-    process.platform === "win32" ? (process.env.PATHEXT ?? ".EXE;.CMD;.BAT").split(";") : [""]
-  const dirs = (process.env.PATH ?? "").split(path.delimiter).filter(Boolean)
-  return dirs.flatMap((d) => exts.map((ext) => path.join(d, cmd + ext)))
-}
-
-// A file's full path on PATH, or null (sync: for the editor detection's quick checks).
-function findOnPath(cmd: string): string | null {
-  return (
-    pathCandidates(cmd).find((p) => {
-      try {
-        return fs.statSync(p).isFile()
-      } catch {
-        return false
-      }
-    }) ?? null
-  )
 }
 
 // The native ssh's full path (on Windows: PATH, else OpenSSH's standard System32 location).

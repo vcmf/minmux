@@ -3,7 +3,7 @@ import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import { AGENTS, AGENT_ENV_VARS, AGENT_RULES, AGENT_SHELL, createAdapters } from "."
-import { AVAILABLE_AGENTS } from "../../src/lib/agent-kinds"
+import { AGENT_KINDS, AVAILABLE_AGENTS, agentsOn } from "../../src/lib/agent-kinds"
 
 describe("agent registry", () => {
   it("derives every list from one spec per agent", () => {
@@ -16,6 +16,12 @@ describe("agent registry", () => {
 
   it("registers the same agents the renderer offers (Settings switches, the board's hint)", () => {
     expect(AGENTS.map((a) => a.kind)).toEqual(AVAILABLE_AGENTS)
+    for (const a of AGENTS) expect(a.windows).toBe(AGENT_KINDS[a.kind].windows) // same platforms
+  })
+
+  it("creates only the adapters integrated on the platform", () => {
+    expect(createAdapters("darwin").map((a) => a.kind)).toEqual(AVAILABLE_AGENTS)
+    expect(createAdapters("win32").map((a) => a.kind)).toEqual(agentsOn("win32"))
   })
 
   it("declares every per-pane env name an adapter sets or WSL forwards", () => {

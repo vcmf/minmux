@@ -35,6 +35,7 @@ describe("normalizeHookEvent", () => {
       agentType: "Explore",
       cwd: "/repo",
       toolName: "Read",
+      toolKey: expect.stringMatching(/^Read:[0-9a-f]{16}$/), // the call's identity, no content
       filePath: "/repo/x.ts",
       message: undefined,
     })
@@ -198,11 +199,12 @@ describe("startHookWatcher", () => {
     })
     try {
       fs.writeFileSync(
-        path.join(dir, "codex", "p.1.0.x.json"),
+        path.join(dir, "codex", "p.4242.0.x.json"),
         JSON.stringify({ hook_event_name: "Stop", session_id: "s" }),
       )
       await waitUntil(() => seen.length === 1)
       expect(seen[0]!.agent).toBe("codex")
+      expect(seen[0]!.pid).toBe(4242) // the agent process, from the drop's name
     } finally {
       await w.close()
       fs.rmSync(dir, { recursive: true, force: true })
