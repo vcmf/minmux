@@ -15,7 +15,7 @@ export interface SessionRules {
   /** Does `cwd` belong to the session filed at `transcriptPath`? undefined = can't tell. */
   cwdFits(cwd: string | undefined, transcriptPath: string | undefined): boolean | undefined
   /** A new session while one of this agent's leads the pane: a switch (vs a background agent)? */
-  isSwitch(ev: AgentEvent): boolean
+  isSwitch(ev: AgentEvent, lead: LedgerEntry): boolean
 }
 
 /** The rc lines our zsh/bash integration adds for an agent, and its per-pane env. */
@@ -43,6 +43,7 @@ export interface AgentAdapter {
 /** One agent's registration: static parts (rc, env, rules) + its per-launch adapter factory. */
 export interface AgentSpec {
   kind: AgentKind
+  windows?: false // not integrated on Windows (nor so its WSL panes) yet; mirrors agent-kinds
   shell: AgentShell
   rules: SessionRules
   create(): AgentAdapter

@@ -5,7 +5,7 @@ import { TerminalManager } from "../terminal/terminal-manager"
 import { displaySessionTitle } from "../lib/session-label"
 import { formatTokens, tokenBreakdown } from "../lib/tokens"
 import type { AgentNode, AgentStatus } from "../lib/agent-graph"
-import { AVAILABLE_AGENTS, agentInfo } from "../lib/agent-kinds"
+import { agentInfo, agentsOn } from "../lib/agent-kinds"
 import { agentIcon } from "./agent-icon"
 
 /** The session's agent as a small icon (titled with its name) on the pane label. */
@@ -108,7 +108,8 @@ function AgentRow({
 export function AgentsPanel() {
   const agents = useStore((s) => s.agents)
   const switches = useStore((s) => s.settings.agents)
-  const enabledAgents = AVAILABLE_AGENTS.filter((k) => switches[k].enabled)
+  const platform = useStore((s) => s.platform)
+  const enabledAgents = agentsOn(platform).filter((k) => switches[k].enabled)
   const sessions = useStore((s) => s.sessions)
   const home = useStore((s) => s.home)
   // The pane the user is currently in — used to box the matching session's agents.

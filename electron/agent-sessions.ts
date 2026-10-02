@@ -41,6 +41,7 @@ export interface LedgerEntry {
   permissionMode?: string
   name?: string // /rename, for the banner
   wslDistro?: string // the pane's distro (WSL) — its transcript lives on that distro's share
+  pid?: number // the agent process leading the pane (this run only, never persisted)
   updatedAt: number
   carried?: boolean // loaded from disk = the PREVIOUS run's (in memory only, never persisted)
 }
@@ -136,7 +137,7 @@ export class SessionLedger {
       // `claude -p`, another agent run by it. A real switch ends the old one first; what the
       // agent counts as a switch even if that SessionEnd got lost (Claude: /clear, a fork) only
       // applies to its own sessions. A carried-over entry is always replaceable.
-      const isSwitch = !!cur && agentOf(cur) === agent && rules.isSwitch(ev)
+      const isSwitch = !!cur && agentOf(cur) === agent && rules.isSwitch(ev, cur)
       // Folders verified under another agent's rules say nothing about this one's sessions.
       if (cur && agentOf(cur) !== agent) this.verified.delete(pane)
       if (cur && !cur.carried && cur.sessionId !== ev.sessionId && !isSwitch) {
@@ -181,6 +182,7 @@ export class SessionLedger {
         permissionMode: ev.permissionMode ?? (same ? cur.permissionMode : undefined),
         name: same ? cur.name : undefined,
         wslDistro,
+        pid: ev.pid,
         updatedAt: this.now(),
       })
       if (rejected) return { verdict: "rejected" }
@@ -332,8 +334,9 @@ export class SessionLedger {
   private serialize(kind: AgentKind): string {
     const out: Record<string, unknown> = {}
     for (const [id, e] of this.entries) {
-      const { carried, agent, ...persisted } = e
+      const { carried, agent, pid, ...persisted } = e
       void carried // in-memory only
+      void pid // per run: meaningless after a relaunch
       if (agentOf({ agent }) === kind) out[id] = persisted
     }
     if (kind === "claude") out[MARKER] = { v: 1 } // "written by a multi-agent build"

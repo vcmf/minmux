@@ -58,9 +58,11 @@ export interface AgentEvent {
   paneId?: string // the minmux pane (session id) this agent session runs in
   agentId?: string // absent ⇒ the session root; present ⇒ a sub-agent
   parentAgentId?: string // a sub-agent's parent sub-agent (absent ⇒ the session root)
+  pid?: number // the agent process that ran the hook (the drop's filename) — Codex's lead rule
   agentType?: string // e.g. "Explore", "general-purpose" (sub-agents only)
   cwd?: string
   toolName?: string // tool_name on Pre/PostToolUse
+  toolKey?: string // one tool call: its name + a hash of its input (matches an approval to it)
   filePath?: string // extracted from a file tool's input, or a FileChanged path
   message?: string // Notification message / last_assistant_message
   worktreePath?: string // worktree_path on WorktreeCreate/WorktreeRemove
@@ -88,6 +90,7 @@ export interface AgentNode {
   agentType: string // "root" for the session root, else the sub-agent type
   status: AgentStatus
   currentTool?: string // in-flight tool (set on PreToolUse, cleared on PostToolUse)
+  waitingFor?: string // the tool call (toolKey) an approval (PermissionRequest) is pending for
   cwd?: string
   recentFiles: string[] // most-recent-first, capped
   worktrees?: Worktree[] // worktrees created in this session (WorktreeCreate), root only
@@ -188,11 +191,22 @@ export function reduceAgentEvent(graph: AgentGraph, ev: AgentEvent): AgentGraph 
   const set = (id: string, changes: Partial<AgentNode>) => {
     nodes[id] = { ...at(id), ...changes }
   }
+  /** `id`'s pending approval is over: back to working, and so is its root if it was the
+   *  same approval that made the root wait. */
+  const endWait = (id: string) => {
+    const key = at(id).waitingFor
+    if (!key) return
+    set(id, { status: "working", waitingFor: undefined })
+    if (id !== rid && at(rid).waitingFor === key)
+      set(rid, { status: "working", waitingFor: undefined })
+  }
 
   switch (ev.event) {
     case "SessionStart":
       // A (re)start — also in another pane (`claude --resume` after a crash) — makes it its
-      // pane's newest session (`started`); the board order (rootIds) never changes.
+      // pane's newest session (`started`); the board order (rootIds) never changes. An
+      // approval pending before (a crash, a quit) is gone.
+      clearWaits(nodes, rid)
       set(rid, {
         status: "idle",
         cwd: ev.cwd ?? at(rid).cwd,
@@ -206,6 +220,7 @@ export function reduceAgentEvent(graph: AgentGraph, ev: AgentEvent): AgentGraph 
       // still-active sub-agent (and the finished ancestors it hangs under). Then mark
       // the session working.
       pruneDone(nodes, rid)
+      clearWaits(nodes, rid)
       set(rid, { status: "working" })
       break
     case "SubagentStart":
@@ -215,16 +230,25 @@ export function reduceAgentEvent(graph: AgentGraph, ev: AgentEvent): AgentGraph 
           status: "working",
         })
       break
-    case "PreToolUse":
+    case "PreToolUse": {
+      // The call an approval is pending for keeps waiting: Codex fires its PreToolUse and its
+      // PermissionRequest ~40 ms apart from separate hook processes, so either lands first.
+      // Any other call starting means the agent moved on (approved, or denied and going on).
+      const twin = !!ev.toolKey && at(targetId).waitingFor === (ev.toolKey ?? ev.toolName)
+      if (!twin) endWait(targetId)
       set(targetId, {
-        status: "working",
+        status: twin ? "waiting" : "working",
         currentTool: ev.toolName,
         cwd: ev.cwd ?? at(targetId).cwd,
         recentFiles: withFile(at(targetId).recentFiles, ev.filePath),
       })
       break
+    }
     case "PostToolUse":
-      // Status stays: a parallel tool finishing doesn't mean a pending approval was answered.
+      // The call an approval was pending for ran: answered. Any other (parallel) call
+      // finishing leaves the approval pending.
+      if (at(targetId).waitingFor && at(targetId).waitingFor === (ev.toolKey ?? ev.toolName))
+        endWait(targetId)
       set(targetId, {
         currentTool: undefined,
         recentFiles: withFile(at(targetId).recentFiles, ev.filePath),
@@ -239,6 +263,7 @@ export function reduceAgentEvent(graph: AgentGraph, ev: AgentEvent): AgentGraph 
         })
       break
     case "Stop":
+      clearWaits(nodes, rid)
       set(rid, {
         status: "idle",
         currentTool: undefined,
@@ -249,9 +274,15 @@ export function reduceAgentEvent(graph: AgentGraph, ev: AgentEvent): AgentGraph 
       set(rid, { status: "waiting", lastMessage: ev.message ?? at(rid).lastMessage })
       break
     case "PermissionRequest":
-      // An approval prompt (Codex): the agent asking — and so its session — waits on the user.
-      set(targetId, { status: "waiting" })
-      if (targetId !== rid) set(rid, { status: "waiting" })
+      {
+        // An approval prompt (Codex): the agent asking — and so its session — waits on the user
+        // until that call runs or another starts, the turn ends, or a new prompt comes. Codex
+        // sends nothing when the user answers, so an approved long command reads "waiting"
+        // until it finishes (known limit).
+        const key = ev.toolKey ?? ev.toolName ?? "tool"
+        set(targetId, { status: "waiting", waitingFor: key })
+        if (targetId !== rid) set(rid, { status: "waiting", waitingFor: key })
+      }
       break
     case "CwdChanged":
       if (ev.cwd) set(targetId, { cwd: ev.cwd })
@@ -305,6 +336,14 @@ function reparent(nodes: Record<string, AgentNode>, id: string, parentId: string
   if (old) nodes[old.id] = { ...old, childIds: old.childIds.filter((c) => c !== id) }
   nodes[parentId] = { ...parent, childIds: [...parent.childIds, id] }
   nodes[id] = { ...node, parentId }
+}
+
+/** Forget every pending approval in a session's tree (mutates `nodes`; statuses stay). */
+function clearWaits(nodes: Record<string, AgentNode>, id: string): void {
+  const node = nodes[id]
+  if (!node) return
+  if (node.waitingFor) nodes[id] = { ...node, waitingFor: undefined }
+  for (const cid of node.childIds) clearWaits(nodes, cid)
 }
 
 /** Delete a node and all its descendants from `nodes` (mutated). */

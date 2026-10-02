@@ -2,6 +2,7 @@
 // (electron/agent-sessions.ts) + the renderer's per-terminal banner state.
 
 import type { AgentKind } from "./agent-graph"
+import { posixQuote } from "./shell-quote"
 
 /** What main says to do for one restored terminal. */
 export interface ResumePlan {
@@ -38,7 +39,7 @@ export const isPosixShell = (command: string): boolean => POSIX_SHELLS.has(shell
 /** `cd -- '<cwd>' && <command>` with the path single-quoted for a POSIX shell (a path from a
  *  hook payload never gets to break out of the quotes). */
 export const withCd = (cwd: string, command: string): string =>
-  `cd -- '${cwd.replace(/'/g, "'\\''")}' && ${command}`
+  `cd -- ${posixQuote(cwd)} && ${command}`
 
 /** Short label for a session on the banner: its /rename, else the id's first block. */
 export const sessionLabel = (plan: ResumePlan): string =>
