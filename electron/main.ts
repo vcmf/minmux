@@ -40,14 +40,12 @@ import { applyLoginShellEnv } from "./shell-env"
 import { buildEditorCommand, winQuote } from "./editor-command"
 import { orderMacEditors, planEditor, type EditorPlan, type EditorInfo } from "./editor-detect"
 import { checkForUpdate } from "./update-check"
-import { normalizeHookEvent, startHookWatcher } from "./agent-hooks"
-import type { AgentEvent } from "../src/lib/agent-graph"
-import { buildHookSettings } from "./hook-writer"
+import { startHookWatcher, type DropNormalizer } from "./agent-hooks"
+import { createAdapters, type AgentAdapter } from "./agents"
+import { agentOf, type AgentEvent, type AgentKind } from "../src/lib/agent-graph"
 import { toDirListing } from "../src/lib/dir-listing"
 import { wslUncCandidates, uncToWslPath } from "./wsl-paths"
 import { colorfgbg } from "./color"
-import { TranscriptTokens } from "./transcript-tokens"
-import { tokenEventsForBatch } from "./agent-tokens"
 import { AgentMetaTracker } from "./agent-meta"
 import { SessionLedger } from "./agent-sessions"
 import {
@@ -144,22 +142,24 @@ const sessions = new Map<string, PtySession>()
 // down (gone from `sessions`). None may outlive Node: quitting drains this (pty-drain.ts).
 const livePtys = new Set<Drainable>()
 let mainWindow: BrowserWindow | null = null
-// The scoped Claude Code hook-settings file the `claude` shell wrapper loads, and the
-// per-launch drop root every agent's hooks write into (`<root>/<agent>/`, via
-// MINMUX_AGENT_EVENTS), both set once the file-drop watcher is up. null ⇒ agents board stays
-// empty. The settings hold no path, so native and WSL panes share one file (WSLENV /p
-// translates both env paths for a claude inside WSL).
-let hookSettingsPath: string | null = null
+// Every coding agent minmux integrates (electron/agents), and the ones armed this launch:
+// their files are installed and their hooks write into the per-launch drop root
+// (`<root>/<agent>/`, passed to panes as MINMUX_AGENT_EVENTS). Empty ⇒ agents board stays
+// empty. Each pane's env carries every armed agent's paths; WSLENV /p translates them for an
+// agent inside WSL.
+const adapters = createAdapters()
+let armed: AgentAdapter[] = []
 let agentEventsDir: string | null = null
 let hookWatcher: { close: () => Promise<void> } | null = null
-// Accumulates per-transcript token totals across hook batches (session + sub-agent).
-const agentTokens = new TranscriptTokens()
 // Branch + GitHub PR per terminal (sidebar), via git + the user's `gh`.
 const paneGit = new PaneGitService()
 // Per-pane Claude `/color` + `/rename` (pane accent), read from each session's transcript.
 const agentMeta = new AgentMetaTracker((paneId, meta) => {
   mainWindow?.webContents.send("agents:meta", paneId, meta)
-  sessionLedger().setName(paneId, meta?.name) // the /rename, for the resume banner
+  // The /rename, for the resume banner: only onto a session of an agent whose names live in
+  // its transcript (a late read must not rename another agent's session in that pane).
+  const lead = sessionLedger().get(paneId)
+  if (lead && adapterFor(lead)?.transcriptMeta) sessionLedger().setName(paneId, meta?.name)
 })
 // Which Claude session each terminal is inside (persisted) → resume on relaunch.
 let ledger: SessionLedger | null = null
@@ -182,10 +182,14 @@ const PTY_REPLAY_BYTES = 256 * 1024
 
 // Session lifecycle only (rare; never per-tool events or cwd changes): enough to trace resume.
 const TRACED_HOOKS = new Set(["SessionStart", "SessionEnd", "WorktreeCreate"])
+/** The armed adapter an event (or ledger entry) belongs to. */
+const adapterFor = (x: { agent?: AgentKind }): AgentAdapter | undefined =>
+  armed.find((a) => a.kind === agentOf(x))
 /** A hook event's diagnostics fields: which session, from which pane, where. */
 function hookTrace(ev: AgentEvent): Record<string, string> {
   return {
     ev: ev.event,
+    agent: agentOf(ev),
     sid: ev.sessionId.slice(0, 8),
     pane: (ev.paneId ?? "-").slice(0, 8),
     src: ev.source ?? ev.reason ?? "",
@@ -311,10 +315,27 @@ async function startAgentObservability(): Promise<void> {
     fs.rmSync(eventsRoot, { recursive: true, force: true })
     const eventsDir = path.join(eventsRoot, randomUUID())
     fs.mkdirSync(eventsDir, { recursive: true })
-    fs.mkdirSync(path.join(eventsDir, "claude"))
+    // Arm each agent on its own: one that fails to install stays off, the others still work.
+    const ready: AgentAdapter[] = []
+    for (const a of adapters) {
+      try {
+        fs.mkdirSync(path.join(eventsDir, a.kind))
+        a.install(cfg)
+        ready.push(a)
+      } catch (err) {
+        diag("agent-install-failed", { agent: a.kind, err: String(err) })
+      }
+    }
+    if (ready.length === 0) {
+      diag("agent-hooks-none", {}) // nothing armed: plain terminals, empty board
+      return
+    }
+    armed = ready // before the watcher: its first batch looks adapters up here
+    const normalizers: Partial<Record<AgentKind, DropNormalizer>> = {}
+    for (const a of ready) normalizers[a.kind] = a.normalize
     hookWatcher = await startHookWatcher({
       dir: eventsDir,
-      agents: { claude: normalizeHookEvent },
+      agents: normalizers,
       onBatch: (events: AgentEvent[]) => {
         // Fold the batch into the resume ledger (which pane is inside which Claude session,
         // + its WSL distro) and tag each event lead/nested from it, then forward it at once
@@ -338,10 +359,12 @@ async function startAgentObservability(): Promise<void> {
             ev.nested = sessionLedger().isNested(ev.paneId, ev.sessionId)
         }
         mainWindow?.webContents.send("agents:events", events)
-        // Session-level events locate each Claude pane's transcript → track its /color and
-        // /rename for the pane accent (async + debounced; SessionEnd stops it).
+        // Session-level events locate each pane's transcript → track its /color and /rename
+        // for the pane accent (agents that keep them there; async + debounced; SessionEnd
+        // stops it).
         for (const ev of events) {
           if (!ev.paneId || !ev.transcriptPath || ev.agentId) continue
+          if (!adapterFor(ev)?.transcriptMeta) continue
           // Only the pane's own session (this event's own verdict, not the state after the whole
           // batch): a background agent inherits the pane but mustn't take its accent.
           if (ev.nested) continue
@@ -353,19 +376,26 @@ async function startAgentObservability(): Promise<void> {
               transcriptTargets(ev.transcriptPath, ev.paneId),
             )
         }
-        void tokenEventsForBatch(agentTokens, events, transcriptTargets).then((tokenEvents) => {
-          if (tokenEvents.length) mainWindow?.webContents.send("agents:events", tokenEvents)
-        })
+        // Token totals per agent, from its own source (async, off the agent's loop), tagged
+        // with that agent like the watcher tags hook events.
+        for (const a of ready) {
+          const mine = events.filter((ev) => agentOf(ev) === a.kind)
+          if (!a.usage || mine.length === 0) continue
+          void a
+            .usage(mine, transcriptTargets)
+            .then((tokenEvents) => {
+              if (tokenEvents.length)
+                mainWindow?.webContents.send(
+                  "agents:events",
+                  tokenEvents.map((e) => ({ ...e, agent: a.kind })),
+                )
+            })
+            .catch(() => {}) // best-effort: no badge
+        }
       },
     })
-    const settingsPath = path.join(cfg, "claude-hooks.json")
-    fs.writeFileSync(settingsPath, buildHookSettings())
-    // Older Windows builds also wrote a WSL variant addressing the drop dir via /mnt/c: gone.
-    if (process.platform === "win32")
-      fs.rmSync(path.join(cfg, "claude-hooks.wsl.json"), { force: true })
-    hookSettingsPath = settingsPath
     agentEventsDir = eventsDir
-    diag("agent-hooks-up", { dir: eventsDir })
+    diag("agent-hooks-up", { dir: eventsDir, agents: ready.map((a) => a.kind).join(",") })
   } catch (err) {
     diag("agent-hooks-failed", { err: String(err) })
   }
@@ -762,12 +792,13 @@ function registerIpc() {
     const wslArgs = wsl ? wslCdArgs(opts.cwd) : []
     const startCwd = !wsl && opts.cwd && fs.existsSync(opts.cwd) ? opts.cwd : os.homedir()
     const env = baseSpawnEnv(opts, inj?.env)
-    // Let the injected `claude` wrapper route through our scoped hook settings, and tag
-    // this pane so the agents board knows which pane each session runs in (M6). The hooks
-    // find the drop root in MINMUX_AGENT_EVENTS. WSL: wslInjection forwards the paths over
-    // WSLENV with /p, so their Windows form is translated for an agent inside WSL.
-    if (hookSettingsPath && agentEventsDir) {
-      env.MINMUX_CLAUDE_SETTINGS = hookSettingsPath
+    // Arm every agent in this pane (Claude: the injected `claude` wrapper routes through our
+    // scoped hook settings), and tag the pane so the agents board knows which pane each
+    // session runs in (M6). The hooks find the drop root in MINMUX_AGENT_EVENTS. WSL:
+    // wslInjection forwards the paths over WSLENV with /p, so their Windows form is
+    // translated for an agent inside WSL.
+    if (agentEventsDir && armed.length) {
+      for (const a of armed) Object.assign(env, a.env())
       env.MINMUX_AGENT_EVENTS = agentEventsDir
       env.MINMUX_PANE_ID = opts.id
     }
@@ -1288,9 +1319,9 @@ app.whenReady().then(async () => {
     if (icon) app.dock?.setIcon(icon)
   }
   registerIpc()
-  // Start the hook receiver BEFORE the window so hookSettingsPath is set before the
-  // renderer can request the first pty:spawn — otherwise the initial pane launches
-  // without MINMUX_CLAUDE_SETTINGS and the `claude` wrapper never arms (M6).
+  // Start the hook receiver BEFORE the window so the agents are armed before the renderer
+  // can request the first pty:spawn — otherwise the initial pane launches without their env
+  // (MINMUX_CLAUDE_SETTINGS, MINMUX_AGENT_EVENTS) and the `claude` wrapper never arms (M6).
   await startAgentObservability()
   createWindow()
   startSettingsWatcher()

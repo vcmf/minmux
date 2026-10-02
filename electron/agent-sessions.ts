@@ -1,7 +1,17 @@
-// Which Claude Code session each terminal is inside — persisted, so a relaunch can type
-// `claude --resume <id>` back into the right pane (cmux-style). Fed by the hook events we
-// already receive (SessionStart / SessionEnd carry session_id, cwd, transcript_path,
-// permission_mode, and the pane id from the drop file's name).
+// Which coding-agent session each terminal is inside — persisted, so a relaunch can type the
+// agent's resume command (`claude --resume <id>`) back into the right pane (cmux-style). Fed by
+// the hook events we already receive (SessionStart / SessionEnd carry session_id, cwd,
+// transcript_path, permission_mode, and the pane id from the drop file's name). The agent's
+// own rules (resume command, folder check, what counts as a switch) come from its adapter
+// (electron/agents); the rules below are the ledger's.
+//
+// Files: Claude's entries live in `agent-sessions.json` exactly as before; every other
+// agent's in `agent-sessions.<agent>.json`, which older builds never read or rewrite (so a
+// downgrade can't type `claude --resume <codex-id>` nor delete them). Claude's file also
+// carries a `__minmux` marker: older builds skip it on load (no session id) and drop it when
+// they rewrite the file, so a Claude file WITHOUT it means an older build wrote it last and
+// may have reused the panes another agent's file names — those files are then ignored (and
+// rewritten). On load the newest entry wins when two files name the same pane.
 //
 // Rules (see docs/GOTCHAS.md#resume):
 //   - SessionStart sets the pane's entry when there is none, or when it continues the same
@@ -15,16 +25,18 @@
 //     SessionEnd). Only a quit/shutdown (freeze) or an app crash leaves entries to resume.
 //   - Closing the pane / the shell exiting drops it (unless frozen).
 
-import { cwdMatchesTranscript } from "../src/lib/claude-project"
 import { hasControlChar } from "../src/lib/control-chars"
 import fs from "node:fs"
 import path from "node:path"
-import type { AgentEvent } from "../src/lib/agent-graph"
+import { agentOf, type AgentEvent, type AgentKind } from "../src/lib/agent-graph"
 import type { ResumePlan } from "../src/lib/resume"
+import { AGENT_RULES } from "./agents"
+import type { SessionRules } from "./agents/types"
 
 export interface LedgerEntry {
-  sessionId: string // Claude's session id (→ `claude --resume <id>`)
-  cwd: string // where Claude ran — its transcripts are keyed by this project dir
+  agent?: AgentKind // absent ⇒ "claude" (the file says which agent; never persisted)
+  sessionId: string // the agent's session id (→ e.g. `claude --resume <id>`)
+  cwd: string // where the agent ran — Claude's transcripts are keyed by this project dir
   transcriptPath?: string
   permissionMode?: string
   name?: string // /rename, for the banner
@@ -33,22 +45,8 @@ export interface LedgerEntry {
   carried?: boolean // loaded from disk = the PREVIOUS run's (in memory only, never persisted)
 }
 
-// Claude session ids are UUIDs; permission modes are single words. Anything else never
-// reaches a command line we type into a shell.
-const SAFE_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
-const SAFE_MODE = /^[A-Za-z]{1,32}$/
-
-/** The resume command for an entry (null if its id can't be trusted). */
-export function resumeCommand(e: LedgerEntry, allowBypass: boolean): string | null {
-  if (!SAFE_ID.test(e.sessionId)) return null
-  const mode = e.permissionMode
-  const keepMode =
-    mode &&
-    SAFE_MODE.test(mode) &&
-    mode !== "default" &&
-    (mode !== "bypassPermissions" || allowBypass)
-  return `claude --resume ${e.sessionId}${keepMode ? ` --permission-mode ${mode}` : ""}`
-}
+// Key of the marker this build writes into Claude's file (see the header).
+const MARKER = "__minmux"
 
 export class SessionLedger {
   // Per pane: the last folder that matched its session's transcript (in memory only).
@@ -60,33 +58,56 @@ export class SessionLedger {
   private timer?: ReturnType<typeof setTimeout>
   private thawTimer?: ReturnType<typeof setTimeout>
   private version = 0 // bumped per change: a slow async write never lands over a newer state
+  private readonly files: [AgentKind, string][] // each agent's ledger file
 
   constructor(
-    private readonly file: string | null, // null = in-memory (tests)
+    file: string | null, // Claude's file (`agent-sessions.json`); null = in-memory (tests)
     private readonly now: () => number = Date.now,
+    private readonly rules: Partial<Record<AgentKind, SessionRules>> = AGENT_RULES,
   ) {
-    if (!file) return
-    try {
-      const raw = JSON.parse(fs.readFileSync(file, "utf8")) as Record<string, LedgerEntry>
-      for (const [pane, e] of Object.entries(raw ?? {})) {
-        if (e && typeof e.sessionId === "string" && typeof e.cwd === "string") {
-          // Hand-edited / corrupted files: keep only well-typed fields (a non-string name would
-          // reach the banner's render).
-          const str = (v: unknown) => (typeof v === "string" ? v : undefined)
-          this.entries.set(pane, {
-            sessionId: e.sessionId,
-            cwd: e.cwd,
-            transcriptPath: str(e.transcriptPath),
-            permissionMode: str(e.permissionMode),
-            name: str(e.name),
-            wslDistro: str(e.wslDistro),
-            updatedAt: typeof e.updatedAt === "number" ? e.updatedAt : 0,
-            carried: true,
-          })
-        }
+    const kinds = Object.keys(rules) as AgentKind[]
+    this.files = !file
+      ? []
+      : kinds.map((k) => [k, k === "claude" ? file : file.replace(/(\.json)?$/, `.${k}.json`)])
+    const read = (f: string): Record<string, LedgerEntry> | null => {
+      try {
+        const raw: unknown = JSON.parse(fs.readFileSync(f, "utf8"))
+        return raw && typeof raw === "object" ? (raw as Record<string, LedgerEntry>) : {}
+      } catch {
+        return null // no ledger yet / unreadable
       }
-    } catch {
-      // no ledger yet / unreadable — start empty
+    }
+    const claudeFile = file ? read(file) : null
+    // An older build wrote Claude's file last: the other agents' files may be stale.
+    const olderBuildRan = claudeFile !== null && !(MARKER in claudeFile)
+    for (const [kind, f] of this.files) {
+      if (kind !== "claude" && olderBuildRan) continue
+      const raw = kind === "claude" ? claudeFile : read(f)
+      if (raw) this.load(kind, raw)
+    }
+  }
+
+  private load(kind: AgentKind, raw: Record<string, LedgerEntry>): void {
+    for (const [pane, e] of Object.entries(raw)) {
+      if (e && typeof e.sessionId === "string" && typeof e.cwd === "string") {
+        const updatedAt = typeof e.updatedAt === "number" ? e.updatedAt : 0
+        const prev = this.entries.get(pane)
+        if (prev && prev.updatedAt >= updatedAt) continue // two files name the pane: newest wins
+        // Hand-edited / corrupted files: keep only well-typed fields (a non-string name would
+        // reach the banner's render).
+        const str = (v: unknown) => (typeof v === "string" ? v : undefined)
+        this.entries.set(pane, {
+          agent: kind,
+          sessionId: e.sessionId,
+          cwd: e.cwd,
+          transcriptPath: str(e.transcriptPath),
+          permissionMode: str(e.permissionMode),
+          name: str(e.name),
+          wslDistro: str(e.wslDistro),
+          updatedAt,
+          carried: true,
+        })
+      }
     }
   }
 
@@ -94,6 +115,9 @@ export class SessionLedger {
    *  the folder used) or it was dropped (`rejected`) — main rewrites the event to match. */
   apply(ev: AgentEvent, wslDistro?: string): { verdict?: "rejected" | "fallback"; cwd?: string } {
     if (this.frozen || !ev.paneId || ev.agentId) return {}
+    const agent = agentOf(ev)
+    const rules = this.rules[agent]
+    if (!rules) return {} // an agent without resume rules is never recorded
     const pane = ev.paneId
     const cur = this.entries.get(pane)
     const nested = this.nestedIn(pane)
@@ -109,9 +133,12 @@ export class SessionLedger {
       if (!ev.cwd) return {}
       // Another session starting while the pane's session (recorded THIS run) is live was
       // launched from inside it — a background agent (its startup, compact or resume), a nested
-      // `claude -p`. A real switch ends the old one first; /clear and fork count as a switch
-      // even if that SessionEnd got lost. A carried-over entry is always replaceable.
-      const isSwitch = ev.source === "clear" || ev.source === "fork"
+      // `claude -p`, another agent run by it. A real switch ends the old one first; what the
+      // agent counts as a switch even if that SessionEnd got lost (Claude: /clear, a fork) only
+      // applies to its own sessions. A carried-over entry is always replaceable.
+      const isSwitch = !!cur && agentOf(cur) === agent && rules.isSwitch(ev)
+      // Folders verified under another agent's rules say nothing about this one's sessions.
+      if (cur && agentOf(cur) !== agent) this.verified.delete(pane)
       if (cur && !cur.carried && cur.sessionId !== ev.sessionId && !isSwitch) {
         nested.add(ev.sessionId)
         return {}
@@ -125,10 +152,10 @@ export class SessionLedger {
       let cwd = ev.cwd
       let verdict: "fallback" | undefined
       let rejected = false
-      const fits = cwdMatchesTranscript(cwd, ev.transcriptPath)
+      const fits = rules.cwdFits(cwd, ev.transcriptPath)
       if (fits === false) {
         const known = [this.verified.get(pane), cur?.cwd].find(
-          (k) => k !== undefined && cwdMatchesTranscript(k, ev.transcriptPath) === true,
+          (k) => k !== undefined && rules.cwdFits(k, ev.transcriptPath) === true,
         )
         if (known) {
           cwd = known
@@ -145,6 +172,7 @@ export class SessionLedger {
       }
       if (fits === true || verdict) this.verified.set(pane, cwd)
       this.set(pane, {
+        agent,
         sessionId: ev.sessionId,
         cwd,
         // The same session restarting keeps what the event doesn't say (a stray event carries
@@ -164,7 +192,7 @@ export class SessionLedger {
       next = { ...next, permissionMode: ev.permissionMode }
     // Claude re-files a session that enters a worktree under the worktree's folder: follow it
     // (only a folder matching the transcript's — a plain `cd src` never does).
-    if (ev.cwd && ev.cwd !== cur.cwd && cwdMatchesTranscript(ev.cwd, ev.transcriptPath) === true) {
+    if (ev.cwd && ev.cwd !== cur.cwd && rules.cwdFits(ev.cwd, ev.transcriptPath) === true) {
       next = { ...next, cwd: ev.cwd, transcriptPath: ev.transcriptPath }
       this.verified.set(pane, ev.cwd)
     }
@@ -231,9 +259,10 @@ export class SessionLedger {
       paneIds.map(async (id) => {
         const e = this.entries.get(id)
         if (!e || isLive(id)) return
-        const command = resumeCommand(e, allowBypass)
+        const rules = this.rules[agentOf(e)]
+        const command = rules?.resumeCommand(e, allowBypass) ?? null
         const base = { cwd: e.cwd, name: e.name, sessionId: e.sessionId }
-        if (!command) {
+        if (!rules || !command) {
           out[id] = { ...base, status: "skip", reason: "unrecognised session id" }
           return
         }
@@ -243,9 +272,9 @@ export class SessionLedger {
           out[id] = { ...base, status: "skip", reason: "its folder name can't be typed safely" }
           return
         }
-        // A folder that isn't where Claude filed the session: `claude --resume` can't find it
-        // there (older entries recorded before this check).
-        if (cwdMatchesTranscript(e.cwd, e.transcriptPath) === false) {
+        // A folder that isn't where the agent filed the session (Claude: `claude --resume`
+        // can't find it there; older entries recorded before this check).
+        if (rules.cwdFits(e.cwd, e.transcriptPath) === false) {
           out[id] = { ...base, status: "skip", reason: "its folder doesn't match the session" }
           return
         }
@@ -294,50 +323,67 @@ export class SessionLedger {
   // output): a crash must still leave the live sessions on disk.
   private schedule() {
     this.version++
-    if (!this.file) return
+    if (this.files.length === 0) return
     clearTimeout(this.timer)
     this.timer = setTimeout(() => void this.flushAsync(), 500)
   }
 
-  private serialize(): string {
-    const out: Record<string, Omit<LedgerEntry, "carried">> = {}
+  /** One agent's entries as its file's JSON (no `agent` field: the file says which). */
+  private serialize(kind: AgentKind): string {
+    const out: Record<string, unknown> = {}
     for (const [id, e] of this.entries) {
-      const { carried, ...persisted } = e
+      const { carried, agent, ...persisted } = e
       void carried // in-memory only
-      out[id] = persisted
+      if (agentOf({ agent }) === kind) out[id] = persisted
     }
+    if (kind === "claude") out[MARKER] = { v: 1 } // "written by a multi-agent build"
     return JSON.stringify(out, null, 2)
   }
 
   // temp + rename: a crash / power loss mid-write can't leave truncated JSON (which would
-  // lose every entry — the very case this file exists for).
+  // lose every entry — the very case this file exists for). Every file is rewritten, so a
+  // pane whose lead changed agent leaves the old file in the same flush; each file on its
+  // own, so one that can't be written never blocks another agent's.
   private async flushAsync(): Promise<void> {
-    if (!this.file || this.frozen) return // a freeze wrote synchronously; don't race it
+    if (this.files.length === 0 || this.frozen) return // a freeze wrote synchronously
     const v = this.version
-    const tmp = `${this.file}.${v}.tmp`
+    const writes = this.files.map(([kind, file]) => ({ file, tmp: `${file}.${v}.tmp`, kind }))
     try {
-      await fs.promises.mkdir(path.dirname(this.file), { recursive: true })
-      await fs.promises.writeFile(tmp, this.serialize())
-      if (v === this.version && !this.frozen) {
-        await fs.promises.rename(tmp, this.file)
-        if (this.frozen) this.flushSync() // a freeze raced this rename: rewrite its final state
-      } else await fs.promises.rm(tmp, { force: true })
+      await fs.promises.mkdir(path.dirname(this.files[0]![1]), { recursive: true })
     } catch {
-      // best-effort — a missed write only means no resume for that session
+      return // best-effort — a missed write only means no resume for those sessions
     }
+    const ok = await Promise.all(
+      writes.map((w) =>
+        fs.promises.writeFile(w.tmp, this.serialize(w.kind)).then(
+          () => true,
+          () => false,
+        ),
+      ),
+    )
+    const current = v === this.version && !this.frozen
+    await Promise.all(
+      writes.map((w, i) =>
+        (current && ok[i] ? fs.promises.rename(w.tmp, w.file) : Promise.reject()).catch(() =>
+          fs.promises.rm(w.tmp, { force: true }).catch(() => {}),
+        ),
+      ),
+    )
+    if (current && this.frozen) this.flushSync() // a freeze raced the renames: rewrite it
   }
 
   /** Synchronous write — only on quit / shutdown, when the process may die right after. */
   flushSync(): void {
     clearTimeout(this.timer)
-    if (!this.file) return
-    try {
-      fs.mkdirSync(path.dirname(this.file), { recursive: true })
-      const tmp = `${this.file}.tmp`
-      fs.writeFileSync(tmp, this.serialize())
-      fs.renameSync(tmp, this.file)
-    } catch {
-      // best-effort
+    for (const [kind, file] of this.files) {
+      try {
+        fs.mkdirSync(path.dirname(file), { recursive: true })
+        const tmp = `${file}.tmp`
+        fs.writeFileSync(tmp, this.serialize(kind))
+        fs.renameSync(tmp, file)
+      } catch {
+        // best-effort
+      }
     }
   }
 }
