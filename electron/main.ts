@@ -50,6 +50,7 @@ import { toDirListing } from "../src/lib/dir-listing"
 import { wslUncCandidates, uncToWslPath } from "./wsl-paths"
 import { colorfgbg } from "./color"
 import { AgentMetaTracker, planMeta } from "./agent-meta"
+import { AgentHints } from "./agent-hints"
 import { SessionLedger } from "./agent-sessions"
 import {
   displayName,
@@ -179,6 +180,9 @@ for (const a of adapters) {
   )
   metaTrackers.set(kind, tracker)
 }
+// Whether to show an agent's "approve the hooks" hint, persisted (agent-hints.ts).
+let hints: AgentHints | null = null
+const agentHints = () => (hints ??= new AgentHints(path.join(configDir(), "agent-hints.json")))
 /** Stop every agent's meta tracking for a pane (its shell / PTY ended). */
 const untrackMeta = (paneId: string, notify = true) =>
   metaTrackers.forEach((t) => t.untrack(paneId, notify))
@@ -929,6 +933,18 @@ function registerIpc() {
   // One shot per session: attempted (or dismissed) → forget it.
   ipcMain.on("agents:resume-consume", (_e, paneId: string, sessionId: string) =>
     sessionLedger().consume(paneId, sessionId),
+  )
+  // The approval hint: show it for this agent? Only if the agent itself says our hooks aren't
+  // approved (unknown → no), and the user hasn't said "Don't ask again".
+  ipcMain.handle("agents:hint-wanted", async (_e, kind: AgentKind) => {
+    // Not for an integration switched off in Settings (older panes still print the marker).
+    const a = disabledAgents().has(kind) ? undefined : armed.find((x) => x.kind === kind)
+    const approved = a?.approved ? await a.approved().catch(() => null) : null
+    const s = await agentHints().get(kind)
+    return { wanted: approved === false && !s.never, dismissals: s.dismissals }
+  })
+  ipcMain.handle("agents:hint-dismiss", async (_e, kind: AgentKind, never: boolean) =>
+    armed.some((a) => a.kind === kind) ? agentHints().dismiss(kind, never === true) : 0,
   )
   // A (re)loaded renderer starts with no accents: hand it every tracked pane's current meta.
   ipcMain.handle("agents:meta-snapshot", async () =>

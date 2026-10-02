@@ -1,6 +1,7 @@
 import { FolderOpen, X } from "@phosphor-icons/react"
 import { hintStillAsks, useStore } from "../store"
 import { TerminalManager } from "../terminal/terminal-manager"
+import { stopPaneMouseDown } from "./pane-hint"
 
 /** A one-line offer on a split of an ssh pane whose host has no shell integration (ask
  *  mode): turning it on is what makes a split, a reconnect or a relaunch open in the same
@@ -20,12 +21,6 @@ export function IntegrationHint({ sessionId }: { sessionId: string }) {
     useStore.getState().answerIntegrationHint("dismiss")
     requestAnimationFrame(() => TerminalManager.focus(sessionId))
   }
-  // The pane's own mousedown focuses its terminal: keep it from eating the click, and keep the
-  // button from taking focus (keys typed next belong to the shell, not to "OK").
-  const stop = (e: React.MouseEvent) => {
-    e.stopPropagation()
-    e.preventDefault()
-  }
   if (hint.state === "on") {
     return (
       <div className="resume-banner ok integration-hint" role="status">
@@ -37,7 +32,7 @@ export function IntegrationHint({ sessionId }: { sessionId: string }) {
           On for <b>{hint.alias}</b> from its next connection
         </span>
         <span className="resume-actions">
-          <button className="resume-btn" onMouseDown={stop} onClick={done}>
+          <button className="resume-btn" onMouseDown={stopPaneMouseDown} onClick={done}>
             OK
           </button>
         </span>
@@ -54,13 +49,17 @@ export function IntegrationHint({ sessionId }: { sessionId: string }) {
         Open splits of <b>{hint.alias}</b> in the same folder?
       </span>
       <span className="resume-actions">
-        <button className="resume-btn primary" onMouseDown={stop} onClick={() => answer("on")}>
+        <button
+          className="resume-btn primary"
+          onMouseDown={stopPaneMouseDown}
+          onClick={() => answer("on")}
+        >
           Turn on
         </button>
         <button
           className="resume-btn"
           title={`Don't ask again for ${hint.alias} (shell integration stays off there)`}
-          onMouseDown={stop}
+          onMouseDown={stopPaneMouseDown}
           onClick={() => answer("never")}
         >
           Never
@@ -69,7 +68,7 @@ export function IntegrationHint({ sessionId }: { sessionId: string }) {
           className="resume-btn icon"
           title="Not now"
           aria-label="Not now"
-          onMouseDown={stop}
+          onMouseDown={stopPaneMouseDown}
           onClick={() => answer("dismiss")}
         >
           <X size={11} />

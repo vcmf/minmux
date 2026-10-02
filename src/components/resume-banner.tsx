@@ -84,6 +84,19 @@ export function ResumeBanner({ sessionId }: { sessionId: string }) {
           </span>
         </div>
       )
+    case "waiting":
+      return (
+        <div className="resume-banner" role="status">
+          <ArrowCounterClockwise size={13} />
+          <span>
+            Resuming {agent.label} session <b>{label}</b>…{" "}
+            {agent.confirmsOnPrompt
+              ? `${agent.label} confirms when you send a message (if minmux's hooks are approved).`
+              : `${agent.label} hasn't confirmed yet: it may be showing a screen of its own.`}
+          </span>
+          <span className="resume-actions">{btn("Dismiss", close, false, false)}</span>
+        </div>
+      )
     case "sent":
       return (
         <div className="resume-banner" role="status">

@@ -110,3 +110,22 @@ describe("ResumeBanner", () => {
     expect(screen.getByText("Waiting for the prompt…")).toBeInTheDocument()
   })
 })
+
+describe("ResumeBanner — waiting (still running, unconfirmed)", () => {
+  it("Codex: says it confirms with the first message; Dismiss only closes", () => {
+    show({ phase: "waiting", plan: { ...plan, agent: "codex", command: "codex resume x" } })
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Resuming Codex session fix-login… Codex confirms when you send a message",
+    )
+    fireEvent.click(screen.getByText("Dismiss"))
+    expect(st().resume[id]).toBeUndefined()
+    expect(ipc.resumeConsume).not.toHaveBeenCalled() // the entry stays for next time
+  })
+
+  it("an agent that confirms on its own: it may be on a screen of its own", () => {
+    show({ phase: "waiting", plan })
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "Claude hasn't confirmed yet: it may be showing a screen of its own",
+    )
+  })
+})

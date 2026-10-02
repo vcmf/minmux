@@ -29,6 +29,8 @@ const minmuxStub = {
   onAgentEvents: vi.fn(unsub),
   onAgentMeta: vi.fn(unsub),
   agentMetaSnapshot: vi.fn(async () => []),
+  agentHintWanted: vi.fn(async () => ({ wanted: false, dismissals: 0 })),
+  agentHintDismiss: vi.fn(async () => 1),
   resumePlan: vi.fn(async () => ({})),
   resumeConsume: vi.fn(),
   shellIdle: vi.fn(),

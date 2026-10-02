@@ -20,7 +20,8 @@ export interface ResumePlan {
 export type ResumeState =
   | { phase: "pending"; plan: ResumePlan } // auto: waiting for the shell prompt to type it
   | { phase: "offer"; plan: ResumePlan } // ask mode: [Resume] [Dismiss]
-  | { phase: "resuming"; plan: ResumePlan } // typed; waiting for Claude's SessionStart
+  | { phase: "resuming"; plan: ResumePlan } // typed; waiting for the agent's SessionStart
+  | { phase: "waiting"; plan: ResumePlan } // still running unconfirmed: on a screen of its own
   | { phase: "resumed"; plan: ResumePlan }
   | { phase: "failed"; plan: ResumePlan; exitCode?: number } // exited before confirming / timed out
   | { phase: "skipped"; plan: ResumePlan } // preflight failed (e.g. transcript gone)

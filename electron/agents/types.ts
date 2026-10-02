@@ -40,6 +40,8 @@ export interface AgentAdapter {
   /** Where the lead session's name/colour live: the file an event points to (null: none) and
    *  how to read a session's meta from it. */
   meta?: { file(ev: AgentEvent): string | null; reader(): MetaReader }
+  /** Has the user approved our hooks in the agent (Codex)? null = can't tell (don't nag). */
+  approved?(): Promise<boolean | null>
 }
 
 /** One agent's registration: static parts (rc, env, rules) + its per-launch adapter factory. */
