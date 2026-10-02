@@ -47,6 +47,9 @@ export type AgentEventName =
   | "WorktreeRemove"
   | "TokenUsage"
 
+/** The agent an event (or ledger entry) belongs to: absent means Claude's. */
+export const agentOf = (x: { agent?: AgentKind }): AgentKind => x.agent ?? "claude"
+
 /** A hook event normalised down to the fields the graph needs. */
 export interface AgentEvent {
   agent?: AgentKind // the adapter that produced it; absent ⇒ "claude" (older drops, fixtures)
@@ -133,7 +136,7 @@ export function reduceAgentEvent(graph: AgentGraph, ev: AgentEvent): AgentGraph 
   if (!nodes[rid]) {
     nodes[rid] = {
       id: rid,
-      agent: ev.agent ?? "claude",
+      agent: agentOf(ev),
       sessionId: ev.sessionId,
       paneId: ev.paneId,
       agentType: "root",

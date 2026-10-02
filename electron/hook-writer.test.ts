@@ -3,7 +3,8 @@ import { execFileSync } from "node:child_process"
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
-import { HOOK_WRITER, buildHookSettings } from "./hook-writer"
+import { HOOK_WRITER } from "./hook-writer"
+import { buildHookSettings } from "./agents/claude"
 
 describe("buildHookSettings", () => {
   const s = JSON.parse(buildHookSettings()) as {

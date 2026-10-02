@@ -2,7 +2,8 @@ import { describe, it, expect } from "vitest"
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
-import { startHookWatcher, normalizeHookEvent } from "./agent-hooks"
+import { startHookWatcher } from "./agent-hooks"
+import { normalizeHookEvent } from "./agents/claude"
 import type { AgentEvent } from "../src/lib/agent-graph"
 
 const waitUntil = async (cond: () => boolean, ms = 4000) => {
@@ -169,6 +170,39 @@ describe("startHookWatcher", () => {
       await new Promise((r) => setTimeout(r, 120)) // several sweeps: still nothing else
       expect(seen).toHaveLength(1)
       for (const f of stray) expect(fs.existsSync(f)).toBe(true) // not claimed, not deleted
+    } finally {
+      await w.close()
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it("returns at once with nothing to watch (no agent armed) instead of waiting forever", async () => {
+    const dir = makeRoot()
+    const w = await Promise.race([
+      startHookWatcher({ dir, agents: {}, onBatch: () => {} }),
+      new Promise<null>((r) => setTimeout(() => r(null), 1000)),
+    ])
+    expect(w).not.toBeNull()
+    await w?.close()
+    fs.rmSync(dir, { recursive: true, force: true })
+  })
+
+  it("tags each event with the folder it came from, whatever the normaliser says", async () => {
+    const dir = makeRoot("codex")
+    const seen: AgentEvent[] = []
+    const w = await startHookWatcher({
+      dir,
+      agents: { codex: normalizeHookEvent }, // Claude's normaliser: it says "claude"
+      coalesceMs: 10,
+      onBatch: (b) => seen.push(...b),
+    })
+    try {
+      fs.writeFileSync(
+        path.join(dir, "codex", "p.1.0.x.json"),
+        JSON.stringify({ hook_event_name: "Stop", session_id: "s" }),
+      )
+      await waitUntil(() => seen.length === 1)
+      expect(seen[0]!.agent).toBe("codex")
     } finally {
       await w.close()
       fs.rmSync(dir, { recursive: true, force: true })

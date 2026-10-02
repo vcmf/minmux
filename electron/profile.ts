@@ -4,6 +4,8 @@
 // state. `--profile=<name>` picks another one; a dev build also takes MINMUX_PROFILE, an
 // installed one never does (docs/GOTCHAS.md#profiles).
 
+import { AGENT_ENV_VARS } from "./agents"
+
 /** The installed app's profile — the plain `minmux` names and dirs. */
 export const DEFAULT_PROFILE = ""
 
@@ -52,7 +54,7 @@ export const displayName = (n: ProfileNames): string => (n.label ? `minmux (${n.
 // not inherit them: they point at the parent's hook files, pane ids and integration dir.
 const PARENT_INSTANCE_VARS = [
   "MINMUX_PROFILE",
-  "MINMUX_CLAUDE_SETTINGS",
+  ...AGENT_ENV_VARS, // each agent's paths (MINMUX_CLAUDE_SETTINGS, …)
   "MINMUX_AGENT_EVENTS",
   "MINMUX_PANE_ID",
   "MINMUX_SHARE_HISTORY",

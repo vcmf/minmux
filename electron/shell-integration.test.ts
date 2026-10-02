@@ -13,6 +13,8 @@ import {
   wslInjection,
   ZSH_ZSHRC,
   BASH_RC,
+  BASH_HOOKS,
+  ZSH_HOOKS,
 } from "./shell-integration"
 
 describe("parseWslDistros", () => {
@@ -227,5 +229,19 @@ describe("buildInjection — per-profile script dir", () => {
     expect(bash.args[bash.args.length - 1]).toBe(
       path.join(os.tmpdir(), "minmux-dev", "shell-integration", "bash", "bashrc"),
     )
+  })
+})
+
+describe("agent wrappers (electron/agents)", () => {
+  const wrapper = /claude\(\) \{ command claude --settings "\$MINMUX_CLAUDE_SETTINGS" "\$@";? \}/g
+  it("go into the local zsh and bash rc once, after the user's rc and our hooks", () => {
+    expect(ZSH_ZSHRC.match(wrapper)).toHaveLength(1)
+    expect(BASH_RC.match(wrapper)).toHaveLength(1)
+    expect(ZSH_ZSHRC.indexOf("claude()")).toBeGreaterThan(ZSH_ZSHRC.indexOf("__MINMUX_ZSH_HOOKS=1"))
+    expect(BASH_RC.indexOf("claude()")).toBeGreaterThan(BASH_RC.indexOf("trap '__minmux_preexec'"))
+  })
+  it("stay out of the hooks an ssh host gets (no agent is armed there)", () => {
+    expect(BASH_HOOKS).not.toContain("claude()")
+    expect(ZSH_HOOKS).not.toContain("claude()")
   })
 })
