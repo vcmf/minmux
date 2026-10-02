@@ -5,6 +5,7 @@ import { mergeSettings } from "../settings/schema"
 import type { Settings } from "../settings/schema"
 import { useEffect, useState } from "react"
 import { ThemePicker } from "./theme-picker"
+import { AVAILABLE_AGENTS, agentInfo } from "../lib/agent-kinds"
 
 export function SettingsPanel() {
   const settings = useStore((s) => s.settings)
@@ -132,6 +133,27 @@ export function SettingsPanel() {
             onChange={(e) => update({ ...settings, scrollback: Number(e.target.value) })}
           />
         </label>
+
+        <h3 className="settings-section">Agents</h3>
+        {AVAILABLE_AGENTS.map((k) => (
+          <label
+            className="settings-row"
+            key={k}
+            title={`Arm ${agentInfo(k).label} in new terminals (Agents board, pane colour, tokens) and resume its sessions on relaunch. Terminals already open keep their current setting.`}
+          >
+            <span>{agentInfo(k).label}</span>
+            <input
+              type="checkbox"
+              checked={settings.agents[k].enabled}
+              onChange={(e) =>
+                update({
+                  ...settings,
+                  agents: { ...settings.agents, [k]: { enabled: e.target.checked } },
+                })
+              }
+            />
+          </label>
+        ))}
 
         <h3 className="settings-section">SSH</h3>
         <label className="settings-row">

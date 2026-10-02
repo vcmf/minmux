@@ -18,9 +18,9 @@ import {
 } from "@phosphor-icons/react"
 import { activeTheme, useStore } from "../store"
 import { sessionColor } from "../lib/session-color"
-import { claudePaneIds } from "../lib/agent-graph"
-import { claudeWorkFlat, inGitFor, inGitKey, inLabel, worksElsewhere } from "../lib/agent-dirs"
-import { ClaudeIcon } from "./claude-icon"
+import { agentPanes, paneAgents, type AgentKind } from "../lib/agent-graph"
+import { agentWorkFlat, inGitFor, inGitKey, inLabel, worksElsewhere } from "../lib/agent-dirs"
+import { agentIcon } from "./agent-icon"
 import { ContextMenu } from "./context-menu"
 import { integrationOn } from "../lib/ssh-integration"
 import {
@@ -77,7 +77,7 @@ export function Sidebar() {
     const c = hostColor(target, hostColors)
     return c ? hostColorCss(c) : undefined
   }
-  // Claude's last reply per pane (newest session root that ran in it), as a flat
+  // The agent's last reply per pane (newest session root that ran in it), as a flat
   // [paneId, message, …] list of primitives: the shallow compare keeps the sidebar from
   // re-rendering on every agent hook event — only when a reply actually changes.
   const replies = useStore(
@@ -92,18 +92,23 @@ export function Sidebar() {
   )
   const home = useStore((s) => s.home)
   const platform = useStore((s) => s.platform)
-  // Claude session colours per terminal (same as the pane border + tab icon).
+  // Agent session colours per terminal (same as the pane border + tab icon).
   const agentMeta = useStore((s) => s.agentMeta)
   const scheme = useStore((s) => activeTheme(s).scheme)
   const accentOf = (id: string) => sessionColor(agentMeta[id], scheme)
-  // Terminals running Claude (shallow-compared list: re-render only when the set changes).
-  const claudePanes = useStore(useShallow((s) => claudePaneIds(s.agents)))
-  // Where each pane's Claude works, as memoized primitives: the shallow compare re-renders
+  // Terminals running an agent, and which (flat primitives: re-render only when they change).
+  const panesFlat = useStore(useShallow((s) => agentPanes(s.agents)))
+  const agentIn = paneAgents(panesFlat)
+  // Where each pane's agent works, as memoized primitives: the shallow compare re-renders
   // only when a folder changes, not on every hook event.
-  const workFlat = useStore(useShallow((s) => claudeWorkFlat(s.agents)))
-  const work: Record<string, { cwd: string; others: string }> = {}
-  for (let i = 0; i + 2 < workFlat.length; i += 3)
-    work[workFlat[i]!] = { cwd: workFlat[i + 1]!, others: workFlat[i + 2]! }
+  const workFlat = useStore(useShallow((s) => agentWorkFlat(s.agents)))
+  const work: Record<string, { agent: AgentKind; cwd: string; others: string }> = {}
+  for (let i = 0; i + 3 < workFlat.length; i += 4)
+    work[workFlat[i]!] = {
+      agent: workFlat[i + 1] as AgentKind,
+      cwd: workFlat[i + 2]!,
+      others: workFlat[i + 3]!,
+    }
 
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
 
@@ -287,16 +292,13 @@ export function Sidebar() {
                     >
                       <span className="tree-icon">
                         {(() => {
-                          const Icon = claudePanes.includes(id)
-                            ? ClaudeIcon
-                            : s.remote
-                              ? Globe
-                              : Terminal
+                          const kind = agentIn[id]
+                          const Icon = kind ? agentIcon(kind) : s.remote ? Globe : Terminal
                           return (
                             <Icon
                               size={14}
                               weight="fill"
-                              // A host's colour (a safety cue) beats a Claude /color accent.
+                              // A host's colour (a safety cue) beats an agent's /color accent.
                               color={
                                 rowColor ??
                                 accentOf(id) ??
@@ -426,7 +428,7 @@ function DirLines({
   home: string
   shellGit: PaneGitInfo | undefined
   inGit: PaneGitInfo | undefined
-  work: { cwd: string; others: string } | undefined
+  work: { agent: AgentKind; cwd: string; others: string } | undefined
   onMenu: (e: React.MouseEvent, path: string) => void
 }) {
   const menuFor = (path: string | undefined) =>
@@ -437,7 +439,7 @@ function DirLines({
       +{extra}
     </span>
   )
-  if (!shellCwd || !work || !worksElsewhere(shellCwd, work.cwd, shellGit, inGit)) {
+  if (!shellCwd || !work || !worksElsewhere(shellCwd, work.cwd, shellGit, inGit, work.agent)) {
     return (
       <>
         <span className="tree-sub tree-dir" title={shellCwd} onContextMenu={menuFor(shellCwd)}>
@@ -470,13 +472,13 @@ function DirLines({
         <span className="tree-dir-label">in</span>
         <span className="tree-dir-path">
           {branchLine(
-            inGitFor(inGit, work.cwd)?.branch,
+            inGitFor(inGit, work.cwd, work.agent)?.branch,
             inLabel(shellCwd, work.cwd, home, shellGit?.real),
           )}
         </span>
         {more}
       </span>
-      {inGitFor(inGit, work.cwd)?.pr && <PrLine pr={inGit!.pr!} />}
+      {inGitFor(inGit, work.cwd, work.agent)?.pr && <PrLine pr={inGit!.pr!} />}
     </>
   )
 }

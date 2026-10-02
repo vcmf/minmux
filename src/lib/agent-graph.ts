@@ -355,16 +355,21 @@ export function agentPanes(graph: AgentGraph): string[] {
   return out
 }
 
-const paneIdsMemo = new WeakMap<AgentGraph, string[]>()
+const byPaneMemo = new WeakMap<AgentGraph, Record<string, AgentKind>>()
 
-/** Panes whose lead session is Claude, sorted (agentPanes filtered); memoized per graph. */
-export function claudePaneIds(graph: AgentGraph): string[] {
-  const hit = paneIdsMemo.get(graph)
+/** Each pane's lead agent (agentPanes as a lookup); memoized per graph. */
+export function agentByPane(graph: AgentGraph): Record<string, AgentKind> {
+  const hit = byPaneMemo.get(graph)
   if (hit) return hit
-  const flat = agentPanes(graph)
-  const out: string[] = []
-  for (let i = 0; i + 1 < flat.length; i += 2) if (flat[i + 1] === "claude") out.push(flat[i]!)
-  paneIdsMemo.set(graph, out)
+  const out = paneAgents(agentPanes(graph))
+  byPaneMemo.set(graph, out)
+  return out
+}
+
+/** agentPanes' flat `[paneId, kind, …]` back into a lookup (for a useShallow-selected copy). */
+export function paneAgents(flat: string[]): Record<string, AgentKind> {
+  const out: Record<string, AgentKind> = {}
+  for (let i = 0; i + 1 < flat.length; i += 2) out[flat[i]!] = flat[i + 1] as AgentKind
   return out
 }
 

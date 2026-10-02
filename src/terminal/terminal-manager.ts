@@ -852,7 +852,7 @@ function spawn(session: Session, entry: Entry) {
       for (const a of actions) {
         if (a.type === "shell-idle") {
           ipc.shellIdle(session.id)
-          useStore.getState().claudeExited(session.id)
+          useStore.getState().agentExited(session.id)
         } else if (a.type === "type-resume") typeResume(session.id, entry)
         else failResume(session.id, entry, a.exitCode)
       }
@@ -949,7 +949,7 @@ function typeResume(id: string, entry: Entry) {
   // POSIX shells: always `cd` into the session's project dir first — `claude --resume` only
   // finds that project's transcripts, and a Retry may come after the user cd'd elsewhere.
   const command = posix ? withCd(r.plan.cwd, r.plan.command) : r.plan.command
-  entry.flow.claudeSeen = true
+  entry.flow.agentSeen = true
   ipc.ptyWrite(id, `${posix ? "\x15" : ""}${command}\r`)
   // The ledger entry is NOT consumed here: a quit/crash during the confirmation window must
   // still resume next time. It's consumed on failure/dismiss; success re-records it anyway.
@@ -1113,18 +1113,18 @@ export const TerminalManager = {
     return true
   },
 
-  /** A Claude session started in this terminal (its SessionStart hook): a returning prompt
-   *  now means Claude exited; and any earlier Ctrl-Z'd job no longer masks that. */
-  /** A hook event came from this pane: Claude runs (or ran) here. */
-  claudeActive(id: string) {
+  /** A hook event came from this pane: an agent runs (or ran) here. */
+  agentActive(id: string) {
     const entry = entries.get(id)
-    if (entry) entry.flow.claudeSeen = true
+    if (entry) entry.flow.agentSeen = true
   },
 
-  claudeStarted(id: string) {
+  /** An agent session started here (SessionStart): a returning prompt now means it exited,
+   *  and an earlier Ctrl-Z'd job no longer masks that. */
+  agentStarted(id: string) {
     const entry = entries.get(id)
     if (!entry) return
-    entry.flow.claudeSeen = true
+    entry.flow.agentSeen = true
     entry.flow.suspendedJob = false
   },
 

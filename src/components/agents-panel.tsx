@@ -5,6 +5,18 @@ import { TerminalManager } from "../terminal/terminal-manager"
 import { displaySessionTitle } from "../lib/session-label"
 import { formatTokens, tokenBreakdown } from "../lib/tokens"
 import type { AgentNode, AgentStatus } from "../lib/agent-graph"
+import { AVAILABLE_AGENTS, agentInfo } from "../lib/agent-kinds"
+import { agentIcon } from "./agent-icon"
+
+/** The session's agent as a small icon (titled with its name) on the pane label. */
+function AgentKindIcon({ node }: { node: AgentNode }) {
+  const Icon = agentIcon(node.agent)
+  return (
+    <span title={agentInfo(node.agent).label} style={{ display: "inline-flex" }}>
+      <Icon size={12} />
+    </span>
+  )
+}
 
 // AgentStatus → dot class (reusing App.css .dot.*) + a short word.
 const DOT: Record<AgentStatus, { cls: string; word: string }> = {
@@ -92,9 +104,11 @@ function AgentRow({
   )
 }
 
-/** Right-side board of live Claude agents/sub-agents across all tabs & panes (M6). */
+/** Right-side board of live coding agents/sub-agents across all tabs & panes (M6). */
 export function AgentsPanel() {
   const agents = useStore((s) => s.agents)
+  const switches = useStore((s) => s.settings.agents)
+  const enabledAgents = AVAILABLE_AGENTS.filter((k) => switches[k].enabled)
   const sessions = useStore((s) => s.sessions)
   const home = useStore((s) => s.home)
   // The pane the user is currently in — used to box the matching session's agents.
@@ -131,7 +145,22 @@ export function AgentsPanel() {
       <div className="diff-files agents-files">
         {agents.rootIds.length === 0 && (
           <div className="diff-empty status-faint">
-            <TreeStructure size={16} /> No agents yet — run <code>claude</code> in a pane.
+            <TreeStructure size={16} />
+            {enabledAgents.length === 0 ? (
+              " Agents are switched off in Settings."
+            ) : (
+              <>
+                {" "}
+                No agents yet — run{" "}
+                {enabledAgents.map((k, i) => (
+                  <span key={k}>
+                    {i > 0 && (i === enabledAgents.length - 1 ? " or " : ", ")}
+                    <code>{agentInfo(k).command}</code>
+                  </span>
+                ))}{" "}
+                in a new terminal.
+              </>
+            )}
           </div>
         )}
         {agents.rootIds.map((rid) => {
@@ -149,7 +178,7 @@ export function AgentsPanel() {
             .map((cid) => agents.nodes[cid])
             .filter((c): c is AgentNode => !!c)
           const wts = root.worktrees ?? []
-          // The worktree Claude is in: the deepest containing its cwd (worktrees can nest).
+          // The worktree the agent is in: the deepest containing its cwd (worktrees can nest).
           const inWt = wts
             .filter((w) => root.cwd && (samePath(root.cwd, w.path) || isInside(root.cwd, w.path)))
             .sort((a, b) => b.path.length - a.path.length)[0]?.path
@@ -167,7 +196,7 @@ export function AgentsPanel() {
                 onMouseDown={go}
                 style={{ cursor: go ? "pointer" : undefined }}
               >
-                <TreeStructure size={12} /> {paneLabel}
+                <AgentKindIcon node={root} /> {paneLabel}
               </div>
               <AgentRow
                 node={root}
@@ -197,7 +226,7 @@ export function AgentsPanel() {
                   <div className="tree-labels">
                     <span className="tree-primary">
                       {w.branch ?? base(w.path)}
-                      {/* Claude works in this one now — the sidebar's `in` line. */}
+                      {/* The agent works in this one now — the sidebar's `in` line. */}
                       {w.path === inWt && <span className="status-faint"> · in</span>}
                     </span>
                     <button

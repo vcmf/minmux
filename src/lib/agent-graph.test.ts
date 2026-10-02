@@ -3,11 +3,15 @@ import {
   reduceAgentEvent,
   reduceAgentEvents,
   emptyGraph,
-  claudePaneIds,
   agentPanes,
+  agentByPane,
+  paneAgents,
   dropPaneSessions,
 } from "./agent-graph"
-import type { AgentEvent } from "./agent-graph"
+import type { AgentEvent, AgentGraph } from "./agent-graph"
+
+/** The panes agentPanes lists (every other entry of its flat [pane, kind, …] list). */
+const panesOf = (g: AgentGraph) => agentPanes(g).filter((_, i) => i % 2 === 0)
 
 // Authentic fixture: the interactive 6a spike run, where the root launched an
 // `Explore` sub-agent that read several docs. Trimmed to the shape the receiver emits.
@@ -316,7 +320,7 @@ describe("agent-graph — worktrees", () => {
   })
 })
 
-describe("claudePaneIds / dropPaneSessions", () => {
+describe("agentPanes / dropPaneSessions", () => {
   const g = reduceAgentEvents([
     { event: "SessionStart", sessionId: "a", paneId: "p2" },
     { event: "SessionStart", sessionId: "b", paneId: "p1" },
@@ -326,21 +330,21 @@ describe("claudePaneIds / dropPaneSessions", () => {
   ])
 
   it("lists each pane with a live session once, sorted; SessionEnd removes it", () => {
-    expect(claudePaneIds(g)).toEqual(["p1", "p2"])
+    expect(panesOf(g)).toEqual(["p1", "p2"])
     const ended = reduceAgentEvent(g, { event: "SessionEnd", sessionId: "a", paneId: "p2" })
-    expect(claudePaneIds(ended)).toEqual(["p1"])
+    expect(panesOf(ended)).toEqual(["p1"])
   })
 
   it("drops every session of a pane (incl. sub-agents) when its shell prompt returns", () => {
     const next = dropPaneSessions(g, "p1")
-    expect(claudePaneIds(next)).toEqual(["p2"])
+    expect(panesOf(next)).toEqual(["p2"])
     expect(next.nodes.sub).toBeUndefined()
     expect(next.rootIds).toHaveLength(2) // a + the pane-less d
   })
 
   it("same reference when the pane had no session; the pane list is memoized per graph", () => {
     expect(dropPaneSessions(g, "nope")).toBe(g)
-    expect(claudePaneIds(g)).toBe(claudePaneIds(g))
+    expect(agentPanes(g)).toBe(agentPanes(g))
   })
 })
 
@@ -350,7 +354,7 @@ describe("SessionStart re-homes a session", () => {
       { event: "SessionStart", sessionId: "s", paneId: "a" },
       { event: "SessionStart", sessionId: "s", paneId: "b", source: "resume" },
     ])
-    expect(claudePaneIds(g)).toEqual(["b"])
+    expect(panesOf(g)).toEqual(["b"])
   })
 
   it("a restart never reorders the board (/compact, resume in place or in another pane)", () => {
@@ -506,12 +510,12 @@ describe("agent kinds + explicit parents (multi-agent)", () => {
     expect(g.nodes.s1!.agent).toBe("codex")
   })
 
-  it("claudePaneIds only counts panes whose lead is Claude", () => {
+  it("agentPanes names each pane's lead agent", () => {
     const g = reduceAgentEvents([
       { event: "SessionStart", sessionId: "a", paneId: "p1" },
       { agent: "codex", event: "SessionStart", sessionId: "b", paneId: "p2" },
     ])
-    expect(claudePaneIds(g)).toEqual(["p1"])
+    expect(agentPanes(g)).toEqual(["p1", "claude", "p2", "codex"])
   })
 
   it("agentPanes lists each pane's lead agent, sorted, skipping nested sessions; memoized", () => {
@@ -523,5 +527,20 @@ describe("agent kinds + explicit parents (multi-agent)", () => {
     ])
     expect(agentPanes(g)).toEqual(["p1", "claude", "p2", "opencode"])
     expect(agentPanes(g)).toBe(agentPanes(g))
+  })
+})
+
+describe("agentByPane / paneAgents", () => {
+  const g = reduceAgentEvents([
+    { event: "SessionStart", sessionId: "a", paneId: "p1" },
+    { agent: "codex", event: "SessionStart", sessionId: "b", paneId: "p2" },
+  ])
+  it("looks each pane's lead agent up, memoized per graph", () => {
+    expect(agentByPane(g)).toEqual({ p1: "claude", p2: "codex" })
+    expect(agentByPane(g)).toBe(agentByPane(g))
+  })
+  it("decodes agentPanes' flat list back into the same lookup", () => {
+    expect(paneAgents(agentPanes(g))).toEqual(agentByPane(g))
+    expect(paneAgents([])).toEqual({})
   })
 })

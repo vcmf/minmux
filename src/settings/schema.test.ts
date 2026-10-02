@@ -177,3 +177,19 @@ describe("ssh settings", () => {
     expect(parseSettings(serializeSettings(s)).ssh).toEqual(s.ssh)
   })
 })
+
+describe("mergeSettings — per-agent switches", () => {
+  it("defaults every agent on and keeps only known agents with boolean switches", () => {
+    expect(mergeSettings({}).agents).toEqual({
+      claude: { enabled: true },
+      codex: { enabled: true },
+      opencode: { enabled: true },
+    })
+    const s = mergeSettings({
+      agents: { codex: { enabled: false }, claude: { enabled: "no" }, aider: { enabled: false } },
+    })
+    expect(s.agents.codex.enabled).toBe(false)
+    expect(s.agents.claude.enabled).toBe(true) // not a boolean → default
+    expect(s.agents).not.toHaveProperty("aider")
+  })
+})
