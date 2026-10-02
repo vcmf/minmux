@@ -49,23 +49,23 @@ describe("parseMark / isSuspendCode", () => {
 
 describe("onMark — shell idle (Claude exited)", () => {
   it("a prompt after a command where Claude ran → shell-idle, once", () => {
-    const { actions, s } = run(live({ claudeSeen: true }), [C, D(0)])
+    const { actions, s } = run(live({ agentSeen: true }), [C, D(0)])
     expect(actions).toEqual(["shell-idle"])
-    expect(s.claudeSeen).toBe(false)
+    expect(s.agentSeen).toBe(false)
     expect(run(s, [C, D(0)]).actions).toEqual([]) // no Claude since → nothing to report
   })
   it("never for panes where Claude didn't run (no IPC per command)", () => {
     expect(run(live(), [C, D(0), C, D(1)]).actions).toEqual([])
   })
   it("never for replayed marks (a reattach replays old history)", () => {
-    expect(run(live({ claudeSeen: true, replaying: true }), [C, D(0)]).actions).toEqual([])
+    expect(run(live({ agentSeen: true, replaying: true }), [C, D(0)]).actions).toEqual([])
   })
   it("a Ctrl-Z'd job masks later prompts (the suspended Claude is alive)", () => {
-    const { actions } = run(live({ claudeSeen: true }), [C, D(148), C, D(0)])
+    const { actions } = run(live({ agentSeen: true }), [C, D(148), C, D(0)])
     expect(actions).toEqual([])
   })
   it("a D without a preceding C (first prompt) isn't an exit", () => {
-    expect(run(live({ claudeSeen: true }), [D(0)]).actions).toEqual([])
+    expect(run(live({ agentSeen: true }), [D(0)]).actions).toEqual([])
   })
 })
 

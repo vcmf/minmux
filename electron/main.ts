@@ -43,6 +43,8 @@ import { checkForUpdate } from "./update-check"
 import { startHookWatcher, type DropNormalizer } from "./agent-hooks"
 import { createAdapters, type AgentAdapter } from "./agents"
 import { agentOf, type AgentEvent, type AgentKind } from "../src/lib/agent-graph"
+import { disabledAgentsIn, mergeAgentSwitches } from "../src/settings/agent-switches"
+import { agentPaneEnv, resumablePanes } from "./agents/arming"
 import { toDirListing } from "../src/lib/dir-listing"
 import { wslUncCandidates, uncToWslPath } from "./wsl-paths"
 import { colorfgbg } from "./color"
@@ -291,6 +293,7 @@ function startSettingsWatcher() {
   const p = settingsPath()
   fs.mkdirSync(path.dirname(p), { recursive: true })
   watch(p, { ignoreInitial: true }).on("all", () => {
+    switchesOff = null // re-read the agent switches on the next spawn
     mainWindow?.webContents.send("settings-changed")
     sshService?.settingsChanged() // reloads only if the ssh block itself changed
   })
@@ -797,11 +800,8 @@ function registerIpc() {
     // session runs in (M6). The hooks find the drop root in MINMUX_AGENT_EVENTS. WSL:
     // wslInjection forwards the paths over WSLENV with /p, so their Windows form is
     // translated for an agent inside WSL.
-    if (agentEventsDir && armed.length) {
-      for (const a of armed) Object.assign(env, a.env())
-      env.MINMUX_AGENT_EVENTS = agentEventsDir
-      env.MINMUX_PANE_ID = opts.id
-    }
+    if (agentEventsDir && armed.length)
+      Object.assign(env, agentPaneEnv(armed, disabledAgents(), agentEventsDir, opts.id))
     return startPty(event.sender, opts, {
       file: shellCmd,
       args: [...(opts.args ?? []), ...wslArgs, ...(inj?.args ?? [])],
@@ -900,8 +900,12 @@ function registerIpc() {
     if (!Array.isArray(paneIds)) return {}
     const l = sessionLedger()
     l.prune(new Set(paneIds))
+    // A switched-off agent isn't resumed: its pane opens plain and its entry goes (no hook
+    // would update it meanwhile, so re-enabling later must not resume a stale session).
+    const { resume, drop } = resumablePanes(paneIds, (id) => l.get(id), disabledAgents())
+    for (const id of drop) l.drop(id)
     return l.plan(
-      paneIds,
+      resume,
       (id) => sessions.has(id),
       // Async + host paths only; bounded. A WSL path isn't checked (a cold share could block
       // or wrongly say "gone") and a stat that times out (a hung network mount) means "can't
@@ -1413,6 +1417,20 @@ function shareHistoryEnabled(): boolean {
   } catch {
     return true
   }
+}
+
+// Agents switched off in settings (validated like the renderer's; default all on). Cached:
+// read once per settings change, not on every spawn (startSettingsWatcher clears it).
+let switchesOff: Set<AgentKind> | null = null
+function disabledAgents(): Set<AgentKind> {
+  if (switchesOff) return switchesOff
+  let raw: { agents?: unknown } = {}
+  try {
+    raw = (JSON.parse(readSettings() || "{}") as { agents?: unknown } | null) ?? {}
+  } catch {
+    // unreadable → defaults
+  }
+  return (switchesOff = disabledAgentsIn(mergeAgentSwitches(raw.agents)))
 }
 
 // Persist "don't warn again" back into settings.json (merge, best-effort).

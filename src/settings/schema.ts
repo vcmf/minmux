@@ -1,5 +1,6 @@
 import { DEFAULT_THEME_FAMILY, themeFamilyName, variantOf, type Appearance } from "./themes"
 import { mergeSshSettings, type SshSettings } from "../lib/ssh-validate"
+import { defaultAgentSwitches, mergeAgentSwitches, type AgentSwitches } from "./agent-switches"
 
 export { mergeSshSettings, type SshSettings } from "../lib/ssh-validate"
 
@@ -24,8 +25,9 @@ export interface Settings {
   defaultShell: string // command path of the preferred shell; "" = system $SHELL
   fileLinks: boolean // click file paths in output to open them
   openPath: string // editor command for clicked paths; "" = OS default. {file}/{line}/{col}
-  resumeAgents: "auto" | "ask" | "off" // on relaunch, resume the Claude session each pane was in
-  resumeBypassPermissions: boolean // also restore --permission-mode bypassPermissions (else default)
+  resumeAgents: "auto" | "ask" | "off" // on relaunch, resume the agent session each pane was in
+  resumeBypassPermissions: boolean // Claude: also restore --permission-mode bypassPermissions
+  agents: AgentSwitches // arm each agent in new terminals + resume it (default on)
   ssh: SshSettings
 }
 
@@ -50,6 +52,7 @@ export const defaultSettings: Settings = {
   openPath: "code -g {file}:{line}:{col}",
   resumeAgents: "auto",
   resumeBypassPermissions: false,
+  agents: defaultAgentSwitches(),
   ssh: mergeSshSettings({}),
 }
 
@@ -98,6 +101,7 @@ export function mergeSettings(input: unknown): Settings {
         ? o.resumeAgents
         : d.resumeAgents,
     resumeBypassPermissions: bool(o.resumeBypassPermissions, d.resumeBypassPermissions),
+    agents: mergeAgentSwitches(o.agents),
     ssh: mergeSshSettings(o.ssh),
   }
 }

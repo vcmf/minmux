@@ -9,7 +9,7 @@ export interface ShellFlow {
   cmdRunning: boolean // between a C and its D: something runs in the foreground
   replaying: boolean // a reattach's replayed history is being parsed: old marks, no effects
   suspendedJob: boolean // a job was Ctrl-Z'd here: a prompt no longer proves Claude exited
-  claudeSeen: boolean // a Claude session ran here this run → a returning prompt matters
+  agentSeen: boolean // an agent session ran here this run → a returning prompt matters
   resumeStage?: "await-prompt" | "typed" // a pending resume: waiting for the prompt / typed
   resumeSawStart: boolean // a C after typing: the next D is OUR command ending
 }
@@ -19,7 +19,7 @@ export const newShellFlow = (): ShellFlow => ({
   cmdRunning: false,
   replaying: true, // until the spawn says it wasn't a reattach (or the replay is parsed)
   suspendedJob: false,
-  claudeSeen: false,
+  agentSeen: false,
   resumeSawStart: false,
 })
 
@@ -64,9 +64,9 @@ export function onMark(
   if (suspended) next.suspendedJob = true // stays: we can't tell when that job ends
   // The prompt is back after a command: whatever ran in the foreground (Claude, SessionEnd or
   // not) has exited — unless it was only suspended, or these are replayed old marks.
-  if (s.cmdRunning && s.claudeSeen && !next.suspendedJob && !s.replaying) {
+  if (s.cmdRunning && s.agentSeen && !next.suspendedJob && !s.replaying) {
     actions.push({ type: "shell-idle" })
-    next.claudeSeen = false
+    next.agentSeen = false
   }
   // Resume: the first prompt → type. After typing, only a D that follows our command's own C
   // means it exited before Claude confirmed; a D without a C is the shell's first prompt

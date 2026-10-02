@@ -3,6 +3,7 @@ import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import { AGENTS, AGENT_ENV_VARS, AGENT_RULES, AGENT_SHELL, createAdapters } from "."
+import { AVAILABLE_AGENTS } from "../../src/lib/agent-kinds"
 
 describe("agent registry", () => {
   it("derives every list from one spec per agent", () => {
@@ -11,6 +12,10 @@ describe("agent registry", () => {
     expect(Object.keys(AGENT_RULES)).toEqual(kinds)
     expect(AGENT_SHELL).toEqual(AGENTS.map((a) => a.shell))
     expect(createAdapters().map((a) => a.kind)).toEqual(kinds)
+  })
+
+  it("registers the same agents the renderer offers (Settings switches, the board's hint)", () => {
+    expect(AGENTS.map((a) => a.kind)).toEqual(AVAILABLE_AGENTS)
   })
 
   it("declares every per-pane env name an adapter sets or WSL forwards", () => {

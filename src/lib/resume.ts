@@ -1,8 +1,11 @@
-// Resuming Claude Code sessions on relaunch — types shared with the main process
+// Resuming agent sessions on relaunch — types shared with the main process
 // (electron/agent-sessions.ts) + the renderer's per-terminal banner state.
+
+import type { AgentKind } from "./agent-graph"
 
 /** What main says to do for one restored terminal. */
 export interface ResumePlan {
+  agent?: AgentKind // whose session (absent = Claude: plans from before multi-agent)
   status: "resume" | "skip"
   sessionId: string
   cwd: string // spawn the shell here — Claude's transcripts are keyed by this project dir
@@ -39,4 +42,4 @@ export const withCd = (cwd: string, command: string): string =>
 
 /** Short label for a session on the banner: its /rename, else the id's first block. */
 export const sessionLabel = (plan: ResumePlan): string =>
-  plan.name?.trim() || plan.sessionId.split("-")[0] || "Claude session"
+  plan.name?.trim() || plan.sessionId.split("-")[0] || "session"

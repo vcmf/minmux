@@ -191,6 +191,7 @@ describe("SessionLedger.plan", () => {
     l.apply(start())
     l.setName("p1", "fix-login")
     expect((await plan(l)).p1).toEqual({
+      agent: "claude",
       status: "resume",
       sessionId: ID,
       cwd: "/repo",

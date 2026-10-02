@@ -89,7 +89,7 @@ describe("CloseConfirmDialog — sessions and terminals", () => {
   it("dismisses itself when its target was closed some other way", () => {
     st().newTab(testShell)
     const tabId = st().tabs[0]!.id
-    useStore.setState({ closeConfirm: { kind: "tab", tabId, title: "term", count: 2, claude: 0 } })
+    useStore.setState({ closeConfirm: { kind: "tab", tabId, title: "term", count: 2, agents: [] } })
     const { container } = render(<CloseConfirmDialog />)
     expect(container).not.toBeEmptyDOMElement()
     act(() => st().closeTab(tabId))
@@ -100,7 +100,9 @@ describe("CloseConfirmDialog — sessions and terminals", () => {
   it("names the session, the terminal count and a running Claude", () => {
     st().newTab(testShell)
     const tabId = st().tabs[0]!.id
-    useStore.setState({ closeConfirm: { kind: "tab", tabId, title: "term", count: 3, claude: 1 } })
+    useStore.setState({
+      closeConfirm: { kind: "tab", tabId, title: "term", count: 3, agents: ["claude"] },
+    })
     render(<CloseConfirmDialog />)
     expect(screen.getByText('Close "term"?')).toBeInTheDocument()
     expect(screen.getByText(/3 terminals will close.*1 is running Claude/)).toBeInTheDocument()
