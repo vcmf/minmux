@@ -200,13 +200,13 @@ describe("AgentMetaTracker over a shared file (Codex's thread-name index)", () =
       p1: { name: "Fix login", auto: true },
       p2: { name: "Write docs", auto: true },
     })
-    // A rename of one thread reaches only its pane; the other pane keeps reading the file.
+    // A /rename of one thread (a later line) reaches only its pane, as the user's name now.
     emitted.length = 0
     t.untrack("p2", false)
     fs.appendFileSync(index, `${line("a", "Fix login flow")}\n`)
     w.fire()
     await settle()
-    expect(emitted).toEqual([["p1", { name: "Fix login flow", auto: true }]])
+    expect(emitted).toEqual([["p1", { name: "Fix login flow" }]])
   })
 
   it("restarts when the pane's session changes, even in the same file", async () => {

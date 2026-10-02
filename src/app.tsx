@@ -238,7 +238,7 @@ function App() {
         const r = useStore.getState().resume[ev.paneId]
         // "failed" too: a slow Claude can confirm after the timeout — the late success wins.
         // Only for THIS session: a fresh `claude` the user starts instead isn't a resume.
-        if (r?.phase !== "resuming" && r?.phase !== "failed") continue
+        if (r?.phase !== "resuming" && r?.phase !== "waiting" && r?.phase !== "failed") continue
         if (ev.sessionId !== r.plan.sessionId) continue
         TerminalManager.resumeSettled(ev.paneId)
         useStore.getState().setResume(ev.paneId, { phase: "resumed", plan: r.plan })

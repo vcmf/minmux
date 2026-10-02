@@ -18,6 +18,7 @@ import { resolveDefaultShell } from "../lib/shells"
 import type { DropZone, PaneLeaf } from "../types"
 import { ResumeBanner } from "./resume-banner"
 import { IntegrationHint } from "./integration-hint"
+import { AgentHint } from "./agent-hint"
 import { agentIcon } from "./agent-icon"
 
 /** A pane: a strip of terminal tabs (surfaces) + a mount point for the visible one.
@@ -432,6 +433,7 @@ export function TerminalPane({ pane, tabId }: { pane: PaneLeaf; tabId: string })
       </div>
       <ResumeBanner sessionId={activeId} />
       <IntegrationHint sessionId={activeId} />
+      <AgentHint key={activeId} sessionId={activeId} />
       <div className="terminal-mount" ref={mountRef} />
       {/* While dragging: a transparent layer over the terminal (xterm's canvas would swallow
           the drag events) that shows where the surface would land. No animation — it sits

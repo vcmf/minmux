@@ -4,7 +4,9 @@
 // on top of the user's hooks (S1-a), and approved once in Codex's `/hooks` — approval is keyed
 // by the definition's hash, so the definition holds no per-launch or per-pane value.
 
+import { createHash } from "node:crypto"
 import fs from "node:fs"
+import os from "node:os"
 import path from "node:path"
 import type { AgentEvent, TokenUsage } from "../../src/lib/agent-graph"
 import type { LedgerEntry } from "../agent-sessions"
@@ -39,21 +41,89 @@ const SHORT = new Set(["SessionEnd", "Interrupt"])
 /** A TOML basic string. */
 const toml = (s: string) => `"${s.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`
 
-/** The `codex` arguments that add our hooks: `-c`, `hooks.<Event>=[…]` pairs. Pure; the same
- *  `dropScript` path always gives the same bytes (Codex's approval is keyed by them). */
-export function codexHookArgs(dropScript: string): string[] {
+/** One of our hooks, as Codex sees it. */
+interface CodexHook {
+  event: string
+  matcher?: string
+  command: string
+  timeout: number
+  async: boolean
+}
+
+/** Our hooks for a drop script: one per event. */
+function codexHooks(dropScript: string): CodexHook[] {
   // `exec`: the shell Codex runs the command in becomes node, so node's parent is Codex
   // itself (the writer records that pid: the lead rule).
   const command = `exec node ${posixQuote(dropScript)} codex`
-  const args: string[] = []
-  for (const e of EVENTS) {
+  return EVENTS.map((event) => ({
+    event,
+    ...(TOOL_EVENTS.has(event) ? { matcher: "" } : {}),
+    command,
+    timeout: SHORT.has(event) ? 3 : 5,
+    async: event !== "SessionEnd",
+  }))
+}
+
+/** The `codex` arguments that add our hooks: `-c`, `hooks.<Event>=[…]` pairs. Pure; the same
+ *  `dropScript` path always gives the same hooks (Codex's approval is keyed by them). */
+export function codexHookArgs(dropScript: string): string[] {
+  return codexHooks(dropScript).flatMap((h) => {
     const hook =
-      `{type="command",command=${toml(command)},timeout=${SHORT.has(e) ? 3 : 5}` +
-      (e === "SessionEnd" ? "}" : ",async=true}")
-    const entry = TOOL_EVENTS.has(e) ? `{matcher="",hooks=[${hook}]}` : `{hooks=[${hook}]}`
-    args.push("-c", `hooks.${e}=[${entry}]`)
+      `{type="command",command=${toml(h.command)},timeout=${h.timeout}` +
+      (h.async ? ",async=true}" : "}")
+    const entry =
+      h.matcher !== undefined ? `{matcher=${toml(h.matcher)},hooks=[${hook}]}` : `{hooks=[${hook}]}`
+    return ["-c", `hooks.${h.event}=[${entry}]`]
+  })
+}
+
+/** Codex's `snake_case` label of an event (its trust records use it). */
+const eventLabel = (event: string) =>
+  event.replace(/[A-Z]/g, (c, i) => (i ? "_" : "") + c.toLowerCase())
+
+/** JSON with every object's keys sorted, compact (serde_json's `sort_all_objects` + `to_vec`). */
+const sortedJson = (v: unknown): string =>
+  Array.isArray(v)
+    ? `[${v.map(sortedJson).join(",")}]`
+    : v && typeof v === "object"
+      ? `{${Object.keys(v)
+          .sort()
+          .map((k) => `${JSON.stringify(k)}:${sortedJson((v as Record<string, unknown>)[k])}`)
+          .join(",")}}`
+      : JSON.stringify(v)
+
+/** Codex's trust hash for each of our hooks, keyed by its trust record's key. */
+export function codexTrustHashes(dropScript: string): Map<string, string> {
+  // sha256 of the normalized identity {event_name, matcher, hooks: [handler]} as sorted JSON,
+  // as `hook_hash` / `version_for_toml` compute it (codex-rs/hooks/src/engine/discovery.rs).
+  const out = new Map<string, string>()
+  for (const h of codexHooks(dropScript)) {
+    const identity = {
+      event_name: eventLabel(h.event),
+      ...(h.matcher !== undefined ? { matcher: h.matcher } : {}),
+      hooks: [{ type: "command", command: h.command, timeout: h.timeout, async: h.async }],
+    }
+    const hash = createHash("sha256").update(sortedJson(identity)).digest("hex")
+    out.set(`/<session-flags>/config.toml:${eventLabel(h.event)}:0:0`, `sha256:${hash}`)
   }
-  return args
+  return out
+}
+
+/** Has Codex approved every one of these hooks? From its config.toml's `[hooks.state."<key>"]`
+ *  tables (`trusted_hash = "…"`), which Codex writes when the user trusts them. */
+export function codexApproved(configToml: string, hashes: Map<string, string>): boolean {
+  const trusted = new Map<string, string>()
+  let table: string | null = null
+  for (const line of configToml.split(/\r?\n/)) {
+    const head = /^\s*\[hooks\.state\."([^"]+)"\]\s*$/.exec(line)
+    if (head) table = head[1]!
+    else if (/^\s*\[/.test(line)) table = null
+    else if (table) {
+      const m = /^\s*trusted_hash\s*=\s*"([^"]+)"/.exec(line)
+      if (m) trusted.set(table, m[1]!)
+    }
+  }
+  return hashes.size > 0 && [...hashes].every(([key, hash]) => trusted.get(key) === hash)
 }
 
 // `apply_patch` sends the patch text; its file headers name what it touches (S1-d).
@@ -127,11 +197,20 @@ export function codexIndexFor(transcriptPath: string | undefined): string | null
   return m ? `${m[1]}${m[2]}session_index.jsonl` : null
 }
 
-/** Fold one index line into the id → name map (pure; latest wins, junk skipped). */
+/** A thread's name and whether the user gave it (vs Codex). */
+export interface ThreadName {
+  name: string
+  user: boolean
+}
+
+/** Fold one index line into the id → name map (latest wins, junk skipped). */
+// Codex writes a thread's first name itself (after its first turn); `/rename` appends another
+// line for the same id (S1-g), so any later, different name is the user's. Known limit: a
+// `/rename` before the first turn ends is the first line, so it reads as Codex's own.
 export function addThreadNameLine(
-  acc: Map<string, string> | null,
+  acc: Map<string, ThreadName> | null,
   line: string,
-): Map<string, string> | null {
+): Map<string, ThreadName> | null {
   // Mutates (and creates) the fold's private Map: one copy per line would make reading a long
   // index O(N²) on the main process, which also forwards terminal output.
   if (!line.includes('"thread_name"')) return acc
@@ -143,21 +222,23 @@ export function addThreadNameLine(
   }
   const r = o as { id?: unknown; thread_name?: unknown }
   if (typeof r?.id !== "string" || typeof r.thread_name !== "string") return acc
-  const map = acc ?? new Map<string, string>()
-  map.set(r.id, r.thread_name.trim())
+  const map = acc ?? new Map<string, ThreadName>()
+  const name = r.thread_name.trim()
+  const prev = map.get(r.id)
+  if (!prev) map.set(r.id, { name, user: false })
+  else if (prev.name !== name) map.set(r.id, { name, user: true })
   return map
 }
 
-/** Codex's meta: the session's thread name, marked automatic — Codex names threads itself and
- *  a user's `/rename` can't be told apart yet (S1-g), so it never colours a pane (D3). */
+/** Codex's meta: the session's thread name; only a user's `/rename` colours its pane (D3). */
 export const threadNameReader = (): MetaReader => {
   // Keyed by the path the hooks report: fine while Codex runs only on macOS/Linux; with WSL
   // panes, two distros' indexes would share it (key by distro + path then).
-  const fold = new TranscriptFold<Map<string, string> | null>(addThreadNameLine, null)
+  const fold = new TranscriptFold<Map<string, ThreadName> | null>(addThreadNameLine, null)
   return {
     update: async (key, candidates, sessionId) => {
-      const name = sessionId ? (await fold.update(key, candidates))?.get(sessionId) : undefined
-      return name ? { name, auto: true } : {}
+      const t = sessionId ? (await fold.update(key, candidates))?.get(sessionId) : undefined
+      return !t ? {} : t.user ? { name: t.name } : { name: t.name, auto: true }
     },
     // One shared, append-only file: keep what's been read of it for the app's lifetime instead
     // of re-reading it from the start every time its last pane lets go (a `/new`, a restart).
@@ -176,6 +257,32 @@ export const codexSessionRules: SessionRules = {
   isSwitch: (ev, lead) => ev.pid !== undefined && ev.pid === lead.pid,
 }
 
+// Codex's subcommands that never open its interactive UI (`codex --help`); a bare `codex`, a
+// prompt, `resume` and `fork` do. The first word that isn't a flag (or a flag's value) decides.
+const NO_TUI =
+  "exec|e|review|login|logout|mcp|plugin|app-server|remote-control|app|completion|update|" +
+  "doctor|sandbox|debug|apply|a|queue|archive|delete|migrate-rollouts|unarchive|cloud|" +
+  "exec-server|features|help|agents"
+const VALUE_FLAGS =
+  "-c|--config|-m|--model|-p|--profile|-s|--sandbox|-a|--ask-for-approval|-C|--cd|" +
+  "-i|--image|--local-provider|--enable|--disable|--add-dir"
+// zsh and bash share it.
+const CODEX_MARKER = [
+  "    local a skip= tui=1",
+  '    for a in "$@"; do',
+  "      [[ -n $skip ]] && { skip=; continue; }",
+  '      case "$a" in',
+  `        ${VALUE_FLAGS}) skip=1 ;;`,
+  "        -V|--version|-h|--help) tui=; break ;;",
+  "        --) break ;;",
+  "        -*) ;;",
+  `        ${NO_TUI}) tui=; break ;;`,
+  "        *) break ;;",
+  "      esac",
+  "    done",
+  "    [[ -n $tui && -t 1 ]] && printf '\\033]6974;agent;codex\\007'",
+]
+
 /** Adds our hooks to `codex` while minmux provides the args file (one argument per line, so
  *  quotes and spaces reach Codex intact). Line arrays, reviewed as shell. */
 export const codexShell: AgentShell = {
@@ -184,6 +291,9 @@ export const codexShell: AgentShell = {
     'if [[ -o interactive && -n "${MINMUX_CODEX_ARGS-}" ]]; then',
     "  function codex {", // not `codex()`: a user alias `codex` would break the rc
     '    [[ -r "$MINMUX_CODEX_ARGS" ]] || { command codex "$@"; return }',
+    // A display-only launch marker for minmux's approval hint: only for Codex's interactive UI
+    // (not `exec`, `login`, …) and only onto a terminal, never into a pipe or `$(…)`.
+    ...CODEX_MARKER,
     '    command codex "${(@f)"$(<"$MINMUX_CODEX_ARGS")"}" "$@"',
     "  }",
     "fi",
@@ -198,6 +308,7 @@ export const codexShell: AgentShell = {
     '    while IFS= read -r __minmux_l || [[ -n "$__minmux_l" ]]; do',
     '      __minmux_a+=("$__minmux_l")',
     '    done < "$MINMUX_CODEX_ARGS"',
+    ...CODEX_MARKER,
     '    command codex ${__minmux_a[@]+"${__minmux_a[@]}"} "$@"',
     "  }",
     "fi",
@@ -210,6 +321,7 @@ export const codexShell: AgentShell = {
  *  the file. */
 export function createCodexAdapter(): AgentAdapter {
   let argsPath: string | null = null
+  let trust: Map<string, string> | null = null // our hooks' trust hashes, as Codex records them
   const tokens = new CodexTokens() // per-rollout totals across batches
   return {
     kind: "codex",
@@ -222,7 +334,9 @@ export function createCodexAdapter(): AgentAdapter {
       const drop = path.join(dir, "drop.cjs")
       writeIfChanged(drop, `${HOOK_WRITER}\n`)
       const args = path.join(dir, "codex-args")
-      writeIfChanged(args, `${codexHookArgs(drop).join("\n")}\n`)
+      const content = `${codexHookArgs(drop).join("\n")}\n`
+      writeIfChanged(args, content)
+      trust = codexTrustHashes(drop)
       argsPath = args
     },
     env: (): Record<string, string> => (argsPath ? { MINMUX_CODEX_ARGS: argsPath } : {}),
@@ -230,6 +344,19 @@ export function createCodexAdapter(): AgentAdapter {
     // Stop → the session's rollout; SubagentStop → the sub-agent's (its hook names it).
     usage: (batch, resolve) => tokenEventsForBatch(tokens, batch, resolve),
     meta: { file: (ev) => codexIndexFor(ev.transcriptPath), reader: threadNameReader },
+    // Codex records each trusted hook in its config.toml; read it (async, read-only) and compare.
+    approved: async () => {
+      if (!trust) return null
+      const home = process.env.CODEX_HOME || path.join(os.homedir(), ".codex")
+      try {
+        return codexApproved(
+          await fs.promises.readFile(path.join(home, "config.toml"), "utf8"),
+          trust,
+        )
+      } catch {
+        return false // no config.toml yet: nothing trusted
+      }
+    },
   }
 }
 

@@ -9,6 +9,7 @@ export interface AgentKindInfo {
   resumePicker: string // opens the agent's own session picker
   worktreeMarkers: string[] // path parts of worktrees the agent lays out inside a repo
   windows?: false // not integrated on Windows (nor its WSL panes) yet
+  confirmsOnPrompt?: true // its session starts (and so a resume confirms) with the first message
 }
 
 export const AGENT_KINDS: Record<AgentKind, AgentKindInfo> = {
@@ -24,6 +25,7 @@ export const AGENT_KINDS: Record<AgentKind, AgentKindInfo> = {
     resumePicker: "codex resume",
     worktreeMarkers: [],
     windows: false, // hook quoting there is unverified (MULTI_AGENT.md S1-e)
+    confirmsOnPrompt: true, // SessionStart fires with the first prompt (S1-f)
   },
   opencode: {
     label: "OpenCode",

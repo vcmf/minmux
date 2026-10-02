@@ -1,4 +1,6 @@
 import { Terminal } from "@xterm/xterm"
+import { HINT_AFTER_MS, hintDue, launchedAgent } from "../lib/agent-hint"
+import type { AgentKind } from "../lib/agent-graph"
 import { FitAddon } from "@xterm/addon-fit"
 import { WebLinksAddon } from "@xterm/addon-web-links"
 import { WebglAddon } from "@xterm/addon-webgl"
@@ -20,7 +22,14 @@ import { appShortcut, keyAction } from "../lib/terminal-keys"
 import { gridChanged, type Grid } from "../lib/resize"
 import { findFilePaths } from "../lib/file-links"
 import { isPosixShell, withCd } from "../lib/resume"
-import { canType, newShellFlow, onMark, parseMark, type ShellFlow } from "../lib/resume-flow"
+import {
+  canType,
+  isSuspendCode,
+  newShellFlow,
+  onMark,
+  parseMark,
+  type ShellFlow,
+} from "../lib/resume-flow"
 import { isMac, isWindows } from "../lib/platform"
 import {
   afterStart,
@@ -43,6 +52,9 @@ import {
 } from "../lib/remote-connect"
 
 interface Entry {
+  agentLaunch?: { kind: AgentKind; at: number } // an agent's launch marker (approval hint)
+  lastAgentEventAt?: number // a hook event from this pane last arrived (ms)
+  hintTimer?: ReturnType<typeof setTimeout>
   term: Terminal
   fit: FitAddon
   search: SearchAddon
@@ -833,6 +845,15 @@ function spawn(session: Session, entry: Entry) {
     return true
   })
 
+  // An agent's launch marker from our rc wrapper (display-only: anything printed can fake it,
+  // and all it can do is offer a hint): if the agent says our hooks aren't approved, offer the
+  // approval hint (MULTI_AGENT.md F18). Not from a reattach's replayed history: an old launch.
+  term.parser.registerOscHandler(6974, (data) => {
+    const kind = session.remote || entry.flow.replaying ? null : launchedAgent(data)
+    if (kind) armAgentHint(session.id, entry, kind)
+    return true
+  })
+
   // OSC 133;C/D — command start/finish.
   term.parser.registerOscHandler(133, (data) => {
     if (session.remote && entry.verified) return true // see the MINMUX_OSC handler
@@ -845,8 +866,22 @@ function spawn(session: Session, entry: Entry) {
       store.signalSession(session.id, { type: "command-end" })
     }
     const mark = parseMark(data)
+    // The agent (or whatever ran) ended — not just suspended: no hint for it any more.
+    const ended = mark?.kind === "D" && !isSuspendCode(mark.code)
+    if (ended) endAgentHint(session.id, entry)
     if (mark) {
-      const resuming = useStore.getState().resume[session.id]?.phase === "resuming"
+      const code = mark.kind === "D" ? mark.code : undefined
+      const phase = useStore.getState().resume[session.id]?.phase
+      // Exiting before confirming = a failure. While "waiting" (it ran, just unconfirmed —
+      // Codex confirms with the first message) only a non-zero exit is; a clean quit just
+      // closes the banner (the quit rules handle the entry). A suspend (Ctrl-Z) is neither.
+      const waitingExit = phase === "waiting" && ended && entry.flow.cmdRunning
+      const resuming = phase === "resuming" || (waitingExit && !!code)
+      if (waitingExit && !code) {
+        entry.flow.resumeStage = undefined
+        clearTimeout(entry.resumeTimer)
+        useStore.getState().setResume(session.id, null)
+      }
       const { next, actions } = onMark(entry.flow, mark, resuming)
       entry.flow = next
       for (const a of actions) {
@@ -906,6 +941,38 @@ const RESUME_PROMPT_GRACE_MS = 3000
 const RESUME_PROMPT_WAIT_MS = 20_000
 const RESUME_CONFIRM_MS = 25_000
 
+/** An agent started in this pane: after a while, offer the approval hint if none of its hooks
+ *  arrived, it still runs, and main says it's wanted (unapproved definition, not dismissed). */
+function armAgentHint(id: string, entry: Entry, kind: AgentKind) {
+  clearTimeout(entry.hintTimer)
+  const at = Date.now()
+  entry.agentLaunch = { kind, at }
+  entry.hintTimer = setTimeout(() => {
+    const due = () =>
+      entries.get(id) === entry &&
+      entry.agentLaunch?.at === at &&
+      hintDue({
+        launchedAt: at,
+        lastEventAt: entry.lastAgentEventAt,
+        running: entry.flow.cmdRunning,
+      })
+    if (!due()) return
+    void ipc
+      .agentHintWanted(kind)
+      .then(({ wanted, dismissals }) => {
+        if (wanted && due()) useStore.getState().setAgentHint(id, { kind, dismissals })
+      })
+      .catch(() => {})
+  }, HINT_AFTER_MS)
+}
+
+/** The program that ran here exited: drop its hint. */
+function endAgentHint(id: string, entry: Entry) {
+  clearTimeout(entry.hintTimer)
+  entry.agentLaunch = undefined
+  if (useStore.getState().agentHint[id]) useStore.getState().setAgentHint(id, null)
+}
+
 /** Once we know whether the shell is integrated: arm the fallback for a pending resume. */
 function armResumeTimer(id: string, entry: Entry) {
   if (entry.flow.resumeStage !== "await-prompt") return // already typed (the prompt came first)
@@ -956,13 +1023,18 @@ function typeResume(id: string, entry: Entry) {
   useStore.getState().setResume(id, { phase: "resuming", plan: r.plan })
   entry.resumeTimer = setTimeout(() => {
     if (useStore.getState().resume[id]?.phase !== "resuming") return
-    if (entry.flow.integrated) failResume(id, entry)
+    const plan = useStore.getState().resume[id]!.plan
+    if (entry.flow.integrated && entry.flow.cmdRunning) {
+      // The agent is still running, just unconfirmed: it's likely on a screen of its own (an
+      // update offer, a trust prompt) before its session starts. Not a failure — say so, keep
+      // the entry; its SessionStart still lands as resumed, its exit as failed.
+      useStore.getState().setResume(id, { phase: "waiting", plan })
+    } else if (entry.flow.integrated) failResume(id, entry)
     else {
       // No integration = no hooks and no OSC 133: Claude can't confirm it resumed, and we
       // can't tell whether it's running now. Never call it failed (and never offer buttons
       // that would type into it) — just say what was sent. The entry is kept.
       entry.flow.resumeStage = undefined
-      const plan = useStore.getState().resume[id]!.plan
       useStore.getState().setResume(id, { phase: "sent", plan })
     }
   }, RESUME_CONFIRM_MS)
@@ -1113,10 +1185,13 @@ export const TerminalManager = {
     return true
   },
 
-  /** A hook event came from this pane: an agent runs (or ran) here. */
+  /** A hook event came from this pane: an agent runs (or ran) here — and its hooks work. */
   agentActive(id: string) {
     const entry = entries.get(id)
-    if (entry) entry.flow.agentSeen = true
+    if (!entry) return
+    entry.flow.agentSeen = true
+    entry.lastAgentEventAt = Date.now()
+    if (useStore.getState().agentHint[id]) useStore.getState().setAgentHint(id, null)
   },
 
   /** An agent session started here (SessionStart): a returning prompt now means it exited,
@@ -1261,6 +1336,7 @@ export const TerminalManager = {
     if (entry) clearTimeout(entry.resumeTimer)
     if (entry) clearTimeout(entry.retryTimer)
     if (entry) clearTimeout(entry.reopenTimer)
+    if (entry) clearTimeout(entry.hintTimer)
     // No entry = never started in this renderer (e.g. a hidden surface after a reload), but
     // main may still hold its PTY — always kill (an unknown id is a no-op there).
     if (!entry) return ipc.ptyKill(id)

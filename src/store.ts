@@ -25,7 +25,13 @@ import type { RemotePhase } from "./lib/remote-connect"
 import { reduceSignals } from "./lib/session-status"
 import type { SignalEvent } from "./lib/session-status"
 import { inGitKey, paneOfGitKey } from "./lib/agent-dirs"
-import { reduceAgentEvent, emptyGraph, dropPaneSessions, agentByPane } from "./lib/agent-graph"
+import {
+  reduceAgentEvent,
+  emptyGraph,
+  dropPaneSessions,
+  agentByPane,
+  type AgentKind,
+} from "./lib/agent-graph"
 import {
   tabCloseConfirm,
   terminalCloseConfirm,
@@ -127,6 +133,8 @@ interface AppState {
   agentMeta: Record<string, SessionMeta> // per pane: the agent session's /color + /rename
   paneGit: Record<string, PaneGitInfo> // per terminal: branch + GitHub PR (sidebar)
   resume: Record<string, ResumeState> // per terminal: agent-session resume banner
+  // per terminal: the "approve minmux's hooks" hint for the agent launched there (Codex)
+  agentHint: Record<string, { kind: AgentKind; dismissals: number }>
 
   setHome: (home: string) => void
   setPlatform: (platform: string) => void
@@ -190,6 +198,7 @@ interface AppState {
   setAgentMeta: (sessionId: string, meta: SessionMeta | null) => void
   setPaneGit: (fresh: Record<string, PaneGitInfo>, polled: string[]) => void
   setResume: (sessionId: string, state: ResumeState | null) => void
+  setAgentHint: (sessionId: string, hint: { kind: AgentKind; dismissals: number } | null) => void
   moveSurface: (tabId: string, sessionId: string, target: MoveTarget) => void // drag & drop
   setActivePane: (tabId: string, sessionId: string) => void
   focusSession: (sessionId: string) => void
@@ -327,6 +336,7 @@ function dropSessions(
   | "agentMeta"
   | "paneGit"
   | "resume"
+  | "agentHint"
   | "remotePhase"
   | "remoteDetail"
   | "integrationHint"
@@ -336,12 +346,14 @@ function dropSessions(
   const agentMeta = { ...state.agentMeta }
   const paneGit = { ...state.paneGit }
   const resume = { ...state.resume }
+  const agentHint = { ...state.agentHint }
   const remotePhase = { ...state.remotePhase }
   const remoteDetail = { ...state.remoteDetail }
   for (const id of ids) {
     delete remotePhase[id]
     delete remoteDetail[id]
     delete resume[id]
+    delete agentHint[id]
     delete paneGit[id]
     delete paneGit[inGitKey(id)] // …and its Claude `in` folder's
     delete sessions[id]
@@ -357,6 +369,7 @@ function dropSessions(
     agentMeta,
     paneGit,
     resume,
+    agentHint,
     remotePhase,
     remoteDetail,
     integrationHint,
@@ -430,6 +443,7 @@ export const useStore = create<AppState>((set, get) => ({
   agentMeta: {},
   paneGit: {},
   resume: {},
+  agentHint: {},
 
   setHome: (home) => set({ home }),
   setPlatform: (platform) => set({ platform }),
@@ -860,6 +874,17 @@ export const useStore = create<AppState>((set, get) => ({
         delete next[id]
       }
       return next === state.paneGit ? {} : { paneGit: next }
+    }),
+
+  setAgentHint: (sessionId, hint) =>
+    set((state) => {
+      // Unchanged → the same state object, so nothing is notified.
+      if (hint && !state.sessions[sessionId]) return state
+      if (!hint && !(sessionId in state.agentHint)) return state
+      const agentHint = { ...state.agentHint }
+      if (hint) agentHint[sessionId] = hint
+      else delete agentHint[sessionId]
+      return { agentHint }
     }),
 
   setResume: (sessionId, st) =>

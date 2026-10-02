@@ -343,7 +343,9 @@ and `terminal-manager` types `claude --resume <id> [--permission-mode m]` at the
   banner, never a retry loop. Main only consumes the exact carried-over entry, so a late
   success that re-recorded it this run is kept. Failure = a `D` that follows our command's own `C` (it exited — the code is in the
   `D` payload; a `D` without a `C` is just the shell's first prompt arriving late) before
-  Claude's `SessionStart`, or 25 s passing. A later success still wins.
+  the agent's `SessionStart`, or 25 s passing with the command no longer running. Still running
+  at 25 s (the agent is on a screen of its own: an update offer, a trust prompt) is **not** a
+  failure: the banner says it's waiting, the entry stays, and a later success still wins.
 - The command is typed from **validated** parts only (UUID id, one-word mode):
   bypassPermissions is dropped unless `resumeBypassPermissions` is on.
 - Background tabs start lazily, so their entries wait (across quits) until first shown.

@@ -6,12 +6,15 @@ import path from "node:path"
 import {
   addCodexTokenLine,
   addThreadNameLine,
+  codexApproved,
   codexHookArgs,
+  codexTrustHashes,
   codexIndexFor,
   codexSessionRules,
   codexShell,
   CodexTokens,
   normalizeCodexEvent,
+  type ThreadName,
 } from "./codex"
 import { AGENT_SHELL } from "."
 import { reduceAgentEvents, type AgentEvent } from "../../src/lib/agent-graph"
@@ -286,8 +289,14 @@ describe("Codex thread names", () => {
     expect(codexIndexFor("/tmp/other.jsonl")).toBeNull()
     expect(codexIndexFor(undefined)).toBeNull()
   })
+  it("treats a thread's first name as Codex's and the same name again as no rename", () => {
+    let m: Map<string, ThreadName> | null = null
+    for (const l of ['{"id":"a","thread_name":"Fix"}', '{"id":"a","thread_name":"Fix"}'])
+      m = addThreadNameLine(m, l)
+    expect(m!.get("a")).toEqual({ name: "Fix", user: false })
+  })
   it("keeps the latest name per thread and ignores junk", () => {
-    let m: Map<string, string> | null = null
+    let m: Map<string, ThreadName> | null = null
     for (const l of [
       '{"id":"a","thread_name":"Run curl"}',
       '{"id":"b","thread_name":"Other"}',
@@ -296,7 +305,10 @@ describe("Codex thread names", () => {
       '{"id":5,"thread_name":"x"}',
     ])
       m = addThreadNameLine(m, l)
-    expect(Object.fromEntries(m!)).toEqual({ a: "Run curl HEAD request", b: "Other" })
+    expect(Object.fromEntries(m!)).toEqual({
+      a: { name: "Run curl HEAD request", user: true }, // a later, different name: /rename
+      b: { name: "Other", user: false }, // Codex's own
+    })
     expect(m!.get("constructor")).toBeUndefined() // a Map: no prototype names
   })
   it("folds a long index in linear time (it runs on the main process)", () => {
@@ -305,9 +317,82 @@ describe("Codex thread names", () => {
       (_, i) => `{"id":"t${i % 5000}","thread_name":"n${i}"}`,
     )
     const t0 = performance.now()
-    let m: Map<string, string> | null = null
+    let m: Map<string, ThreadName> | null = null
     for (const l of lines) m = addThreadNameLine(m, l)
     expect(m!.size).toBe(5000)
     expect(performance.now() - t0).toBeLessThan(500) // the O(N²) copy took seconds here
+  })
+})
+
+describe("Codex hook approval (its own trust records)", () => {
+  // A hash Codex itself recorded when our SessionStart hook was trusted in a real run.
+  const DROP =
+    "/var/folders/2h/p050c52s2976v5kxlgbrmb580000gn/T/minmux-pr7h-VOS4Z3/home/.config/minmux/agents/drop.cjs"
+  const RECORDED = "sha256:1c1d7e9a0047b00274e966257a919a9bae09fc4eae5b677ea6748b24bbb506b8"
+  it("computes the same trust hash Codex records", () => {
+    const h = codexTrustHashes(DROP)
+    expect(h.size).toBe(10)
+    expect(h.get("/<session-flags>/config.toml:session_start:0:0")).toBe(RECORDED)
+  })
+  const toml = (entries: [string, string][]) =>
+    entries.map(([k, v]) => `[hooks.state."${k}"]\ntrusted_hash = "${v}"\n`).join("\n")
+  it("approved only when every one of our hooks is trusted with today's definition", () => {
+    const h = codexTrustHashes("/cfg/agents/drop.cjs")
+    const all = [...h]
+    expect(codexApproved(toml(all), h)).toBe(true)
+    expect(codexApproved(toml(all.slice(1)), h)).toBe(false) // one missing
+    const changed = all.map(([k, v], i) => [k, i ? v : "sha256:old"] as [string, string])
+    expect(codexApproved(toml(changed), h)).toBe(false) // a definition that changed since
+    expect(codexApproved('model = "x"\n', h)).toBe(false)
+  })
+  it("keeps snake_case event labels apart (stop vs subagent_stop)", () => {
+    const keys = [...codexTrustHashes("/d").keys()]
+    expect(keys).toContain("/<session-flags>/config.toml:stop:0:0")
+    expect(keys).toContain("/<session-flags>/config.toml:subagent_stop:0:0")
+    expect(keys).toContain("/<session-flags>/config.toml:permission_request:0:0")
+  })
+})
+
+describe("the launch marker (approval hint)", () => {
+  // A real terminal for the wrapper's stdout: macOS `script` gives the shell a pty.
+  const tty = process.platform === "darwin" && has("zsh") && has("script")
+  const run = (args: string) => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "minmux-mark-"))
+    try {
+      fs.writeFileSync(path.join(dir, "codex"), "#!/bin/sh\nexit 0\n")
+      fs.chmodSync(path.join(dir, "codex"), 0o755)
+      const argsFile = path.join(dir, "args")
+      fs.writeFileSync(argsFile, "-c\nhooks.Stop=[]\n")
+      const rc = path.join(dir, "rc")
+      fs.writeFileSync(rc, `${codexShell.zsh.join("\n")}\n`)
+      return execFileSync(
+        "script",
+        ["-q", "/dev/null", "zsh", "-i", "-c", `source '${rc}'; codex ${args}`],
+        {
+          env: {
+            ...process.env,
+            PATH: `${dir}:${process.env.PATH}`,
+            MINMUX_CODEX_ARGS: argsFile,
+            HOME: dir,
+            ZDOTDIR: dir,
+          },
+          encoding: "utf8",
+          stdio: ["ignore", "pipe", "pipe"], // `script` wants no pipe on stdin
+        },
+      )
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  }
+  it.skipIf(!tty)("is printed onto a terminal for Codex's UI, not for its other commands", () => {
+    expect(run("")).toContain("\x1b]6974;agent;codex\x07")
+    expect(run("resume abc")).toContain("\x1b]6974;agent;codex\x07")
+    expect(run("exec 'do it'")).not.toContain("6974")
+    expect(run("--version")).not.toContain("6974")
+    // Global flags (and their values) come before the subcommand.
+    expect(run("-m o3 exec 'do it'")).not.toContain("6974")
+    expect(run("-c a=b --cd /tmp review")).not.toContain("6974")
+    expect(run("-m o3 'fix the bug'")).toContain("\x1b]6974;agent;codex\x07")
+    expect(run("--yolo resume abc")).toContain("\x1b]6974;agent;codex\x07")
   })
 })
