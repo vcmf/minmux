@@ -40,11 +40,11 @@ import { applyLoginShellEnv } from "./shell-env"
 import { buildEditorCommand, winQuote } from "./editor-command"
 import { orderMacEditors, planEditor, type EditorPlan, type EditorInfo } from "./editor-detect"
 import { checkForUpdate } from "./update-check"
-import { startHookWatcher } from "./agent-hooks"
+import { normalizeHookEvent, startHookWatcher } from "./agent-hooks"
 import type { AgentEvent } from "../src/lib/agent-graph"
 import { buildHookSettings } from "./hook-writer"
 import { toDirListing } from "../src/lib/dir-listing"
-import { wslUncCandidates, winToMnt, uncToWslPath } from "./wsl-paths"
+import { wslUncCandidates, uncToWslPath } from "./wsl-paths"
 import { colorfgbg } from "./color"
 import { TranscriptTokens } from "./transcript-tokens"
 import { tokenEventsForBatch } from "./agent-tokens"
@@ -144,11 +144,13 @@ const sessions = new Map<string, PtySession>()
 // down (gone from `sessions`). None may outlive Node: quitting drains this (pty-drain.ts).
 const livePtys = new Set<Drainable>()
 let mainWindow: BrowserWindow | null = null
-// Paths to the scoped Claude Code hook-settings files the `claude` shell wrapper loads
-// (set once the file-drop watcher is up). null ⇒ agents board stays empty. The WSL variant
-// (Windows only) points the drop dir at a /mnt/c path an in-WSL claude can write.
+// The scoped Claude Code hook-settings file the `claude` shell wrapper loads, and the
+// per-launch drop root every agent's hooks write into (`<root>/<agent>/`, via
+// MINMUX_AGENT_EVENTS), both set once the file-drop watcher is up. null ⇒ agents board stays
+// empty. The settings hold no path, so native and WSL panes share one file (WSLENV /p
+// translates both env paths for a claude inside WSL).
 let hookSettingsPath: string | null = null
-let hookSettingsPathWsl: string | null = null
+let agentEventsDir: string | null = null
 let hookWatcher: { close: () => Promise<void> } | null = null
 // Accumulates per-transcript token totals across hook batches (session + sub-agent).
 const agentTokens = new TranscriptTokens()
@@ -292,8 +294,9 @@ function startSettingsWatcher() {
 
 // ── agent observability (M6) ───────────────────────────────────────
 // Start the file-drop watcher + write the scoped settings file(s). Best-effort: on any
-// failure the board just stays empty (never blocks startup or the terminal). Claude writes
-// each event as a file into `hook-events/`; the watcher reads + deletes them (agent-hooks).
+// failure the board just stays empty (never blocks startup or the terminal). Each agent's
+// hooks write every event as a file into `hook-events/<nonce>/<agent>/`; the watcher reads +
+// deletes them (agent-hooks).
 // No ports/networking — so nothing can go stale, and it crosses the WSL boundary.
 async function startAgentObservability(): Promise<void> {
   try {
@@ -301,12 +304,17 @@ async function startAgentObservability(): Promise<void> {
     // Per-launch nonce as the drop-dir name: a foreign local process can't guess where to
     // drop spoofed events (restores the auth boundary the old token gave), and it clears any
     // stale drops from a previous run for free. Wipe the parent so old nonces don't pile up.
+    // Hooks find it via the pane env (MINMUX_AGENT_EVENTS), so an agent still carrying an
+    // earlier launch's env (a tmux server started from an old pane) reports nothing; before,
+    // its events arrived tagged with a pane that no longer exists.
     const eventsRoot = path.join(cfg, "hook-events")
     fs.rmSync(eventsRoot, { recursive: true, force: true })
     const eventsDir = path.join(eventsRoot, randomUUID())
     fs.mkdirSync(eventsDir, { recursive: true })
+    fs.mkdirSync(path.join(eventsDir, "claude"))
     hookWatcher = await startHookWatcher({
       dir: eventsDir,
+      agents: { claude: normalizeHookEvent },
       onBatch: (events: AgentEvent[]) => {
         // Fold the batch into the resume ledger (which pane is inside which Claude session,
         // + its WSL distro) and tag each event lead/nested from it, then forward it at once
@@ -350,19 +358,13 @@ async function startAgentObservability(): Promise<void> {
         })
       },
     })
-    // Native settings: the drop dir as a host path.
-    const nativePath = path.join(cfg, "claude-hooks.json")
-    fs.writeFileSync(nativePath, buildHookSettings(eventsDir))
-    hookSettingsPath = nativePath
-    // WSL variant (Windows only): same physical dir, addressed via /mnt/c so an in-WSL
-    // `claude` can write into it. MINMUX_CLAUDE_SETTINGS is WSLENV-forwarded with /p, so
-    // this file's Windows path is translated for claude to read.
-    const mnt = process.platform === "win32" ? winToMnt(eventsDir) : null
-    if (mnt) {
-      const wslPath = path.join(cfg, "claude-hooks.wsl.json")
-      fs.writeFileSync(wslPath, buildHookSettings(mnt))
-      hookSettingsPathWsl = wslPath
-    }
+    const settingsPath = path.join(cfg, "claude-hooks.json")
+    fs.writeFileSync(settingsPath, buildHookSettings())
+    // Older Windows builds also wrote a WSL variant addressing the drop dir via /mnt/c: gone.
+    if (process.platform === "win32")
+      fs.rmSync(path.join(cfg, "claude-hooks.wsl.json"), { force: true })
+    hookSettingsPath = settingsPath
+    agentEventsDir = eventsDir
     diag("agent-hooks-up", { dir: eventsDir })
   } catch (err) {
     diag("agent-hooks-failed", { err: String(err) })
@@ -761,13 +763,12 @@ function registerIpc() {
     const startCwd = !wsl && opts.cwd && fs.existsSync(opts.cwd) ? opts.cwd : os.homedir()
     const env = baseSpawnEnv(opts, inj?.env)
     // Let the injected `claude` wrapper route through our scoped hook settings, and tag
-    // this pane so the agents board knows which pane each session runs in (M6). WSL panes
-    // use the /mnt/c-addressed variant; wslInjection forwards both vars over WSLENV (the
-    // settings path with /p so its Windows form is translated for claude inside WSL).
-    if (hookSettingsPath) {
-      env.MINMUX_CLAUDE_SETTINGS = wsl
-        ? (hookSettingsPathWsl ?? hookSettingsPath)
-        : hookSettingsPath
+    // this pane so the agents board knows which pane each session runs in (M6). The hooks
+    // find the drop root in MINMUX_AGENT_EVENTS. WSL: wslInjection forwards the paths over
+    // WSLENV with /p, so their Windows form is translated for an agent inside WSL.
+    if (hookSettingsPath && agentEventsDir) {
+      env.MINMUX_CLAUDE_SETTINGS = hookSettingsPath
+      env.MINMUX_AGENT_EVENTS = agentEventsDir
       env.MINMUX_PANE_ID = opts.id
     }
     return startPty(event.sender, opts, {

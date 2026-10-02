@@ -273,9 +273,15 @@ export function wslInjection(
     return {
       args: ["--", "bash", "--rcfile", `${wslBase}/bash/bashrc`, "-i"],
       env: {},
-      // /p path-translates the (Windows) hook-settings path so claude-in-WSL can read it.
+      // /p path-translates the (Windows) hook-settings path and drop root for agents in WSL.
       // COLORFGBG crosses so agents in WSL can detect our light/dark theme.
-      wslenv: ["MINMUX_SHARE_HISTORY", "MINMUX_CLAUDE_SETTINGS/p", "MINMUX_PANE_ID", "COLORFGBG"],
+      wslenv: [
+        "MINMUX_SHARE_HISTORY",
+        "MINMUX_CLAUDE_SETTINGS/p",
+        "MINMUX_AGENT_EVENTS/p", // the agents' drop root, path-translated like the settings
+        "MINMUX_PANE_ID",
+        "COLORFGBG",
+      ],
     }
   }
   if (name === "zsh") {
@@ -295,6 +301,7 @@ export function wslInjection(
         "MINMUX_SHELL_INTEGRATION",
         "MINMUX_SHARE_HISTORY",
         "MINMUX_CLAUDE_SETTINGS/p", // /p path-translates it for claude-in-WSL to read
+        "MINMUX_AGENT_EVENTS/p", // the agents' drop root (hooks write there from WSL)
         "MINMUX_PANE_ID",
         "COLORFGBG", // so agents in WSL can detect our light/dark theme
       ],
