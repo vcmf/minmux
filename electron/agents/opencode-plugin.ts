@@ -70,21 +70,60 @@ export const MinmuxPlugin = async (ctx) => {
   }
 
   const sessions = new Map() // id → { parentID, directory, title, status }
+  const asks = new Map() // permission request id → the tool call it's for
   const assistant = new Map() // session id → its latest assistant message id
   const reply = new Map() // session id → that message's latest text (bounded when sent)
   const capped = (m, k, v) => {
     if (!m.has(k) && m.size >= MAX_SESSIONS) m.delete(m.keys().next().value)
     m.set(k, v)
   }
+  // Least recently used goes first: a long-lived root outlives its many sub-agents.
   const session = (id) => {
     let s = sessions.get(id)
-    if (!s) capped(sessions, id, (s = {}))
+    if (s) sessions.delete(id)
+    else if (sessions.size >= MAX_SESSIONS) sessions.delete(sessions.keys().next().value)
+    sessions.set(id, (s = s || {}))
     return s
   }
-  // A child names its parent; a root its folder (so a session first seen mid-life still files).
-  const where = (s) => (s.parentID ? { parentID: s.parentID } : { directory: s.directory || base })
-
-  const onSession = (info) => {
+  // A child's root: its parent chain's top (sub-agents can nest with custom agents).
+  const rootOf = (id) => {
+    let cur = id
+    for (let i = 0; i < 16; i++) {
+      const p = sessions.get(cur) && sessions.get(cur).parentID
+      if (!p) break
+      cur = p
+    }
+    return cur
+  }
+  // A child names its parent and root; a root its folder (so a session first seen mid-life
+  // still files).
+  const where = (id) => {
+    const s = session(id)
+    return s.parentID
+      ? { parentID: s.parentID, rootID: rootOf(id) }
+      : { directory: s.directory || base }
+  }
+  // A "start" before a session's activity: a child's first sight; a root's whenever the user
+  // moves to it (new, picked in /sessions, --session, back after /new), i.e. its own new
+  // turn, never a background session's tools. Only once its info is known (a prompt brings
+  // session.updated before busy): an unknown session may be a child.
+  let active
+  const begin = (id, activate) => {
+    const s = session(id)
+    if (!s.seen) return
+    if (s.parentID) {
+      begin(rootOf(id))
+      if (s.started) return
+      s.started = true
+      return drop(Object.assign({ e: "start", sessionID: id, title: s.title }, where(id)))
+    }
+    // A root starts only when the user moves to it: never on a background session's tools.
+    if (!activate || active === id) return
+    active = id
+    const source = activate === "new" ? "new" : "seen"
+    drop({ e: "start", sessionID: id, source, directory: s.directory || base })
+  }
+  const onSession = (info, created) => {
     const id = str(info && info.id, MAX_TEXT)
     if (!id) return
     const s = session(id)
@@ -93,14 +132,16 @@ export const MinmuxPlugin = async (ctx) => {
     const title = str(info.title, MAX_TEXT)
     if (s.seen && s.parentID === parentID && s.directory === directory && s.title === title) return
     Object.assign(s, { seen: true, parentID, directory, title })
-    drop(Object.assign({ e: "session", sessionID: id, title }, where(s)))
+    if (created) begin(id, "new")
+    drop(Object.assign({ e: "session", sessionID: id, title }, where(id)))
   }
   const onStatus = (id, status) => {
     if (!id || (status !== "busy" && status !== "idle")) return
     const s = session(id)
     if (s.status === status) return // reported on change only
     s.status = status
-    const o = Object.assign({ e: "status", sessionID: id, status }, where(s))
+    if (status === "busy") begin(id, "turn")
+    const o = Object.assign({ e: "status", sessionID: id, status }, where(id))
     if (status === "idle") {
       const text = reply.get(id)
       if (typeof text === "string" && text.trim()) o.reply = text.slice(0, MAX_REPLY)
@@ -116,7 +157,8 @@ export const MinmuxPlugin = async (ctx) => {
     o.callID = str(input.callID, MAX_TEXT)
     const paths = touched(args)
     if (paths.length) o.paths = paths
-    drop(Object.assign(o, where(session(id))))
+    if (phase === "start") begin(id)
+    drop(Object.assign(o, where(id)))
   }
 
   drop({ e: "started", directory: base })
@@ -141,7 +183,7 @@ export const MinmuxPlugin = async (ctx) => {
           }
           case "session.created":
           case "session.updated":
-            return onSession(p.info)
+            return onSession(p.info, event.type === "session.created")
           case "session.status": {
             const t = p.status && p.status.type
             return onStatus(str(p.sessionID, MAX_TEXT), t === "retry" ? "busy" : t)
@@ -155,8 +197,12 @@ export const MinmuxPlugin = async (ctx) => {
             const phase = event.type === "permission.asked" ? "asked" : "replied"
             const o = { e: "permission", phase, sessionID: id, tool: str(p.permission, MAX_TEXT) }
             o.requestID = str(p.id, MAX_TEXT) || str(p.requestID, MAX_TEXT) // which ask a reply answers
-            o.callID = str(p.tool && p.tool.callID, MAX_TEXT)
-            return drop(Object.assign(o, where(session(id))))
+            // The call it's for (a reply doesn't say: the ask did).
+            o.callID = str(p.tool && p.tool.callID, MAX_TEXT) || asks.get(o.requestID)
+            if (phase === "asked" && o.requestID && o.callID) capped(asks, o.requestID, o.callID)
+            else if (phase === "replied") asks.delete(o.requestID)
+            if (phase === "asked") begin(id)
+            return drop(Object.assign(o, where(id)))
           }
         }
       } catch {

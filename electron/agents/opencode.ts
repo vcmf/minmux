@@ -1,11 +1,12 @@
-// OpenCode: minmux's plugin, added through OPENCODE_CONFIG_CONTENT (MULTI_AGENT.md F1, S2).
-// The plugin writes its own drops; reading them onto the board is PR #9's normaliser.
+// OpenCode: minmux's plugin, added through OPENCODE_CONFIG_CONTENT (MULTI_AGENT.md F1, S2),
+// writes its own drops; the normaliser maps them onto the canonical events.
 
 import fs from "node:fs"
 import path from "node:path"
 import { pathToFileURL } from "node:url"
+import type { AgentEvent } from "../../src/lib/agent-graph"
 import { writeIfChanged } from "./files"
-import { OPENCODE_PLUGIN } from "./opencode-plugin"
+import { OPENCODE_DROP_VERSION, OPENCODE_PLUGIN } from "./opencode-plugin"
 import type { AgentAdapter, AgentShell, AgentSpec, SessionRules } from "./types"
 
 /** The plugin's file name: also how a stale copy from another minmux is recognised. */
@@ -102,12 +103,77 @@ export const opencodeShell: AgentShell = {
   wslenv: [], // not on Windows (so never in a WSL pane) yet: see opencodeSpec.windows
 }
 
-// Resume and the lead rules come with PR #9 / #11 (sub-agents share their root's process, so
-// "same process = a switch" doesn't hold here). Until then: never a switch.
+// By process (MULTI_AGENT.md §4.4): the plugin starts a root whenever it becomes the active one,
+// so a start from the leading OpenCode is a switch; another process's session is nested.
+// Sub-agents never start sessions (they're SubagentStart). Resume comes with PR #11; a lead
+// that ends with its process (OpenCode fires nothing on quit) with PR #9b.
 export const opencodeSessionRules: SessionRules = {
   resumeCommand: () => null,
   cwdFits: () => undefined,
-  isSwitch: () => false,
+  isSwitch: (ev, lead) => ev.pid !== undefined && ev.pid === lead.pid,
+}
+
+const ID = /^[A-Za-z0-9_-]{1,128}$/
+const id = (v: unknown) => (typeof v === "string" && ID.test(v) ? v : undefined)
+const text = (v: unknown, max = 4096) =>
+  typeof v === "string" && v.length > 0 ? v.slice(0, max) : undefined
+/** A child's type, from the title OpenCode gives it: `"… (@general subagent)"` → `general`. */
+const childType = (title: unknown) =>
+  typeof title === "string" ? /\(@([\w.-]{1,64}) subagent\)\s*$/.exec(title)?.[1] : undefined
+
+/** One plugin drop → a canonical event (or null). Children are sub-agents of their root
+ *  session (nested under their parent when that isn't the root). Never throws. */
+export function normalizeOpencodeDrop(raw: unknown, paneId?: string): AgentEvent | null {
+  if (!raw || typeof raw !== "object") return null
+  const d = raw as Record<string, unknown>
+  if (d.v !== OPENCODE_DROP_VERSION) return null
+  const sid = id(d.sessionID)
+  if (!sid) return null
+  const root = id(d.rootID)
+  const child = !!root && root !== sid
+  const parent = id(d.parentID)
+  const base: AgentEvent = child
+    ? {
+        event: "",
+        sessionId: root,
+        paneId,
+        agentId: sid,
+        ...(parent && parent !== root ? { parentAgentId: parent } : {}),
+      }
+    : { event: "", sessionId: sid, paneId, cwd: text(d.directory) }
+  const at = (event: AgentEvent["event"], more: Partial<AgentEvent> = {}): AgentEvent => ({
+    ...base,
+    ...more,
+    event,
+  })
+  const tool = { toolName: text(d.tool, 128) }
+  switch (d.e) {
+    case "start":
+      if (child) return at("SubagentStart", { agentType: childType(d.title) })
+      return base.cwd
+        ? at("SessionStart", { source: d.source === "new" ? "startup" : "resume" })
+        : null
+    case "status":
+      if (d.status === "busy") return at(child ? "SubagentStart" : "UserPromptSubmit")
+      if (d.status === "idle")
+        return at(child ? "SubagentStop" : "Stop", { message: text(d.reply) })
+      return null
+    case "tool": {
+      const paths = Array.isArray(d.paths) ? d.paths : []
+      const more = { ...tool, toolKey: text(d.callID, 128), filePath: text(paths[0]) }
+      if (d.phase === "start") return at("PreToolUse", more)
+      return d.phase === "end" ? at("PostToolUse", more) : null
+    }
+    case "permission": {
+      // Keyed by the call (its finishing ends the wait too; the plugin gives a reply its ask's
+      // call), else by the request.
+      const key = { toolKey: text(d.callID, 128) ?? text(d.requestID, 128) }
+      if (d.phase === "asked") return at("PermissionRequest", { ...tool, ...key })
+      return d.phase === "replied" ? at("PermissionReplied", key) : null
+    }
+    default:
+      return null // `started`, `session` (titles: PR #10), anything newer
+  }
 }
 
 /** An OpenCode adapter: `install` writes the plugin, `env` adds it to OpenCode's inline config. */
@@ -130,7 +196,7 @@ export function createOpencodeAdapter(): AgentAdapter {
         ? {}
         : { OPENCODE_CONFIG_CONTENT: merged, MINMUX_OPENCODE_PLUGIN: url }
     },
-    normalize: () => null, // the plugin's drops reach the board with PR #9
+    normalize: normalizeOpencodeDrop,
   }
 }
 

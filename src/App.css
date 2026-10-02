@@ -1308,7 +1308,7 @@ body.resizing-col {
 .diff-file.tree-child::before {
   content: "";
   position: absolute;
-  left: 13px;
+  left: var(--tree-x, 13px); /* a nested row's parent dot */
   top: 0;
   height: 50%;
   width: 15px;

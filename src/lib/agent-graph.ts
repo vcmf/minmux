@@ -30,7 +30,8 @@ export interface TokenUsage {
 export type AgentKind = "claude" | "codex" | "opencode"
 
 /** The canonical event names: Claude Code's hook names (Codex uses the same contract), plus
- *  PermissionRequest (Codex) and the synthetic TokenUsage. Adapters map onto these. */
+ *  PermissionRequest (Codex, OpenCode), PermissionReplied (OpenCode) and the synthetic
+ *  TokenUsage. Adapters map onto these. */
 export type AgentEventName =
   | "SessionStart"
   | "SessionEnd"
@@ -38,6 +39,7 @@ export type AgentEventName =
   | "Stop"
   | "Notification"
   | "PermissionRequest"
+  | "PermissionReplied"
   | "PreToolUse"
   | "PostToolUse"
   | "SubagentStart"
@@ -285,6 +287,10 @@ export function reduceAgentEvent(graph: AgentGraph, ev: AgentEvent): AgentGraph 
         if (targetId !== rid) set(rid, { status: "waiting", waitingFor: key })
       }
       break
+    case "PermissionReplied":
+      // The user answered (OpenCode says so): that approval is over, the agent goes on.
+      if (at(targetId).waitingFor && at(targetId).waitingFor === ev.toolKey) endWait(targetId)
+      break
     case "CwdChanged":
       if (ev.cwd) set(targetId, { cwd: ev.cwd })
       break
@@ -319,6 +325,31 @@ export function reduceAgentEvent(graph: AgentGraph, ev: AgentEvent): AgentGraph 
   }
 
   return { nodes, rootIds }
+}
+
+/** Deepest level the board indents a sub-agent to (OpenCode's custom agents can nest further). */
+export const MAX_TREE_DEPTH = 4
+
+/** A root's sub-agents depth-first, each with its level (1 = a direct child); deeper ones are
+ *  still listed, drawn at the deepest level (a blocked one must stay visible). */
+export function subAgents(
+  graph: AgentGraph,
+  root: AgentNode,
+  maxDepth = MAX_TREE_DEPTH,
+): { node: AgentNode; depth: number }[] {
+  const out: { node: AgentNode; depth: number }[] = []
+  const seen = new Set<string>([root.id])
+  const walk = (n: AgentNode, depth: number) => {
+    for (const cid of n.childIds) {
+      const c = graph.nodes[cid]
+      if (!c || seen.has(cid)) continue // a broken link or a cycle never loops
+      seen.add(cid)
+      out.push({ node: c, depth: Math.min(depth, maxDepth) })
+      walk(c, depth + 1)
+    }
+  }
+  walk(root, 1)
+  return out
 }
 
 /** Move sub-agent `id` under `parentId` (mutates `nodes`) when that is a live node of the same
