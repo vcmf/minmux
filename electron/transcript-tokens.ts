@@ -17,7 +17,8 @@ export type { TokenUsage }
 
 export const emptyUsage: TokenUsage = { context: 0, output: 0 }
 
-const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : 0)
+/** A finite number from untrusted JSON, else 0. */
+export const num = (v: unknown) => (typeof v === "number" && Number.isFinite(v) ? v : 0)
 
 /** Fold one transcript line into `acc` (pure). `context` is OVERWRITTEN to this line's total
  *  input (input + cache read + cache create) — so after folding a whole read it reflects the

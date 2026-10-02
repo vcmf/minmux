@@ -5,6 +5,7 @@ import type { AgentEvent, AgentKind } from "../../src/lib/agent-graph"
 import type { DropNormalizer } from "../agent-hooks"
 import type { LedgerEntry } from "../agent-sessions"
 import type { ResolvePath } from "../agent-tokens"
+import type { MetaReader } from "../agent-meta"
 
 export type { ResolvePath }
 
@@ -36,8 +37,9 @@ export interface AgentAdapter {
   normalize: DropNormalizer
   /** Token totals for a batch of this agent's events, read off the hot path. */
   usage?(batch: AgentEvent[], resolve: ResolvePath): Promise<AgentEvent[]>
-  /** The lead session's name/colour live in its transcript (Claude's /color, /rename). */
-  transcriptMeta?: boolean
+  /** Where the lead session's name/colour live: the file an event points to (null: none) and
+   *  how to read a session's meta from it. */
+  meta?: { file(ev: AgentEvent): string | null; reader(): MetaReader }
 }
 
 /** One agent's registration: static parts (rc, env, rules) + its per-launch adapter factory. */

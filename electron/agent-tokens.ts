@@ -3,8 +3,8 @@
 // reducer folds onto the matching node. Runs on the hook channel in the main process, off the
 // terminal hot path — see startAgentObservability.
 
-import type { AgentEvent } from "../src/lib/agent-graph"
-import { TranscriptTokens } from "./transcript-tokens"
+import type { AgentEvent, TokenUsage } from "../src/lib/agent-graph"
+import type { TranscriptFold } from "./transcript-fold"
 
 /** Host-fs candidate paths for a transcript path the agent reported. Identity on same-OS
  *  runs; on WSL the agent's Linux path resolves to the pane's distro's UNC shares (see main —
@@ -42,7 +42,7 @@ export function subagentTranscriptPath(
  *     no-resurrection guard drops it and no badge appears. Narrow — sub-agent transcripts are
  *     small so the read is fast; the session root is never pruned, only evicted on SessionEnd. */
 export async function tokenEventsForBatch(
-  tracker: TranscriptTokens,
+  tracker: TranscriptFold<TokenUsage>, // the agent's transcript reader (Claude's, Codex's…)
   batch: AgentEvent[],
   resolve: ResolvePath = identity,
 ): Promise<AgentEvent[]> {
