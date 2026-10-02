@@ -11,6 +11,7 @@ import { cwdMatchesTranscript } from "../../src/lib/claude-project"
 import type { LedgerEntry } from "../agent-sessions"
 import { tokenEventsForBatch } from "../agent-tokens"
 import { HOOK_WRITER } from "../hook-writer"
+import { TranscriptMeta } from "../transcript-meta"
 import { TranscriptTokens } from "../transcript-tokens"
 import type { AgentAdapter, AgentShell, AgentSpec, SessionRules } from "./types"
 
@@ -168,7 +169,7 @@ export function createClaudeAdapter(): AgentAdapter {
       settingsPath ? { MINMUX_CLAUDE_SETTINGS: settingsPath } : {},
     normalize: normalizeHookEvent,
     usage: (batch, resolve) => tokenEventsForBatch(tokens, batch, resolve),
-    transcriptMeta: true,
+    meta: { file: (ev) => ev.transcriptPath ?? null, reader: () => new TranscriptMeta() },
   }
 }
 

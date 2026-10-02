@@ -47,3 +47,10 @@ describe("sessionColor", () => {
     }
   })
 })
+
+describe("automatic names (D3)", () => {
+  it("never colour a pane; a user's name does", () => {
+    expect(sessionColor({ name: "Run curl request", auto: true }, "dark")).toBeUndefined()
+    expect(sessionColor({ name: "Run curl request" }, "dark")).toBeDefined()
+  })
+})

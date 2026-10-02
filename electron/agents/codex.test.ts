@@ -3,7 +3,16 @@ import { execFileSync, spawnSync } from "node:child_process"
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
-import { codexHookArgs, codexSessionRules, codexShell, normalizeCodexEvent } from "./codex"
+import {
+  addCodexTokenLine,
+  addThreadNameLine,
+  codexHookArgs,
+  codexIndexFor,
+  codexSessionRules,
+  codexShell,
+  CodexTokens,
+  normalizeCodexEvent,
+} from "./codex"
 import { AGENT_SHELL } from "."
 import { reduceAgentEvents, type AgentEvent } from "../../src/lib/agent-graph"
 import type { LedgerEntry } from "../agent-sessions"
@@ -223,5 +232,82 @@ describe("codexSessionRules", () => {
     const e = { ...lead(), sessionId: "01a0f3f0-41df-7e00-8190-0eefd9149881" }
     expect(codexSessionRules.resumeCommand(e, false)).toBe(`codex resume ${e.sessionId}`)
     expect(codexSessionRules.resumeCommand({ ...e, sessionId: "x; rm -rf ~" }, false)).toBeNull()
+  })
+})
+
+describe("Codex tokens (rollout token_count)", () => {
+  const tc = (info: unknown) =>
+    JSON.stringify({ type: "event_msg", payload: { type: "token_count", info } })
+  const info = (input: number, out: number, window = 258400) => ({
+    last_token_usage: { input_tokens: input, cached_input_tokens: input - 100, output_tokens: 7 },
+    total_token_usage: { input_tokens: input * 2, output_tokens: out },
+    model_context_window: window,
+  })
+  const zero = { context: 0, output: 0 }
+  it("takes the latest request's context, the session's output so far and the window", () => {
+    let u = addCodexTokenLine(zero, tc(info(13215, 358)))
+    u = addCodexTokenLine(u, tc(info(16245, 900)))
+    expect(u).toEqual({ context: 16245, output: 900, window: 258400 })
+  })
+  it("skips everything else, including the record before any usage", () => {
+    const u = addCodexTokenLine(zero, tc(info(500, 10)))
+    for (const l of [
+      tc(null),
+      "{}",
+      "not json",
+      '{"type":"event_msg","payload":{"type":"agent_message"}}',
+      "",
+    ])
+      expect(addCodexTokenLine(u, l)).toBe(u)
+  })
+  it("reads a rollout incrementally", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "minmux-ctok-"))
+    const f = path.join(dir, "rollout.jsonl")
+    try {
+      fs.writeFileSync(f, `{"type":"session_meta","payload":{}}\n${tc(info(1000, 50))}\n`)
+      const r = new CodexTokens()
+      expect(await r.update(f)).toEqual({ context: 1000, output: 50, window: 258400 })
+      fs.appendFileSync(f, `${tc(info(2000, 80))}\n`)
+      expect(await r.update(f)).toEqual({ context: 2000, output: 80, window: 258400 })
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  })
+})
+
+describe("Codex thread names", () => {
+  it("finds the index next to the sessions folder the rollout lives in", () => {
+    expect(codexIndexFor("/home/u/.codex/sessions/2026/10/02/rollout-x.jsonl")).toBe(
+      "/home/u/.codex/session_index.jsonl",
+    )
+    expect(codexIndexFor("/srv/ch/sessions/2026/10/02/rollout-y.jsonl")).toBe(
+      "/srv/ch/session_index.jsonl",
+    )
+    expect(codexIndexFor("/tmp/other.jsonl")).toBeNull()
+    expect(codexIndexFor(undefined)).toBeNull()
+  })
+  it("keeps the latest name per thread and ignores junk", () => {
+    let m: Map<string, string> | null = null
+    for (const l of [
+      '{"id":"a","thread_name":"Run curl"}',
+      '{"id":"b","thread_name":"Other"}',
+      '{"id":"a","thread_name":" Run curl HEAD request "}',
+      "junk",
+      '{"id":5,"thread_name":"x"}',
+    ])
+      m = addThreadNameLine(m, l)
+    expect(Object.fromEntries(m!)).toEqual({ a: "Run curl HEAD request", b: "Other" })
+    expect(m!.get("constructor")).toBeUndefined() // a Map: no prototype names
+  })
+  it("folds a long index in linear time (it runs on the main process)", () => {
+    const lines = Array.from(
+      { length: 20000 },
+      (_, i) => `{"id":"t${i % 5000}","thread_name":"n${i}"}`,
+    )
+    const t0 = performance.now()
+    let m: Map<string, string> | null = null
+    for (const l of lines) m = addThreadNameLine(m, l)
+    expect(m!.size).toBe(5000)
+    expect(performance.now() - t0).toBeLessThan(500) // the O(N²) copy took seconds here
   })
 })

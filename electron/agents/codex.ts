@@ -6,12 +6,16 @@
 
 import fs from "node:fs"
 import path from "node:path"
-import type { AgentEvent } from "../../src/lib/agent-graph"
+import type { AgentEvent, TokenUsage } from "../../src/lib/agent-graph"
 import type { LedgerEntry } from "../agent-sessions"
 import { posixQuote } from "../../src/lib/shell-quote"
+import { tokenEventsForBatch } from "../agent-tokens"
 import { HOOK_WRITER } from "../hook-writer"
+import { TranscriptFold } from "../transcript-fold"
+import { emptyUsage, num } from "../transcript-tokens"
 import { findOnPath } from "../path-lookup"
 import { normalizeHookEvent, SAFE_ID } from "./claude"
+import type { MetaReader } from "../agent-meta"
 import type { AgentAdapter, AgentShell, AgentSpec, SessionRules } from "./types"
 
 // The events we consume; tool events take a matcher (S1-d).
@@ -72,6 +76,95 @@ export function normalizeCodexEvent(raw: unknown, paneId?: string): AgentEvent |
   return out
 }
 
+// Codex logs `event_msg` / `token_count` records (S1): `last_token_usage.total_tokens` is what
+// the latest request filled, `total_token_usage.output_tokens` the session's output so far,
+// `model_context_window` the window. The badge's % is of the full window (Codex's own meter
+// subtracts a baseline first, so it reads a little lower). Other lines are skipped.
+/** Fold one rollout `token_count` line into context, output so far and window (pure). */
+export function addCodexTokenLine(acc: TokenUsage, line: string): TokenUsage {
+  if (!line.includes('"token_count"')) return acc // cheap pre-filter: most lines aren't
+  let o: unknown
+  try {
+    o = JSON.parse(line)
+  } catch {
+    return acc
+  }
+  const rec = o as { type?: unknown; payload?: { type?: unknown; info?: unknown } }
+  if (rec?.type !== "event_msg" || rec.payload?.type !== "token_count") return acc
+  const info = rec.payload.info as
+    | {
+        last_token_usage?: { input_tokens?: unknown; total_tokens?: unknown }
+        total_token_usage?: { output_tokens?: unknown }
+        model_context_window?: unknown
+      }
+    | null
+    | undefined
+  if (!info || typeof info !== "object") return acc // an early record has no info yet
+  const window = num(info.model_context_window) || acc.window
+  return {
+    // What the last request filled (input + its output), as Codex's own context meter counts.
+    context:
+      num(info.last_token_usage?.total_tokens) ||
+      num(info.last_token_usage?.input_tokens) ||
+      acc.context,
+    output: Math.max(acc.output, num(info.total_token_usage?.output_tokens)),
+    ...(window ? { window } : {}),
+  }
+}
+
+/** Incremental per-rollout token totals (see TranscriptFold). */
+export class CodexTokens extends TranscriptFold<TokenUsage> {
+  constructor(chunkBytes?: number) {
+    super(addCodexTokenLine, emptyUsage, chunkBytes)
+  }
+}
+
+/** Codex's thread names: `<codex home>/session_index.jsonl`, one `{id, thread_name}` line per
+ *  change, the latest per id winning (S1). Home comes from the rollout path the hooks report
+ *  (`<home>/sessions/YYYY/MM/DD/rollout-…jsonl`), so a custom CODEX_HOME just works. */
+export function codexIndexFor(transcriptPath: string | undefined): string | null {
+  const m = /^(.*)([\\/])sessions\2\d{4}\2\d{2}\2\d{2}\2[^\\/]+\.jsonl$/.exec(transcriptPath ?? "")
+  return m ? `${m[1]}${m[2]}session_index.jsonl` : null
+}
+
+/** Fold one index line into the id → name map (pure; latest wins, junk skipped). */
+export function addThreadNameLine(
+  acc: Map<string, string> | null,
+  line: string,
+): Map<string, string> | null {
+  // Mutates (and creates) the fold's private Map: one copy per line would make reading a long
+  // index O(N²) on the main process, which also forwards terminal output.
+  if (!line.includes('"thread_name"')) return acc
+  let o: unknown
+  try {
+    o = JSON.parse(line)
+  } catch {
+    return acc
+  }
+  const r = o as { id?: unknown; thread_name?: unknown }
+  if (typeof r?.id !== "string" || typeof r.thread_name !== "string") return acc
+  const map = acc ?? new Map<string, string>()
+  map.set(r.id, r.thread_name.trim())
+  return map
+}
+
+/** Codex's meta: the session's thread name, marked automatic — Codex names threads itself and
+ *  a user's `/rename` can't be told apart yet (S1-g), so it never colours a pane (D3). */
+export const threadNameReader = (): MetaReader => {
+  // Keyed by the path the hooks report: fine while Codex runs only on macOS/Linux; with WSL
+  // panes, two distros' indexes would share it (key by distro + path then).
+  const fold = new TranscriptFold<Map<string, string> | null>(addThreadNameLine, null)
+  return {
+    update: async (key, candidates, sessionId) => {
+      const name = sessionId ? (await fold.update(key, candidates))?.get(sessionId) : undefined
+      return name ? { name, auto: true } : {}
+    },
+    // One shared, append-only file: keep what's been read of it for the app's lifetime instead
+    // of re-reading it from the start every time its last pane lets go (a `/new`, a restart).
+    forget: () => {},
+  }
+}
+
 /** Codex's lead + resume rules: sessions of the leading Codex process switch freely (`/new`,
  *  the resume picker); another process's are background agents. The process is the hook's
  *  parent (`exec node …` makes Codex itself that parent); if a wrapper ever stood between
@@ -117,6 +210,7 @@ export const codexShell: AgentShell = {
  *  the file. */
 export function createCodexAdapter(): AgentAdapter {
   let argsPath: string | null = null
+  const tokens = new CodexTokens() // per-rollout totals across batches
   return {
     kind: "codex",
     install(cfgDir) {
@@ -133,6 +227,9 @@ export function createCodexAdapter(): AgentAdapter {
     },
     env: (): Record<string, string> => (argsPath ? { MINMUX_CODEX_ARGS: argsPath } : {}),
     normalize: normalizeCodexEvent,
+    // Stop → the session's rollout; SubagentStop → the sub-agent's (its hook names it).
+    usage: (batch, resolve) => tokenEventsForBatch(tokens, batch, resolve),
+    meta: { file: (ev) => codexIndexFor(ev.transcriptPath), reader: threadNameReader },
   }
 }
 

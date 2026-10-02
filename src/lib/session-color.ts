@@ -7,6 +7,7 @@
 export interface SessionMeta {
   color?: string | null
   name?: string
+  auto?: boolean // the name was given by the agent, not the user: shown, never a colour (D3)
 }
 
 /** The colours Claude Code's `/color` accepts (verified against the CLI docs + transcripts). */
@@ -66,6 +67,7 @@ export function sessionColorName(meta: SessionMeta | undefined): AccentColor | u
   if (!meta) return undefined
   if (typeof meta.color === "string") return isAccentColor(meta.color) ? meta.color : undefined
   if (meta.color === null) return undefined // `/color default` — the user asked for none
+  if (meta.auto) return undefined // an automatic name (Codex's) colours nothing
   const name = meta.name?.trim()
   return name ? ACCENT_COLORS[hash(name) % ACCENT_COLORS.length] : undefined
 }

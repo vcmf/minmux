@@ -23,6 +23,7 @@ export type AgentStatus = "working" | "waiting" | "idle" | "done"
 export interface TokenUsage {
   context: number
   output: number
+  window?: number // the model's context window, when the agent reports it (Codex)
 }
 
 /** Which coding agent an event / node belongs to (one adapter each in main). */

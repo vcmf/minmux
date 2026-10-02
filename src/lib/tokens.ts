@@ -12,7 +12,10 @@ export function formatTokens(n: number): string {
   return `${m < 10 ? m.toFixed(1) : Math.round(m)}M`
 }
 
-/** Tooltip: "↑ 148k context · ↓ 7.4M generated". */
+/** Tooltip: "↑ 148k context · ↓ 7.4M generated", plus "(57% of 258k)" when the window is known. */
 export function tokenBreakdown(u: TokenUsage): string {
-  return `↑ ${formatTokens(u.context)} context · ↓ ${formatTokens(u.output)} generated`
+  const of = u.window
+    ? ` (${Math.min(100, Math.round((u.context / u.window) * 100))}% of ${formatTokens(u.window)})`
+    : ""
+  return `↑ ${formatTokens(u.context)} context${of} · ↓ ${formatTokens(u.output)} generated`
 }

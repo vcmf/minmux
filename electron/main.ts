@@ -49,7 +49,7 @@ import { findOnPath, pathCandidates } from "./path-lookup"
 import { toDirListing } from "../src/lib/dir-listing"
 import { wslUncCandidates, uncToWslPath } from "./wsl-paths"
 import { colorfgbg } from "./color"
-import { AgentMetaTracker } from "./agent-meta"
+import { AgentMetaTracker, planMeta } from "./agent-meta"
 import { SessionLedger } from "./agent-sessions"
 import {
   displayName,
@@ -156,14 +156,32 @@ let agentEventsDir: string | null = null
 let hookWatcher: { close: () => Promise<void> } | null = null
 // Branch + GitHub PR per terminal (sidebar), via git + the user's `gh`.
 const paneGit = new PaneGitService()
-// Per-pane Claude `/color` + `/rename` (pane accent), read from each session's transcript.
-const agentMeta = new AgentMetaTracker((paneId, meta) => {
-  mainWindow?.webContents.send("agents:meta", paneId, meta)
-  // The /rename, for the resume banner: only onto a session of an agent whose names live in
-  // its transcript (a late read must not rename another agent's session in that pane).
-  const lead = sessionLedger().get(paneId)
-  if (lead && adapterFor(lead)?.transcriptMeta) sessionLedger().setName(paneId, meta?.name)
-})
+// Per pane, the lead session's name/colour (pane accent, resume banner), one tracker per
+// agent that keeps them somewhere: Claude's transcript (`/color`, `/rename`), Codex's index.
+const metaTrackers = new Map<AgentKind, AgentMetaTracker>()
+for (const a of adapters) {
+  if (!a.meta) continue
+  const kind = a.kind
+  const tracker = new AgentMetaTracker(
+    (paneId, meta) => {
+      // An automatic name with no colour changes nothing on screen (D3): only the ledger
+      // wants it — skip the IPC and the panes' re-render.
+      if (!meta?.auto || meta.color !== undefined)
+        mainWindow?.webContents.send("agents:meta", paneId, meta)
+      // The name, for the resume banner: only onto this agent's session (a late read must not
+      // rename another agent's session in that pane).
+      const lead = sessionLedger().get(paneId)
+      if (lead && agentOf(lead) === kind) sessionLedger().setName(paneId, meta?.name)
+    },
+    undefined,
+    undefined,
+    a.meta.reader(),
+  )
+  metaTrackers.set(kind, tracker)
+}
+/** Stop every agent's meta tracking for a pane (its shell / PTY ended). */
+const untrackMeta = (paneId: string, notify = true) =>
+  metaTrackers.forEach((t) => t.untrack(paneId, notify))
 // Which Claude session each terminal is inside (persisted) → resume on relaunch.
 let ledger: SessionLedger | null = null
 const sessionLedger = () =>
@@ -363,22 +381,20 @@ async function startAgentObservability(): Promise<void> {
             ev.nested = sessionLedger().isNested(ev.paneId, ev.sessionId)
         }
         mainWindow?.webContents.send("agents:events", events)
-        // Session-level events locate each pane's transcript → track its /color and /rename
-        // for the pane accent (agents that keep them there; async + debounced; SessionEnd
-        // stops it).
-        for (const ev of events) {
-          if (!ev.paneId || !ev.transcriptPath || ev.agentId) continue
-          if (!adapterFor(ev)?.transcriptMeta) continue
-          // Only the pane's own session (this event's own verdict, not the state after the whole
-          // batch): a background agent inherits the pane but mustn't take its accent.
-          if (ev.nested) continue
-          if (ev.event === "SessionEnd") agentMeta.untrack(ev.paneId, true, ev.transcriptPath)
-          else
-            agentMeta.track(
-              ev.paneId,
-              ev.transcriptPath,
-              transcriptTargets(ev.transcriptPath, ev.paneId),
-            )
+        // Session-level events locate where each pane's session keeps its name/colour → track
+        // it for the pane accent (async + debounced; SessionEnd stops it).
+        const plan = planMeta(events, (ev) => {
+          const a = adapterFor(ev)
+          return a ? { kind: a.kind, file: a.meta?.file(ev) ?? null } : null
+        })
+        for (const m of plan) {
+          if (m.type === "clear-others") {
+            for (const [k, t] of metaTrackers) if (k !== m.kind) t.untrack(m.paneId)
+            continue
+          }
+          const t = metaTrackers.get(m.kind)
+          if (m.type === "untrack") t?.untrack(m.paneId, true, m.file, m.sessionId)
+          else t?.track(m.paneId, m.file, transcriptTargets(m.file, m.paneId), m.sessionId)
         }
         // Token totals per agent, from its own source (async, off the agent's loop), tagged
         // with that agent like the watcher tags hook events.
@@ -583,7 +599,7 @@ function startPty(sender: Electron.WebContents, opts: SpawnOpts, spec: StartSpec
         rec.sender.send(`pty:exit:${opts.id}`, { code: e.exitCode, signal: e.signal ?? 0 })
       }
       sessions.delete(opts.id)
-      agentMeta.untrack(opts.id) // shell (and any claude in it) gone — drop the accent
+      untrackMeta(opts.id) // shell (and any agent in it) gone — drop the accent
       sessionLedger().drop(opts.id) // …and nothing to resume there (no-op during a quit)
     }
     livePtys.delete(live)
@@ -809,7 +825,7 @@ function registerIpc() {
   // Which sessions have a live PTY here (a renderer reload restores its layout over them).
   ipcMain.handle("pty:live-ids", async () => [...sessions.keys()])
   ipcMain.on("pty:kill", (_e, id: string) => {
-    agentMeta.untrack(id, false) // the pane is gone — nothing left to accent
+    untrackMeta(id, false) // the pane is gone — nothing left to accent
     sessionLedger().drop(id) // closed on purpose — don't resume its Claude session
     pendingSpawns.kill(id) // still preparing: it must not start at all
     const rec = sessions.get(id)
@@ -915,7 +931,9 @@ function registerIpc() {
     sessionLedger().consume(paneId, sessionId),
   )
   // A (re)loaded renderer starts with no accents: hand it every tracked pane's current meta.
-  ipcMain.handle("agents:meta-snapshot", async () => agentMeta.snapshot())
+  ipcMain.handle("agents:meta-snapshot", async () =>
+    [...metaTrackers.values()].flatMap((t) => t.snapshot()),
+  )
   ipcMain.handle("window:is-maximized", async () => mainWindow?.isMaximized() ?? false)
 
   // Git — working-tree status + per-file diff for the changes panel.
@@ -1340,7 +1358,7 @@ app.on("window-all-closed", () => {
 
 app.on("will-quit", () => {
   diag("will-quit", { ptys: sessions.size })
-  agentMeta.dispose() // close transcript watchers
+  metaTrackers.forEach((t) => t.dispose()) // close transcript / index watchers
   sshService?.dispose() // close the ssh config watchers
   void hookWatcher?.close() // stop the file-drop watcher
 })
