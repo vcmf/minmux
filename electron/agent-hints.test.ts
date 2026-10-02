@@ -20,6 +20,10 @@ describe("AgentHints", () => {
       await h.dismiss("codex", false)
       await h.flushed()
       expect(await new AgentHints(f).get("codex")).toEqual({ dismissals: 1, never: false })
+      // Junk fields read as defaults; junk entries are skipped.
+      fs.writeFileSync(f, JSON.stringify({ codex: { dismissals: "3", never: 1 }, opencode: 7 }))
+      expect(await new AgentHints(f).get("codex")).toEqual({ dismissals: 0, never: false })
+      expect(await new AgentHints(f).get("opencode")).toEqual({ dismissals: 0, never: false })
       fs.writeFileSync(f, "{not json")
       expect(await new AgentHints(f).get("codex")).toEqual({ dismissals: 0, never: false })
     } finally {

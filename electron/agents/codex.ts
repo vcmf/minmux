@@ -334,8 +334,7 @@ export function createCodexAdapter(): AgentAdapter {
       const drop = path.join(dir, "drop.cjs")
       writeIfChanged(drop, `${HOOK_WRITER}\n`)
       const args = path.join(dir, "codex-args")
-      const content = `${codexHookArgs(drop).join("\n")}\n`
-      writeIfChanged(args, content)
+      writeIfChanged(args, `${codexHookArgs(drop).join("\n")}\n`)
       trust = codexTrustHashes(drop)
       argsPath = args
     },

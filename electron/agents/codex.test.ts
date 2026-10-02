@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest"
+import { describe, it, expect, afterEach } from "vitest"
 import { execFileSync, spawnSync } from "node:child_process"
 import fs from "node:fs"
 import os from "node:os"
@@ -9,6 +9,7 @@ import {
   codexApproved,
   codexHookArgs,
   codexTrustHashes,
+  createCodexAdapter,
   codexIndexFor,
   codexSessionRules,
   codexShell,
@@ -394,5 +395,49 @@ describe("the launch marker (approval hint)", () => {
     expect(run("-c a=b --cd /tmp review")).not.toContain("6974")
     expect(run("-m o3 'fix the bug'")).toContain("\x1b]6974;agent;codex\x07")
     expect(run("--yolo resume abc")).toContain("\x1b]6974;agent;codex\x07")
+  })
+})
+
+describe("the codex adapter", () => {
+  const dirs: string[] = []
+  const tmp = () => {
+    const d = fs.mkdtempSync(path.join(os.tmpdir(), "minmux-codex-"))
+    dirs.push(d)
+    return d
+  }
+  const home = process.env.CODEX_HOME
+  afterEach(() => {
+    if (home === undefined) delete process.env.CODEX_HOME
+    else process.env.CODEX_HOME = home
+    for (const d of dirs.splice(0)) fs.rmSync(d, { recursive: true, force: true })
+  })
+
+  it("install writes the drop script and args file; panes get the file's path", () => {
+    const a = createCodexAdapter()
+    expect(a.env()).toEqual({})
+    const cfg = tmp()
+    a.install(cfg)
+    const args = path.join(cfg, "agents", "codex-args")
+    expect(a.env()).toEqual({ MINMUX_CODEX_ARGS: args })
+    const drop = path.join(cfg, "agents", "drop.cjs")
+    expect(fs.readFileSync(args, "utf8")).toBe(`${codexHookArgs(drop).join("\n")}\n`)
+    const before = fs.statSync(args).mtimeMs
+    a.install(cfg) // unchanged: not rewritten (a running Codex may be reading it)
+    expect(fs.statSync(args).mtimeMs).toBe(before)
+  })
+
+  it("approved: unknown before install, false without trust records, true with ours", async () => {
+    const a = createCodexAdapter()
+    expect(await a.approved!()).toBeNull()
+    const cfg = tmp()
+    a.install(cfg)
+    process.env.CODEX_HOME = tmp()
+    expect(await a.approved!()).toBe(false) // no config.toml yet
+    const hashes = codexTrustHashes(path.join(cfg, "agents", "drop.cjs"))
+    const records = [...hashes]
+      .map(([k, v]) => `[hooks.state."${k}"]\ntrusted_hash = "${v}"\n`)
+      .join("\n")
+    fs.writeFileSync(path.join(process.env.CODEX_HOME, "config.toml"), records)
+    expect(await a.approved!()).toBe(true)
   })
 })
