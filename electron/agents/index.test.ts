@@ -31,7 +31,8 @@ describe("agent registry", () => {
       for (const spec of AGENTS) {
         const a = spec.create()
         a.install(dir)
-        for (const k of Object.keys(a.env())) expect(spec.shell.env).toContain(k)
+        for (const k of Object.keys(a.env()))
+          expect([...spec.shell.env, ...Object.keys(spec.shell.merged ?? {})]).toContain(k)
         for (const w of spec.shell.wslenv) expect(spec.shell.env).toContain(w.replace(/\/.*$/, ""))
       }
     } finally {

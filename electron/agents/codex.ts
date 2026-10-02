@@ -16,6 +16,7 @@ import { HOOK_WRITER } from "../hook-writer"
 import { TranscriptFold } from "../transcript-fold"
 import { emptyUsage, num } from "../transcript-tokens"
 import { findOnPath } from "../path-lookup"
+import { writeIfChanged } from "./files"
 import { normalizeHookEvent, SAFE_ID } from "./claude"
 import type { MetaReader } from "../agent-meta"
 import type { AgentAdapter, AgentShell, AgentSpec, SessionRules } from "./types"
@@ -357,19 +358,6 @@ export function createCodexAdapter(): AgentAdapter {
       }
     },
   }
-}
-
-/** Replace `file` with `content` atomically (temp + rename), and only when it differs: a
- *  Codex still running from an earlier launch may be reading it for a hook right now. */
-function writeIfChanged(file: string, content: string): void {
-  try {
-    if (fs.readFileSync(file, "utf8") === content) return
-  } catch {
-    // missing: write it
-  }
-  const tmp = `${file}.${process.pid}.tmp`
-  fs.writeFileSync(tmp, content)
-  fs.renameSync(tmp, file)
 }
 
 export const codexSpec: AgentSpec = {

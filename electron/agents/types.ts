@@ -25,6 +25,9 @@ export interface AgentShell {
   bash: string[]
   env: string[] // every per-pane env name the agent's adapter sets (scrubbed from children)
   wslenv: string[] // the ones WSL must forward, with their WSLENV flags
+  /** The user's own vars the adapter adds to, each with how to take a minmux's part back out
+   *  (undefined: nothing of theirs left). Cleaned, never scrubbed: theirs is in it. */
+  merged?: Record<string, (value: string) => string | undefined>
 }
 
 export interface AgentAdapter {

@@ -93,6 +93,23 @@ describe("scrubParentInstanceEnv", () => {
     expect(env).toEqual({ MINMUX_PERF: "1", PATH: "/usr/bin" })
   })
 
+  it("takes a parent's OpenCode plugin out of the user's inline config, keeping theirs", () => {
+    const ours = "file:///home/me/.config/minmux/agents/minmux-opencode.js"
+    const env: Record<string, string | undefined> = {
+      OPENCODE_CONFIG_CONTENT: JSON.stringify({ model: "m", plugin: ["mine", ours] }),
+    }
+    expect(scrubParentInstanceEnv(env)).toEqual(["OPENCODE_CONFIG_CONTENT"])
+    expect(JSON.parse(env.OPENCODE_CONFIG_CONTENT!)).toEqual({ model: "m", plugin: ["mine"] })
+    const onlyOurs: Record<string, string | undefined> = {
+      OPENCODE_CONFIG_CONTENT: JSON.stringify({ plugin: [ours] }),
+    }
+    scrubParentInstanceEnv(onlyOurs)
+    expect(onlyOurs).toEqual({})
+    const theirs = { OPENCODE_CONFIG_CONTENT: '{"plugin":["mine"]}' }
+    expect(scrubParentInstanceEnv(theirs)).toEqual([]) // nothing of a minmux's: untouched
+    expect(theirs.OPENCODE_CONFIG_CONTENT).toBe('{"plugin":["mine"]}')
+  })
+
   it("also drops them under the old smterm names (started from an smterm pane)", () => {
     const env: Record<string, string | undefined> = {
       SMTERM_PANE_ID: "p1",

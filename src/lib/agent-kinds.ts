@@ -32,11 +32,12 @@ export const AGENT_KINDS: Record<AgentKind, AgentKindInfo> = {
     command: "opencode",
     resumePicker: "opencode",
     worktreeMarkers: [],
+    windows: false, // its plugin's file: URL and WSL forwarding are unverified there
   },
 }
 
 /** Agents minmux integrates today (settings switches, the empty board's hint), in order. */
-export const AVAILABLE_AGENTS: AgentKind[] = ["claude", "codex"]
+export const AVAILABLE_AGENTS: AgentKind[] = ["claude", "codex", "opencode"]
 
 /** The agents integrated on this platform (`process.platform`-style; "" = not known yet, so
  *  only the agents integrated everywhere). */
