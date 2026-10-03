@@ -7,7 +7,8 @@ import { pathToFileURL } from "node:url"
 import type { AgentEvent } from "../../src/lib/agent-graph"
 import { writeIfChanged } from "./files"
 import { OPENCODE_DROP_VERSION, OPENCODE_PLUGIN } from "./opencode-plugin"
-import type { AgentAdapter, AgentShell, AgentSpec, SessionRules } from "./types"
+import { namesReader, OpencodeNames } from "./opencode-names"
+import type { AdapterContext, AgentAdapter, AgentShell, AgentSpec, SessionRules } from "./types"
 
 /** The plugin's file name: also how a stale copy from another minmux is recognised. */
 export const PLUGIN_FILE = "minmux-opencode.js"
@@ -114,6 +115,8 @@ export const opencodeSessionRules: SessionRules = {
 }
 
 const ID = /^[A-Za-z0-9_-]{1,128}$/
+const count = (v: unknown) =>
+  typeof v === "number" && Number.isSafeInteger(v) && v >= 0 ? v : undefined
 const id = (v: unknown) => (typeof v === "string" && ID.test(v) ? v : undefined)
 const text = (v: unknown, max = 4096) =>
   typeof v === "string" && v.length > 0 ? v.slice(0, max) : undefined
@@ -149,13 +152,28 @@ export function normalizeOpencodeDrop(raw: unknown, paneId?: string): AgentEvent
   })
   const tool = { toolName: text(d.tool, 128) }
   switch (d.e) {
+    case "session": // its title: main decides whose name it is (OpencodeNames)
+      return child ? null : at("SessionTitle", { title: text(d.title, 256) })
+    case "tokens": {
+      const context = count(d.context)
+      const output = count(d.output)
+      if (context === undefined || output === undefined) return null
+      // No pane: a count is no sign of activity there (like Claude's and Codex's).
+      return { ...at("TokenUsage", { tokens: { context, output } }), paneId: undefined }
+    }
     case "end":
       return child ? null : at("SessionEnd", { reason: "switch" }) // a root the user left
-    case "start":
-      if (child) return at("SubagentStart", { agentType: childType(d.title) })
+    case "start": {
+      // The counts known when it starts come with it (one drop: never before its node).
+      const context = count(d.context)
+      const output = count(d.output)
+      const counts =
+        context !== undefined && output !== undefined ? { tokens: { context, output } } : {}
+      if (child) return at("SubagentStart", { agentType: childType(d.title), ...counts })
       return base.cwd
-        ? at("SessionStart", { source: d.source === "new" ? "startup" : "resume" })
+        ? at("SessionStart", { source: d.source === "new" ? "startup" : "resume", ...counts })
         : null
+    }
     case "status":
       if (d.status === "busy") return at(child ? "SubagentStart" : "UserPromptSubmit")
       if (d.status === "idle")
@@ -175,13 +193,20 @@ export function normalizeOpencodeDrop(raw: unknown, paneId?: string): AgentEvent
       return d.phase === "replied" ? at("PermissionReplied", key) : null
     }
     default:
-      return null // `started`, `session` (titles: PR #10), anything newer
+      return null // `started`, anything newer
   }
 }
 
+const NAMES_KEY = "opencode:titles" // the meta tracker's key for the store (no file)
+
 /** An OpenCode adapter: `install` writes the plugin, `env` adds it to OpenCode's inline config. */
-export function createOpencodeAdapter(): AgentAdapter {
+export function createOpencodeAdapter(ctx?: AdapterContext): AgentAdapter {
   let url: string | null = null
+  // Titles pushed by the plugin: kept here, read by the meta tracker.
+  const names = new OpencodeNames(
+    (id) => ctx?.userNamed(id),
+    (id, user) => ctx?.setUserNamed(id, user),
+  )
   return {
     kind: "opencode",
     install(cfgDir) {
@@ -200,6 +225,14 @@ export function createOpencodeAdapter(): AgentAdapter {
         : { OPENCODE_CONFIG_CONTENT: merged, MINMUX_OPENCODE_PLUGIN: url }
     },
     normalize: normalizeOpencodeDrop,
+    // Titles come in the plugin's drops: one store for every pane, keyed by session.
+    meta: {
+      file: () => NAMES_KEY,
+      reader: () => namesReader(names),
+      watch: false,
+    },
+    observe: (ev) => names.apply(ev),
+    metaNow: (sessionId) => names.meta(sessionId),
   }
 }
 

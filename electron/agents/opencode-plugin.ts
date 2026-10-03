@@ -127,14 +127,15 @@ export const MinmuxPlugin = async (ctx) => {
       begin(root)
       if (s.started) return
       s.started = true
-      return drop(Object.assign({ e: "start", sessionID: id, title: s.title }, where(id)))
+      return drop(counted(s, Object.assign({ e: "start", sessionID: id, title: s.title }, where(id))))
     }
     // A root starts only when the user moves to it: never on a background session's tools.
     if (!activate || active === id) return
     const left = active
     active = id
     const source = activate === "new" ? "new" : "seen"
-    drop({ e: "start", sessionID: id, source, directory: s.directory || base })
+    drop(counted(s, { e: "start", sessionID: id, source, directory: s.directory || base }))
+    s.started = true
     if (left && activate === "new") leave(left)
   }
   // The root /new left is over once idle (a still-running one: when its turn does). Not on a
@@ -146,20 +147,51 @@ export const MinmuxPlugin = async (ctx) => {
     if (s.status === "busy") s.left = true
     else {
       s.left = false
+      // Off the board until picked again: then it starts anew, and its badge comes back.
+      s.started = false
+      s.sentContext = s.sentOutput = undefined
       drop(Object.assign({ e: "end", sessionID: id }, where(id)))
     }
+  }
+  // Tokens, reported on change: the context of the session's last completed reply (what it
+  // sends the model now), and its cumulative output (OpenCode keeps the session's totals).
+  const num = (v) => (typeof v === "number" && v >= 0 ? v : 0)
+  // A start carries the counts known so far: one drop, so they can't reach the board before
+  // the node they're for (two drops may land in either order).
+  const counted = (s, o) => {
+    if (s.context === undefined) return o
+    o.context = s.context
+    o.output = s.output || 0
+    s.sentContext = o.context
+    s.sentOutput = o.output
+    return o
+  }
+  const tokens = (id, s) => {
+    // Only once it's on the board (a count for a node not there yet is dropped) and its context
+    // is known (no "0 context" from a session that hasn't answered here yet).
+    if (!s.started || s.context === undefined) return
+    const context = s.context || 0
+    const output = s.output || 0
+    if (s.sentContext === context && s.sentOutput === output) return
+    s.sentContext = context
+    s.sentOutput = output
+    drop(Object.assign({ e: "tokens", sessionID: id, context, output }, where(id)))
   }
   const onSession = (info, created) => {
     const id = str(info && info.id, MAX_TEXT)
     if (!id) return
     const s = session(id)
+    const t = info.tokens
+    if (t && typeof t === "object") s.output = num(t.output) + num(t.reasoning)
     const parentID = str(info.parentID, MAX_TEXT)
     const directory = str(info.directory, MAX_PATH)
     const title = str(info.title, MAX_TEXT)
-    if (s.seen && s.parentID === parentID && s.directory === directory && s.title === title) return
-    Object.assign(s, { seen: true, parentID, directory, title })
-    if (created) begin(id, "new")
-    drop(Object.assign({ e: "session", sessionID: id, title }, where(id)))
+    if (!s.seen || s.parentID !== parentID || s.directory !== directory || s.title !== title) {
+      Object.assign(s, { seen: true, parentID, directory, title })
+      if (created) begin(id, "new")
+      drop(Object.assign({ e: "session", sessionID: id, title }, where(id)))
+    }
+    tokens(id, s)
   }
   const onStatus = (id, status) => {
     if (!id || (status !== "busy" && status !== "idle")) return
@@ -205,7 +237,19 @@ export const MinmuxPlugin = async (ctx) => {
           }
           case "message.updated": {
             const m = p.info
-            if (m && m.role === "assistant" && typeof m.sessionID === "string") capped(assistant, m.sessionID, m.id)
+            if (!m || m.role !== "assistant" || typeof m.sessionID !== "string") return
+            capped(assistant, m.sessionID, m.id)
+            const t = m.tokens
+            // A completed reply's context; not an aborted or failed one (it may report none).
+            if (m.time && m.time.completed && !m.error && t && typeof t === "object" && sessions.has(m.sessionID)) {
+              const c = t.cache || {}
+              const s = session(m.sessionID)
+              const context = num(t.input) + num(c.read) + num(c.write)
+              if (context > 0) {
+                s.context = context
+                tokens(m.sessionID, s)
+              }
+            }
             return
           }
           case "session.created":

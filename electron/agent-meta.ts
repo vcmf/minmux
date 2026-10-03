@@ -64,7 +64,8 @@ export class AgentMetaTracker {
   private panes = new Map<string, PaneWatch>()
 
   constructor(
-    private readonly emit: (paneId: string, meta: SessionMeta | null) => void,
+    // `sessionId`: whose meta it is (a null for the session a switch left isn't the new one's).
+    private readonly emit: (paneId: string, meta: SessionMeta | null, sessionId?: string) => void,
     private readonly watch: WatchFn = fsWatch,
     private readonly debounceMs = 200,
     private readonly reader: MetaReader = new TranscriptMeta(), // Claude's: the session's file
@@ -82,9 +83,10 @@ export class AgentMetaTracker {
       // land on it — and clear the old session's accent now.
       clearTimeout(p.timer)
       const had = hasMeta(p.last)
+      const left = p.sessionId
       p = { ...p, sessionId, last: undefined, timer: undefined }
       this.panes.set(paneId, p)
-      if (had) this.emit(paneId, null)
+      if (had) this.emit(paneId, null, left)
     } else if (p && p.key !== key) {
       this.untrack(paneId)
       p = undefined
@@ -109,7 +111,7 @@ export class AgentMetaTracker {
     this.panes.delete(paneId)
     // A shared file (Codex's index) stays read for the other panes that track it.
     if (![...this.panes.values()].some((o) => o.key === p.key)) this.reader.forget(p.key)
-    if (notify && hasMeta(p.last)) this.emit(paneId, null)
+    if (notify && hasMeta(p.last)) this.emit(paneId, null, p.sessionId)
   }
 
   /** Current metadata of every tracked pane — a freshly (re)loaded renderer has none. */
@@ -154,8 +156,8 @@ export class AgentMetaTracker {
     if (sameMeta(meta, p.last)) return
     const had = hasMeta(p.last)
     p.last = meta
-    if (hasMeta(meta)) this.emit(paneId, meta)
-    else if (had) this.emit(paneId, null)
+    if (hasMeta(meta)) this.emit(paneId, meta, p.sessionId)
+    else if (had) this.emit(paneId, null, p.sessionId)
   }
 }
 

@@ -4,7 +4,7 @@ import type { AgentKind } from "../../src/lib/agent-graph"
 import { claudeSpec } from "./claude"
 import { codexSpec } from "./codex"
 import { opencodeSpec } from "./opencode"
-import type { AgentAdapter, AgentShell, AgentSpec, SessionRules } from "./types"
+import type { AdapterContext, AgentAdapter, AgentShell, AgentSpec, SessionRules } from "./types"
 
 export type { AgentAdapter, AgentShell, AgentSpec, SessionRules } from "./types"
 
@@ -12,8 +12,8 @@ export const AGENTS: AgentSpec[] = [claudeSpec, codexSpec, opencodeSpec]
 
 /** Fresh adapters for this process (per-launch state: settings paths, trackers), for the agents
  *  integrated on this platform. */
-export const createAdapters = (platform = process.platform): AgentAdapter[] =>
-  AGENTS.filter((a) => platform !== "win32" || a.windows !== false).map((a) => a.create())
+export const createAdapters = (platform = process.platform, ctx?: AdapterContext): AgentAdapter[] =>
+  AGENTS.filter((a) => platform !== "win32" || a.windows !== false).map((a) => a.create(ctx))
 
 /** Each agent's rc lines + WSL forwards, in registry order (static: scripts build at load). */
 export const AGENT_SHELL: AgentShell[] = AGENTS.map((a) => a.shell)

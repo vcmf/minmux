@@ -296,6 +296,112 @@ describe("the plugin (loaded from its source, as OpenCode does)", () => {
     )
   })
 
+  it("tokens: the last reply's context and the session's output, on change, for children too", async () => {
+    const h = await (await load())({ directory: "/base" })
+    const e = h.event!
+    const msg = (sessionID: string, id: string, tokens: object, completed?: number) =>
+      e(
+        ev("message.updated", {
+          info: { id, sessionID, role: "assistant", tokens, time: { completed } },
+        }),
+      )
+    const sess = (id: string, tokens: object, parentID?: string) =>
+      e(ev("session.updated", { info: { id, parentID, tokens } }))
+    const zero = { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }
+    e(ev("session.created", { info: { id: "ses_r", tokens: zero } })) // nothing used: no report
+    msg("ses_r", "m1", { input: 9847, output: 33, reasoning: 0, cache: { read: 1938, write: 5 } }) // streaming
+    msg(
+      "ses_r",
+      "m1",
+      { input: 9847, output: 33, reasoning: 0, cache: { read: 1938, write: 5 } },
+      1,
+    )
+    sess("ses_r", { input: 9847, output: 33, reasoning: 7, cache: { read: 1938, write: 5 } })
+    sess("ses_r", { input: 9847, output: 33, reasoning: 7, cache: { read: 1938, write: 5 } }) // same
+    e(ev("session.created", { info: { id: "ses_c", parentID: "ses_r" } }))
+    msg("ses_c", "m2", { input: 500, output: 9, reasoning: 0, cache: { read: 0, write: 0 } }, 2)
+    const out = (await drops(9)).filter((d) => d.e === "tokens")
+    expect(out).toEqual([
+      { v: 1, e: "tokens", sessionID: "ses_r", context: 11790, output: 0, directory: "/base" },
+      { v: 1, e: "tokens", sessionID: "ses_r", context: 11790, output: 40, directory: "/base" },
+      {
+        v: 1,
+        e: "tokens",
+        sessionID: "ses_c",
+        context: 500,
+        output: 0,
+        parentID: "ses_r",
+        rootID: "ses_r",
+      },
+    ])
+  })
+
+  it("tokens wait for the session's start and a known context (a resumed one's come first)", async () => {
+    const h = await (await load())({ directory: "/base" })
+    const e = h.event!
+    const t = { input: 100, output: 50, reasoning: 0, cache: { read: 900, write: 0 } }
+    // `opencode -s`: its info (with totals) comes before its prompt starts it.
+    e(ev("session.updated", { info: { id: "ses_a", title: "old", tokens: t } }))
+    e(
+      ev("message.updated", {
+        info: { id: "m", sessionID: "ses_a", role: "assistant", tokens: t, time: { completed: 1 } },
+      }),
+    )
+    e(ev("session.status", { sessionID: "ses_a", status: { type: "busy" } })) // its start
+    const out = await drops(4)
+    expect(out.filter((d) => d.e === "tokens")).toEqual([]) // never before its start…
+    expect(out.find((d) => d.e === "start")).toMatchObject({ context: 1000, output: 50 }) // …with it
+  })
+
+  it("a picked-again root gets its badge back; an aborted reply never reads as 0 context", async () => {
+    const h = await (await load())({ directory: "/base" })
+    const e = h.event!
+    const status = (id: string, type: string) =>
+      e(ev("session.status", { sessionID: id, status: { type } }))
+    const t = { input: 100, output: 5, reasoning: 0, cache: { read: 900, write: 0 } }
+    e(ev("session.created", { info: { id: "ses_a" } }))
+    status("ses_a", "busy")
+    e(
+      ev("message.updated", {
+        info: {
+          id: "m1",
+          sessionID: "ses_a",
+          role: "assistant",
+          tokens: t,
+          time: { completed: 1 },
+        },
+      }),
+    )
+    status("ses_a", "idle")
+    // Esc mid-reply: completed with an error and no tokens.
+    const none = { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }
+    e(
+      ev("message.updated", {
+        info: {
+          id: "m2",
+          sessionID: "ses_a",
+          role: "assistant",
+          tokens: none,
+          time: { completed: 2 },
+          error: { name: "Aborted" },
+        },
+      }),
+    )
+    e(ev("session.created", { info: { id: "ses_b" } })) // /new: ses_a ends (idle)
+    e(ev("session.updated", { info: { id: "ses_a", title: "x" } }))
+    status("ses_a", "busy") // picked again
+    const out = await drops(13)
+    const a = out.filter(
+      (d) => d.sessionID === "ses_a" && (d.e === "tokens" || d.e === "start" || d.e === "end"),
+    )
+    expect(a.map((d) => `${d.e} ${d.context ?? ""}`.trim())).toEqual([
+      "start", // nothing used yet
+      "tokens 1000",
+      "end",
+      "start 1000", // picked again: its badge comes with its new node
+    ])
+  })
+
   it("a child whose chain is broken names no root (never filed as one)", async () => {
     const h = await (await load())({ directory: "/base" })
     const e = h.event!
@@ -512,7 +618,8 @@ describe("normalizeOpencodeDrop", () => {
     .map((e) => ({ ...e, agent: "opencode" as const }))
 
   it("maps a real turn onto the canonical events", () => {
-    expect(events.map((e) => e.event + (e.agentId ? "·sub" : ""))).toEqual([
+    const flow = events.filter((e) => e.event !== "TokenUsage" && e.event !== "SessionTitle")
+    expect(flow.map((e) => e.event + (e.agentId ? "·sub" : ""))).toEqual([
       "SessionStart",
       "UserPromptSubmit",
       "PreToolUse",
@@ -524,19 +631,26 @@ describe("normalizeOpencodeDrop", () => {
       "PostToolUse·sub",
       "SubagentStop·sub",
       "PostToolUse",
+      "PreToolUse", // an edit that never finished (the model retried it)
       "PreToolUse",
       "PostToolUse",
       "Stop",
     ])
-    const root = events[0]!
+    const root = flow[0]!
     expect(root).toMatchObject({
       sessionId: expect.stringMatching(/^ses_/),
       cwd: "/repo",
       source: "startup",
     })
-    expect(events.every((e) => e.sessionId === root.sessionId && e.paneId === "pane-oc")).toBe(true)
-    expect(events[5]).toMatchObject({ agentType: "general" })
-    expect(events[5]).not.toHaveProperty("parentAgentId") // its parent is the root
+    expect(flow.every((e) => e.sessionId === root.sessionId && e.paneId === "pane-oc")).toBe(true)
+    expect(flow[5]).toMatchObject({ agentType: "general" })
+    expect(flow[5]).not.toHaveProperty("parentAgentId") // its parent is the root
+    // Its titles (main's alone): the placeholder, then OpenCode's automatic one.
+    const titles = events.filter((e) => e.event === "SessionTitle").map((e) => e.title)
+    expect(titles).toEqual([
+      expect.stringMatching(/^New session - /),
+      "Count words in a.txt and append bye",
+    ])
   })
 
   it("folds into a two-level tree: the root, its sub-agent, files and replies", () => {
@@ -549,13 +663,16 @@ describe("normalizeOpencodeDrop", () => {
       cwd: "/repo",
       paneId: "pane-oc",
     })
-    expect(root.lastMessage).toMatch(/subagent/)
+    expect(root.lastMessage).toBe("Done.")
+    expect(root.currentTool).toBeUndefined() // the turn's end clears the unfinished edit
     expect(root.recentFiles).toEqual(["/repo/a.txt"])
+    expect(root.tokens).toEqual({ context: 10797, output: 418 }) // the badge
     const kids = subAgents(g, root)
     expect(kids.map((k) => [k.node.agentType, k.node.status, k.depth])).toEqual([
       ["general", "done", 1],
     ])
     expect(kids[0]!.node.lastMessage).toMatch(/1/)
+    expect(kids[0]!.node.tokens).toEqual({ context: 10100, output: 118 }) // its own badge
   })
 
   it("deeper children nest under their parent (custom agents)", () => {
@@ -605,6 +722,54 @@ describe("normalizeOpencodeDrop", () => {
       }),
     ).toMatchObject({ event: "SessionStart", source: "resume", cwd: "/r" })
     expect(normalizeOpencodeDrop({ v: 1, e: "start", sessionID: "ses_a" })).toBeNull()
+  })
+
+  it("tokens become a TokenUsage for the session or its sub-agent; titles a SessionTitle", () => {
+    const n = (o: Record<string, unknown>) => normalizeOpencodeDrop({ v: 1, ...o })
+    expect(
+      n({ e: "tokens", sessionID: "ses_r", context: 11790, output: 40, directory: "/r" }),
+    ).toMatchObject({
+      event: "TokenUsage",
+      sessionId: "ses_r",
+      tokens: { context: 11790, output: 40 },
+    })
+    const child = { sessionID: "ses_c", parentID: "ses_r", rootID: "ses_r" }
+    expect(n({ e: "tokens", ...child, context: 500, output: 0 })).toMatchObject({
+      event: "TokenUsage",
+      sessionId: "ses_r",
+      agentId: "ses_c",
+    })
+    expect(n({ e: "tokens", sessionID: "ses_r", context: -1, output: 2 })).toBeNull()
+    expect(n({ e: "tokens", sessionID: "ses_r", context: "9", output: 2 })).toBeNull()
+    expect(n({ e: "session", sessionID: "ses_r", title: "Fix it", directory: "/r" })).toMatchObject(
+      {
+        event: "SessionTitle",
+        title: "Fix it",
+      },
+    )
+    expect(n({ e: "session", ...child, title: "x (@general subagent)" })).toBeNull()
+    // Folded: the badge on the root and on the sub-agent.
+    const g = reduceAgentEvents([
+      n({ e: "start", sessionID: "ses_r", source: "new", directory: "/r" })!,
+      n({ e: "start", ...child, title: "x (@general subagent)" })!,
+      n({ e: "tokens", sessionID: "ses_r", context: 11790, output: 40, directory: "/r" })!,
+      n({ e: "tokens", ...child, context: 500, output: 9 })!,
+    ])
+    expect(g.nodes["root:ses_r"]!.tokens).toEqual({ context: 11790, output: 40 })
+    // Counts that come with a start (one drop): the badge is there from its first event.
+    const picked = n({
+      e: "start",
+      sessionID: "ses_p",
+      source: "seen",
+      directory: "/r",
+      context: 9,
+      output: 1,
+    })
+    expect(reduceAgentEvents([picked!]).nodes["root:ses_p"]!.tokens).toEqual({
+      context: 9,
+      output: 1,
+    })
+    expect(g.nodes.ses_c!.tokens).toEqual({ context: 500, output: 9 })
   })
 
   it("a root the user left ends on the board; a child's end isn't one", () => {

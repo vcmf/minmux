@@ -33,6 +33,8 @@ export class AgentLiveness {
     if (this.platform === "win32" || ev.agentId || ev.pid === undefined || !ev.paneId) return
     const agent = agentOf(ev)
     if (!this.byPid(agent)) return
+    // A title isn't a session at work (a background one's, or one already ended).
+    if (ev.event === "SessionTitle") return
     if (ev.event === "SessionEnd") {
       const ss = this.procs.get(ev.pid)
       if (ss?.delete(ev.sessionId) && ss.size === 0) this.procs.delete(ev.pid)

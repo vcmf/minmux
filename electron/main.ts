@@ -43,6 +43,7 @@ import { checkForUpdate } from "./update-check"
 import { startHookWatcher, type DropNormalizer } from "./agent-hooks"
 import { AGENT_RULES, createAdapters, type AgentAdapter } from "./agents"
 import { AgentLiveness, foldLiveness } from "./agent-liveness"
+import { UserNames } from "./agent-names"
 import { agentOf, type AgentEvent, type AgentKind } from "../src/lib/agent-graph"
 import { disabledAgentsIn, mergeAgentSwitches } from "../src/settings/agent-switches"
 import { agentPaneEnv, resumablePanes } from "./agents/arming"
@@ -152,7 +153,15 @@ let mainWindow: BrowserWindow | null = null
 // (`<root>/<agent>/`, passed to panes as MINMUX_AGENT_EVENTS). Empty ⇒ agents board stays
 // empty. Each pane's env carries every armed agent's paths; WSLENV /p translates them for an
 // agent inside WSL.
-const adapters = createAdapters()
+// Whose name each agent session's is (kept per session: the colour survives a resume, D3).
+let userNamesStore: UserNames | null = null
+const userNames = () =>
+  (userNamesStore ??= new UserNames(path.join(configDir(), "agent-names.json")))
+void userNames().loaded // read now, async: the first OpenCode title finds it ready
+const adapters = createAdapters(process.platform, {
+  userNamed: (id) => userNames().has(id),
+  setUserNamed: (id, user) => userNames().set(id, user),
+})
 let armed: AgentAdapter[] = []
 let agentEventsDir: string | null = null
 let hookWatcher: { close: () => Promise<void> } | null = null
@@ -167,17 +176,18 @@ for (const a of adapters) {
   if (!a.meta) continue
   const kind = a.kind
   const tracker = new AgentMetaTracker(
-    (paneId, meta) => {
+    (paneId, meta, sessionId) => {
       // An automatic name with no colour changes nothing on screen (D3): only the ledger
       // wants it — skip the IPC and the panes' re-render.
       if (!meta?.auto || meta.color !== undefined)
         mainWindow?.webContents.send("agents:meta", paneId, meta)
-      // The name, for the resume banner: only onto this agent's session (a late read must not
-      // rename another agent's session in that pane).
+      // The name, for the resume banner: only onto the session it's for (a late read, or the
+      // null for a session a switch left, must not rename the pane's new lead).
       const lead = sessionLedger().get(paneId)
-      if (lead && agentOf(lead) === kind) sessionLedger().setName(paneId, meta?.name)
+      if (lead && agentOf(lead) === kind && (!sessionId || lead.sessionId === sessionId))
+        sessionLedger().setName(paneId, meta?.name)
     },
-    undefined,
+    a.meta.watch === false ? () => null : undefined, // not a file: nothing to watch
     undefined,
     a.meta.reader(),
   )
@@ -379,11 +389,23 @@ async function startAgentObservability(): Promise<void> {
         // rejected one dropped (the graph keeps what it knew) — no second classifier there.
         if (r.verdict === "fallback") ev.cwd = r.cwd
         else if (r.verdict === "rejected") ev.cwd = undefined
+        adapterFor(ev)?.observe?.(ev) // state an adapter keeps (OpenCode's pushed names)
+        // A pushed name may come before its session leads (a resumed OpenCode's title): the
+        // new entry takes it, and whether it's the user's.
+        if (ev.event === "SessionStart" && ev.paneId && !ev.agentId) {
+          const m = adapterFor(ev)?.metaNow?.(ev.sessionId)
+          if (m?.name && sessionLedger().get(ev.paneId)?.sessionId === ev.sessionId)
+            sessionLedger().setName(ev.paneId, m.name)
+        }
         // One classifier for "who leads this pane": the ledger. Tag every root event so the
         // graph and the accent agree (and survive a renderer reload — the ledger lives here).
         if (ev.paneId && !ev.agentId) ev.nested = sessionLedger().isNested(ev.paneId, ev.sessionId)
       }
-      mainWindow?.webContents.send("agents:events", events)
+      // A title is main's alone (the meta tracker shows it), never a board event.
+      mainWindow?.webContents.send(
+        "agents:events",
+        events.filter((ev) => ev.event !== "SessionTitle"),
+      )
       // Session-level events locate where each pane's session keeps its name/colour → track
       // it for the pane accent (async + debounced; SessionEnd stops it).
       const plan = planMeta(events, (ev) => {
