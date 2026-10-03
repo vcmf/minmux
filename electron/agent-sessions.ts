@@ -121,14 +121,14 @@ export class SessionLedger {
     if (!rules) return {} // an agent without resume rules is never recorded
     const pane = ev.paneId
     const cur = this.entries.get(pane)
-    const nested = this.nestedIn(pane)
     if (ev.event === "SessionEnd") {
-      nested.delete(ev.sessionId)
+      this.nested.get(pane)?.delete(ev.sessionId) // a closed pane's late end adds no entry back
       if (cur?.sessionId === ev.sessionId) this.delete(pane)
       return {}
     }
     // A session once launched inside the pane's lead stays nested until it ends — a background
     // agent keeps running after the lead exits (or across a thaw) and must never become it.
+    const nested = this.nestedIn(pane)
     if (nested.has(ev.sessionId)) return {}
     if (ev.event === "SessionStart") {
       if (!ev.cwd) return {}

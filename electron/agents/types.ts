@@ -17,6 +17,8 @@ export interface SessionRules {
   cwdFits(cwd: string | undefined, transcriptPath: string | undefined): boolean | undefined
   /** A new session while one of this agent's leads the pane: a switch (vs a background agent)? */
   isSwitch(ev: AgentEvent, lead: LedgerEntry): boolean
+  /** Its events' pid is the agent itself, so its exit ends its sessions (not Claude's: a hook shell). */
+  liveByPid?: true
 }
 
 /** The rc lines our zsh/bash integration adds for an agent, and its per-pane env. */

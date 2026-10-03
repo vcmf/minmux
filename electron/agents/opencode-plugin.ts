@@ -77,28 +77,38 @@ export const MinmuxPlugin = async (ctx) => {
     if (!m.has(k) && m.size >= MAX_SESSIONS) m.delete(m.keys().next().value)
     m.set(k, v)
   }
-  // Least recently used goes first: a long-lived root outlives its many sub-agents.
+  // Full: the least recently used sub-agent goes first (every one is a session of its own), so
+  // a long run never loses the roots the user works in; only if all are roots, the oldest root.
+  // Never one still in use: busy, the active root, or one /new left that ends at idle.
+  const evict = () => {
+    const kept = (k, v) => k === active || v.left || v.status === "busy"
+    for (const [k, v] of sessions) if (v.parentID && !kept(k, v)) return sessions.delete(k)
+    for (const [k, v] of sessions) if (!kept(k, v)) return sessions.delete(k)
+    sessions.delete(sessions.keys().next().value)
+  }
   const session = (id) => {
     let s = sessions.get(id)
     if (s) sessions.delete(id)
-    else if (sessions.size >= MAX_SESSIONS) sessions.delete(sessions.keys().next().value)
+    else if (sessions.size >= MAX_SESSIONS) evict()
     sessions.set(id, (s = s || {}))
     return s
   }
   // A child's root: its parent chain's top (sub-agents can nest with custom agents).
+  // undefined when a link in the chain is unknown (never seen, or evicted): never a guess.
   const rootOf = (id) => {
     let cur = id
     for (let i = 0; i < 16; i++) {
       const p = sessions.get(cur) && sessions.get(cur).parentID
-      if (!p) break
+      if (!p) return cur
+      if (!sessions.has(p)) return undefined
       cur = p
     }
-    return cur
+    return undefined
   }
   // A child names its parent and root; a root its folder (so a session first seen mid-life
-  // still files).
+  // still files). A lookup: it never adds a session.
   const where = (id) => {
-    const s = session(id)
+    const s = sessions.get(id) || {}
     return s.parentID
       ? { parentID: s.parentID, rootID: rootOf(id) }
       : { directory: s.directory || base }
@@ -112,16 +122,32 @@ export const MinmuxPlugin = async (ctx) => {
     const s = session(id)
     if (!s.seen) return
     if (s.parentID) {
-      begin(rootOf(id))
+      const root = rootOf(id)
+      if (!root) return
+      begin(root)
       if (s.started) return
       s.started = true
       return drop(Object.assign({ e: "start", sessionID: id, title: s.title }, where(id)))
     }
     // A root starts only when the user moves to it: never on a background session's tools.
     if (!activate || active === id) return
+    const left = active
     active = id
     const source = activate === "new" ? "new" : "seen"
     drop({ e: "start", sessionID: id, source, directory: s.directory || base })
+    if (left && activate === "new") leave(left)
+  }
+  // The root /new left is over once idle (a still-running one: when its turn does). Not on a
+  // turn starting elsewhere: that may be a queued prompt, not the user moving. Picked again, it
+  // starts again with the user's next prompt there (picking a busy one sends nothing).
+  const leave = (id) => {
+    const s = sessions.get(id)
+    if (!s || active === id) return
+    if (s.status === "busy") s.left = true
+    else {
+      s.left = false
+      drop(Object.assign({ e: "end", sessionID: id }, where(id)))
+    }
   }
   const onSession = (info, created) => {
     const id = str(info && info.id, MAX_TEXT)
@@ -148,6 +174,7 @@ export const MinmuxPlugin = async (ctx) => {
       reply.delete(id)
     }
     drop(o)
+    if (status === "idle" && s.left) leave(id)
   }
   const onTool = (phase, input, output) => {
     const id = str(input && input.sessionID, MAX_TEXT)

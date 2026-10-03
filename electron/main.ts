@@ -41,7 +41,8 @@ import { buildEditorCommand, winQuote } from "./editor-command"
 import { orderMacEditors, planEditor, type EditorPlan, type EditorInfo } from "./editor-detect"
 import { checkForUpdate } from "./update-check"
 import { startHookWatcher, type DropNormalizer } from "./agent-hooks"
-import { createAdapters, type AgentAdapter } from "./agents"
+import { AGENT_RULES, createAdapters, type AgentAdapter } from "./agents"
+import { AgentLiveness, foldLiveness } from "./agent-liveness"
 import { agentOf, type AgentEvent, type AgentKind } from "../src/lib/agent-graph"
 import { disabledAgentsIn, mergeAgentSwitches } from "../src/settings/agent-switches"
 import { agentPaneEnv, resumablePanes } from "./agents/arming"
@@ -155,6 +156,8 @@ const adapters = createAdapters()
 let armed: AgentAdapter[] = []
 let agentEventsDir: string | null = null
 let hookWatcher: { close: () => Promise<void> } | null = null
+let reaper: ReturnType<typeof setInterval> | null = null // ends sessions whose process is gone
+const REAP_MS = 3000
 // Branch + GitHub PR per terminal (sidebar), via git + the user's `gh`.
 const paneGit = new PaneGitService()
 // Per pane, the lead session's name/colour (pane accent, resume banner), one tracker per
@@ -359,65 +362,86 @@ async function startAgentObservability(): Promise<void> {
     armed = ready // before the watcher: its first batch looks adapters up here
     const normalizers: Partial<Record<AgentKind, DropNormalizer>> = {}
     for (const a of ready) normalizers[a.kind] = a.normalize
-    hookWatcher = await startHookWatcher({
-      dir: eventsDir,
-      agents: normalizers,
-      onBatch: (events: AgentEvent[]) => {
-        // Fold the batch into the resume ledger (which pane is inside which Claude session,
-        // + its WSL distro) and tag each event lead/nested from it, then forward it at once
-        // (keeps the board live). Token totals are priced from the transcripts afterwards,
-        // async and incremental — off the terminal hot path and the agent's loop.
-        for (const ev of events) {
-          // Session lifecycle only (never per-tool events): traceable when resume goes wrong.
-          if (TRACED_HOOKS.has(ev.event)) diag("hook", hookTrace(ev))
-          const r = sessionLedger().apply(
-            ev,
-            ev.paneId ? sessions.get(ev.paneId)?.wslDistro : undefined,
-          )
-          if (r.verdict) diag(`hook-cwd-${r.verdict}`, hookTrace(ev))
-          // The renderer's graph takes the ledger's folder: a replaced one is rewritten, a
-          // rejected one dropped (the graph keeps what it knew) — no second classifier there.
-          if (r.verdict === "fallback") ev.cwd = r.cwd
-          else if (r.verdict === "rejected") ev.cwd = undefined
-          // One classifier for "who leads this pane": the ledger. Tag every root event so the
-          // graph and the accent agree (and survive a renderer reload — the ledger lives here).
-          if (ev.paneId && !ev.agentId)
-            ev.nested = sessionLedger().isNested(ev.paneId, ev.sessionId)
+    const fold = (events: AgentEvent[]) => {
+      // Fold the batch into the resume ledger (which pane is inside which Claude session,
+      // + its WSL distro) and tag each event lead/nested from it, then forward it at once
+      // (keeps the board live). Token totals are priced from the transcripts afterwards,
+      // async and incremental — off the terminal hot path and the agent's loop.
+      for (const ev of events) {
+        // Session lifecycle only (never per-tool events): traceable when resume goes wrong.
+        if (TRACED_HOOKS.has(ev.event)) diag("hook", hookTrace(ev))
+        const r = sessionLedger().apply(
+          ev,
+          ev.paneId ? sessions.get(ev.paneId)?.wslDistro : undefined,
+        )
+        if (r.verdict) diag(`hook-cwd-${r.verdict}`, hookTrace(ev))
+        // The renderer's graph takes the ledger's folder: a replaced one is rewritten, a
+        // rejected one dropped (the graph keeps what it knew) — no second classifier there.
+        if (r.verdict === "fallback") ev.cwd = r.cwd
+        else if (r.verdict === "rejected") ev.cwd = undefined
+        // One classifier for "who leads this pane": the ledger. Tag every root event so the
+        // graph and the accent agree (and survive a renderer reload — the ledger lives here).
+        if (ev.paneId && !ev.agentId) ev.nested = sessionLedger().isNested(ev.paneId, ev.sessionId)
+      }
+      mainWindow?.webContents.send("agents:events", events)
+      // Session-level events locate where each pane's session keeps its name/colour → track
+      // it for the pane accent (async + debounced; SessionEnd stops it).
+      const plan = planMeta(events, (ev) => {
+        const a = adapterFor(ev)
+        return a ? { kind: a.kind, file: a.meta?.file(ev) ?? null } : null
+      })
+      for (const m of plan) {
+        if (m.type === "clear-others") {
+          for (const [k, t] of metaTrackers) if (k !== m.kind) t.untrack(m.paneId)
+          continue
         }
-        mainWindow?.webContents.send("agents:events", events)
-        // Session-level events locate where each pane's session keeps its name/colour → track
-        // it for the pane accent (async + debounced; SessionEnd stops it).
-        const plan = planMeta(events, (ev) => {
-          const a = adapterFor(ev)
-          return a ? { kind: a.kind, file: a.meta?.file(ev) ?? null } : null
-        })
-        for (const m of plan) {
-          if (m.type === "clear-others") {
-            for (const [k, t] of metaTrackers) if (k !== m.kind) t.untrack(m.paneId)
-            continue
-          }
-          const t = metaTrackers.get(m.kind)
-          if (m.type === "untrack") t?.untrack(m.paneId, true, m.file, m.sessionId)
-          else t?.track(m.paneId, m.file, transcriptTargets(m.file, m.paneId), m.sessionId)
-        }
-        // Token totals per agent, from its own source (async, off the agent's loop), tagged
-        // with that agent like the watcher tags hook events.
-        for (const a of ready) {
-          const mine = events.filter((ev) => agentOf(ev) === a.kind)
-          if (!a.usage || mine.length === 0) continue
-          void a
-            .usage(mine, transcriptTargets)
-            .then((tokenEvents) => {
-              if (tokenEvents.length)
-                mainWindow?.webContents.send(
-                  "agents:events",
-                  tokenEvents.map((e) => ({ ...e, agent: a.kind })),
-                )
-            })
-            .catch(() => {}) // best-effort: no badge
-        }
-      },
-    })
+        const t = metaTrackers.get(m.kind)
+        if (m.type === "untrack") t?.untrack(m.paneId, true, m.file, m.sessionId)
+        else t?.track(m.paneId, m.file, transcriptTargets(m.file, m.paneId), m.sessionId)
+      }
+      // Token totals per agent, from its own source (async, off the agent's loop), tagged
+      // with that agent like the watcher tags hook events.
+      for (const a of ready) {
+        const mine = events.filter((ev) => agentOf(ev) === a.kind)
+        if (!a.usage || mine.length === 0) continue
+        void a
+          .usage(mine, transcriptTargets)
+          .then((tokenEvents) => {
+            if (tokenEvents.length)
+              mainWindow?.webContents.send(
+                "agents:events",
+                tokenEvents.map((e) => ({ ...e, agent: a.kind })),
+              )
+          })
+          .catch(() => {}) // best-effort: no badge
+      }
+    }
+    // Sessions that end with their process (OpenCode on quit, fish/pwsh: no prompt mark) get
+    // the SessionEnd they never sent: before a batch that starts one, and every few seconds
+    // while any is tracked (signal 0 per process).
+    const liveness = new AgentLiveness((k) => !!AGENT_RULES[k]?.liveByPid)
+    // Ticks only while something is tracked: none when no Codex/OpenCode ever ran.
+    const tick = () => {
+      try {
+        const ends = liveness.reap()
+        if (ends.length) fold(ends)
+      } catch (err) {
+        diag("agent-reap-failed", { err: String(err) }) // never into Electron
+      }
+      if (!liveness.hasProcs() && reaper) {
+        clearInterval(reaper)
+        reaper = null
+      }
+    }
+    const onBatch = (batch: AgentEvent[]) => {
+      const events = foldLiveness(batch, liveness)
+      if (events.length) fold(events)
+      if (liveness.hasProcs() && !reaper) {
+        reaper = setInterval(tick, REAP_MS)
+        reaper.unref()
+      }
+    }
+    hookWatcher = await startHookWatcher({ dir: eventsDir, agents: normalizers, onBatch })
     agentEventsDir = eventsDir
     diag("agent-hooks-up", { dir: eventsDir, agents: ready.map((a) => a.kind).join(",") })
   } catch (err) {
@@ -1377,6 +1401,7 @@ app.on("will-quit", () => {
   metaTrackers.forEach((t) => t.dispose()) // close transcript / index watchers
   sshService?.dispose() // close the ssh config watchers
   void hookWatcher?.close() // stop the file-drop watcher
+  if (reaper) clearInterval(reaper)
 })
 app.on("quit", () => diag("quit"))
 

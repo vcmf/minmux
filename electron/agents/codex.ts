@@ -256,6 +256,7 @@ export const codexSessionRules: SessionRules = {
     SAFE_ID.test(e.sessionId) ? `codex resume ${e.sessionId}` : null,
   cwdFits: () => undefined, // rollouts are found by id, not by folder
   isSwitch: (ev, lead) => ev.pid !== undefined && ev.pid === lead.pid,
+  liveByPid: true, // `exec node …`: the hook's parent is Codex itself (a test pins the exec)
 }
 
 // Codex's subcommands that never open its interactive UI (`codex --help`); a bare `codex`, a
