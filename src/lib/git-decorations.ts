@@ -31,7 +31,9 @@ export function buildGitDecorations(repoRoot: string, files: GitFile[]): GitDeco
   if (!repoRoot) return { file, dir }
   for (const f of files) {
     const abs = joinPath(repoRoot, f.path)
-    file.set(abs, f.status)
+    if (f.isDir)
+      dir.set(abs, f.status) // a wholly-untracked folder (git reports it once)
+    else file.set(abs, f.status)
     // Roll the status up through ancestor folders, up to and including repoRoot.
     let d = parentDir(abs)
     while (d === repoRoot || d.startsWith(`${repoRoot}/`)) {

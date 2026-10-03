@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest"
 import {
+  showAllIn,
   joinPath,
   baseName,
   emptyTree,
@@ -121,6 +122,32 @@ describe("visibleRows", () => {
     const last = rows[rows.length - 1]!
     expect(last.kind).toBe("note")
     expect(last.path).toBe("note:/repo") // stable, printable key (no NUL byte)
+  })
+
+  it("a big folder (>100 entries) previews its first 10, then a 'N more' row; Show all lifts it", () => {
+    const big = Array.from(
+      { length: 150 },
+      (_, i) => [`f${String(i).padStart(3, "0")}`, false] as [string, boolean],
+    )
+    let s = setListing(emptyTree("/repo"), "/repo", { ...listing(big), total: 150 })
+    let rows = visibleRows(s)
+    expect(rows).toHaveLength(11)
+    expect(rows[10]).toMatchObject({ kind: "more", name: "140 more", dir: "/repo", hidden: 140 })
+    s = showAllIn(s, "/repo")
+    rows = visibleRows(s)
+    expect(rows).toHaveLength(150)
+    expect(rows.some((r) => r.kind === "more")).toBe(false)
+  })
+
+  it("a folder past the backend cap ends with a note row counting what's left", () => {
+    const capped = Array.from({ length: 50 }, (_, i) => [`f${i}`, false] as [string, boolean])
+    const s = showAllIn(
+      setListing(emptyTree("/r"), "/r", { ...listing(capped, true), total: 1240 }),
+      "/r",
+    )
+    const rows = visibleRows(s)
+    const last = rows[rows.length - 1]!
+    expect(last).toMatchObject({ kind: "note", name: "1,190 more", path: "note:/r" })
   })
 
   it("nothing renders before the root listing arrives", () => {

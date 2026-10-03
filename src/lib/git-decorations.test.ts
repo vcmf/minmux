@@ -90,3 +90,22 @@ describe("statusLetter / statusColor", () => {
     expect(statusColor("R")).toContain("--blue")
   })
 })
+
+describe("untracked folders (git reports each once)", () => {
+  const f = (path: string, status: ChangeStatus, isDir = false) => ({
+    path,
+    name: path,
+    dir: ".",
+    status,
+    add: 0,
+    del: 0,
+    isDir,
+  })
+  it("the folder itself is badged and rolls up; what's inside isn't (git may ignore it)", () => {
+    const d = buildGitDecorations("/r", [f("docs/node_modules", "?", true), f("a.ts", "M")])
+    expect(d.dir.get("/r/docs/node_modules")).toBe("?")
+    expect(d.dir.get("/r/docs")).toBe("?") // rolled up
+    expect(d.file.get("/r/docs/node_modules/.env")).toBeUndefined()
+    expect(d.file.get("/r/a.ts")).toBe("M")
+  })
+})

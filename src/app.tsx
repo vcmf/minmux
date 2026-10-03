@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect } from "react"
+import { nextGitPollDelay } from "./lib/git-poll"
 import { ipc } from "./lib/ipc"
 import { TopBar } from "./components/top-bar"
 import { Sidebar } from "./components/sidebar"
@@ -421,16 +422,26 @@ function App() {
       useStore.getState().setGit(null)
       return
     }
+    // Sequential, never overlapping (a slow call used to pile up behind setInterval), and
+    // adaptive: the next poll waits longer when this repo's status is slow (lib/git-poll).
     let cancelled = false
-    const poll = () =>
-      void ipc.gitStatus(activeCwd, getActiveWsl()).then((g) => {
-        if (!cancelled) useStore.getState().setGit(g)
-      })
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const poll = () => {
+      const t0 = performance.now()
+      void ipc
+        .gitStatus(activeCwd, getActiveWsl())
+        .then((g) => {
+          if (!cancelled) useStore.getState().setGit(g)
+        })
+        .catch(() => {})
+        .finally(() => {
+          if (!cancelled) timer = setTimeout(poll, nextGitPollDelay(performance.now() - t0))
+        })
+    }
     poll()
-    const t = setInterval(poll, 2500)
     return () => {
       cancelled = true
-      clearInterval(t)
+      clearTimeout(timer)
     }
   }, [activeCwd])
 
