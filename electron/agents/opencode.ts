@@ -80,9 +80,11 @@ const MERGE = [
   "    fi",
   "  }",
   "  function opencode {", // not `opencode()`: a user alias `opencode` would break the rc
-  "    local __minmux_oc",
+  // A resume's id goes to this run only (a `K=V` before a function may stay set: bash POSIX).
+  '    local __minmux_oc __minmux_rs="${MINMUX_RESUME_SESSION-}"',
+  "    unset MINMUX_RESUME_SESSION",
   "    __minmux_oc_config",
-  '    OPENCODE_CONFIG_CONTENT="$__minmux_oc" command opencode "$@"',
+  '    MINMUX_RESUME_SESSION="$__minmux_rs" OPENCODE_CONFIG_CONTENT="$__minmux_oc" command opencode "$@"',
   "  }",
 ]
 
@@ -99,22 +101,29 @@ export const opencodeShell: AgentShell = {
     ...MERGE,
     "fi",
   ],
-  env: ["MINMUX_OPENCODE_PLUGIN"],
+  env: ["MINMUX_OPENCODE_PLUGIN", "MINMUX_RESUME_SESSION"],
   merged: { OPENCODE_CONFIG_CONTENT: stripMinmuxPlugins }, // theirs plus ours
   wslenv: [], // not on Windows (so never in a WSL pane) yet: see opencodeSpec.windows
 }
 
 // By process (MULTI_AGENT.md §4.4): the plugin starts a root whenever it becomes the active one,
 // so a start from the leading OpenCode is a switch; another process's session is nested.
-// Sub-agents never start sessions (they're SubagentStart). Resume comes with PR #11.
+// Sub-agents never start sessions (they're SubagentStart). Resume reopens the session by id
+// (after a `cd` to its folder: OpenCode files sessions per project), and the plugin starts it at
+// once from OpenCode's own lookup (resumes confirm like Claude's); an id it doesn't know makes
+// it exit at once ("Session not found", 1), which the banner reports.
 export const opencodeSessionRules: SessionRules = {
-  resumeCommand: () => null,
+  resumeCommand: (e) => (SESSION_ID.test(e.sessionId) ? `opencode --session ${e.sessionId}` : null),
+  // Lets the plugin confirm it at once: OpenCode's own lookup of that session.
+  resumeEnv: (e) => ({ MINMUX_RESUME_SESSION: e.sessionId }),
   cwdFits: () => undefined,
   isSwitch: (ev, lead) => ev.pid !== undefined && ev.pid === lead.pid,
   liveByPid: true, // the plugin's own process.pid: OpenCode fires nothing on quit
 }
 
 const ID = /^[A-Za-z0-9_-]{1,128}$/
+/** An OpenCode session id: `ses_` + 26 characters (S2); anything else is never typed. */
+export const SESSION_ID = /^ses_[A-Za-z0-9]{20,40}$/ // the plugin checks the same (a test pins it)
 const count = (v: unknown) =>
   typeof v === "number" && Number.isSafeInteger(v) && v >= 0 ? v : undefined
 const id = (v: unknown) => (typeof v === "string" && ID.test(v) ? v : undefined)

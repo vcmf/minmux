@@ -5,6 +5,7 @@ import os from "node:os"
 import path from "node:path"
 import { pathToFileURL } from "node:url"
 import {
+  SESSION_ID,
   createOpencodeAdapter,
   mergeOpencodeConfig,
   normalizeOpencodeDrop,
@@ -103,7 +104,9 @@ describe("the plugin (loaded from its source, as OpenCode does)", () => {
   fs.mkdirSync(mods, { recursive: true })
   let root = ""
   let load: () => Promise<Factory>
-  const saved = ["MINMUX_AGENT_EVENTS", "MINMUX_PANE_ID"].map((k) => [k, process.env[k]] as const)
+  const saved = ["MINMUX_AGENT_EVENTS", "MINMUX_PANE_ID", "MINMUX_RESUME_SESSION"].map(
+    (k) => [k, process.env[k]] as const,
+  )
   beforeEach(() => {
     root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "minmux-oc-")))
     fs.mkdirSync(path.join(root, "opencode"))
@@ -402,6 +405,52 @@ describe("the plugin (loaded from its source, as OpenCode does)", () => {
     ])
   })
 
+  it("a resume starts at once from OpenCode's own lookup; an unknown id never does", async () => {
+    const SES = "ses_f02cfead3ffecevT8eQkttqOR5"
+    const info = { id: SES, title: "auth-rework", directory: "/repo" }
+    const get = async ({ path: { id } }: { path: { id: string } }) =>
+      id === SES ? { data: info } : { error: { name: "NotFoundError" } }
+    process.env.MINMUX_RESUME_SESSION = SES
+    await (
+      await load()
+    )({ directory: "/repo", client: { session: { get } } })
+    expect(process.env.MINMUX_RESUME_SESSION).toBeUndefined() // not for what it runs
+    const out = await drops(3)
+    expect(out.slice(1)).toEqual([
+      { v: 1, e: "session", sessionID: SES, title: "auth-rework", directory: "/repo" },
+      { v: 1, e: "start", sessionID: SES, source: "seen", directory: "/repo" },
+    ])
+    expect(normalizeOpencodeDrop(out[2])).toMatchObject({ event: "SessionStart", source: "resume" })
+  })
+
+  it("a late answer doesn't take over a session the user moved to meanwhile", async () => {
+    const SES = "ses_f02cfead3ffecevT8eQkttqOR5"
+    let answer: (v: unknown) => void = () => {}
+    const get = () => new Promise((r) => (answer = r))
+    process.env.MINMUX_RESUME_SESSION = SES
+    const h = await (await load())({ directory: "/repo", client: { session: { get } } })
+    h.event!(ev("session.created", { info: { id: "ses_new" } })) // /new before the answer
+    answer({ data: { id: SES, title: "old", directory: "/repo" } })
+    const out = await drops(4)
+    expect(out.filter((d) => d.e === "start").map((d) => d.sessionID)).toEqual(["ses_new"])
+  })
+
+  it("a resume of an id OpenCode doesn't know reports nothing (it exits 1)", async () => {
+    process.env.MINMUX_RESUME_SESSION = "ses_doesnotexist0000000000000"
+    const get = async () => ({ error: { name: "NotFoundError" } })
+    await (
+      await load()
+    )({ directory: "/repo", client: { session: { get } } })
+    expect(await drops(1)).toHaveLength(1) // `started` only
+    process.env.MINMUX_RESUME_SESSION = "not an id; rm -rf ~"
+    delete (globalThis as Record<symbol, unknown>)[LOADED] // a fresh OpenCode
+    let asked = false
+    await (
+      await load()
+    )({ client: { session: { get: async () => ((asked = true), {}) } } })
+    expect(asked).toBe(false) // never even asked
+  })
+
   it("a child whose chain is broken names no root (never filed as one)", async () => {
     const h = await (await load())({ directory: "/base" })
     const e = h.event!
@@ -599,6 +648,12 @@ describe("the opencode adapter", () => {
     } finally {
       fs.rmSync(cfg, { recursive: true, force: true })
     }
+  })
+})
+
+describe("the resume id rule", () => {
+  it("the plugin checks the same ids main types (one rule, two places)", () => {
+    expect(OPENCODE_PLUGIN).toContain(`/${SESSION_ID.source}/`)
   })
 })
 
@@ -823,4 +878,40 @@ describe("normalizeOpencodeDrop", () => {
       }),
     ).toMatchObject({ event: "PreToolUse", toolName: undefined, filePath: undefined })
   })
+})
+
+describe("the rc wrapper passes a resume's id to that one run", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "minmux-oc-rs-"))
+  afterAll(() => fs.rmSync(dir, { recursive: true, force: true }))
+  fs.writeFileSync(
+    path.join(dir, "opencode"),
+    '#!/bin/sh\nprintf "run=[%s] " "$MINMUX_RESUME_SESSION"\n',
+  )
+  fs.chmodSync(path.join(dir, "opencode"), 0o755)
+  const run = (shell: string, args: string[], rcLines: string[]) => {
+    const rc = path.join(dir, `rc.${path.basename(shell)}`)
+    fs.writeFileSync(rc, `${rcLines.join("\n")}\n`)
+    const script = `source '${rc}'; MINMUX_RESUME_SESSION=ses_x opencode; opencode; printf "shell=[%s]" "\${MINMUX_RESUME_SESSION-}"`
+    return execFileSync(shell, [...args, script], {
+      env: {
+        PATH: `${dir}:/usr/bin:/bin`,
+        HOME: dir,
+        ZDOTDIR: dir,
+        MINMUX_OPENCODE_PLUGIN: "file:///p.js",
+      },
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    })
+  }
+  const want = "run=[ses_x] run=[] shell=[]" // that run only; the next is plain; nothing stays
+  it.skipIf(!has("zsh"))("zsh", () =>
+    expect(run("zsh", ["-i", "-c"], opencodeShell.zsh)).toBe(want),
+  )
+  it.skipIf(!has("bash"))(
+    "bash, also in POSIX mode (a K=V before a function stays set there)",
+    () => {
+      expect(run("bash", ["--norc", "-i", "-c"], opencodeShell.bash)).toBe(want)
+      expect(run("bash", ["--norc", "--posix", "-i", "-c"], opencodeShell.bash)).toBe(want)
+    },
+  )
 })

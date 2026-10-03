@@ -91,7 +91,7 @@ export function ResumeBanner({ sessionId }: { sessionId: string }) {
           <span>
             Resuming {agent.label} session <b>{label}</b>…{" "}
             {agent.confirmsOnPrompt
-              ? `${agent.label} confirms when you send a message (if minmux's hooks are approved).`
+              ? `${agent.label} confirms when you send a message${agent.hookApproval ? " (if minmux's hooks are approved)" : ""}.`
               : `${agent.label} hasn't confirmed yet: it may be showing a screen of its own.`}
           </span>
           <span className="resume-actions">{btn("Dismiss", close, false, false)}</span>
@@ -131,7 +131,10 @@ export function ResumeBanner({ sessionId }: { sessionId: string }) {
           </span>
           <span className="resume-actions">
             {btn(waiting ? "Waiting for the prompt…" : "Retry", retry, true)}
-            {btn(waiting ? "Waiting for the prompt…" : "Pick a session…", () => run(pickCommand))}
+            {btn(
+              waiting ? "Waiting for the prompt…" : (agent.resumePickerLabel ?? "Pick a session…"),
+              () => run(pickCommand),
+            )}
             {btn("Dismiss", dismiss, false, false)}
           </span>
         </div>

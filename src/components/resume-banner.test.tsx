@@ -129,3 +129,31 @@ describe("ResumeBanner — waiting (still running, unconfirmed)", () => {
     )
   })
 })
+
+describe("ResumeBanner — OpenCode", () => {
+  it("waiting: confirms with a message — no hooks to approve (that's Codex's)", () => {
+    show({
+      phase: "waiting",
+      plan: { ...plan, agent: "opencode", command: "opencode --session x" },
+    })
+    const text = screen.getByRole("status").textContent
+    expect(text).toContain("OpenCode confirms when you send a message.")
+    expect(text).not.toContain("hooks")
+  })
+
+  const oc: ResumePlan = {
+    agent: "opencode",
+    status: "resume",
+    sessionId: "ses_f02cfead3ffecevT8eQkttqOR5",
+    cwd: "/repo",
+    command: "opencode --session ses_f02cfead3ffecevT8eQkttqOR5",
+  }
+  it("an unnamed session is labelled by its id's start; its picker is the TUI's /sessions", () => {
+    show({ phase: "failed", plan: oc, exitCode: 1 })
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Couldn't resume ses_f02cfead (opencode exited 1)",
+    )
+    fireEvent.click(screen.getByText("Open OpenCode (/sessions)"))
+    expect(TerminalManager.runCommand).toHaveBeenCalledWith(id, "cd -- '/repo' && opencode")
+  })
+})

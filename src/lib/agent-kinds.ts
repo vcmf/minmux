@@ -7,9 +7,11 @@ export interface AgentKindInfo {
   label: string // "Claude"
   command: string // what starts it in a shell
   resumePicker: string // opens the agent's own session picker
+  resumePickerLabel?: string // its button, when that isn't a picker of its own ("Pick a session…")
   worktreeMarkers: string[] // path parts of worktrees the agent lays out inside a repo
   windows?: false // not integrated on Windows (nor its WSL panes) yet
   confirmsOnPrompt?: true // its session starts (and so a resume confirms) with the first message
+  hookApproval?: true // minmux's hooks need the user's approval in the agent (Codex)
 }
 
 export const AGENT_KINDS: Record<AgentKind, AgentKindInfo> = {
@@ -26,11 +28,15 @@ export const AGENT_KINDS: Record<AgentKind, AgentKindInfo> = {
     worktreeMarkers: [],
     windows: false, // hook quoting there is unverified (MULTI_AGENT.md S1-e)
     confirmsOnPrompt: true, // SessionStart fires with the first prompt (S1-f)
+    hookApproval: true, // its hooks run once the user trusts them (/hooks)
   },
   opencode: {
     label: "OpenCode",
     command: "opencode",
     resumePicker: "opencode",
+    resumePickerLabel: "Open OpenCode (/sessions)", // no CLI picker: /sessions in the TUI
+    // At latest: its plugin starts a resumed session at once, else with its first prompt.
+    confirmsOnPrompt: true,
     worktreeMarkers: [],
     windows: false, // its plugin's file: URL and WSL forwarding are unverified there
   },

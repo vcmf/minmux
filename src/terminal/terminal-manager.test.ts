@@ -1081,3 +1081,35 @@ describe("TerminalManager — a resume that runs unconfirmed (waiting)", () => {
     expect(st().resume[id]?.phase).toBe("waiting")
   })
 })
+
+describe("TerminalManager — typing a resume", () => {
+  const plan = {
+    agent: "opencode" as const,
+    status: "resume" as const,
+    sessionId: "ses_a",
+    cwd: "/tmp/p",
+    command: "opencode --session ses_a",
+    env: { MINMUX_RESUME_SESSION: "ses_a" },
+  }
+  /** A restored pane of `shell` whose first prompt types the resume. */
+  const typedIn = async (shell: string) => {
+    vi.mocked(ipc.ptySpawn).mockResolvedValue({ reattached: false, integrated: true })
+    st().newTab({ ...testShell, id: shell, command: shell })
+    const id = st().tabs[st().tabs.length - 1]!.activeSessionId
+    st().setResume(id, { phase: "pending", plan })
+    TerminalManager.ensureRunning(st().sessions[id] as Session)
+    await flush()
+    terms[terms.length - 1]!.osc[133]!("D")
+    return vi.mocked(ipc.ptyWrite).mock.calls.find((c) => c[0] === id)?.[1]
+  }
+
+  it("a POSIX shell gets the folder and the env with it", async () => {
+    expect(await typedIn("/bin/zsh")).toBe(
+      "\x15cd -- '/tmp/p' && MINMUX_RESUME_SESSION='ses_a' opencode --session ses_a\r",
+    )
+  })
+
+  it("another shell gets the command alone (no `K=V`: the first prompt confirms instead)", async () => {
+    expect(await typedIn("pwsh")).toBe("opencode --session ses_a\r")
+  })
+})

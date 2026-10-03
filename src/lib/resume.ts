@@ -12,6 +12,7 @@ export interface ResumePlan {
   cwd: string // spawn the shell here — Claude's transcripts are keyed by this project dir
   name?: string // the session's /rename, for the banner
   command?: string // `claude --resume <id> [--permission-mode <m>]` (validated in main)
+  env?: Record<string, string> // for the command, in POSIX shells (OpenCode's resume id)
   reason?: string // why it's skipped
   cwdUnverified?: boolean // its stat timed out (hung mount): don't use it as a spawn cwd
 }
@@ -42,6 +43,15 @@ export const isPosixShell = (command: string): boolean => POSIX_SHELLS.has(shell
 export const withCd = (cwd: string, command: string): string =>
   `cd -- ${posixQuote(cwd)} && ${command}`
 
-/** Short label for a session on the banner: its /rename, else the id's first block. */
+/** `K=V command` for a POSIX shell (names that aren't plain env names are left out). */
+export const withEnv = (env: Record<string, string> | undefined, command: string): string =>
+  Object.entries(env ?? {})
+    .filter(([k]) => /^[A-Z_][A-Z0-9_]*$/.test(k))
+    .map(([k, v]) => `${k}=${posixQuote(v)} `)
+    .join("") + command
+
+/** A session's banner label: its name, else its id's first block (or 12 characters). */
 export const sessionLabel = (plan: ResumePlan): string =>
-  plan.name?.trim() || plan.sessionId.split("-")[0] || "session"
+  plan.name?.trim() ||
+  (plan.sessionId.includes("-") ? plan.sessionId.split("-")[0] : plan.sessionId.slice(0, 12)) ||
+  "session"

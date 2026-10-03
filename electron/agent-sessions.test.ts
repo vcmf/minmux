@@ -657,4 +657,20 @@ describe("OpenCode's lead rules", () => {
     expect(l.get("p1")?.sessionId).toBe("ses_a")
     expect(l.isNested("p1", "ses_x")).toBe(true)
   })
+
+  it("resumes by id in its folder; an id that isn't OpenCode's is never typed", async () => {
+    const SES = "ses_f02cfead3ffecevT8eQkttqOR5"
+    const l = new SessionLedger(null, Date.now, rules)
+    l.apply(oc(SES, 100, { cwd: "/repo" }))
+    l.apply(oc("ses_bad; rm -rf ~", 100, { paneId: "p2" }))
+    const out = await plan(l, ["p1", "p2"])
+    expect(out.p1).toMatchObject({
+      agent: "opencode",
+      status: "resume",
+      cwd: "/repo",
+      command: `opencode --session ${SES}`,
+      env: { MINMUX_RESUME_SESSION: SES }, // typed as a prefix in POSIX shells only
+    })
+    expect(out.p2).toMatchObject({ status: "skip", reason: "unrecognised session id" })
+  })
 })
