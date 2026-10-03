@@ -7,6 +7,7 @@ import {
   agentByPane,
   paneAgents,
   dropPaneSessions,
+  subAgents,
 } from "./agent-graph"
 import type { AgentEvent, AgentGraph } from "./agent-graph"
 
@@ -587,5 +588,44 @@ describe("a pending approval vs racing hook drops (Codex)", () => {
     expect(status(evs, "a1")).toBe("waiting")
     expect(status(evs)).toBe("waiting")
     expect(status([...evs, { ...S, event: "Stop" }, sub(pre)], "a1")).toBe("working")
+  })
+})
+
+describe("subAgents", () => {
+  const sub = (agentId: string, parentAgentId?: string): AgentEvent => ({
+    event: "SubagentStart",
+    sessionId: "s",
+    agentId,
+    agentType: agentId,
+    ...(parentAgentId ? { parentAgentId } : {}),
+  })
+  const g = reduceAgentEvents([
+    { event: "SessionStart", sessionId: "s", cwd: "/r" },
+    sub("a"),
+    sub("a1", "a"),
+    sub("a2", "a1"),
+    sub("b"),
+  ])
+  const root = g.nodes["root:s"]!
+
+  it("walks the tree depth-first with each level", () => {
+    expect(subAgents(g, root).map((k) => [k.node.id, k.depth])).toEqual([
+      ["a", 1],
+      ["a1", 2],
+      ["a2", 3],
+      ["b", 1],
+    ])
+  })
+
+  it("draws deeper ones at the cap (still visible), and a cycle never loops", () => {
+    expect(subAgents(g, root, 2).map((k) => [k.node.id, k.depth])).toEqual([
+      ["a", 1],
+      ["a1", 2],
+      ["a2", 2],
+      ["b", 1],
+    ])
+    const a2 = g.nodes.a2!
+    const cyclic = { ...g, nodes: { ...g.nodes, a2: { ...a2, childIds: ["a"] } } }
+    expect(subAgents(cyclic, root).map((k) => k.node.id)).toEqual(["a", "a1", "a2", "b"])
   })
 })

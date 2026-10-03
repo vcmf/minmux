@@ -5,6 +5,7 @@ import path from "node:path"
 import { SessionLedger } from "./agent-sessions"
 import { claudeSessionRules, resumeCommand } from "./agents/claude"
 import { codexSessionRules } from "./agents/codex"
+import { opencodeSessionRules } from "./agents/opencode"
 import { claudeProjectDirName } from "../src/lib/claude-project"
 import type { AgentEvent } from "../src/lib/agent-graph"
 
@@ -637,5 +638,23 @@ describe("per-agent rules and files (multi-agent)", () => {
     const out = await plan(l, ["p1", "p2"])
     expect(out.p1?.command).toBe(`claude --resume ${ID}`)
     expect(out.p2?.command).toBe(`other resume ${OTHER}`)
+  })
+})
+
+describe("OpenCode's lead rules", () => {
+  const rules = { claude: claudeSessionRules, opencode: opencodeSessionRules }
+  const oc = (sessionId: string, pid: number, o: Partial<AgentEvent> = {}) =>
+    start({ agent: "opencode", sessionId, pid, transcriptPath: undefined, ...o })
+
+  it("/new and a picked older session switch in the leading process; another's is nested", () => {
+    const l = new SessionLedger(null, Date.now, rules)
+    l.apply(oc("ses_a", 100))
+    l.apply(oc("ses_b", 100)) // /new
+    expect(l.get("p1")?.sessionId).toBe("ses_b")
+    l.apply(oc("ses_a", 100, { source: "resume" })) // picked in /sessions, once active
+    expect(l.get("p1")?.sessionId).toBe("ses_a")
+    l.apply(oc("ses_x", 200)) // an `opencode run` the agent started
+    expect(l.get("p1")?.sessionId).toBe("ses_a")
+    expect(l.isNested("p1", "ses_x")).toBe(true)
   })
 })

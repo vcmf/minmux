@@ -4,7 +4,14 @@ import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import { pathToFileURL } from "node:url"
-import { createOpencodeAdapter, mergeOpencodeConfig, opencodeShell, PLUGIN_FILE } from "./opencode"
+import {
+  createOpencodeAdapter,
+  mergeOpencodeConfig,
+  normalizeOpencodeDrop,
+  opencodeShell,
+  PLUGIN_FILE,
+} from "./opencode"
+import { reduceAgentEvents, subAgents, type AgentEvent } from "../../src/lib/agent-graph"
 import { OPENCODE_DROP_VERSION, OPENCODE_PLUGIN } from "./opencode-plugin"
 
 const URL_ = "file:///home/u/.config/minmux/agents/minmux-opencode.js"
@@ -174,9 +181,10 @@ describe("the plugin (loaded from its source, as OpenCode does)", () => {
     )
     e(ev("session.status", { sessionID: "ses_1", status: { type: "idle" } }))
     e(ev("session.idle", { sessionID: "ses_1" })) // the same idle again: nothing
-    const out = await drops(7)
+    const out = await drops(8)
     expect(out.map((d) => [d.e, d.phase ?? d.status ?? ""])).toEqual([
       ["started", ""],
+      ["start", ""],
       ["session", ""],
       ["status", "busy"],
       ["tool", "start"],
@@ -186,9 +194,16 @@ describe("the plugin (loaded from its source, as OpenCode does)", () => {
     ])
     expect(out.every((d) => d.v === OPENCODE_DROP_VERSION)).toBe(true)
     expect(out[0]).toMatchObject({ directory: "/repo" })
-    expect(out[1]).toMatchObject({ sessionID: "ses_1", title: "New session", directory: "/repo" })
-    expect(out[3]).toMatchObject({ tool: "write", callID: "c1", paths: ["/repo/a.txt"] })
-    expect(out[6]!.reply).toBe(long.slice(0, 2000))
+    expect(out[1]).toEqual({
+      v: 1,
+      e: "start",
+      sessionID: "ses_1",
+      source: "new",
+      directory: "/repo",
+    })
+    expect(out[2]).toMatchObject({ sessionID: "ses_1", title: "New session", directory: "/repo" })
+    expect(out[4]).toMatchObject({ tool: "write", callID: "c1", paths: ["/repo/a.txt"] })
+    expect(out[7]!.reply).toBe(long.slice(0, 2000))
     // A projection: no prompt, file, command or tool output ever leaves OpenCode.
     const all = JSON.stringify(out)
     for (const secret of ["MY PROMPT", "FILE CONTENT", "TOOL OUTPUT", "rm X"])
@@ -213,12 +228,17 @@ describe("the plugin (loaded from its source, as OpenCode does)", () => {
         metadata: { command: "SECRET" },
       }),
     )
-    e(ev("session.status", { sessionID: "ses_x", status: { type: "busy" } })) // first seen mid-life
-    const out = await drops(7)
+    // First seen mid-life (picked in /sessions): its prompt brings its info, then busy.
+    e(ev("session.updated", { info: { id: "ses_x", directory: "/base" } }))
+    e(ev("session.status", { sessionID: "ses_x", status: { type: "busy" } }))
+    const out = await drops(11)
+    const child = { parentID: "ses_r", rootID: "ses_r" }
     expect(out.slice(1)).toEqual([
+      { v: 1, e: "start", sessionID: "ses_r", source: "new", directory: "/base" },
       { v: 1, e: "session", sessionID: "ses_r", title: "t", directory: "/base" },
-      { v: 1, e: "session", sessionID: "ses_c", title: "x (@general subagent)", parentID: "ses_r" },
-      { v: 1, e: "status", sessionID: "ses_c", status: "busy", parentID: "ses_r" },
+      { v: 1, e: "start", sessionID: "ses_c", title: "x (@general subagent)", ...child },
+      { v: 1, e: "session", sessionID: "ses_c", title: "x (@general subagent)", ...child },
+      { v: 1, e: "status", sessionID: "ses_c", status: "busy", ...child },
       { v: 1, e: "session", sessionID: "ses_r", title: "Fix the bug", directory: "/base" },
       {
         v: 1,
@@ -228,8 +248,59 @@ describe("the plugin (loaded from its source, as OpenCode does)", () => {
         tool: "bash",
         directory: "/base",
       },
+      { v: 1, e: "session", sessionID: "ses_x", directory: "/base" },
+      // Another root becoming active (picked in /sessions, --session): it starts, as "seen".
+      { v: 1, e: "start", sessionID: "ses_x", source: "seen", directory: "/base" },
       { v: 1, e: "status", sessionID: "ses_x", status: "busy", directory: "/base" },
     ])
+  })
+
+  it("a background session's tools never move the lead; an unknown session never starts", async () => {
+    const h = await (await load())({ directory: "/base" })
+    const e = h.event!
+    const busy = (id: string) =>
+      e(ev("session.status", { sessionID: id, status: { type: "busy" } }))
+    e(ev("session.created", { info: { id: "ses_a" } }))
+    busy("ses_a")
+    e(ev("session.created", { info: { id: "ses_b" } })) // /new while ses_a's turn still runs
+    busy("ses_b")
+    h["tool.execute.before"]!({ tool: "read", sessionID: "ses_a", callID: "c" }, { args: {} })
+    busy("ses_u") // no info yet: maybe a child whose parent this copy never saw (a reload)
+    h["tool.execute.before"]!({ tool: "read", sessionID: "ses_u", callID: "d" }, { args: {} })
+    const out = await drops(10)
+    expect(out.filter((d) => d.e === "start").map((d) => d.sessionID)).toEqual(["ses_a", "ses_b"])
+    expect(out.filter((d) => d.sessionID === "ses_u").map((d) => d.e)).toEqual(["status", "tool"])
+  })
+
+  it("the lead follows activity: back to an earlier root, it starts again; deeper children", async () => {
+    const h = await (await load())({ directory: "/base" })
+    const e = h.event!
+    const busy = (id: string) =>
+      e(ev("session.status", { sessionID: id, status: { type: "busy" } }))
+    const idle = (id: string) =>
+      e(ev("session.status", { sessionID: id, status: { type: "idle" } }))
+    e(ev("session.created", { info: { id: "ses_a" } }))
+    busy("ses_a")
+    idle("ses_a")
+    e(ev("session.created", { info: { id: "ses_b" } })) // /new
+    busy("ses_b")
+    idle("ses_b")
+    busy("ses_a") // picked again in /sessions
+    e(ev("session.created", { info: { id: "ses_c1", parentID: "ses_a" } }))
+    e(ev("session.created", { info: { id: "ses_c2", parentID: "ses_c1" } })) // a custom agent's own
+    busy("ses_c2")
+    const out = await drops(17)
+    const starts = out
+      .filter((d) => d.e === "start")
+      .map((d) => [d.sessionID, d.source ?? d.rootID])
+    expect(starts).toEqual([
+      ["ses_a", "new"],
+      ["ses_b", "new"],
+      ["ses_a", "seen"],
+      ["ses_c1", "ses_a"],
+      ["ses_c2", "ses_a"],
+    ])
+    expect(out.at(-1)).toMatchObject({ sessionID: "ses_c2", parentID: "ses_c1", rootID: "ses_a" })
   })
 
   it("never awaits: handlers return nothing and the write lands later", async () => {
@@ -242,20 +313,20 @@ describe("the plugin (loaded from its source, as OpenCode does)", () => {
       h["tool.execute.before"]!({ tool: "read", sessionID: "ses_1" }, { args: {} }),
     ).toBeUndefined()
     expect(json()).toBe(before) // not delivered synchronously
-    expect((await drops(3)).length).toBe(3)
+    expect((await drops(4)).length).toBe(4) // + the session's start
     expect(files().some((f) => f.endsWith(".tmp"))).toBe(false)
   })
 
   it("names drops <pane>.<pid>.<ts>.<seq>.json with strictly increasing times", async () => {
     const h = await (await load())({})
     for (let i = 0; i < 20; i++) h.event!(ev("session.created", { info: { id: `ses_${i}` } }))
-    await drops(21)
+    await drops(41) // `started`, then a start + a session each
     const names = files()
     const ts = names.map((f) => f.split("."))
     expect(
       ts.every((p) => p.length === 5 && p[0] === "pane-1" && p[1] === String(process.pid)),
     ).toBe(true)
-    expect(new Set(ts.map((p) => p[2])).size).toBe(21)
+    expect(new Set(ts.map((p) => p[2])).size).toBe(41)
   })
 
   it("ignores what it doesn't know, and junk never throws", async () => {
@@ -282,9 +353,9 @@ describe("the plugin (loaded from its source, as OpenCode does)", () => {
     const patchText =
       "*** Begin Patch\n*** Update File: /repo/a.ts\n@@\n-SECRET\n*** Add File: /repo/b.ts\n+x\n*** End Patch"
     before({ tool: "apply_patch", sessionID: "s" }, { args: { patchText } })
-    const out = await drops(3)
-    expect(out[1]).not.toHaveProperty("paths")
-    expect(out[2]!.paths).toEqual(["/repo/a.ts", "/repo/b.ts"])
+    const out = (await drops(4)).filter((d) => d.e === "tool")
+    expect(out[0]).not.toHaveProperty("paths")
+    expect(out[1]!.paths).toEqual(["/repo/a.ts", "/repo/b.ts"])
     expect(JSON.stringify(out)).not.toContain("SECRET")
   })
 
@@ -299,14 +370,19 @@ describe("the plugin (loaded from its source, as OpenCode does)", () => {
       }),
     )
     h.event!(ev("permission.replied", { requestID: "per_1", sessionID: "s", reply: "once" }))
-    const out = await drops(3)
-    expect(out[1]).toMatchObject({
+    const out = (await drops(4)).filter((d) => d.e === "permission")
+    expect(out[0]).toMatchObject({
       e: "permission",
       phase: "asked",
       requestID: "per_1",
       callID: "c9",
     })
-    expect(out[2]).toMatchObject({ e: "permission", phase: "replied", requestID: "per_1" })
+    expect(out[1]).toMatchObject({
+      e: "permission",
+      phase: "replied",
+      requestID: "per_1",
+      callID: "c9",
+    })
   })
 
   it("the same copy called again (another project, a reload) reports too", async () => {
@@ -315,9 +391,16 @@ describe("the plugin (loaded from its source, as OpenCode does)", () => {
     const b = await factory({ directory: "/two" })
     b.event!(ev("session.created", { info: { id: "ses_b", directory: "/two" } }))
     a.event!(ev("session.created", { info: { id: "ses_a", directory: "/one" } }))
-    const out = await drops(4)
-    expect(out.map((d) => d.sessionID ?? d.e)).toEqual(["started", "started", "ses_b", "ses_a"])
-    expect(new Set(files()).size).toBe(4) // one counter per process: names never collide
+    const out = await drops(6)
+    expect(out.map((d) => d.sessionID ?? d.e)).toEqual([
+      "started",
+      "started",
+      "ses_b",
+      "ses_b",
+      "ses_a",
+      "ses_a",
+    ])
+    expect(new Set(files()).size).toBe(6) // one counter per process: names never collide
   })
 
   it("inert outside a minmux pane, and loads once per process", async () => {
@@ -357,5 +440,151 @@ describe("the opencode adapter", () => {
     } finally {
       fs.rmSync(cfg, { recursive: true, force: true })
     }
+  })
+})
+
+describe("normalizeOpencodeDrop", () => {
+  // The real plugin's drops from a turn with a `task` sub-agent (OpenCode 1.18.34).
+  const drops = fs
+    .readFileSync(
+      path.join(__dirname, "../../src/test/fixtures/agents/opencode-plugin-run.jsonl"),
+      "utf8",
+    )
+    .split("\n")
+    .filter(Boolean)
+    .map((l) => JSON.parse(l) as unknown)
+  const events = drops
+    .map((d) => normalizeOpencodeDrop(d, "pane-oc"))
+    .filter((e): e is AgentEvent => !!e)
+    .map((e) => ({ ...e, agent: "opencode" as const }))
+
+  it("maps a real turn onto the canonical events", () => {
+    expect(events.map((e) => e.event + (e.agentId ? "·sub" : ""))).toEqual([
+      "SessionStart",
+      "UserPromptSubmit",
+      "PreToolUse",
+      "PostToolUse",
+      "PreToolUse", // task
+      "SubagentStart·sub",
+      "SubagentStart·sub", // its busy
+      "PreToolUse·sub",
+      "PostToolUse·sub",
+      "SubagentStop·sub",
+      "PostToolUse",
+      "PreToolUse",
+      "PostToolUse",
+      "Stop",
+    ])
+    const root = events[0]!
+    expect(root).toMatchObject({
+      sessionId: expect.stringMatching(/^ses_/),
+      cwd: "/repo",
+      source: "startup",
+    })
+    expect(events.every((e) => e.sessionId === root.sessionId && e.paneId === "pane-oc")).toBe(true)
+    expect(events[5]).toMatchObject({ agentType: "general" })
+    expect(events[5]).not.toHaveProperty("parentAgentId") // its parent is the root
+  })
+
+  it("folds into a two-level tree: the root, its sub-agent, files and replies", () => {
+    const g = reduceAgentEvents(events)
+    expect(g.rootIds).toHaveLength(1)
+    const root = g.nodes[g.rootIds[0]!]!
+    expect(root).toMatchObject({
+      agent: "opencode",
+      status: "idle",
+      cwd: "/repo",
+      paneId: "pane-oc",
+    })
+    expect(root.lastMessage).toMatch(/subagent/)
+    expect(root.recentFiles).toEqual(["/repo/a.txt"])
+    const kids = subAgents(g, root)
+    expect(kids.map((k) => [k.node.agentType, k.node.status, k.depth])).toEqual([
+      ["general", "done", 1],
+    ])
+    expect(kids[0]!.node.lastMessage).toMatch(/1/)
+  })
+
+  it("deeper children nest under their parent (custom agents)", () => {
+    const at = (o: Record<string, unknown>) => normalizeOpencodeDrop({ v: 1, ...o }, "p")!
+    const child = (id: string, parentID: string) => ({ sessionID: id, parentID, rootID: "ses_r" })
+    const g = reduceAgentEvents([
+      at({ e: "start", sessionID: "ses_r", source: "new", directory: "/repo" }),
+      at({ e: "start", ...child("ses_1", "ses_r"), title: "plan (@planner subagent)" }),
+      at({ e: "start", ...child("ses_2", "ses_1"), title: "dig (@explore subagent)" }),
+      at({ e: "tool", phase: "start", ...child("ses_2", "ses_1"), tool: "grep", callID: "c" }),
+    ])
+    const root = g.nodes["root:ses_r"]!
+    expect(subAgents(g, root).map((k) => [k.node.agentType, k.depth, k.node.currentTool])).toEqual([
+      ["planner", 1, undefined],
+      ["explore", 2, "grep"],
+    ])
+  })
+
+  it("an approval waits until it's answered (OpenCode says so)", () => {
+    const at = (o: Record<string, unknown>) =>
+      normalizeOpencodeDrop({ v: 1, sessionID: "ses_r", directory: "/repo", ...o }, "p")!
+    const evs = [
+      at({ e: "start", source: "new" }),
+      at({ e: "status", status: "busy" }),
+      at({ e: "tool", phase: "start", tool: "bash", callID: "c1" }),
+      at({ e: "permission", phase: "asked", tool: "bash", requestID: "per_1", callID: "c1" }),
+    ]
+    const root = (g: ReturnType<typeof reduceAgentEvents>) => g.nodes["root:ses_r"]!
+    expect(root(reduceAgentEvents(evs)).status).toBe("waiting")
+    // The plugin gives a reply its ask's call.
+    const reply = { e: "permission", phase: "replied", requestID: "per_1", callID: "c1" }
+    const answered = [...evs, at(reply)]
+    expect(root(reduceAgentEvents(answered)).status).toBe("working")
+    // Another ask's reply doesn't end this one.
+    const other = [...evs, at({ ...reply, requestID: "per_9", callID: "c9" })]
+    expect(root(reduceAgentEvents(other)).status).toBe("waiting")
+  })
+
+  it("a root picked again starts as a resume; a start without a folder isn't one", () => {
+    expect(
+      normalizeOpencodeDrop({
+        v: 1,
+        e: "start",
+        sessionID: "ses_a",
+        source: "seen",
+        directory: "/r",
+      }),
+    ).toMatchObject({ event: "SessionStart", source: "resume", cwd: "/r" })
+    expect(normalizeOpencodeDrop({ v: 1, e: "start", sessionID: "ses_a" })).toBeNull()
+  })
+
+  it("rejects other versions, bad ids and junk; never throws", () => {
+    for (const bad of [
+      null,
+      7,
+      "x",
+      [],
+      {},
+      { v: 2, e: "start", sessionID: "ses_a", directory: "/r" },
+      { v: 1, e: "status", sessionID: "../x", status: "busy" },
+      { v: 1, e: "status", sessionID: "ses_a", status: "weird" },
+      { v: 1, e: "tool", sessionID: "ses_a", phase: "middle" },
+      { v: 1, e: "permission", sessionID: "ses_a", phase: "maybe" },
+      { v: 1, e: "started", directory: "/r" },
+      { v: 1, e: "session", sessionID: "ses_a", title: "t" },
+      { v: 1, e: "future", sessionID: "ses_a" },
+      { v: 1, e: "tool", sessionID: "ses_a", phase: "start", paths: "notalist", tool: 5 },
+    ]) {
+      expect(() => normalizeOpencodeDrop(bad)).not.toThrow()
+    }
+    expect(
+      normalizeOpencodeDrop({ v: 2, e: "start", sessionID: "ses_a", directory: "/r" }),
+    ).toBeNull()
+    expect(
+      normalizeOpencodeDrop({
+        v: 1,
+        e: "tool",
+        sessionID: "ses_a",
+        phase: "start",
+        paths: "x",
+        tool: 5,
+      }),
+    ).toMatchObject({ event: "PreToolUse", toolName: undefined, filePath: undefined })
   })
 })
