@@ -6,6 +6,7 @@ import type { DropNormalizer } from "../agent-hooks"
 import type { LedgerEntry } from "../agent-sessions"
 import type { ResolvePath } from "../agent-tokens"
 import type { MetaReader } from "../agent-meta"
+import type { SessionMeta } from "../transcript-meta"
 
 export type { ResolvePath }
 
@@ -43,10 +44,26 @@ export interface AgentAdapter {
   /** Token totals for a batch of this agent's events, read off the hot path. */
   usage?(batch: AgentEvent[], resolve: ResolvePath): Promise<AgentEvent[]>
   /** Where the lead session's name/colour live: the file an event points to (null: none) and
-   *  how to read a session's meta from it. */
-  meta?: { file(ev: AgentEvent): string | null; reader(): MetaReader }
+   *  how to read a session's meta from it (`watch: false`: not a file, nothing to watch). */
+  meta?: {
+    file(ev: AgentEvent): string | null
+    reader(): MetaReader
+    watch?: false
+  }
+  /** Every event of this agent, after the ledger (state an adapter keeps, e.g. pushed names). */
+  observe?(ev: AgentEvent): void
+  /** A pushed name known now (OpenCode's titles): the ledger takes it when the session leads. */
+  metaNow?(sessionId: string): SessionMeta
   /** Has the user approved our hooks in the agent (Codex)? null = can't tell (don't nag). */
   approved?(): Promise<boolean | null>
+}
+
+/** What an adapter may ask main. */
+export interface AdapterContext {
+  /** Was this session's name the user's, as recorded before (a resumed session)? */
+  userNamed(sessionId: string): boolean | undefined
+  /** Record whose name it is now (kept per session, across runs). */
+  setUserNamed(sessionId: string, user: boolean): void
 }
 
 /** One agent's registration: static parts (rc, env, rules) + its per-launch adapter factory. */
@@ -55,5 +72,5 @@ export interface AgentSpec {
   windows?: false // not integrated on Windows (nor so its WSL panes) yet; mirrors agent-kinds
   shell: AgentShell
   rules: SessionRules
-  create(): AgentAdapter
+  create(ctx?: AdapterContext): AgentAdapter
 }

@@ -4,8 +4,8 @@
 // Async I/O: it runs on the main process, which also forwards terminal output.
 
 import fs from "node:fs"
-import path from "node:path"
 import type { AgentKind } from "../src/lib/agent-graph"
+import { AtomicFile } from "./atomic-file"
 
 interface KindState {
   dismissals: number // "Not now" clicks
@@ -15,9 +15,11 @@ interface KindState {
 /** The hint state per agent; `file` null = in memory (tests). */
 export class AgentHints {
   private state: Partial<Record<AgentKind, KindState>> | null = null
-  private writes: Promise<void> = Promise.resolve()
+  private readonly out: AtomicFile | null
 
-  constructor(private readonly file: string | null) {}
+  constructor(private readonly file: string | null) {
+    this.out = file ? new AtomicFile(file) : null
+  }
 
   /** The agent's state ("never" and the dismissals so far). */
   async get(kind: AgentKind): Promise<KindState> {
@@ -55,22 +57,13 @@ export class AgentHints {
     return (this.state ??= out)
   }
 
-  // Serialized temp + rename writes; best-effort (worst case the hint shows once more).
+  // Best-effort (worst case the hint shows once more).
   private save(all: Partial<Record<AgentKind, KindState>>): void {
-    const file = this.file
-    if (!file) return
-    const body = JSON.stringify(all, null, 2)
-    this.writes = this.writes
-      .then(async () => {
-        await fs.promises.mkdir(path.dirname(file), { recursive: true })
-        await fs.promises.writeFile(`${file}.tmp`, body)
-        await fs.promises.rename(`${file}.tmp`, file)
-      })
-      .catch(() => {})
+    this.out?.write(JSON.stringify(all, null, 2))
   }
 
   /** Done when every pending write has landed (tests). */
   flushed(): Promise<void> {
-    return this.writes
+    return this.out?.flushed() ?? Promise.resolve()
   }
 }

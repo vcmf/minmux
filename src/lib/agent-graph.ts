@@ -30,8 +30,8 @@ export interface TokenUsage {
 export type AgentKind = "claude" | "codex" | "opencode"
 
 /** The canonical event names: Claude Code's hook names (Codex uses the same contract), plus
- *  PermissionRequest (Codex, OpenCode), PermissionReplied (OpenCode) and the synthetic
- *  TokenUsage. Adapters map onto these. */
+ *  PermissionRequest (Codex, OpenCode), PermissionReplied (OpenCode), the synthetic TokenUsage
+ *  and SessionTitle (OpenCode's pushed name: main only, never sent to the graph). */
 export type AgentEventName =
   | "SessionStart"
   | "SessionEnd"
@@ -49,6 +49,7 @@ export type AgentEventName =
   | "WorktreeCreate"
   | "WorktreeRemove"
   | "TokenUsage"
+  | "SessionTitle"
 
 /** The agent an event (or ledger entry) belongs to: absent means Claude's. */
 export const agentOf = (x: { agent?: AgentKind }): AgentKind => x.agent ?? "claude"
@@ -77,6 +78,7 @@ export interface AgentEvent {
   nested?: boolean // main's verdict: a session launched inside the pane's lead (background agent)
   reason?: string // SessionEnd: prompt_input_exit | logout | clear | resume | other
   permissionMode?: string // permission_mode (default | acceptEdits | plan | bypassPermissions …)
+  title?: string // SessionTitle: the session's name as the agent reports it
 }
 
 /** A git worktree an agent created (WorktreeCreate), for the "open a terminal here" chip. */
@@ -214,6 +216,7 @@ export function reduceAgentEvent(graph: AgentGraph, ev: AgentEvent): AgentGraph 
         status: "idle",
         cwd: ev.cwd ?? at(rid).cwd,
         paneId: ev.paneId ?? at(rid).paneId,
+        tokens: ev.tokens ?? at(rid).tokens, // an agent's counts may come with it (OpenCode)
         started: Math.max(0, ...rootIds.map((id) => nodes[id]?.started ?? 0)) + 1,
       })
       break
@@ -231,6 +234,7 @@ export function reduceAgentEvent(graph: AgentGraph, ev: AgentEvent): AgentGraph 
         set(ev.agentId, {
           agentType: ev.agentType ?? at(ev.agentId).agentType,
           status: "working",
+          tokens: ev.tokens ?? at(ev.agentId).tokens,
         })
       break
     case "PreToolUse": {

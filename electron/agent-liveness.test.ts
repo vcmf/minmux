@@ -91,6 +91,12 @@ describe("AgentLiveness", () => {
     expect(l.isLate(oc("ses_a", 100, { event: "Stop" }))).toBe(false)
   })
 
+  it("a title never registers a session (a background or ended one's)", () => {
+    const l = make()
+    l.observe(oc("ses_a", 100, { event: "SessionTitle", title: "x" }))
+    expect(l.hasProcs()).toBe(false)
+  })
+
   it("only by-pid agents (not Claude's hook shells), only root events, never on Windows", () => {
     const l = make()
     l.observe({ ...start("ses_c", 400), agent: "claude" })
