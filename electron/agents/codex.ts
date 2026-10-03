@@ -15,7 +15,6 @@ import { tokenEventsForBatch } from "../agent-tokens"
 import { HOOK_WRITER } from "../hook-writer"
 import { TranscriptFold } from "../transcript-fold"
 import { emptyUsage, num } from "../transcript-tokens"
-import { findOnPath } from "../path-lookup"
 import { writeIfChanged } from "./files"
 import { normalizeHookEvent, SAFE_ID } from "./claude"
 import type { MetaReader } from "../agent-meta"
@@ -292,7 +291,8 @@ export const codexShell: AgentShell = {
     "# Add minmux's hooks to `codex` (agents board): one argument per line in the file.",
     'if [[ -o interactive && -n "${MINMUX_CODEX_ARGS-}" ]]; then',
     "  function codex {", // not `codex()`: a user alias `codex` would break the rc
-    '    [[ -r "$MINMUX_CODEX_ARGS" ]] || { command codex "$@"; return }',
+    // Its hook runs `node`: a file on this PATH (not a function: nvm lazy-load), else plain Codex.
+    '    [[ -r "$MINMUX_CODEX_ARGS" ]] && whence -p node >/dev/null || { command codex "$@"; return }',
     // A display-only launch marker for minmux's approval hint: only for Codex's interactive UI
     // (not `exec`, `login`, …) and only onto a terminal, never into a pipe or `$(…)`.
     ...CODEX_MARKER,
@@ -304,7 +304,7 @@ export const codexShell: AgentShell = {
     "# Add minmux's hooks to `codex` (agents board): one argument per line in the file.",
     'if [[ $- == *i* && -n "${MINMUX_CODEX_ARGS-}" ]]; then',
     "  function codex {",
-    '    [[ -r "$MINMUX_CODEX_ARGS" ]] || { command codex "$@"; return; }',
+    '    [[ -r "$MINMUX_CODEX_ARGS" ]] && type -P node >/dev/null || { command codex "$@"; return; }',
     "    local -a __minmux_a=()",
     "    local __minmux_l",
     '    while IFS= read -r __minmux_l || [[ -n "$__minmux_l" ]]; do',
@@ -328,8 +328,6 @@ export function createCodexAdapter(): AgentAdapter {
   return {
     kind: "codex",
     install(cfgDir) {
-      // The hook runs `node`; Codex itself is a native binary, often installed without it.
-      if (!findOnPath("node")) throw new Error("codex: `node` not on PATH, hooks can't run")
       const dir = path.join(cfgDir, "agents")
       fs.mkdirSync(dir, { recursive: true })
       // .cjs: CommonJS even under a package.json with "type": "module" further up.

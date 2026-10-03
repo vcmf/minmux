@@ -88,8 +88,11 @@ describe("codexHookArgs", () => {
 })
 
 describe("codex() wrapper", () => {
+  // The shell's own folder, so it runs with a PATH that has no `node` of the system's.
+  const shellDir = (shell: string) =>
+    path.dirname(execFileSync("sh", ["-c", `command -v ${shell}`], { encoding: "utf8" }).trim())
   // Run the generated rc lines in a real shell with a fake `codex` that prints its argv.
-  const run = (shell: "zsh" | "bash") => {
+  const run = (shell: "zsh" | "bash", withNode = true, userRc = "") => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "minmux-codexw-"))
     try {
       fs.writeFileSync(
@@ -97,15 +100,21 @@ describe("codex() wrapper", () => {
         '#!/bin/sh\nfor a in "$@"; do printf "[%s]\\n" "$a"; done\n',
       )
       fs.chmodSync(path.join(dir, "codex"), 0o755)
+      if (withNode) {
+        fs.writeFileSync(path.join(dir, "node"), "#!/bin/sh\n")
+        fs.chmodSync(path.join(dir, "node"), 0o755)
+      }
       const argsFile = path.join(dir, "codex args") // a space in the path, too
       const args = codexHookArgs(`/tmp/x y/drop.js`)
       fs.writeFileSync(argsFile, `${args.join("\n")}\n`)
       const rc = path.join(dir, "rc")
-      fs.writeFileSync(rc, `${(shell === "zsh" ? codexShell.zsh : codexShell.bash).join("\n")}\n`)
+      const lines = shell === "zsh" ? codexShell.zsh : codexShell.bash
+      fs.writeFileSync(rc, `${userRc}\n${lines.join("\n")}\n`)
       const out = execFileSync(shell, ["-i", "-c", `source '${rc}'; codex resume 'a b'`], {
         env: {
           ...process.env,
-          PATH: `${dir}:${process.env.PATH}`,
+          // `node` only when we put one there (not the system's: distros ship /usr/bin/node).
+          PATH: withNode ? `${dir}:${process.env.PATH}` : `${dir}:${shellDir(shell)}`,
           MINMUX_CODEX_ARGS: argsFile,
           HOME: dir,
           ZDOTDIR: dir,
@@ -123,6 +132,18 @@ describe("codex() wrapper", () => {
       const { out, args } = run(shell)
       expect(out).toBe([...args, "resume", "a b"].map((a) => `[${a}]`).join("\n") + "\n")
     })
+  for (const shell of ["zsh", "bash"] as const)
+    it.skipIf(!has(shell))(`without node on the pane's PATH, a plain Codex (${shell})`, () => {
+      expect(run(shell, false).out).toBe("[resume]\n[a b]\n") // no hook arguments
+    })
+  for (const shell of ["zsh", "bash"] as const)
+    it.skipIf(!has(shell))(
+      `a node that's only a function (nvm lazy-load) isn't one (${shell})`,
+      () => {
+        const out = run(shell, false, "function node { :; }").out
+        expect(out).toBe("[resume]\n[a b]\n") // the hooks' `sh -c` wouldn't have it
+      },
+    )
 })
 
 describe("agent wrappers vs the user's aliases", () => {

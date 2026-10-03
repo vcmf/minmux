@@ -427,7 +427,8 @@ is wired in zsh and bash panes only (fish, pwsh or sh: a plain Codex).
   A test pins the `exec`; a wrapper in between would break both.
 - The wrapper prints a display-only launch marker (OSC 6974) for Codex's interactive UI only,
   never for `exec`, `login` or `--version`, and never into a pipe.
-- Not armed on Windows or in WSL panes yet, nor when `node` isn't on PATH.
+- Not armed on Windows or in WSL panes yet. Without `node` on the pane's PATH (where the hook
+  runs; nvm often adds it only in an interactive rc), the wrapper runs a plain Codex.
 - Thread names come from `<codex home>/session_index.jsonl`, read once for every pane (each
   pane still has its own `fs.watch` on it).
   Codex writes the first name itself; a later different name is the user's `/rename`.
