@@ -48,6 +48,7 @@ moves on.
 | 7   | `feat(codex): resume codex sessions and hint when hooks aren't approved`     | 2c + 2d | 5          |            |
 | 8   | `feat(opencode): minmux plugin and scoped loading`                           | 3a      | 4          |            |
 | 9   | `feat(opencode): agents board for opencode sessions`                         | 3b      | 8          |            |
+| 9b  | `feat(agents): end sessions whose process exited`                            | 3b'     | 9          |            |
 | 10  | `feat(opencode): token badge and session title`                              | 3c      | 9          |            |
 | 11  | `feat(opencode): resume opencode sessions on relaunch`                       | 3d      | 9          |            |
 | 12  | `docs: architecture, gotchas, claude.md, roadmap and readme for multi-agent` | Phase 4 | all        |            |
@@ -202,6 +203,39 @@ plugin.
   second process is nested, a dead process frees the pane (fish case); panel depth.
 - **Verify:** sub-agents on the board; icon; `in`; PR; quit OpenCode in a fish pane, then run
   `claude` there → Claude leads.
+
+### 3b'. Session liveness — PR #9b
+
+Split from PR #9 after three review rounds kept finding edge cases in it. OpenCode sends
+nothing on quit; fish and pwsh send no prompt mark. A session that ends that way must still
+leave the board and stop leading its pane.
+
+- **One pure module** (`electron/agent-liveness.ts`) owns it, unit-tested; main only calls
+  `foldLiveness(batch)` and a periodic `reap()`. The ledger and the graph are unchanged: they
+  get ordinary SessionEnd events.
+- **Which pid:** only agents whose events carry the agent's own pid (`liveByPid`), as a fact
+  checked per agent, never guessed at run time: OpenCode's plugin sends `process.pid`; Codex's
+  hook runs `exec node …`, so its parent is Codex (S1; a test pins the `exec`). If Codex ever
+  runs hooks through a wrapper, that's a spike finding to act on.
+- **What ends:** every root session the dead process ran (the lead, the ones switched away
+  from, nested ones), each with its folder and transcript path (meta untrack).
+- **When:** every 3 s while anything is tracked (no timer otherwise), and before folding a batch with a
+  SessionStart (so a new agent in that pane leads, and isn't nested in a dead session).
+- **Late drops:** for 10 s after a reap, a drop from that pid is ignored if it names one of its
+  sessions, or if the pid is still dead (a `/new` right before the quit); a new process that
+  reused the pid is alive, so its sessions count.
+- **`/new` inside OpenCode:** the plugin ends the root it left once that's idle (a still-running
+  one ends when its turn does), so the board shows the session the user is in. Not on a turn
+  starting in another session: that can be a queued prompt, not the user moving.
+- **Not on Windows** (WSL pids are the distro's); a child whose root is unknown is dropped,
+  never filed as a root.
+- **Not here:** a parallel tool call ending another call's approval wait. That needs the
+  activity-based status rewrite with its test matrix (ARCHITECTURE §9a), not a reducer patch.
+- **Tests:** confirmation (one event, two close, two apart, a transient wrapper), reap of all
+  sessions, late drops (same session vs a reused pid), reap-before-start ordering, Windows,
+  the plugin's end-on-leave (idle, busy then idle, picked again).
+- **Verify:** OpenCode in `bash --norc` (no prompt mark): quit → gone from the board in ≤ 3 s,
+  a new agent in that pane leads; `/new` leaves one row.
 
 ### 3c. Tokens + title — PR #10
 

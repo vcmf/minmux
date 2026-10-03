@@ -255,6 +255,59 @@ describe("the plugin (loaded from its source, as OpenCode does)", () => {
     ])
   })
 
+  it("a root the user left ends once idle; a running one when its turn does", async () => {
+    const h = await (await load())({ directory: "/base" })
+    const e = h.event!
+    const status = (id: string, type: string) =>
+      e(ev("session.status", { sessionID: id, status: { type } }))
+    e(ev("session.created", { info: { id: "ses_a" } }))
+    status("ses_a", "busy")
+    e(ev("session.created", { info: { id: "ses_b" } })) // /new while ses_a's turn runs
+    status("ses_a", "idle") // …which then ends
+    status("ses_b", "busy")
+    status("ses_b", "idle")
+    e(ev("session.updated", { info: { id: "ses_a", title: "again" } }))
+    status("ses_a", "busy") // picked again (or a queued prompt): it starts again; ses_b stays
+    const out = await drops(13)
+    const life = out
+      .filter((d) => d.e === "start" || d.e === "end")
+      .map((d) => `${d.e} ${d.sessionID}`)
+    expect(life).toEqual(["start ses_a", "start ses_b", "end ses_a", "start ses_a"])
+    // ses_a's end comes after its own idle (its reply is on the board first).
+    const i = out.findIndex((d) => d.e === "end")
+    expect(out[i - 1]).toMatchObject({ e: "status", sessionID: "ses_a", status: "idle" })
+  })
+
+  it("a long run's many sub-agents never push out its root", async () => {
+    const h = await (await load())({ directory: "/base" })
+    const e = h.event!
+    e(ev("session.created", { info: { id: "ses_r" } }))
+    e(ev("session.status", { sessionID: "ses_r", status: { type: "busy" } }))
+    for (let i = 0; i < 300; i++)
+      e(ev("session.created", { info: { id: `ses_c${i}`, parentID: "ses_r" } }))
+    e(ev("session.created", { info: { id: "ses_n" } })) // /new: the root it left still ends
+    e(ev("session.status", { sessionID: "ses_r", status: { type: "idle" } }))
+    // started + start r + session r + busy + 300 × (start + session) + start n + session n + idle + end
+    const out = await drops(608)
+    expect(out.at(-1)).toMatchObject({ e: "end", sessionID: "ses_r", directory: "/base" })
+    // The latest children still name their root.
+    expect(out.filter((d) => d.sessionID === "ses_c299").every((d) => d.rootID === "ses_r")).toBe(
+      true,
+    )
+  })
+
+  it("a child whose chain is broken names no root (never filed as one)", async () => {
+    const h = await (await load())({ directory: "/base" })
+    const e = h.event!
+    // ses_c's parent was never seen (this copy loaded mid-session).
+    e(ev("session.created", { info: { id: "ses_c", parentID: "ses_gone" } }))
+    e(ev("session.status", { sessionID: "ses_c", status: { type: "busy" } }))
+    const out = await drops(3)
+    expect(out.filter((d) => d.e === "start")).toEqual([])
+    expect(out.slice(1).every((d) => d.parentID === "ses_gone" && !("rootID" in d))).toBe(true)
+    expect(out.slice(1).map((d) => normalizeOpencodeDrop(d))).toEqual([null, null])
+  })
+
   it("a background session's tools never move the lead; an unknown session never starts", async () => {
     const h = await (await load())({ directory: "/base" })
     const e = h.event!
@@ -320,13 +373,13 @@ describe("the plugin (loaded from its source, as OpenCode does)", () => {
   it("names drops <pane>.<pid>.<ts>.<seq>.json with strictly increasing times", async () => {
     const h = await (await load())({})
     for (let i = 0; i < 20; i++) h.event!(ev("session.created", { info: { id: `ses_${i}` } }))
-    await drops(41) // `started`, then a start + a session each
+    await drops(60) // `started`, then a start + a session each, and each one /new left ends
     const names = files()
     const ts = names.map((f) => f.split("."))
     expect(
       ts.every((p) => p.length === 5 && p[0] === "pane-1" && p[1] === String(process.pid)),
     ).toBe(true)
-    expect(new Set(ts.map((p) => p[2])).size).toBe(41)
+    expect(new Set(ts.map((p) => p[2])).size).toBe(60)
   })
 
   it("ignores what it doesn't know, and junk never throws", async () => {
@@ -552,6 +605,24 @@ describe("normalizeOpencodeDrop", () => {
       }),
     ).toMatchObject({ event: "SessionStart", source: "resume", cwd: "/r" })
     expect(normalizeOpencodeDrop({ v: 1, e: "start", sessionID: "ses_a" })).toBeNull()
+  })
+
+  it("a root the user left ends on the board; a child's end isn't one", () => {
+    const end = normalizeOpencodeDrop({ v: 1, e: "end", sessionID: "ses_a", directory: "/r" })
+    expect(end).toMatchObject({ event: "SessionEnd", sessionId: "ses_a", reason: "switch" })
+    const g = reduceAgentEvents([
+      normalizeOpencodeDrop({
+        v: 1,
+        e: "start",
+        sessionID: "ses_a",
+        source: "new",
+        directory: "/r",
+      })!,
+      end!,
+    ])
+    expect(g.rootIds).toEqual([])
+    const child = { v: 1, e: "end", sessionID: "ses_c", parentID: "ses_a", rootID: "ses_a" }
+    expect(normalizeOpencodeDrop(child)).toBeNull()
   })
 
   it("rejects other versions, bad ids and junk; never throws", () => {

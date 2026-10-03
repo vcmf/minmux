@@ -105,12 +105,12 @@ export const opencodeShell: AgentShell = {
 
 // By process (MULTI_AGENT.md §4.4): the plugin starts a root whenever it becomes the active one,
 // so a start from the leading OpenCode is a switch; another process's session is nested.
-// Sub-agents never start sessions (they're SubagentStart). Resume comes with PR #11; a lead
-// that ends with its process (OpenCode fires nothing on quit) with PR #9b.
+// Sub-agents never start sessions (they're SubagentStart). Resume comes with PR #11.
 export const opencodeSessionRules: SessionRules = {
   resumeCommand: () => null,
   cwdFits: () => undefined,
   isSwitch: (ev, lead) => ev.pid !== undefined && ev.pid === lead.pid,
+  liveByPid: true, // the plugin's own process.pid: OpenCode fires nothing on quit
 }
 
 const ID = /^[A-Za-z0-9_-]{1,128}$/
@@ -132,6 +132,7 @@ export function normalizeOpencodeDrop(raw: unknown, paneId?: string): AgentEvent
   const root = id(d.rootID)
   const child = !!root && root !== sid
   const parent = id(d.parentID)
+  if (parent && !child) return null // a child whose root the plugin can't name: never a root
   const base: AgentEvent = child
     ? {
         event: "",
@@ -148,6 +149,8 @@ export function normalizeOpencodeDrop(raw: unknown, paneId?: string): AgentEvent
   })
   const tool = { toolName: text(d.tool, 128) }
   switch (d.e) {
+    case "end":
+      return child ? null : at("SessionEnd", { reason: "switch" }) // a root the user left
     case "start":
       if (child) return at("SubagentStart", { agentType: childType(d.title) })
       return base.cwd
