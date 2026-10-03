@@ -309,10 +309,12 @@ A running shell's env can't change, so `COLORFGBG` is stale for panes opened bef
 light/dark switch (incl. `appearance: "system"` following the OS); native shells get the live
 answer via xterm's OSC 11 reply.
 
-## Claude Code integration reads internal formats {#claude-transcript}
+## Agent integrations read internal formats {#claude-transcript}
 
 Hook payloads and the session transcript JSONL are **undocumented Claude internals** — parse
 best-effort and ignore what you don't recognize; never throw (`transcript-fold.ts` and friends).
+The same holds for Codex's rollouts and `session_index.jsonl` and for OpenCode's bus events
+(#codex, #opencode). Each agent's parsing lives in its adapter under `electron/agents/`.
 
 - `/color` and `/rename` are recorded **only** in the transcript
   (`{"type":"agent-color","agentColor":"orange"}`, `{"type":"custom-title","customTitle":"…"}`,
@@ -325,7 +327,7 @@ best-effort and ignore what you don't recognize; never throw (`transcript-fold.t
 - Hook-event drops are ingested **unordered**: a late `SessionEnd` of the previous session in a
   pane must not stop tracking the new one (compare the transcript path).
 
-## Resuming Claude sessions on relaunch {#resume}
+## Resuming agent sessions on relaunch {#resume}
 
 `electron/agent-sessions.ts` keeps a ledger (`agent-sessions.json`) of which Claude session
 each terminal is inside, from the `SessionStart` / `SessionEnd` hooks. On relaunch the
@@ -389,6 +391,12 @@ and `terminal-manager` types `claude --resume <id> [--permission-mode m]` at the
   session's **folder** is restored, not its **environment** — a hand-run `conda activate ml` /
   venv comes back as whatever the rc activates (could record `CONDA_DEFAULT_ENV` /
   `VIRTUAL_ENV` from the hook process's env, if it ever matters).
+- **Per agent** (its `SessionRules` in `electron/agents/`): Claude types `claude --resume <id>`
+  and confirms with its SessionStart. Codex types `codex resume <id>`; its session only starts
+  with the first message, so at 25 s the banner says it's waiting for one. OpenCode types
+  `opencode --session <id>`, and the plugin confirms at once from OpenCode's own lookup of
+  that session (#opencode). Each agent has its own ledger file (`agent-sessions.<kind>.json`;
+  Claude's is `agent-sessions.json`, with a marker an older build drops).
 - **Delivery by typing is deliberate — revisit only if a shell becomes a pain point.**
   Alternatives weighed (2026-09): (a) the integration runs `MINMUX_RESUME_ID` at the first
   prompt — nothing typed, but native only on zsh; (b) spawn the pane as
@@ -397,6 +405,70 @@ and `terminal-manager` types `claude --resume <id> [--permission-mode m]` at the
   failed resume; (c) `claude --continue` — picks the wrong session when two panes share a
   repo. None handles an rc that execs tmux. If fish/pwsh users hit problems, (b) per shell
   is the candidate.
+
+## Codex {#codex}
+
+Codex runs our hooks from `-c hooks.<Event>=[…]` overrides that a `codex` shell function in the
+rc tail adds (arguments read one per line from `<config>/agents/codex-args`, so quotes and
+spaces survive). They add to the user's own hooks.
+
+- **Hooks need a one-time approval inside Codex** (`/hooks`, then `t`). Codex keeps a trust hash
+  per hook definition in `$CODEX_HOME/config.toml`; minmux computes the same hash
+  (`codexTrustHashes`, pinned by a test against a hash Codex wrote) to know whether they're
+  approved, and only then stays quiet. Until then a strip in the pane offers to copy `/hooks`.
+  Changing a hook's command or timeout changes its hash: the user approves again.
+- **The hook command is `exec node <drop.cjs> codex`.** The `exec` makes the drop's
+  `process.ppid` Codex itself, which the lead rule and the process check rely on (#agent-liveness).
+  A test pins the `exec`; a wrapper in between would break both.
+- The wrapper prints a display-only launch marker (OSC 6974) for Codex's interactive UI only,
+  never for `exec`, `login` or `--version`, and never into a pipe.
+- Not armed on Windows or in WSL panes yet, nor when `node` isn't on PATH.
+- Thread names come from `<codex home>/session_index.jsonl` (one watcher for every pane).
+  Codex writes the first name itself; a later different name is the user's `/rename`.
+  Tokens come from the rollout's `token_count` events.
+
+## OpenCode {#opencode}
+
+minmux writes a plugin (`<config>/agents/minmux-opencode.js`, source in
+`electron/agents/opencode-plugin.ts`) and adds it to `OPENCODE_CONFIG_CONTENT`. The plugin runs
+inside OpenCode and writes its own drops.
+
+- **The user's own `OPENCODE_CONFIG_CONTENT` is kept.** Main merges ours into it (JSON), and an
+  `opencode` shell function merges again at launch in case the rc or direnv replaced it.
+  A config that isn't plain JSON is left alone (OpenCode then runs without minmux). A minmux
+  started from a pane takes the parent's plugin out at startup.
+- **The plugin source is a `String.raw` template:** no backticks and no `${` inside it.
+- **It runs inside OpenCode's loop:** filter first, never await, keep maps bounded. Handlers
+  measured at p99 ≈ 0.1 ms. One copy per process (another minmux's stays quiet).
+- **OpenCode fires nothing on quit.** Its sessions end through the process check
+  (#agent-liveness) or the prompt mark.
+- **Sub-agents are child sessions** (`parentID`); drops name their root, so the board can nest
+  them under their parent. A child whose chain the plugin can't name is dropped, never shown
+  as a root.
+- **Who named a session:** OpenCode only writes its own title while a session still has the
+  `New session - …` placeholder, after its first prompt. Any other change is the user's
+  `/rename` and colours the pane. Whether a name is the user's is kept per session in
+  `agent-names.json`. Known limit: a rename in the moment before OpenCode's own title (or when
+  that title never comes) reads as OpenCode's.
+- **Resume:** `MINMUX_RESUME_SESSION=<id> opencode --session <id>`. The TUI's plugin worker
+  doesn't see `--session` in its argv, hence the env. The plugin asks OpenCode
+  (`client.session.get`) and starts the session at once if it exists; a bad id exits 1
+  ("Session not found"). The wrapper unsets the variable after use (a `K=V` before a function
+  stays set in bash's POSIX mode).
+- `/new` ends the session it left once that one is idle. Picking a session in `/sessions` sends
+  nothing until its next prompt.
+- Not integrated on Windows yet (a Windows path in a `file:` URL is unverified).
+
+## Sessions that end with their process {#agent-liveness}
+
+`electron/agent-liveness.ts`. OpenCode sends nothing on quit, and fish and pwsh send no prompt
+mark, so a session could stay on the board and keep leading its pane. For agents whose events
+carry the agent's own pid (`liveByPid`: Codex, OpenCode; never Claude, whose pid is a hook
+shell's), main tracks each root session per process and sends its `SessionEnd` once the
+process is gone: every 3 s while anything is tracked, and before folding a batch that starts a
+session. A dead process's last drops are ignored for 10 s if they name one of its sessions. A
+new process that reuses the pid is alive, so its events count. Not on Windows (WSL pids are the
+distro's).
 
 ## SSH panes {#ssh}
 

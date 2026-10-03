@@ -20,10 +20,14 @@ electron/                 main process (Node) — see electron/CLAUDE.md
   preload.ts              contextBridge → window.minmux (mirrors src/lib/ipc.ts)
   shell-integration.ts    inlined zsh/bash OSC-133/OSC-7 scripts, listShells (WSL), injection
   git.ts · pane-git.ts    changes panel (status/diff) · per-terminal branch + gh PR (sidebar)
-  agent-hooks.ts          Claude hook-event file drops → AgentEvents (hook-writer builds them)
+  agents/                 one adapter per coding agent (claude, codex, opencode + its plugin):
+                          arming, normaliser, tokens, names, resume rules (types.ts)
+  agent-hooks.ts          per-agent file drops → AgentEvents (hook-writer builds the hooks')
+  agent-sessions.ts       resume ledger: which session leads each pane (per-agent files)
+  agent-liveness.ts       ends sessions whose process exited without a word (OpenCode, fish)
+  agent-meta.ts           per-pane session name/colour, from each agent's source (agents:meta)
   transcript-fold.ts      chunked incremental JSONL reader, shared by:
     transcript-tokens.ts  · token badge      transcript-meta.ts · /color + /rename
-  agent-meta.ts           per-pane transcript watch → session colour (agents:meta)
   ssh-config.ts · ssh-service.ts  ~/.ssh/config → host list (watched) · spawn plans (trusted)
   pending-spawns.ts       one spawn per pane while an async (ssh) plan is built
   profile.ts              which profile this process is (dev build = `dev`): names + env scrub
@@ -90,7 +94,9 @@ Rules the code relies on but can't enforce — most past review findings broke o
 - **Persisted files stay readable by older builds** (workspace v2 keeps a legacy `sessionId`
   per leaf), and a file written by a **newer** build is never overwritten.
 - **Claude hook payloads + transcripts are internal formats** — parse best-effort, never throw,
-  read incrementally off the hot path. → GOTCHAS #claude-transcript
+  read incrementally off the hot path (Codex's and OpenCode's too). → GOTCHAS #claude-transcript
+- **Agent specifics live in `electron/agents/*` and `src/lib/agent-kinds.ts`** (plus icons and
+  user-facing strings); everything else works on the neutral `AgentEvent` and its `agent` tag.
 
 ## Gotchas
 
@@ -121,8 +127,13 @@ rules also in `electron/CLAUDE.md` (loaded on demand). Design detail in `docs/AR
 - **No dark flash on launch** needs the `index.html` pre-paint script + `settingsLoaded` gate +
   saved window bg. → GOTCHAS #first-paint-theme
 - **`/color` + `/rename` live only in Claude's transcript**; slash commands fire no hook. → GOTCHAS #claude-transcript
-- **Relaunch resumes Claude sessions** from a hook-fed ledger: any SessionEnd while running
-  clears an entry; a quit freezes it first; one shot per session. → GOTCHAS #resume
+- **Relaunch resumes agent sessions** (Claude, Codex, OpenCode) from a hook-fed ledger: any
+  SessionEnd while running clears an entry; a quit freezes it first; one shot per session. → GOTCHAS #resume
+- **Codex's hooks need a one-time `/hooks` approval** in Codex; minmux reads Codex's own trust
+  records to know, and its hook must stay `exec node …` (the pid is Codex). → GOTCHAS #codex
+- **OpenCode is armed by a plugin** merged into the user's `OPENCODE_CONFIG_CONTENT`; it runs
+  inside OpenCode (never await; no backticks in its source). It fires nothing on quit, so main
+  ends its sessions when the process is gone. → GOTCHAS #opencode, #agent-liveness
 - **SSH panes have no local cwd; main rebuilds their ssh command** from its own host list;
   reconnect reuses the session id (xterm listeners wired once). → GOTCHAS #ssh
 - **Agent-status reducer has a known flaw** — don't quick-patch (needs a test matrix). → GOTCHAS #agent-status, ARCHITECTURE §9a

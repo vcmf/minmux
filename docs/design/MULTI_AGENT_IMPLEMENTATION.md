@@ -5,9 +5,8 @@
 > code, syntax, layouts) are decided in the PR itself. Feature ids (F1–F18) and spikes
 > (S1–S3) refer to the design doc.
 
-Status: **PLAN** (2026-10-01). Order: Phase 0 spikes (done) → Phase 1 refactor (Claude only)
-→ Phase 2 Codex → Phase 3 OpenCode → Phase 4 docs. Phases 2 and 3 are independent once
-Phase 1 lands.
+Status: **DONE** (2026-10-03). PRs #90–#104 into `epic/multi-agent`; PR 9 was split into #101
+(board) and #102 (sessions that end with their process). Tracker and follow-ups: #93.
 
 ## Ground rules for every PR
 

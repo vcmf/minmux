@@ -21,7 +21,7 @@
 **minmux** is a fast, cross-platform terminal (tabs, split panes, real shells) for people who run
 coding agents all day. It stays out of your way like a normal terminal, then adds a few panels
 that show you what the agents are actually doing: git diffs, files, and a live agents board that
-works with Claude Code. If you have looked for an open-source Warp alternative, or a tmux built
+works with Claude Code, Codex and OpenCode. If you have looked for an open-source Warp alternative, or a tmux built
 for coding agents, this is that.
 
 - 🔔 **Notifications when a session needs you.** Working, waiting for input, or done, shown as a
@@ -31,9 +31,9 @@ for coding agents, this is that.
   what an agent just touched. Branch and ahead/behind show in the status bar.
 - 📁 **Files browser.** A lazy per-folder listing rooted at the focused pane's cwd, with git
   decorations (badges on changed files, tinted folders). Click a file to open it in your editor.
-- 🤖 **Agents board.** A live view of the Claude Code agents you launched inside minmux: the
-  root session, its sub-agents, what each is doing, its cwd, and its recent files. Click one to
-  jump to its pane.
+- 🤖 **Agents board.** A live view of the Claude Code, Codex and OpenCode agents you launched
+  inside minmux: the root session, its sub-agents, what each is doing, its cwd, and its recent
+  files. Click one to jump to its pane.
 - 🪟 **Real multiplexer.** Tabs and resizable splits. Split a pane and it keeps your shell and
   directory. Quit and reopen and your layout comes back.
 - 🌐 **SSH hosts in one click.** The hosts in your `~/.ssh/config` are listed in the sidebar.
@@ -63,7 +63,7 @@ irm https://raw.githubusercontent.com/vcmf/minmux/main/install.ps1 | iex
 <table>
   <tr>
     <td width="42%"><img src="docs/media/feat-agents.jpg" width="100%" alt="Agents board showing sessions, sub-agents, status, and token usage" /></td>
-    <td><b>Agents board.</b> A live tree of the Claude Code agents you launched: each session, its sub-agents, what they are doing, and token usage. Click one to jump to its pane.</td>
+    <td><b>Agents board.</b> A live tree of the Claude Code, Codex and OpenCode agents you launched: each session, its sub-agents, what they are doing, and token usage. Click one to jump to its pane.</td>
   </tr>
   <tr>
     <td width="42%"><img src="docs/media/feat-notifications.png" width="100%" alt="Notification bell with an unread badge in the top bar" /></td>
@@ -95,12 +95,21 @@ irm https://raw.githubusercontent.com/vcmf/minmux/main/install.ps1 | iex
   </tr>
 </table>
 
-## Works with Claude Code
+## Works with Claude Code, Codex and OpenCode
 
-Run `claude` in any pane and the Agents board lights up: the root session, its sub-agents, what
-each is doing, its working directory, and the files it touched. It reads Claude Code's own hook
-events, so there is zero setup and no global config to edit; minmux only wires the panes it
-launches. Agents started outside minmux do not show up.
+Run `claude`, `codex` or `opencode` in any pane and the Agents board lights up: the root session,
+its sub-agents, what each is doing, its working directory, the files it touched and its token
+use. Quit minmux with an agent running and its session comes back in the same pane when you
+reopen it. There is no global config to edit: minmux only wires the panes it launches, so agents
+started outside minmux do not show up. Each integration can be switched off in Settings.
+
+- **Claude Code** works with no setup at all.
+- **Codex** asks you to approve minmux's hooks once. When it does, minmux shows a strip in the
+  pane: type `/hooks` in Codex and press `t`.
+- **OpenCode** works with no setup: minmux adds a small plugin to OpenCode in its panes, next to
+  your own plugins.
+
+Codex and OpenCode are not wired on Windows or in WSL panes yet.
 
 ## Why I built this
 
@@ -222,8 +231,7 @@ This is v0. I use it every day, and it will still surprise you sometimes.
   security prompt the first time.
 - Agent status comes from a heuristic (is the pane still producing output, or has it gone
   quiet?), so it reads the state wrong once in a while.
-- The Agents board only knows about Claude Code today, since it reads Claude's hook events. The
-  code under it does not assume any particular agent, so others can plug in later.
+- The Agents board knows Claude Code, Codex and OpenCode. Other agents need their own adapter.
 - Windows and WSL have had far less real-world use than macOS and Linux, so expect rougher edges
   there.
 - After a full quit, your tabs and layout come back on relaunch, but running processes are not

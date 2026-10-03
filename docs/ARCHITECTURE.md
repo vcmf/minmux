@@ -220,18 +220,19 @@ Output stream: main → renderer via `webContents.send('pty:data:'+id, Uint8Arra
   centre (join), or a slot in any pane's header strip (reorder / join there). Pure
   `dropZone`/`insertIndex` (geometry) + `canMove`/`moveSurface` (pane-tree); a transparent
   overlay covers the terminal only while dragging (xterm's canvas swallows drag events).
-- **Claude session colour:** Claude Code's `/color` / `/rename` are recorded only in its session
-  transcript (`agent-color` / `custom-title` JSONL lines — no terminal escape). Main tracks each
-  Claude pane's transcript (located via its hook events; `fs.watch` + debounced incremental fold,
-  `electron/agent-meta.ts`) and pushes `{paneId, meta}` → a 2px top border + tab/sidebar icon in
-  that colour; a renamed session without `/color` gets a stable colour from its name.
+- **Session name + colour:** each agent keeps its session's name somewhere of its own: Claude's
+  `/color` / `/rename` in the transcript, Codex's thread names in its index file, OpenCode's
+  titles pushed by our plugin. Main tracks the lead session's (`electron/agent-meta.ts`, one
+  reader per agent) and pushes `{paneId, meta}` → a 2px top border + tab/sidebar icon in that
+  colour; a renamed session without `/color` gets a stable colour from its name. A name the
+  agent gave itself is shown but never colours the pane (MULTI_AGENT.md D3).
 - **Theming:** each theme is a **family** with a dark and a light variant (Minimal, Tokyo Night,
   Catppuccin, Gruvbox); `settings.appearance` = `dark` | `light` | `system` (follows the OS live)
   picks the variant, resolved by `activeTheme()`. A variant is UI tokens (→ CSS vars) + an xterm
   palette; light palettes keep ANSI black dark. Launch never flashes dark: an inline
   `index.html` script applies the cached tokens pre-paint, theming waits for `settingsLoaded`,
   and the native window bg follows the theme (GOTCHAS #first-paint-theme).
-- **Sidebar meta:** per terminal — Claude's last reply (from the `Stop` hook), `branch • cwd`,
+- **Sidebar meta:** per terminal — the agent's last reply (from its `Stop` event), `branch • cwd`,
   and `PR #n <state>` (`electron/pane-git.ts`: `git rev-parse` + the user's own `gh pr view`
   for the checked-out branch; cached per folder / repo+branch with state-based TTLs, deduped,
   ≤2 gh processes; branches return immediately while PRs load in the background). Polled by the
@@ -240,11 +241,16 @@ Output stream: main → renderer via `webContents.send('pty:data:'+id, Uint8Arra
   splits/tab-switches re-attach (never respawn). Loads addons (webgl, fit, web-links); registers the
   ligature character-joiner; wires OSC 9 / OSC 133. Off-screen terminals are **parked** (opened
   in an inert off-viewport element — GOTCHAS #hidden-terminals).
-- **Agent observability** (design: `docs/design/AGENT_OBSERVABILITY.md`): Claude Code hooks are
-  injected per launch and write each event as a **file** into a nonce-named drop dir
-  (`agent-hooks.ts`) — no ports, crosses the WSL boundary. Events feed the Agents board, the
-  sidebar snippet and, via the session transcript (read incrementally, best-effort —
-  `transcript-fold.ts`), the token badge and the session colour.
+- **Coding agents** (design: `docs/design/AGENT_OBSERVABILITY.md`, `docs/design/MULTI_AGENT.md`):
+  Claude Code, Codex and OpenCode, each one adapter in `electron/agents/` (how it's armed in a
+  pane, how its events normalise, its tokens, names and resume rules). Each writes its events
+  as **files** into its own folder of a nonce-named drop dir (`agent-hooks.ts`): no ports, and
+  it crosses the WSL boundary. Claude and Codex through their hooks, OpenCode through a plugin
+  minmux writes. Events use Claude's hook names as the one vocabulary, tagged with the agent,
+  and feed the Agents board, the sidebar snippet, the token badge and the session colour.
+  The ledger (`agent-sessions.ts`) decides which session leads each pane; sessions that end
+  with their process are ended by `agent-liveness.ts`. Landmines: GOTCHAS #codex, #opencode,
+  #agent-liveness.
 - **IPC:** all backend calls go through `lib/ipc.ts` → `window.minmux.*` (preload). Components never
   touch Electron directly (keeps them testable + portable).
 - **Chrome:** tab bar, sidebar tree, status bar, ⌘K palette (mux reskin — ROADMAP M3.5).
@@ -321,14 +327,16 @@ CI: GitHub Actions matrix (macos/ubuntu/windows). Auto-update later via `electro
 - **Renderer → main** (`invoke` for answers, `send` for fire-and-forget), by family: `pty:*`
   (spawn = attach-or-spawn, write, resize, kill) · `shells:list` · `settings:*` / `workspace:*`
   (read/write the JSON files) · `git:status` / `git:diff` (changes panel) · `pane:git-info`
-  (sidebar branch + PR) · `agents:meta-snapshot` · `fs:*` / `file:*` / `dialog:pick-directory` /
+  (sidebar branch + PR) · `agents:meta-snapshot` · `agents:resume-plan` /
+  `agents:resume-consume` / `agents:shell-idle` · `agents:hint-wanted` / `agents:hint-dismiss`
+  (the Codex approval hint) · `fs:*` / `file:*` / `dialog:pick-directory` /
   `editor:info` (files panel, links, preview) · `window:*` (frameless controls, native bg) ·
   `platform:info` · `app:*` (version, update check, metrics) · `open-external` / `open-path` /
   `notify` / `clipboard:*` · `ssh:list-hosts` (invoke) / `ssh:open-config` (send).
 - **Main → renderer** (`webContents.send`): `pty:data:<id>` (coalesced PTY bytes — the hot path;
   nothing else rides it) · `pty:exit:<id>` (the process ended on its own) · `ssh-hosts-changed`
   · `agents:events` (hook batches + token totals) · `agents:meta`
-  (per-pane Claude colour/name) · `settings-changed` · `window:maximize-change`.
+  (per-pane session name/colour) · `settings-changed` · `window:maximize-change`.
 - **Security:** `contextIsolation: true`, `nodeIntegration: false`; the renderer only sees the
   typed API the preload exposes.
 
@@ -347,10 +355,14 @@ non-default profile; a dev build is `minmux-dev` (GOTCHAS #profiles).
   `{id, sessionIds, activeSessionId}` plus a legacy `sessionId` mirror so an older build still
   restores every pane; v1 files migrate on read. A file from a **newer** build is not parsed
   and not overwritten. Restore de-duplicates / prunes broken entries.
-- **`agent-sessions.json`** — which Claude session each terminal is inside, so a relaunch can
-  type `claude --resume <id>` back into it (GOTCHAS #resume).
-- **Small caches:** `window-bg` (native window colour for the next launch), `claude-hooks.json`
-  and the per-launch `hook-events/` drop dir, and localStorage `minmux:theme-vars` (first paint).
+- **`agent-sessions.json`** (Claude) and **`agent-sessions.<agent>.json`** — which agent session
+  each terminal is inside, so a relaunch can resume it (GOTCHAS #resume).
+- **`agent-names.json`** (the sessions the user named: their colour survives a resume) and
+  **`agent-hints.json`** (the Codex approval hint's "Not now" / "Don't ask again").
+- **Small caches:** `window-bg` (native window colour for the next launch), the agents' arming
+  files written per launch (`claude-hooks.json`, `agents/` with Codex's args and drop script and
+  OpenCode's plugin), the per-launch `hook-events/` drop dir, and localStorage
+  `minmux:theme-vars` (first paint).
 - **Process lifetime:** PTYs live in the main process, so they **survive a renderer reload**
   (attach-or-spawn reattach + replay). They **die on a full quit** (guarded by a confirm
   dialog); relaunch respawns shells at the saved cwd. Surviving a quit needs the daemon

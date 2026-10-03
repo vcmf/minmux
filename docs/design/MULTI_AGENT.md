@@ -6,7 +6,9 @@
 > `AGENT_OBSERVABILITY.md` (the M6 design this generalises) and `../ARCHITECTURE.md`.
 > Implementation steps: `MULTI_AGENT_IMPLEMENTATION.md`.
 
-Status: **DESIGN / accepted** (2026-10-01). Milestone: ROADMAP M6 → **6d**.
+Status: **IMPLEMENTED** (2026-10-03, #90–#104 into `epic/multi-agent`). Milestone: ROADMAP M6 →
+**6d** ✅. Where the code settled a question this doc left open, the answer is recorded here;
+the landmines are in `../GOTCHAS.md` (#codex, #opencode, #agent-liveness).
 
 **How to read this doc.** It records decisions, constraints and verified facts. It does not
 specify code: shell syntax, file layouts, regexes and similar mechanics are settled in the

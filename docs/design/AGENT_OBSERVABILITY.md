@@ -7,6 +7,8 @@
 > specific case of _official_ telemetry.
 
 Status: **DESIGN / accepted for Phase 1** (2026-07-13). Milestone: see `../ROADMAP.md` → M6.
+Codex and OpenCode (2026-10): `MULTI_AGENT.md`, which generalises this design to one adapter
+per agent.
 
 ---
 
