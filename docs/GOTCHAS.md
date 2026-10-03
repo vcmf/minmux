@@ -348,8 +348,8 @@ and `terminal-manager` types `claude --resume <id> [--permission-mode m]` at the
   the agent's `SessionStart`, or 25 s passing with the command no longer running. Still running
   at 25 s (the agent is on a screen of its own: an update offer, a trust prompt) is **not** a
   failure: the banner says it's waiting, the entry stays, and a later success still wins.
-- The command is typed from **validated** parts only (UUID id, one-word mode):
-  bypassPermissions is dropped unless `resumeBypassPermissions` is on.
+- The command is typed from **validated** parts only (each agent's own id format, Claude's
+  one-word mode): bypassPermissions is dropped unless `resumeBypassPermissions` is on.
 - Background tabs start lazily, so their entries wait (across quits) until first shown.
 - Only shells that take POSIX quoting get the typed `cd -- '…' &&` (zsh/bash/sh/dash/ksh, WSL);
   fish, pwsh, cmd and others spawn in the session's dir instead. Typing waits for a real
@@ -374,7 +374,9 @@ and `terminal-manager` types `claude --resume <id> [--permission-mode m]` at the
   processes with our `MINMUX_PANE_ID` + hooks. **One classifier decides the pane's lead: the
   ledger** — while a live lead exists, any other session's `SessionStart` (startup, compact,
   resume) is nested, and stays nested until it ends (an agent outlives its lead); a real switch
-  ends the old session first, and `/clear` / `fork` count as one regardless. Main rewrites a
+  ends the old session first, and `/clear` / `fork` count as one regardless. Codex and OpenCode
+  go by process instead: a new session from the leading process is a switch (`/new`, a picked
+  session), another process's is nested (MULTI_AGENT.md §4.4). Main rewrites a
   replaced/rejected folder and tags every root event `nested` before forwarding, so the
   renderer's graph (`in`, status bar, panels) and the pane accent follow only the lead — no
   second classifier. Known limits: a lead killed with no `SessionEnd` in a shell without our
@@ -410,20 +412,24 @@ and `terminal-manager` types `claude --resume <id> [--permission-mode m]` at the
 
 Codex runs our hooks from `-c hooks.<Event>=[…]` overrides that a `codex` shell function in the
 rc tail adds (arguments read one per line from `<config>/agents/codex-args`, so quotes and
-spaces survive). They add to the user's own hooks.
+spaces survive). They add to the user's own hooks. That function is the only arming, so Codex
+is wired in zsh and bash panes only (fish, pwsh or sh: a plain Codex).
 
 - **Hooks need a one-time approval inside Codex** (`/hooks`, then `t`). Codex keeps a trust hash
   per hook definition in `$CODEX_HOME/config.toml`; minmux computes the same hash
   (`codexTrustHashes`, pinned by a test against a hash Codex wrote) to know whether they're
   approved, and only then stays quiet. Until then a strip in the pane offers to copy `/hooks`.
-  Changing a hook's command or timeout changes its hash: the user approves again.
+  The hash covers the hook's command (with the absolute path of our drop script, so each
+  profile, a dev build and the installed app, is approved separately), its timeout and event:
+  a minmux update that changes any of them asks for the approval again.
 - **The hook command is `exec node <drop.cjs> codex`.** The `exec` makes the drop's
   `process.ppid` Codex itself, which the lead rule and the process check rely on (#agent-liveness).
   A test pins the `exec`; a wrapper in between would break both.
 - The wrapper prints a display-only launch marker (OSC 6974) for Codex's interactive UI only,
   never for `exec`, `login` or `--version`, and never into a pipe.
 - Not armed on Windows or in WSL panes yet, nor when `node` isn't on PATH.
-- Thread names come from `<codex home>/session_index.jsonl` (one watcher for every pane).
+- Thread names come from `<codex home>/session_index.jsonl`, read once for every pane (each
+  pane still has its own `fs.watch` on it).
   Codex writes the first name itself; a later different name is the user's `/rename`.
   Tokens come from the rollout's `token_count` events.
 
@@ -439,7 +445,7 @@ inside OpenCode and writes its own drops.
   started from a pane takes the parent's plugin out at startup.
 - **The plugin source is a `String.raw` template:** no backticks and no `${` inside it.
 - **It runs inside OpenCode's loop:** filter first, never await, keep maps bounded. Handlers
-  measured at p99 ≈ 0.1 ms. One copy per process (another minmux's stays quiet).
+  measured at p99 ≈ 0.1–0.16 ms over ~200 calls of a real turn (PR #100, #103). One copy per process (another minmux's stays quiet).
 - **OpenCode fires nothing on quit.** Its sessions end through the process check
   (#agent-liveness) or the prompt mark.
 - **Sub-agents are child sessions** (`parentID`); drops name their root, so the board can nest
@@ -453,8 +459,9 @@ inside OpenCode and writes its own drops.
 - **Resume:** `MINMUX_RESUME_SESSION=<id> opencode --session <id>`. The TUI's plugin worker
   doesn't see `--session` in its argv, hence the env. The plugin asks OpenCode
   (`client.session.get`) and starts the session at once if it exists; a bad id exits 1
-  ("Session not found"). The wrapper unsets the variable after use (a `K=V` before a function
-  stays set in bash's POSIX mode).
+  ("Session not found"). The `opencode` wrapper unsets the variable before it runs OpenCode and
+  passes it to that one run only (a `K=V` before a function stays set in bash's POSIX mode),
+  and the plugin deletes it from its own env.
 - `/new` ends the session it left once that one is idle. Picking a session in `/sessions` sends
   nothing until its next prompt.
 - Not integrated on Windows yet (a Windows path in a `file:` URL is unverified).
@@ -466,8 +473,9 @@ mark, so a session could stay on the board and keep leading its pane. For agents
 carry the agent's own pid (`liveByPid`: Codex, OpenCode; never Claude, whose pid is a hook
 shell's), main tracks each root session per process and sends its `SessionEnd` once the
 process is gone: every 3 s while anything is tracked, and before folding a batch that starts a
-session. A dead process's last drops are ignored for 10 s if they name one of its sessions. A
-new process that reuses the pid is alive, so its events count. Not on Windows (WSL pids are the
+session. For 10 s after a reap, a drop from that pid is ignored if it names one of its sessions,
+or any drop while the pid is still dead (a `/new` right before the quit). A new process that
+reuses the pid is alive, so its events count. Not on Windows (WSL pids are the
 distro's).
 
 ## SSH panes {#ssh}

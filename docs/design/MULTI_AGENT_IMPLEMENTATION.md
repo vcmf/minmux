@@ -5,8 +5,8 @@
 > code, syntax, layouts) are decided in the PR itself. Feature ids (F1–F18) and spikes
 > (S1–S3) refer to the design doc.
 
-Status: **DONE** (2026-10-03). PRs #90–#104 into `epic/multi-agent`; PR 9 was split into #101
-(board) and #102 (sessions that end with their process). Tracker and follow-ups: #93.
+Status: **DONE** (2026-10-03). PRs into `epic/multi-agent` as in the table; PR 9 was split into
+#101 (board) and #102 (sessions that end with their process). Tracker and follow-ups: #93.
 
 ## Ground rules for every PR
 
@@ -35,22 +35,22 @@ moves on.
 
 ## PR plan (13 PRs)
 
-| #   | PR (title without emoji)                                                     | Steps   | Depends on | Status     |
-| --- | ---------------------------------------------------------------------------- | ------- | ---------- | ---------- |
-| 0   | `docs(agents): multi-agent design, implementation plan and spike results`    | Phase 0 | —          | open (#91) |
-| 1   | `refactor(agents): tag events and nodes with the agent kind`                 | 1a      | 0          | open (#90) |
-| 2   | `refactor(agents): per-agent drop folders, drop root from env`               | 1b      | 1          |            |
-| 3   | `refactor(agents): move claude specifics behind an adapter`                  | 1c      | 2          |            |
-| 4   | `refactor(ui): agent-neutral presence, icon and labels` + per-agent settings | 1d + 1e | 3          |            |
-| 5   | `feat(codex): agents board for codex sessions`                               | 2a      | 4          |            |
-| 6   | `feat(codex): token badge and thread name`                                   | 2b      | 5          |            |
-| 7   | `feat(codex): resume codex sessions and hint when hooks aren't approved`     | 2c + 2d | 5          |            |
-| 8   | `feat(opencode): minmux plugin and scoped loading`                           | 3a      | 4          |            |
-| 9   | `feat(opencode): agents board for opencode sessions`                         | 3b      | 8          |            |
-| 9b  | `feat(agents): end sessions whose process exited`                            | 3b'     | 9          |            |
-| 10  | `feat(opencode): token badge and session title`                              | 3c      | 9          |            |
-| 11  | `feat(opencode): resume opencode sessions on relaunch`                       | 3d      | 9          |            |
-| 12  | `docs: architecture, gotchas, claude.md, roadmap and readme for multi-agent` | Phase 4 | all        |            |
+| #   | PR (title without emoji)                                                     | Steps   | Depends on | Status         |
+| --- | ---------------------------------------------------------------------------- | ------- | ---------- | -------------- |
+| 0   | `docs(agents): multi-agent design, implementation plan and spike results`    | Phase 0 | —          | merged (#91)   |
+| 1   | `refactor(agents): tag events and nodes with the agent kind`                 | 1a      | 0          | merged (#90)   |
+| 2   | `refactor(agents): per-agent drop folders, drop root from env`               | 1b      | 1          | merged (#94)   |
+| 3   | `refactor(agents): move claude specifics behind an adapter`                  | 1c      | 2          | merged (#95)   |
+| 4   | `refactor(ui): agent-neutral presence, icon and labels` + per-agent settings | 1d + 1e | 3          | merged (#96)   |
+| 5   | `feat(codex): agents board for codex sessions`                               | 2a      | 4          | merged (#97)   |
+| 6   | `feat(codex): token badge and thread name`                                   | 2b      | 5          | merged (#98)   |
+| 7   | `feat(codex): resume codex sessions and hint when hooks aren't approved`     | 2c + 2d | 5          | merged (#99)   |
+| 8   | `feat(opencode): minmux plugin and scoped loading`                           | 3a      | 4          | merged (#100)  |
+| 9   | `feat(opencode): agents board for opencode sessions`                         | 3b      | 8          | merged (#101)) |
+| 9b  | `feat(agents): end sessions whose process exited`                            | 3b'     | 9          | merged (#102)  |
+| 10  | `feat(opencode): token badge and session title`                              | 3c      | 9          | merged (#103)  |
+| 11  | `feat(opencode): resume opencode sessions on relaunch`                       | 3d      | 9          | merged (#104)  |
+| 12  | `docs: architecture, gotchas, claude.md, roadmap and readme for multi-agent` | Phase 4 | all        | merged (#105)  |
 
 Rough size (production / test LOC): refactor ~600 new + ~350 moved / ~740; Codex ~600 / ~650;
 OpenCode ~700 / ~680. Hardest parts: the OpenCode plugin, the lead rules, the meta tracker.
@@ -261,7 +261,8 @@ leave the board and stop leading its pane.
 
 - `ARCHITECTURE.md`, `GOTCHAS.md` (`#codex`, `#opencode`; widen `#claude-transcript` to agent
   internal formats), `CLAUDE.md` (structure + the adapter invariant), `electron/CLAUDE.md`,
-  `ROADMAP.md` 6d → done, README (agents row, Codex notifications tip),
+  `ROADMAP.md` 6d → done, README (agents row; the Codex notifications tip was dropped as
+  unverified),
   `AGENT_OBSERVABILITY.md` pointer.
 - Diagnostics name the agent.
 - Mixed pass (`run-minmux`): Claude, Codex and OpenCode in one tab; close text; quit →

@@ -51,7 +51,7 @@ different way to match sessions to panes.
 | Tokens           | transcript `message.usage`                      | rollout `token_count`, incl. the model's context window ✅                             | `message.updated` tokens + cost ✅                                        |
 | Name / colour    | transcript `/rename`, `/color`                  | `thread_name` in `session_index.jsonl`, **automatic** ✅; no colour                    | session title, **automatic**, then `/rename` ✅; no colour                |
 | Process identity | —                                               | hook's parent pid = the Codex process ✅                                               | `process.pid` in the plugin ✅                                            |
-| Resume           | `claude --resume <uuid>` from the session's dir | `codex resume <id>` ✅ (from another folder ❓ S1-f)                                   | `opencode --session <id>` ✅                                              |
+| Resume           | `claude --resume <uuid>` from the session's dir | `codex resume <id>` ✅ (from another folder ✅ S1-f)                                   | `opencode --session <id>` ✅                                              |
 
 **Key finding.** Codex adopted Claude's hook contract, so the Claude pipeline carries over
 almost unchanged. OpenCode is different but the richest: we write the plugin, so we choose
@@ -245,12 +245,15 @@ adapter; the badge can show context fill when the window is known.
 adapter (watched file, shared index, or pushed by the plugin). **D3:** show the name always;
 colour only from a name the user set.
 
-- **Codex.** `thread_name` from the shared index file (one watcher for all panes; Codex home
-  derived from `transcript_path`). Names are automatic, so **no colour until S1-g** shows how
-  to tell a user rename.
+- **Codex.** `thread_name` from the shared index file (read once for all panes; Codex home
+  derived from `transcript_path`). Codex writes a thread's first name itself and a `/rename`
+  appends another (S1-g ✅), so a later different name is the user's and colours the pane. A
+  rename before the first turn ends reads as automatic (known limit).
 - **OpenCode.** Title changes go default → automatic → user. main decides "user-named" from
-  the order (a change before any prompt is the user's) and **persists** it with the session,
-  so it survives a resume. Limit: a rename made outside minmux comes back uncoloured.
+  the order (OpenCode only titles a session on its placeholder, after a prompt; any other
+  change is the user's) and **persists** it per session (`agent-names.json`), so it survives
+  a resume. Limits: a rename made outside minmux comes back uncoloured, and one made while a
+  prompted session is still on the placeholder reads as OpenCode's.
 
 ### F13. Last reply snippet
 
@@ -268,7 +271,8 @@ signal Claude's). **Plan:** resume rules per adapter; labels and picker command 
 files per §4.5.
 
 - **Codex.** `codex resume <id>`, after `cd` to the recorded folder. Permission mode not
-  restored in v1. Confirm: the same session id starting again. ❓ S1-f before PR #7.
+  restored in v1. Confirm: the same session id starting again, which Codex sends with the first
+  message (S1-f ✅): the banner says it's waiting for one.
 - **OpenCode.** `MINMUX_RESUME_SESSION=<id> opencode --session <id>` (ids `ses_` + 26
   characters ✅), after `cd` to the session directory. Reopening emits no session event, so the
   plugin asks OpenCode itself at startup (`client.session.get`) and starts the session at once
@@ -358,8 +362,9 @@ sub-agent) and `codex-tui.jsonl` (16: approval, Esc interrupt, stand-in user hoo
   session that never sent SessionStart. `plugin_hooks` is removed (no plugin-bundled hooks).
   SessionEnd is run synchronously and clamped to 3 s; Interrupt is clamped to 3 s.
 - Thread names are automatic; Codex prints `codex resume <id>` on exit.
-- ❓ Open: S1-e (quoting on native Windows / WSL), S1-f (`codex resume` from another folder),
-  S1-g (telling a user rename from an automatic name). They block PR #7 and the Windows part
+- ✅ S1-f (`codex resume` works from another folder; the session starts with the first message)
+  and S1-g (a `/rename` appends a second index line) were settled for PR #7. ❓ Still open:
+  S1-e (quoting on native Windows / WSL), which blocks the Windows part
   of PR #5.
 
 ### S2 — OpenCode plugin (2026-10-01, OpenCode 1.18.34, sandboxed XDG dirs)

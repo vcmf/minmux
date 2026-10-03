@@ -104,8 +104,9 @@ reopen it. There is no global config to edit: minmux only wires the panes it lau
 started outside minmux do not show up. Each integration can be switched off in Settings.
 
 - **Claude Code** works with no setup at all.
-- **Codex** asks you to approve minmux's hooks once. When it does, minmux shows a strip in the
-  pane: type `/hooks` in Codex and press `t`.
+- **Codex** asks you to approve minmux's hooks once (and again when a minmux update changes
+  them). When it does, minmux shows a strip in the pane: type `/hooks` in Codex and press `t`.
+  Codex is wired in zsh and bash panes.
 - **OpenCode** works with no setup: minmux adds a small plugin to OpenCode in its panes, next to
   your own plugins.
 

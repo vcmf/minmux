@@ -129,7 +129,7 @@ rules also in `electron/CLAUDE.md` (loaded on demand). Design detail in `docs/AR
 - **`/color` + `/rename` live only in Claude's transcript**; slash commands fire no hook. → GOTCHAS #claude-transcript
 - **Relaunch resumes agent sessions** (Claude, Codex, OpenCode) from a hook-fed ledger: any
   SessionEnd while running clears an entry; a quit freezes it first; one shot per session. → GOTCHAS #resume
-- **Codex's hooks need a one-time `/hooks` approval** in Codex; minmux reads Codex's own trust
+- **Codex's hooks need a `/hooks` approval** in Codex (per profile, again when they change); minmux reads Codex's own trust
   records to know, and its hook must stay `exec node …` (the pid is Codex). → GOTCHAS #codex
 - **OpenCode is armed by a plugin** merged into the user's `OPENCODE_CONFIG_CONTENT`; it runs
   inside OpenCode (never await; no backticks in its source). It fires nothing on quit, so main
