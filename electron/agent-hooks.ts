@@ -28,6 +28,13 @@ export interface HookWatcherOptions {
 
 const MAX_DROP_BYTES = 1024 * 1024 // ignore a pathologically large drop (bound main memory)
 
+/** A drop's file name: `<pane>.<pid>.<ts>.<rand>.json` (anything else is a temp or a claim). */
+const isDropName = (p: string): boolean => p.endsWith(".json")
+
+/** Not a drop: chokidar doesn't even poll it (folders pass: they're what is watched). */
+export const notADrop = (p: string, st?: { isFile(): boolean }): boolean =>
+  !!st?.isFile() && !isDropName(p)
+
 /** Watch each agent's folder under `dir` for event files; claim + parse + delete each,
  *  normalise it with its folder's normaliser (tagging the pane id from the filename), and
  *  forward coalesced batches. A periodic sweep re-scans the dir so a burst
@@ -65,7 +72,7 @@ export async function startHookWatcher(opts: HookWatcherOptions): Promise<HookWa
   // Claim a drop by renaming it (atomic) → only one of {watcher, sweep} wins, so an event
   // is never delivered twice. Size-cap it, parse, emit, then remove the claimed file.
   const ingest = (file: string) => {
-    if (!file.endsWith(".json")) return // skip our own .rd claim files + anything else
+    if (!isDropName(file)) return // skip our own .rd claim files + anything else
     // Only `<dir>/<known agent>/<drop>.json`: the folder names the agent; a file straight in
     // the root, a deeper one or an unknown folder is not ours (left alone).
     const agent = byFolder.get(path.dirname(path.resolve(file)))
@@ -117,7 +124,7 @@ export async function startHookWatcher(opts: HookWatcherOptions): Promise<HookWa
       void fs.promises
         .readdir(folder)
         .then((files) => {
-          for (const f of files) if (f.endsWith(".json")) ingest(path.join(folder, f))
+          for (const f of files) if (isDropName(f)) ingest(path.join(folder, f))
         })
         .catch(() => {})
   }
@@ -130,6 +137,7 @@ export async function startHookWatcher(opts: HookWatcherOptions): Promise<HookWa
   const watcher = watch(folders, {
     ignoreInitial: true,
     depth: 0,
+    ignored: notADrop,
     awaitWriteFinish: { stabilityThreshold: 30, pollInterval: 10 },
   })
   watcher.on("add", ingest)

@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest"
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
-import { startHookWatcher } from "./agent-hooks"
+import { notADrop, startHookWatcher } from "./agent-hooks"
 import { normalizeHookEvent } from "./agents/claude"
 import type { AgentEvent } from "../src/lib/agent-graph"
 
@@ -52,6 +52,19 @@ describe("normalizeHookEvent", () => {
     expect(normalizeHookEvent({ session_id: "s1" })).toBeNull() // no event name
     expect(normalizeHookEvent({ hook_event_name: "Stop" })).toBeNull() // no session id
     expect(normalizeHookEvent(null)).toBeNull()
+  })
+})
+
+describe("notADrop (what the watcher doesn't even poll)", () => {
+  const file = { isFile: () => true }
+  const folder = { isFile: () => false }
+  it("any file but a .json drop: a writer's temp file, our claim files, anything else", () => {
+    expect(notADrop("/r/opencode/.pane.1.2.a.tmp", file)).toBe(true)
+    expect(notADrop("/r/claude/pane.1.2.a.json.rd", file)).toBe(true)
+    expect(notADrop("/r/claude/.DS_Store", file)).toBe(true)
+    expect(notADrop("/r/claude/pane.1.2.a.json", file)).toBe(false)
+    expect(notADrop("/r/claude", folder)).toBe(false) // its folders are watched
+    expect(notADrop("/r/claude/x.tmp")).toBe(false) // no stats yet: asked again with them
   })
 })
 
