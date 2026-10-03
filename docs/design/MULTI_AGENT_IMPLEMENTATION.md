@@ -68,7 +68,8 @@ Results in `MULTI_AGENT.md` §9; captured streams in `src/test/fixtures/agents/`
   another folder) and S1-g (user rename vs automatic name), both before PR #7.
 - **S2 OpenCode plugin** (2026-10-01): inline config merges plugins, two-level tree by default,
   no quit event, resume visible only as the plugin starting, renames detectable by order.
-  **Open:** whether `opencode --session <bad id>` exits (before PR #11).
+  `opencode --session <bad id>` prints "Session not found" and exits 1 at once (checked for
+  PR #11, OpenCode 1.18.34).
 - **S3 Terminal ergonomics** (1–2 h, in the dev build, any time before Phase 4): Shift+Enter,
   image paste, light/dark, mouse + click-to-open, titles, bell / OSC 9, focus across splits in
   both TUIs. Code only if something breaks.

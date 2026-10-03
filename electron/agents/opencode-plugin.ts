@@ -221,6 +221,24 @@ export const MinmuxPlugin = async (ctx) => {
   }
 
   drop({ e: "started", directory: base })
+  // A resume (minmux typed MINMUX_RESUME_SESSION=<id> opencode --session <id>): OpenCode reports
+  // nothing until the first prompt, so ask it whether that session exists and start it now —
+  // OpenCode's own answer, not a guess (a wrong id: no such session, and OpenCode exits 1).
+  // Not awaited; the TUI's worker doesn't see --session in its argv, hence the env.
+  const resumed = process.env.MINMUX_RESUME_SESSION
+  delete process.env.MINMUX_RESUME_SESSION // not for what it runs (a nested opencode run)
+  const client = ctx && ctx.client && ctx.client.session
+  if (resumed && /^ses_[A-Za-z0-9]{20,40}$/.test(resumed) && client && client.get) {
+    Promise.resolve(client.get({ path: { id: resumed } }))
+      .then((r) => {
+        const info = r && r.data
+        // Not if the user moved on meanwhile (/new, a pick): a late answer mustn't take over.
+        if (!info || info.id !== resumed || (active !== undefined && active !== resumed)) return
+        onSession(info, false)
+        begin(resumed, "seen")
+      })
+      .catch(() => {})
+  }
   return {
     event: (input) => {
       try {

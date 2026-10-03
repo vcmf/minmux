@@ -14,6 +14,8 @@ export type { ResolvePath }
 export interface SessionRules {
   /** The command that resumes this entry's session; null if its id can't be trusted. */
   resumeCommand(e: LedgerEntry, allowBypass: boolean): string | null
+  /** Env for that command (POSIX shells type it as `K=V command`; others go without). */
+  resumeEnv?(e: LedgerEntry): Record<string, string>
   /** Does `cwd` belong to the session filed at `transcriptPath`? undefined = can't tell. */
   cwdFits(cwd: string | undefined, transcriptPath: string | undefined): boolean | undefined
   /** A new session while one of this agent's leads the pane: a switch (vs a background agent)? */
@@ -26,7 +28,7 @@ export interface SessionRules {
 export interface AgentShell {
   zsh: string[]
   bash: string[]
-  env: string[] // every per-pane env name the agent's adapter sets (scrubbed from children)
+  env: string[] // every minmux env name that may reach the agent (arming, resume): scrubbed from children
   wslenv: string[] // the ones WSL must forward, with their WSLENV flags
   /** The user's own vars the adapter adds to, each with how to take a minmux's part back out
    *  (undefined: nothing of theirs left). Cleaned, never scrubbed: theirs is in it. */

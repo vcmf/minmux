@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest"
-import { isPosixShell, sessionLabel, withCd } from "./resume"
+import { isPosixShell, sessionLabel, withCd, withEnv } from "./resume"
 
 describe("resume helpers", () => {
   it("withCd single-quotes the path (a hook-supplied path can't break out)", () => {
@@ -19,5 +19,15 @@ describe("resume helpers", () => {
       "x",
     )
     expect(sessionLabel({ status: "resume", sessionId: "abc-def", cwd: "/" })).toBe("abc")
+  })
+})
+
+describe("withEnv", () => {
+  it("prefixes the env, quoted; leaves out names that aren't env names", () => {
+    expect(withEnv({ MINMUX_RESUME_SESSION: "ses_a" }, "opencode --session ses_a")).toBe(
+      "MINMUX_RESUME_SESSION='ses_a' opencode --session ses_a",
+    )
+    expect(withEnv({ "A;rm -rf ~": "x", B: "it's" }, "cmd")).toBe(`B='it'\\''s' cmd`)
+    expect(withEnv(undefined, "cmd")).toBe("cmd")
   })
 })

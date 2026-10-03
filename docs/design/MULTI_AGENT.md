@@ -267,9 +267,14 @@ files per §4.5.
 
 - **Codex.** `codex resume <id>`, after `cd` to the recorded folder. Permission mode not
   restored in v1. Confirm: the same session id starting again. ❓ S1-f before PR #7.
-- **OpenCode.** `opencode --session <id>` (ids `ses_` + 26 characters ✅), after `cd` to the
-  session directory. Reopening emits no session event, so the confirm is "OpenCode started in
-  this pane and kept running"; ❓ that a bad id makes it exit.
+- **OpenCode.** `MINMUX_RESUME_SESSION=<id> opencode --session <id>` (ids `ses_` + 26
+  characters ✅), after `cd` to the session directory. Reopening emits no session event, so the
+  plugin asks OpenCode itself at startup (`client.session.get`) and starts the session at once
+  when it exists: an ordinary SessionStart confirms the resume, like Claude's (in a shell
+  without `K=V` prefixes the id isn't passed, and the first prompt confirms it). The env carries
+  the id because the TUI's plugin worker doesn't see `--session` in its argv (PR #11 spike). A
+  bad id: the lookup finds nothing and OpenCode exits 1 ✅ ("Session not found"). Its picker is
+  `/sessions` in the TUI, so the banner offers "Open OpenCode (/sessions)".
 
 ### F16. Attention + notifications
 

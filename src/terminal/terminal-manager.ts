@@ -21,7 +21,7 @@ import { webglPanes, shouldRebuildAtlas } from "../lib/renderer-policy"
 import { appShortcut, keyAction } from "../lib/terminal-keys"
 import { gridChanged, type Grid } from "../lib/resize"
 import { findFilePaths } from "../lib/file-links"
-import { isPosixShell, withCd } from "../lib/resume"
+import { isPosixShell, withCd, withEnv } from "../lib/resume"
 import {
   canType,
   isSuspendCode,
@@ -1015,7 +1015,7 @@ function typeResume(id: string, entry: Entry) {
   const posix = isPosixShell(useStore.getState().sessions[id]?.command ?? "")
   // POSIX shells: always `cd` into the session's project dir first — `claude --resume` only
   // finds that project's transcripts, and a Retry may come after the user cd'd elsewhere.
-  const command = posix ? withCd(r.plan.cwd, r.plan.command) : r.plan.command
+  const command = posix ? withCd(r.plan.cwd, withEnv(r.plan.env, r.plan.command)) : r.plan.command
   entry.flow.agentSeen = true
   ipc.ptyWrite(id, `${posix ? "\x15" : ""}${command}\r`)
   // The ledger entry is NOT consumed here: a quit/crash during the confirmation window must

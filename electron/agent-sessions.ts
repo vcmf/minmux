@@ -263,7 +263,14 @@ export class SessionLedger {
         if (!e || isLive(id)) return
         const rules = this.rules[agentOf(e)]
         const command = rules?.resumeCommand(e, allowBypass) ?? null
-        const base = { agent: agentOf(e), cwd: e.cwd, name: e.name, sessionId: e.sessionId }
+        const env = rules?.resumeEnv?.(e)
+        const base = {
+          agent: agentOf(e),
+          cwd: e.cwd,
+          name: e.name,
+          sessionId: e.sessionId,
+          ...(env ? { env } : {}),
+        }
         if (!rules || !command) {
           out[id] = { ...base, status: "skip", reason: "unrecognised session id" }
           return
