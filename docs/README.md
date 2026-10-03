@@ -6,13 +6,15 @@ Code — nested `electron/CLAUDE.md` too).
 
 ## Reference (living docs)
 
-| Doc                                  | What                                                                                 |
-| ------------------------------------ | ------------------------------------------------------------------------------------ |
-| [ARCHITECTURE.md](./ARCHITECTURE.md) | System design, seams, decisions (incl. the Tauri→Electron pivot, Appendix A daemon). |
-| [ROADMAP.md](./ROADMAP.md)           | Milestones + status. Update as we go.                                                |
-| [GOTCHAS.md](./GOTCHAS.md)           | The non-obvious traps, with the _why_. Each has a one-line flag in `CLAUDE.md`.      |
-| [TESTING.md](./TESTING.md)           | Where tests live, patterns, gates; real-app checks via the `run-minmux` skill.       |
-| [PERF.md](./PERF.md)                 | Performance methodology + baselines (`MINMUX_PERF=1` harness).                       |
+| Doc                                    | What                                                                                 |
+| -------------------------------------- | ------------------------------------------------------------------------------------ |
+| [ARCHITECTURE.md](./ARCHITECTURE.md)   | System design, seams, decisions (incl. the Tauri→Electron pivot, Appendix A daemon). |
+| [ROADMAP.md](./ROADMAP.md)             | Milestones + status. Update as we go.                                                |
+| [GOTCHAS.md](./GOTCHAS.md)             | The non-obvious traps, with the _why_. Each has a one-line flag in `CLAUDE.md`.      |
+| [TESTING.md](./TESTING.md)             | Where tests live, patterns, gates; real-app checks via the `run-minmux` skill.       |
+| [PERF.md](./PERF.md)                   | Performance methodology + baselines (`MINMUX_PERF=1` harness).                       |
+| [CONFIGURATION.md](./CONFIGURATION.md) | Every `settings.json` key, with its default (user-facing; linked from the README).   |
+| [SSH.md](./SSH.md)                     | SSH hosts: picker, splits, reconnect, shell integration (user-facing).               |
 
 ## Research
 
