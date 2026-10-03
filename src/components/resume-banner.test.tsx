@@ -131,6 +131,16 @@ describe("ResumeBanner — waiting (still running, unconfirmed)", () => {
 })
 
 describe("ResumeBanner — OpenCode", () => {
+  it("waiting: confirms with a message — no hooks to approve (that's Codex's)", () => {
+    show({
+      phase: "waiting",
+      plan: { ...plan, agent: "opencode", command: "opencode --session x" },
+    })
+    const text = screen.getByRole("status").textContent
+    expect(text).toContain("OpenCode confirms when you send a message.")
+    expect(text).not.toContain("hooks")
+  })
+
   const oc: ResumePlan = {
     agent: "opencode",
     status: "resume",

@@ -31,3 +31,13 @@ describe("withEnv", () => {
     expect(withEnv(undefined, "cmd")).toBe("cmd")
   })
 })
+
+describe("sessionLabel", () => {
+  const plan = { status: "resume" as const, cwd: "/r" }
+  it("its name, else its id's first block or start, else 'session'", () => {
+    expect(sessionLabel({ ...plan, sessionId: "x", name: " mine " })).toBe("mine")
+    expect(sessionLabel({ ...plan, sessionId: "7fe87f63-8ccf-437e" })).toBe("7fe87f63")
+    expect(sessionLabel({ ...plan, sessionId: "ses_f02cfead3ffecevT8e" })).toBe("ses_f02cfead")
+    expect(sessionLabel({ ...plan, sessionId: "" })).toBe("session")
+  })
+})
