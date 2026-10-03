@@ -2,7 +2,7 @@
   <img src="docs/media/icon.png" alt="minmux" width="128" height="128" />
 </p>
 
-<h1 align="center">minmux</h1>
+<h1 align="center"><a href="https://minmux.dev">minmux</a></h1>
 
 <p align="center">A minimal terminal for agentic coding, built to keep you in the loop (yes we love reading the code).</p>
 
