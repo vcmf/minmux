@@ -2,7 +2,8 @@ import { describe, it, expect } from "vitest"
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
-import { startHookWatcher, normalizeHookEvent } from "./agent-hooks"
+import { notADrop, startHookWatcher } from "./agent-hooks"
+import { normalizeHookEvent } from "./agents/claude"
 import type { AgentEvent } from "../src/lib/agent-graph"
 
 const waitUntil = async (cond: () => boolean, ms = 4000) => {
@@ -26,6 +27,7 @@ describe("normalizeHookEvent", () => {
       "pane-7",
     )
     expect(ev).toEqual({
+      agent: "claude",
       event: "PreToolUse",
       sessionId: "s1",
       paneId: "pane-7",
@@ -33,6 +35,7 @@ describe("normalizeHookEvent", () => {
       agentType: "Explore",
       cwd: "/repo",
       toolName: "Read",
+      toolKey: expect.stringMatching(/^Read:[0-9a-f]{16}$/), // the call's identity, no content
       filePath: "/repo/x.ts",
       message: undefined,
     })
@@ -52,13 +55,39 @@ describe("normalizeHookEvent", () => {
   })
 })
 
+describe("notADrop (what the watcher doesn't even poll)", () => {
+  const file = { isFile: () => true }
+  const folder = { isFile: () => false }
+  it("any file but a .json drop: a writer's temp file, our claim files, anything else", () => {
+    expect(notADrop("/r/opencode/.pane.1.2.a.tmp", file)).toBe(true)
+    expect(notADrop("/r/claude/pane.1.2.a.json.rd", file)).toBe(true)
+    expect(notADrop("/r/claude/.DS_Store", file)).toBe(true)
+    expect(notADrop("/r/claude/pane.1.2.a.json", file)).toBe(false)
+    expect(notADrop("/r/claude", folder)).toBe(false) // its folders are watched
+    expect(notADrop("/r/claude/x.tmp")).toBe(false) // no stats yet: asked again with them
+  })
+})
+
 describe("startHookWatcher", () => {
-  it("parses a dropped event file, tags the pane from its name, deletes it, and batches", async () => {
+  // A drop root with one folder per agent, as main lays it out.
+  const makeRoot = (...agents: string[]) => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "minmux-watch-"))
+    for (const a of agents) fs.mkdirSync(path.join(dir, a))
+    return dir
+  }
+  const claude = { claude: normalizeHookEvent }
+
+  it("parses a dropped event file, tags the pane from its name, deletes it, and batches", async () => {
+    const dir = makeRoot("claude")
     const batches: AgentEvent[][] = []
-    const w = await startHookWatcher({ dir, onBatch: (b) => batches.push(b), coalesceMs: 10 })
+    const w = await startHookWatcher({
+      dir,
+      agents: claude,
+      onBatch: (b) => batches.push(b),
+      coalesceMs: 10,
+    })
     try {
-      const file = path.join(dir, "pane-9.111.222.abc.json")
+      const file = path.join(dir, "claude", "pane-9.111.222.abc.json")
       fs.writeFileSync(
         file,
         JSON.stringify({ hook_event_name: "SessionStart", session_id: "s1", cwd: "/repo" }),
@@ -66,13 +95,156 @@ describe("startHookWatcher", () => {
       await waitUntil(() => batches.length > 0)
       expect(batches.flat()).toHaveLength(1)
       expect(batches.flat()[0]).toMatchObject({
+        agent: "claude",
         event: "SessionStart",
         sessionId: "s1",
         paneId: "pane-9", // parsed from the filename prefix
         cwd: "/repo",
       })
       // the drop file is consumed (read + deleted)
-      await waitUntil(() => fs.readdirSync(dir).length === 0)
+      await waitUntil(() => fs.readdirSync(path.join(dir, "claude")).length === 0)
+    } finally {
+      await w.close()
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it("normalises each folder with its own agent's normaliser", async () => {
+    const dir = makeRoot("claude", "codex")
+    const seen: AgentEvent[] = []
+    const codex = (raw: unknown, paneId?: string) => {
+      const ev = normalizeHookEvent(raw, paneId)
+      return ev && { ...ev, agent: "codex" as const }
+    }
+    const w = await startHookWatcher({
+      dir,
+      agents: { ...claude, codex },
+      coalesceMs: 10,
+      onBatch: (b) => seen.push(...b),
+    })
+    try {
+      for (const a of ["claude", "codex"])
+        fs.writeFileSync(
+          path.join(dir, a, `p.1.0.${a}.json`),
+          JSON.stringify({ hook_event_name: "Stop", session_id: a }),
+        )
+      await waitUntil(() => seen.length === 2)
+      expect(Object.fromEntries(seen.map((e) => [e.sessionId, e.agent]))).toEqual({
+        claude: "claude",
+        codex: "codex",
+      })
+    } finally {
+      await w.close()
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it("accepts a root given with a trailing separator", async () => {
+    const dir = makeRoot("claude")
+    const seen: AgentEvent[] = []
+    const w = await startHookWatcher({
+      dir: dir + path.sep,
+      agents: claude,
+      coalesceMs: 10,
+      onBatch: (b) => seen.push(...b),
+    })
+    try {
+      fs.writeFileSync(
+        path.join(dir, "claude", "p.1.0.x.json"),
+        JSON.stringify({ hook_event_name: "Stop", session_id: "t" }),
+      )
+      await waitUntil(() => seen.length === 1)
+    } finally {
+      await w.close()
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it("leaves files in the root, in unknown folders and deeper alone", async () => {
+    const dir = makeRoot("claude", "other")
+    fs.mkdirSync(path.join(dir, "claude", "deep"))
+    const seen: AgentEvent[] = []
+    const w = await startHookWatcher({
+      dir,
+      agents: claude,
+      coalesceMs: 10,
+      sweepMs: 20,
+      onBatch: (b) => seen.push(...b),
+    })
+    const stray = [
+      path.join(dir, "p.1.0.root.json"),
+      path.join(dir, "other", "p.1.0.other.json"),
+      path.join(dir, "claude", "deep", "p.1.0.deep.json"),
+    ]
+    try {
+      const body = JSON.stringify({ hook_event_name: "Stop", session_id: "x" })
+      for (const f of stray) fs.writeFileSync(f, body)
+      fs.writeFileSync(path.join(dir, "claude", "p.1.0.ok.json"), body) // the one that counts
+      await waitUntil(() => seen.length === 1)
+      await new Promise((r) => setTimeout(r, 120)) // several sweeps: still nothing else
+      expect(seen).toHaveLength(1)
+      for (const f of stray) expect(fs.existsSync(f)).toBe(true) // not claimed, not deleted
+    } finally {
+      await w.close()
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it("returns at once with nothing to watch (no agent armed) instead of waiting forever", async () => {
+    const dir = makeRoot()
+    const w = await Promise.race([
+      startHookWatcher({ dir, agents: {}, onBatch: () => {} }),
+      new Promise<null>((r) => setTimeout(() => r(null), 1000)),
+    ])
+    expect(w).not.toBeNull()
+    await w?.close()
+    fs.rmSync(dir, { recursive: true, force: true })
+  })
+
+  it("tags each event with the folder it came from, whatever the normaliser says", async () => {
+    const dir = makeRoot("codex")
+    const seen: AgentEvent[] = []
+    const w = await startHookWatcher({
+      dir,
+      agents: { codex: normalizeHookEvent }, // Claude's normaliser: it says "claude"
+      coalesceMs: 10,
+      onBatch: (b) => seen.push(...b),
+    })
+    try {
+      fs.writeFileSync(
+        path.join(dir, "codex", "p.4242.0.x.json"),
+        JSON.stringify({ hook_event_name: "Stop", session_id: "s" }),
+      )
+      await waitUntil(() => seen.length === 1)
+      expect(seen[0]!.agent).toBe("codex")
+      expect(seen[0]!.pid).toBe(4242) // the agent process, from the drop's name
+    } finally {
+      await w.close()
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it("survives a normaliser that throws", async () => {
+    const dir = makeRoot("claude")
+    const seen: AgentEvent[] = []
+    let calls = 0
+    const flaky = (raw: unknown, paneId?: string) => {
+      if (calls++ === 0) throw new Error("boom")
+      return normalizeHookEvent(raw, paneId)
+    }
+    const w = await startHookWatcher({
+      dir,
+      agents: { claude: flaky },
+      coalesceMs: 10,
+      onBatch: (b) => seen.push(...b),
+    })
+    try {
+      const body = (id: string) => JSON.stringify({ hook_event_name: "Stop", session_id: id })
+      fs.writeFileSync(path.join(dir, "claude", "p.1.0.a.json"), body("a"))
+      await waitUntil(() => calls === 1)
+      fs.writeFileSync(path.join(dir, "claude", "p.1.1.b.json"), body("b"))
+      await waitUntil(() => seen.length === 1)
+      expect(seen[0]!.sessionId).toBe("b")
     } finally {
       await w.close()
       fs.rmSync(dir, { recursive: true, force: true })
@@ -80,23 +252,26 @@ describe("startHookWatcher", () => {
   })
 
   it("delivers every event under a burst (sweep backs up the OS watcher)", async () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "minmux-watch-"))
-    const seen = new Set<string>()
+    const dir = makeRoot("claude")
+    const seen: string[] = []
     const w = await startHookWatcher({
       dir,
+      agents: claude,
       coalesceMs: 10,
       sweepMs: 40,
-      onBatch: (b) => b.forEach((e) => seen.add(e.sessionId)),
+      onBatch: (b) => b.forEach((e) => seen.push(e.sessionId)),
     })
     try {
       for (let i = 0; i < 60; i++) {
         fs.writeFileSync(
-          path.join(dir, `p.${i}.0.x.json`),
+          path.join(dir, "claude", `p.${i}.0.x.json`),
           JSON.stringify({ hook_event_name: "PreToolUse", session_id: "s" + i }),
         )
       }
-      await waitUntil(() => seen.size === 60, 8000)
-      expect(seen.size).toBe(60) // none dropped, none double-counted
+      await waitUntil(() => new Set(seen).size === 60, 8000)
+      await new Promise((r) => setTimeout(r, 120)) // a few more sweeps: no late duplicates
+      expect(new Set(seen).size).toBe(60) // none dropped…
+      expect(seen).toHaveLength(60) // …and each delivered exactly once (watcher + sweep claim)
     } finally {
       await w.close()
       fs.rmSync(dir, { recursive: true, force: true })
@@ -104,12 +279,17 @@ describe("startHookWatcher", () => {
   })
 
   it("skips a corrupt (non-JSON) drop without emitting", async () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "minmux-watch-"))
+    const dir = makeRoot("claude")
     const batches: AgentEvent[][] = []
-    const w = await startHookWatcher({ dir, onBatch: (b) => batches.push(b), coalesceMs: 10 })
+    const w = await startHookWatcher({
+      dir,
+      agents: claude,
+      onBatch: (b) => batches.push(b),
+      coalesceMs: 10,
+    })
     try {
-      fs.writeFileSync(path.join(dir, "pane-1.1.1.x.json"), "not json{")
-      await waitUntil(() => fs.readdirSync(dir).length === 0) // still consumed
+      fs.writeFileSync(path.join(dir, "claude", "pane-1.1.1.x.json"), "not json{")
+      await waitUntil(() => fs.readdirSync(path.join(dir, "claude")).length === 0) // consumed
       await new Promise((r) => setTimeout(r, 60)) // give any (wrong) batch a chance to fire
       expect(batches.flat()).toHaveLength(0)
     } finally {

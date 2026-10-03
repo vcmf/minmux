@@ -13,6 +13,8 @@ import {
   wslInjection,
   ZSH_ZSHRC,
   BASH_RC,
+  BASH_HOOKS,
+  ZSH_HOOKS,
 } from "./shell-integration"
 
 describe("parseWslDistros", () => {
@@ -100,6 +102,7 @@ describe("wslInjection", () => {
     expect(r?.wslenv).toEqual([
       "MINMUX_SHARE_HISTORY", // opt-out crosses the boundary
       "MINMUX_CLAUDE_SETTINGS/p", // hook settings path (path-translated)
+      "MINMUX_AGENT_EVENTS/p", // the agents' drop root (path-translated)
       "MINMUX_PANE_ID", // agents-board pane tag
       "COLORFGBG", // light/dark theme signal for agents in WSL
     ])
@@ -113,6 +116,7 @@ describe("wslInjection", () => {
     expect(r?.wslenv).toContain("ZDOTDIR")
     expect(r?.wslenv).toContain("MINMUX_ZDOTDIR")
     expect(r?.wslenv).toContain("MINMUX_CLAUDE_SETTINGS/p") // hooks reach claude inside WSL
+    expect(r?.wslenv).toContain("MINMUX_AGENT_EVENTS/p") // …and can write their drops
     expect(r?.wslenv).toContain("MINMUX_PANE_ID")
     expect(r?.wslenv).toContain("COLORFGBG") // light/dark theme signal for agents in WSL
   })
@@ -225,5 +229,24 @@ describe("buildInjection — per-profile script dir", () => {
     expect(bash.args[bash.args.length - 1]).toBe(
       path.join(os.tmpdir(), "minmux-dev", "shell-integration", "bash", "bashrc"),
     )
+  })
+})
+
+describe("agent wrappers (electron/agents)", () => {
+  const wrapper =
+    /function claude \{ command claude --settings "\$MINMUX_CLAUDE_SETTINGS" "\$@";? \}/g
+  it("go into the local zsh and bash rc once, after the user's rc and our hooks", () => {
+    expect(ZSH_ZSHRC.match(wrapper)).toHaveLength(1)
+    expect(BASH_RC.match(wrapper)).toHaveLength(1)
+    expect(ZSH_ZSHRC.indexOf("function claude")).toBeGreaterThan(
+      ZSH_ZSHRC.indexOf("__MINMUX_ZSH_HOOKS=1"),
+    )
+    expect(BASH_RC.indexOf("function claude")).toBeGreaterThan(
+      BASH_RC.indexOf("trap '__minmux_preexec'"),
+    )
+  })
+  it("stay out of the hooks an ssh host gets (no agent is armed there)", () => {
+    expect(BASH_HOOKS).not.toContain("function claude")
+    expect(ZSH_HOOKS).not.toContain("function claude")
   })
 })

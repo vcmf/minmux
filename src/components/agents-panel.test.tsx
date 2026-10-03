@@ -128,3 +128,29 @@ describe("AgentsPanel", () => {
     expect(wt?.classList.contains("through")).toBe(false)
   })
 })
+
+describe("AgentsPanel — nested sub-agents", () => {
+  it("indents each level under its parent (OpenCode's custom agents nest)", () => {
+    resetStore()
+    useStore.setState({
+      agents: reduceAgentEvents([
+        { event: "SessionStart", sessionId: "s", cwd: "/repo", paneId: "p" },
+        { event: "SubagentStart", sessionId: "s", agentId: "a", agentType: "planner" },
+        {
+          event: "SubagentStart",
+          sessionId: "s",
+          agentId: "b",
+          agentType: "explore",
+          parentAgentId: "a",
+        },
+      ]),
+    })
+    render(<AgentsPanel />)
+    const row = (t: string) => screen.getByText(t).closest(".diff-file") as HTMLElement
+    expect(row("planner").style.paddingLeft).toBe("26px")
+    expect(row("explore").style.paddingLeft).toBe("42px")
+    // Its elbow leaves from its parent's dot, not the root's spine.
+    expect(row("planner").style.getPropertyValue("--tree-x")).toBe("13px")
+    expect(row("explore").style.getPropertyValue("--tree-x")).toBe("29px")
+  })
+})

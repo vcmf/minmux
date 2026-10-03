@@ -4,6 +4,8 @@
 // state. `--profile=<name>` picks another one; a dev build also takes MINMUX_PROFILE, an
 // installed one never does (docs/GOTCHAS.md#profiles).
 
+import { AGENT_ENV_VARS, AGENT_MERGED_VARS } from "./agents"
+
 /** The installed app's profile — the plain `minmux` names and dirs. */
 export const DEFAULT_PROFILE = ""
 
@@ -52,7 +54,8 @@ export const displayName = (n: ProfileNames): string => (n.label ? `minmux (${n.
 // not inherit them: they point at the parent's hook files, pane ids and integration dir.
 const PARENT_INSTANCE_VARS = [
   "MINMUX_PROFILE",
-  "MINMUX_CLAUDE_SETTINGS",
+  ...AGENT_ENV_VARS, // each agent's paths (MINMUX_CLAUDE_SETTINGS, …)
+  "MINMUX_AGENT_EVENTS",
   "MINMUX_PANE_ID",
   "MINMUX_SHARE_HISTORY",
   "MINMUX_SHELL_INTEGRATION",
@@ -62,11 +65,21 @@ const PARENT_INSTANCE_VARS = [
 // The same vars under the app's old name: a minmux started from a pane an smterm spawned.
 const LEGACY_INSTANCE_VARS = PARENT_INSTANCE_VARS.map((k) => k.replace(/^MINMUX_/, "SMTERM_"))
 
-/** Drop a parent minmux's per-pane vars from `env` (in place); returns the names removed. */
+/** Drop a parent minmux's per-pane vars from `env` (in place); returns the names removed or cleaned. */
 export function scrubParentInstanceEnv(env: Record<string, string | undefined>): string[] {
   const removed = [...PARENT_INSTANCE_VARS, ...LEGACY_INSTANCE_VARS].filter(
     (k) => env[k] !== undefined,
   )
   for (const k of removed) delete env[k]
+  // The user's own vars an agent added to: keep theirs, take the parent's part out.
+  for (const [k, strip] of AGENT_MERGED_VARS) {
+    const v = env[k]
+    if (v === undefined) continue
+    const kept = strip(v)
+    if (kept === v) continue
+    if (kept === undefined) delete env[k]
+    else env[k] = kept
+    removed.push(k)
+  }
   return removed
 }

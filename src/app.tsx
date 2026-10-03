@@ -16,7 +16,7 @@ import { FilePreview } from "./components/file-preview"
 import { CloseConfirmDialog } from "./components/close-confirm-dialog"
 import { RightPanelResizer } from "./components/right-panel-resizer"
 import { useActiveWorkCwd, getActiveWsl } from "./lib/use-active-cwd"
-import { claudeWorkDirs, keepPrs, planGitPoll, settleInAnswers } from "./lib/agent-dirs"
+import { agentWorkDirs, keepPrs, planGitPoll, settleInAnswers } from "./lib/agent-dirs"
 import { TerminalManager } from "./terminal/terminal-manager"
 import { activeTheme, useStore } from "./store"
 import { ensureNotificationPermission } from "./lib/notify"
@@ -233,13 +233,13 @@ function App() {
       for (const ev of events) {
         // Any event proves Claude runs there (after a reload no SessionStart comes) → the
         // prompt returning later clears its icon, even if it crashes without a SessionEnd.
-        if (ev.paneId) TerminalManager.claudeActive(ev.paneId)
+        if (ev.paneId) TerminalManager.agentActive(ev.paneId)
         if (ev.event !== "SessionStart" || !ev.paneId || ev.agentId) continue
-        TerminalManager.claudeStarted(ev.paneId)
+        TerminalManager.agentStarted(ev.paneId)
         const r = useStore.getState().resume[ev.paneId]
         // "failed" too: a slow Claude can confirm after the timeout — the late success wins.
         // Only for THIS session: a fresh `claude` the user starts instead isn't a resume.
-        if (r?.phase !== "resuming" && r?.phase !== "failed") continue
+        if (r?.phase !== "resuming" && r?.phase !== "waiting" && r?.phase !== "failed") continue
         if (ev.sessionId !== r.plan.sessionId) continue
         TerminalManager.resumeSettled(ev.paneId)
         useStore.getState().setResume(ev.paneId, { phase: "resumed", plan: r.plan })
@@ -373,7 +373,7 @@ function App() {
       if (document.visibilityState === "hidden") return
       const { reqs, polled, inCwd } = planGitPoll(
         Object.values(s.sessions),
-        claudeWorkDirs(s.agents),
+        agentWorkDirs(s.agents),
         s.sidebarCollapsed,
       )
       if (reqs.length === 0) {
@@ -399,7 +399,7 @@ function App() {
     const unsub = useStore.subscribe((state, prev) => {
       if (state.sidebarCollapsed !== prev.sidebarCollapsed && !state.sidebarCollapsed) pollSoon()
       if (state.sessions === prev.sessions && state.agents === prev.agents) return
-      const work = claudeWorkDirs(state.agents) // memoized: cheap on every hook event
+      const work = agentWorkDirs(state.agents) // memoized: cheap on every hook event
       const key = Object.values(state.sessions)
         .map((x) => `${x.id}=${x.cwd ?? ""}>${work[x.id]?.cwd ?? ""}`)
         .join("|")

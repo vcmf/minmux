@@ -19,3 +19,11 @@ describe("tokenBreakdown", () => {
     )
   })
 })
+
+describe("tokenBreakdown with the model's context window (Codex)", () => {
+  it("says how full the window is", () => {
+    expect(tokenBreakdown({ context: 129200, output: 900, window: 258400 })).toBe(
+      "↑ 129k context (50% of 258k) · ↓ 900 generated",
+    )
+  })
+})

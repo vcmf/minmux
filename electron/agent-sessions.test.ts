@@ -2,7 +2,10 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest"
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
-import { SessionLedger, resumeCommand } from "./agent-sessions"
+import { SessionLedger } from "./agent-sessions"
+import { claudeSessionRules, resumeCommand } from "./agents/claude"
+import { codexSessionRules } from "./agents/codex"
+import { opencodeSessionRules } from "./agents/opencode"
 import { claudeProjectDirName } from "../src/lib/claude-project"
 import type { AgentEvent } from "../src/lib/agent-graph"
 
@@ -190,6 +193,7 @@ describe("SessionLedger.plan", () => {
     l.apply(start())
     l.setName("p1", "fix-login")
     expect((await plan(l)).p1).toEqual({
+      agent: "claude",
       status: "resume",
       sessionId: ID,
       cwd: "/repo",
@@ -469,5 +473,204 @@ describe("SessionLedger — an unverifiable restart never costs a resumable fold
     l.apply(start({ cwd: long, transcriptPath: t }))
     l.apply(start({ cwd: "/tmp/x", transcriptPath: t, source: "compact" }))
     expect(l.get("p1")?.cwd).toBe(long)
+  })
+})
+
+describe("per-agent rules and files (multi-agent)", () => {
+  // A second agent with permissive rules: any id, no folder check, `/new` = a switch.
+  const OTHER = "11111111-2222-4333-8444-555555555555"
+  const otherRules = {
+    resumeCommand: (e: { sessionId: string }) => `other resume ${e.sessionId}`,
+    cwdFits: () => undefined,
+    isSwitch: (ev: AgentEvent) => ev.source === "new",
+  }
+  const rules = { claude: claudeSessionRules, codex: otherRules }
+  const codexStart = (o: Partial<AgentEvent> = {}) =>
+    start({ agent: "codex", sessionId: OTHER, transcriptPath: undefined, ...o })
+  let dir = ""
+  let file = ""
+  beforeEach(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), "minmux-ledger-"))
+    file = path.join(dir, "agent-sessions.json")
+  })
+  afterEach(() => fs.rmSync(dir, { recursive: true, force: true }))
+  const read = (f: string) => JSON.parse(fs.readFileSync(path.join(dir, f), "utf8"))
+
+  it("keeps each agent's entries in its own file; Claude's file has no agent field", () => {
+    const l = new SessionLedger(file, Date.now, rules)
+    l.apply(start({ paneId: "p1" }))
+    l.apply(codexStart({ paneId: "p2" }))
+    l.flushSync()
+    expect(Object.keys(read("agent-sessions.json"))).toEqual(["p1", "__minmux"])
+    expect(read("agent-sessions.json").p1).not.toHaveProperty("agent")
+    expect(Object.keys(read("agent-sessions.codex.json"))).toEqual(["p2"])
+    const back = new SessionLedger(file, Date.now, rules)
+    expect(back.get("p1")).toMatchObject({ agent: "claude", sessionId: ID, carried: true })
+    expect(back.get("p2")).toMatchObject({ agent: "codex", sessionId: OTHER, carried: true })
+  })
+
+  it("an older build (Claude-only rules) neither loads nor rewrites another agent's file", () => {
+    const l = new SessionLedger(file, Date.now, rules)
+    l.apply(codexStart({ paneId: "p2" }))
+    l.flushSync()
+    const before = fs.readFileSync(path.join(dir, "agent-sessions.codex.json"), "utf8")
+    const old = new SessionLedger(file, Date.now, { claude: claudeSessionRules })
+    expect(old.get("p2")).toBeUndefined()
+    old.apply(start({ paneId: "p1" }))
+    old.flushSync()
+    expect(fs.readFileSync(path.join(dir, "agent-sessions.codex.json"), "utf8")).toBe(before)
+  })
+
+  it("the newest entry wins when two files name the same pane", () => {
+    const entry = (sessionId: string, updatedAt: number) => ({ sessionId, cwd: "/repo", updatedAt })
+    const marker = { __minmux: { v: 1 } } // written by this build, not an older one
+    fs.writeFileSync(file, JSON.stringify({ p1: entry(ID, 100), ...marker }))
+    fs.writeFileSync(
+      path.join(dir, "agent-sessions.codex.json"),
+      JSON.stringify({ p1: entry(OTHER, 200) }),
+    )
+    expect(new SessionLedger(file, Date.now, rules).get("p1")).toMatchObject({
+      agent: "codex",
+      sessionId: OTHER,
+    })
+    fs.writeFileSync(file, JSON.stringify({ p1: entry(ID, 300), ...marker }))
+    expect(new SessionLedger(file, Date.now, rules).get("p1")).toMatchObject({
+      agent: "claude",
+      sessionId: ID,
+    })
+  })
+
+  it("moving a pane's lead to another agent rewrites both files in one flush", () => {
+    const l = new SessionLedger(file, Date.now, rules)
+    l.apply(start())
+    l.apply(end())
+    l.apply(codexStart())
+    l.flushSync()
+    expect(Object.keys(read("agent-sessions.json"))).toEqual(["__minmux"])
+    expect(Object.keys(read("agent-sessions.codex.json"))).toEqual(["p1"])
+  })
+
+  it("another agent's session while a lead is live is a background agent, whatever it calls a switch", () => {
+    const l = new SessionLedger(null, Date.now, rules)
+    l.apply(start())
+    l.apply(codexStart({ source: "new" })) // a switch for codex, but Claude leads
+    expect(l.get("p1")?.sessionId).toBe(ID)
+    expect(l.isNested("p1", OTHER)).toBe(true)
+  })
+
+  it("an agent's own switch rule only applies to its own lead", () => {
+    const l = new SessionLedger(null, Date.now, rules)
+    l.apply(codexStart())
+    const NEXT = "99999999-2222-4333-8444-555555555555"
+    l.apply(codexStart({ sessionId: NEXT, source: "startup" }))
+    expect(l.get("p1")?.sessionId).toBe(OTHER) // not a switch: nested
+    l.apply(codexStart({ sessionId: NEXT, source: "new" }))
+    expect(l.get("p1")?.sessionId).toBe(OTHER) // still nested: it started as a background agent
+    const THIRD = "88888888-2222-4333-8444-555555555555"
+    l.apply(codexStart({ sessionId: THIRD, source: "new" }))
+    expect(l.get("p1")?.sessionId).toBe(THIRD) // a fresh session that is a switch replaces it
+  })
+
+  it("Codex: a new thread in the leading process switches; another process's is nested", () => {
+    const l = new SessionLedger(null, Date.now, {
+      claude: claudeSessionRules,
+      codex: codexSessionRules,
+    })
+    const T2 = "22222222-2222-4333-8444-555555555555"
+    const T3 = "33333333-2222-4333-8444-555555555555"
+    l.apply(codexStart({ pid: 100 }))
+    l.apply(codexStart({ sessionId: T2, pid: 100 })) // `/new` in the same TUI
+    expect(l.get("p1")?.sessionId).toBe(T2)
+    l.apply(codexStart({ sessionId: T3, pid: 200 })) // `codex exec` started by the agent
+    expect(l.get("p1")?.sessionId).toBe(T2)
+    expect(l.isNested("p1", T3)).toBe(true)
+  })
+
+  it("never records an agent it has no rules for", () => {
+    const l = new SessionLedger(null, Date.now, { claude: claudeSessionRules })
+    l.apply(codexStart())
+    expect(l.get("p1")).toBeUndefined()
+  })
+
+  it("ignores other agents' files once an older build rewrote Claude's (no marker)", () => {
+    const l = new SessionLedger(file, Date.now, rules)
+    l.apply(codexStart({ paneId: "p2" }))
+    l.flushSync()
+    expect(new SessionLedger(file, Date.now, rules).get("p2")).toBeDefined()
+    // An older build rewrites only its own entries: the marker is gone.
+    fs.writeFileSync(file, JSON.stringify({ p1: { sessionId: ID, cwd: "/repo", updatedAt: 1 } }))
+    const after = new SessionLedger(file, Date.now, rules)
+    expect(after.get("p2")).toBeUndefined()
+    expect(after.get("p1")?.sessionId).toBe(ID)
+  })
+
+  it("keeps another agent's file that only missed a write (marker still there)", () => {
+    const l = new SessionLedger(file, Date.now, rules)
+    l.apply(codexStart({ paneId: "p2" }))
+    l.flushSync()
+    const old = Date.now() / 1000 - 3600
+    fs.utimesSync(path.join(dir, "agent-sessions.codex.json"), old, old) // an old, failed write
+    expect(new SessionLedger(file, Date.now, rules).get("p2")?.sessionId).toBe(OTHER)
+  })
+
+  it("an older build's loader skips the marker (it has no session id)", () => {
+    const l = new SessionLedger(file, Date.now, { claude: claudeSessionRules })
+    l.apply(start())
+    l.flushSync()
+    const raw = read("agent-sessions.json") as Record<string, { sessionId?: unknown }>
+    const kept = Object.entries(raw).filter(([, e]) => e && typeof e.sessionId === "string")
+    expect(kept.map(([k]) => k)).toEqual(["p1"])
+  })
+
+  it("one file that can't be written doesn't block the others", async () => {
+    fs.mkdirSync(path.join(dir, "agent-sessions.codex.json")) // a directory: rename onto it fails
+    const l = new SessionLedger(file, Date.now, rules)
+    l.apply(start({ paneId: "p1" }))
+    await new Promise((r) => setTimeout(r, 900)) // the debounced async flush
+    expect(Object.keys(read("agent-sessions.json"))).toEqual(["p1", "__minmux"])
+    expect(fs.readdirSync(dir).filter((f) => f.endsWith(".tmp"))).toEqual([]) // tmp cleaned
+  })
+
+  it("plans each entry with its own agent's resume command", async () => {
+    const l = new SessionLedger(null, Date.now, rules)
+    l.apply(start({ paneId: "p1" }))
+    l.apply(codexStart({ paneId: "p2" }))
+    const out = await plan(l, ["p1", "p2"])
+    expect(out.p1?.command).toBe(`claude --resume ${ID}`)
+    expect(out.p2?.command).toBe(`other resume ${OTHER}`)
+  })
+})
+
+describe("OpenCode's lead rules", () => {
+  const rules = { claude: claudeSessionRules, opencode: opencodeSessionRules }
+  const oc = (sessionId: string, pid: number, o: Partial<AgentEvent> = {}) =>
+    start({ agent: "opencode", sessionId, pid, transcriptPath: undefined, ...o })
+
+  it("/new and a picked older session switch in the leading process; another's is nested", () => {
+    const l = new SessionLedger(null, Date.now, rules)
+    l.apply(oc("ses_a", 100))
+    l.apply(oc("ses_b", 100)) // /new
+    expect(l.get("p1")?.sessionId).toBe("ses_b")
+    l.apply(oc("ses_a", 100, { source: "resume" })) // picked in /sessions, once active
+    expect(l.get("p1")?.sessionId).toBe("ses_a")
+    l.apply(oc("ses_x", 200)) // an `opencode run` the agent started
+    expect(l.get("p1")?.sessionId).toBe("ses_a")
+    expect(l.isNested("p1", "ses_x")).toBe(true)
+  })
+
+  it("resumes by id in its folder; an id that isn't OpenCode's is never typed", async () => {
+    const SES = "ses_f02cfead3ffecevT8eQkttqOR5"
+    const l = new SessionLedger(null, Date.now, rules)
+    l.apply(oc(SES, 100, { cwd: "/repo" }))
+    l.apply(oc("ses_bad; rm -rf ~", 100, { paneId: "p2" }))
+    const out = await plan(l, ["p1", "p2"])
+    expect(out.p1).toMatchObject({
+      agent: "opencode",
+      status: "resume",
+      cwd: "/repo",
+      command: `opencode --session ${SES}`,
+      env: { MINMUX_RESUME_SESSION: SES }, // typed as a prefix in POSIX shells only
+    })
+    expect(out.p2).toMatchObject({ status: "skip", reason: "unrecognised session id" })
   })
 })

@@ -3,10 +3,16 @@ import {
   reduceAgentEvent,
   reduceAgentEvents,
   emptyGraph,
-  claudePaneIds,
+  agentPanes,
+  agentByPane,
+  paneAgents,
   dropPaneSessions,
+  subAgents,
 } from "./agent-graph"
-import type { AgentEvent } from "./agent-graph"
+import type { AgentEvent, AgentGraph } from "./agent-graph"
+
+/** The panes agentPanes lists (every other entry of its flat [pane, kind, …] list). */
+const panesOf = (g: AgentGraph) => agentPanes(g).filter((_, i) => i % 2 === 0)
 
 // Authentic fixture: the interactive 6a spike run, where the root launched an
 // `Explore` sub-agent that read several docs. Trimmed to the shape the receiver emits.
@@ -315,7 +321,7 @@ describe("agent-graph — worktrees", () => {
   })
 })
 
-describe("claudePaneIds / dropPaneSessions", () => {
+describe("agentPanes / dropPaneSessions", () => {
   const g = reduceAgentEvents([
     { event: "SessionStart", sessionId: "a", paneId: "p2" },
     { event: "SessionStart", sessionId: "b", paneId: "p1" },
@@ -325,21 +331,21 @@ describe("claudePaneIds / dropPaneSessions", () => {
   ])
 
   it("lists each pane with a live session once, sorted; SessionEnd removes it", () => {
-    expect(claudePaneIds(g)).toEqual(["p1", "p2"])
+    expect(panesOf(g)).toEqual(["p1", "p2"])
     const ended = reduceAgentEvent(g, { event: "SessionEnd", sessionId: "a", paneId: "p2" })
-    expect(claudePaneIds(ended)).toEqual(["p1"])
+    expect(panesOf(ended)).toEqual(["p1"])
   })
 
   it("drops every session of a pane (incl. sub-agents) when its shell prompt returns", () => {
     const next = dropPaneSessions(g, "p1")
-    expect(claudePaneIds(next)).toEqual(["p2"])
+    expect(panesOf(next)).toEqual(["p2"])
     expect(next.nodes.sub).toBeUndefined()
     expect(next.rootIds).toHaveLength(2) // a + the pane-less d
   })
 
   it("same reference when the pane had no session; the pane list is memoized per graph", () => {
     expect(dropPaneSessions(g, "nope")).toBe(g)
-    expect(claudePaneIds(g)).toBe(claudePaneIds(g))
+    expect(agentPanes(g)).toBe(agentPanes(g))
   })
 })
 
@@ -349,7 +355,7 @@ describe("SessionStart re-homes a session", () => {
       { event: "SessionStart", sessionId: "s", paneId: "a" },
       { event: "SessionStart", sessionId: "s", paneId: "b", source: "resume" },
     ])
-    expect(claudePaneIds(g)).toEqual(["b"])
+    expect(panesOf(g)).toEqual(["b"])
   })
 
   it("a restart never reorders the board (/compact, resume in place or in another pane)", () => {
@@ -361,5 +367,265 @@ describe("SessionStart re-homes a session", () => {
     expect(g.rootIds).toEqual(["root:a", "root:b"])
     const moved = reduceAgentEvent(g, { event: "SessionStart", sessionId: "a", paneId: "r" })
     expect(moved.rootIds).toEqual(["root:a", "root:b"])
+  })
+})
+
+describe("agent kinds + explicit parents (multi-agent)", () => {
+  // OpenCode-shaped: child sessions report their parent, so the tree goes deeper than two.
+  const deep = (): AgentEvent[] => [
+    { agent: "opencode", event: "SessionStart", sessionId: "r", paneId: "p" },
+    { agent: "opencode", event: "UserPromptSubmit", sessionId: "r" },
+    {
+      agent: "opencode",
+      event: "SubagentStart",
+      sessionId: "r",
+      agentId: "c1",
+      agentType: "general",
+    },
+    {
+      agent: "opencode",
+      event: "SubagentStart",
+      sessionId: "r",
+      agentId: "g1",
+      agentType: "explore",
+      parentAgentId: "c1",
+    },
+  ]
+
+  it("tags nodes with their agent; events without one are Claude's", () => {
+    const g = reduceAgentEvents([...deep(), { event: "SessionStart", sessionId: "x" }])
+    expect(g.nodes["root:r"]!.agent).toBe("opencode")
+    expect(g.nodes.g1!.agent).toBe("opencode")
+    expect(g.nodes["root:x"]!.agent).toBe("claude")
+  })
+
+  it("attaches a sub-agent under its reported parent", () => {
+    const g = reduceAgentEvents(deep())
+    expect(g.nodes["root:r"]!.childIds).toEqual(["c1"])
+    expect(g.nodes.c1!.childIds).toEqual(["g1"])
+    expect(g.nodes.g1!.parentId).toBe("c1")
+  })
+
+  it("falls back to the root for an unknown parent or one from another session", () => {
+    const g = reduceAgentEvents([
+      { event: "SessionStart", sessionId: "s" },
+      { event: "SubagentStart", sessionId: "other", agentId: "o1" },
+      { event: "SubagentStart", sessionId: "s", agentId: "a", parentAgentId: "nope" },
+      { event: "SubagentStart", sessionId: "s", agentId: "b", parentAgentId: "o1" },
+    ])
+    expect(g.nodes["root:s"]!.childIds).toEqual(["a", "b"])
+  })
+
+  it("a new turn prunes finished subtrees but keeps a finished parent of an active child", () => {
+    const g1 = reduceAgentEvents([
+      ...deep(),
+      { agent: "opencode", event: "SubagentStop", sessionId: "r", agentId: "c1" }, // g1 still works
+    ])
+    const g2 = reduceAgentEvent(g1, { event: "UserPromptSubmit", sessionId: "r" })
+    expect(g2.nodes.c1!.childIds).toEqual(["g1"])
+    const g3 = reduceAgentEvents(
+      [
+        { event: "SubagentStop", sessionId: "r", agentId: "g1" },
+        { event: "UserPromptSubmit", sessionId: "r" },
+      ],
+      g2,
+    )
+    expect(g3.nodes.c1).toBeUndefined()
+    expect(g3.nodes.g1).toBeUndefined()
+    expect(g3.nodes["root:r"]!.childIds).toEqual([])
+  })
+
+  it("SessionEnd and dropPaneSessions evict the whole subtree", () => {
+    const ended = reduceAgentEvent(reduceAgentEvents(deep()), {
+      event: "SessionEnd",
+      sessionId: "r",
+    })
+    expect(Object.keys(ended.nodes)).toEqual([])
+    const dropped = dropPaneSessions(reduceAgentEvents(deep()), "p")
+    expect(Object.keys(dropped.nodes)).toEqual([])
+  })
+
+  it("PermissionRequest waits; a parallel tool finishing keeps it waiting; the approved one resumes", () => {
+    const g1 = reduceAgentEvents([
+      { agent: "codex", event: "SessionStart", sessionId: "c" },
+      { agent: "codex", event: "PreToolUse", sessionId: "c", toolName: "Read" },
+      { agent: "codex", event: "PermissionRequest", sessionId: "c", toolName: "Bash" },
+    ])
+    expect(g1.nodes["root:c"]!.status).toBe("waiting")
+    const g2 = reduceAgentEvent(g1, { agent: "codex", event: "PostToolUse", sessionId: "c" })
+    expect(g2.nodes["root:c"]!.status).toBe("waiting") // the approval is still pending
+    const g3 = reduceAgentEvent(g2, {
+      agent: "codex",
+      event: "PostToolUse",
+      sessionId: "c",
+      toolName: "Bash",
+    })
+    expect(g3.nodes["root:c"]!.status).toBe("working")
+  })
+
+  it("a sub-agent's PermissionRequest marks both it and its session waiting", () => {
+    const g = reduceAgentEvents([
+      { agent: "codex", event: "SessionStart", sessionId: "c" },
+      { agent: "codex", event: "UserPromptSubmit", sessionId: "c" },
+      { agent: "codex", event: "PermissionRequest", sessionId: "c", agentId: "a1" },
+    ])
+    expect(g.nodes.a1!.status).toBe("waiting")
+    expect(g.nodes["root:c"]!.status).toBe("waiting")
+  })
+
+  it("moves a sub-agent under its parent once a later event names it (unordered drops)", () => {
+    const g = reduceAgentEvents([
+      { agent: "opencode", event: "SessionStart", sessionId: "r" },
+      { agent: "opencode", event: "PreToolUse", sessionId: "r", agentId: "g1" }, // parent unknown yet
+      { agent: "opencode", event: "SubagentStart", sessionId: "r", agentId: "c1" },
+      {
+        agent: "opencode",
+        event: "PostToolUse",
+        sessionId: "r",
+        agentId: "g1",
+        parentAgentId: "c1",
+      },
+    ])
+    expect(g.nodes["root:r"]!.childIds).toEqual(["c1"])
+    expect(g.nodes.c1!.childIds).toEqual(["g1"])
+    expect(g.nodes.g1!.parentId).toBe("c1")
+  })
+
+  it("never re-parents into its own subtree", () => {
+    const g = reduceAgentEvents([
+      ...deep(),
+      {
+        agent: "opencode",
+        event: "PreToolUse",
+        sessionId: "r",
+        agentId: "c1",
+        parentAgentId: "g1",
+      },
+    ])
+    expect(g.nodes.c1!.parentId).toBe("root:r")
+    expect(g.nodes.g1!.parentId).toBe("c1")
+  })
+
+  it("sub-agents take their session's kind; a tagged root event corrects a defaulted root", () => {
+    const g = reduceAgentEvents([
+      { event: "CwdChanged", sessionId: "k", cwd: "/x" }, // untagged stray → defaults to claude
+      { agent: "codex", event: "SessionStart", sessionId: "k" },
+      { event: "SubagentStart", sessionId: "k", agentId: "s1" }, // untagged sub-agent event
+    ])
+    expect(g.nodes["root:k"]!.agent).toBe("codex")
+    expect(g.nodes.s1!.agent).toBe("codex")
+  })
+
+  it("agentPanes names each pane's lead agent", () => {
+    const g = reduceAgentEvents([
+      { event: "SessionStart", sessionId: "a", paneId: "p1" },
+      { agent: "codex", event: "SessionStart", sessionId: "b", paneId: "p2" },
+    ])
+    expect(agentPanes(g)).toEqual(["p1", "claude", "p2", "codex"])
+  })
+
+  it("agentPanes lists each pane's lead agent, sorted, skipping nested sessions; memoized", () => {
+    const g = reduceAgentEvents([
+      { agent: "codex", event: "SessionStart", sessionId: "a", paneId: "p2" },
+      { event: "SessionStart", sessionId: "b", paneId: "p1" },
+      { agent: "codex", event: "SessionStart", sessionId: "n", paneId: "p1", nested: true },
+      { agent: "opencode", event: "SessionStart", sessionId: "c", paneId: "p2" }, // newer lead
+    ])
+    expect(agentPanes(g)).toEqual(["p1", "claude", "p2", "opencode"])
+    expect(agentPanes(g)).toBe(agentPanes(g))
+  })
+})
+
+describe("agentByPane / paneAgents", () => {
+  const g = reduceAgentEvents([
+    { event: "SessionStart", sessionId: "a", paneId: "p1" },
+    { agent: "codex", event: "SessionStart", sessionId: "b", paneId: "p2" },
+  ])
+  it("looks each pane's lead agent up, memoized per graph", () => {
+    expect(agentByPane(g)).toEqual({ p1: "claude", p2: "codex" })
+    expect(agentByPane(g)).toBe(agentByPane(g))
+  })
+  it("decodes agentPanes' flat list back into the same lookup", () => {
+    expect(paneAgents(agentPanes(g))).toEqual(agentByPane(g))
+    expect(paneAgents([])).toEqual({})
+  })
+})
+
+describe("a pending approval vs racing hook drops (Codex)", () => {
+  const S = { agent: "codex" as const, sessionId: "c" }
+  const call = (event: string, key: string, more: Partial<AgentEvent> = {}): AgentEvent => ({
+    ...S,
+    event,
+    toolName: "Bash",
+    toolKey: key,
+    ...more,
+  })
+  const perm = call("PermissionRequest", "Bash:rm")
+  const pre = call("PreToolUse", "Bash:rm")
+  const status = (evs: AgentEvent[], id = "root:c") =>
+    reduceAgentEvents([{ ...S, event: "SessionStart" }, ...evs]).nodes[id]!.status
+  it("waits whichever of the call's PreToolUse / PermissionRequest lands first", () => {
+    expect(status([pre, perm])).toBe("waiting")
+    expect(status([perm, pre])).toBe("waiting")
+  })
+  it("another call (even of the same tool) finishing leaves it waiting; the call itself ends it", () => {
+    expect(status([perm, pre, call("PostToolUse", "Bash:ls")])).toBe("waiting")
+    expect(status([perm, pre, call("PostToolUse", "Bash:rm")])).toBe("working")
+  })
+  it("a different call starting means the agent moved on (approved or denied)", () => {
+    expect(status([perm, pre, call("PreToolUse", "Read:x", { toolName: "Read" })])).toBe("working")
+  })
+  it("the turn ending, a new prompt or a restart forgets it", () => {
+    expect(status([perm, { ...S, event: "Stop" }])).toBe("idle")
+    expect(status([perm, { ...S, event: "Stop" }, { ...S, event: "UserPromptSubmit" }, pre])).toBe(
+      "working",
+    )
+    expect(status([perm, { ...S, event: "SessionStart", source: "resume" }, pre])).toBe("working")
+  })
+  it("a sub-agent's approval waits it and its session; Stop forgets it for the next turn", () => {
+    const sub = (e: AgentEvent): AgentEvent => ({ ...e, agentId: "a1" })
+    const evs = [{ ...S, event: "SubagentStart", agentId: "a1" }, sub(perm), sub(pre)]
+    expect(status(evs, "a1")).toBe("waiting")
+    expect(status(evs)).toBe("waiting")
+    expect(status([...evs, { ...S, event: "Stop" }, sub(pre)], "a1")).toBe("working")
+  })
+})
+
+describe("subAgents", () => {
+  const sub = (agentId: string, parentAgentId?: string): AgentEvent => ({
+    event: "SubagentStart",
+    sessionId: "s",
+    agentId,
+    agentType: agentId,
+    ...(parentAgentId ? { parentAgentId } : {}),
+  })
+  const g = reduceAgentEvents([
+    { event: "SessionStart", sessionId: "s", cwd: "/r" },
+    sub("a"),
+    sub("a1", "a"),
+    sub("a2", "a1"),
+    sub("b"),
+  ])
+  const root = g.nodes["root:s"]!
+
+  it("walks the tree depth-first with each level", () => {
+    expect(subAgents(g, root).map((k) => [k.node.id, k.depth])).toEqual([
+      ["a", 1],
+      ["a1", 2],
+      ["a2", 3],
+      ["b", 1],
+    ])
+  })
+
+  it("draws deeper ones at the cap (still visible), and a cycle never loops", () => {
+    expect(subAgents(g, root, 2).map((k) => [k.node.id, k.depth])).toEqual([
+      ["a", 1],
+      ["a1", 2],
+      ["a2", 2],
+      ["b", 1],
+    ])
+    const a2 = g.nodes.a2!
+    const cyclic = { ...g, nodes: { ...g.nodes, a2: { ...a2, childIds: ["a"] } } }
+    expect(subAgents(cyclic, root).map((k) => k.node.id)).toEqual(["a", "a1", "a2", "b"])
   })
 })

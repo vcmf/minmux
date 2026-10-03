@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest"
-import { CLAUDE_COLORS, sessionColor, sessionColorName } from "./session-color"
+import { ACCENT_COLORS, sessionColor, sessionColorName } from "./session-color"
 
 describe("sessionColorName", () => {
   it("an explicit /color wins (even over a name)", () => {
@@ -12,7 +12,7 @@ describe("sessionColorName", () => {
 
   it("a renamed session without /color gets a stable colour from its name", () => {
     const a = sessionColorName({ name: "add-multi-windows-per-tab" })
-    expect(CLAUDE_COLORS).toContain(a)
+    expect(ACCENT_COLORS).toContain(a)
     expect(sessionColorName({ name: "add-multi-windows-per-tab" })).toBe(a) // stable
     expect(sessionColorName({ name: "  add-multi-windows-per-tab  " })).toBe(a) // trimmed
   })
@@ -41,9 +41,16 @@ describe("sessionColor", () => {
   })
 
   it("every Claude colour has a swatch in both schemes", () => {
-    for (const c of CLAUDE_COLORS) {
+    for (const c of ACCENT_COLORS) {
       expect(sessionColor({ color: c }, "dark")).toBeTruthy()
       expect(sessionColor({ color: c }, "light")).toBeTruthy()
     }
+  })
+})
+
+describe("automatic names (D3)", () => {
+  it("never colour a pane; a user's name does", () => {
+    expect(sessionColor({ name: "Run curl request", auto: true }, "dark")).toBeUndefined()
+    expect(sessionColor({ name: "Run curl request" }, "dark")).toBeDefined()
   })
 })

@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from "electron"
-import type { AgentEvent } from "../src/lib/agent-graph"
+import type { AgentEvent, AgentKind } from "../src/lib/agent-graph"
 import type { SessionMeta } from "../src/lib/session-color"
 import type { ResumePlan } from "../src/lib/resume"
 import type { PaneGitInfo, PaneGitRequest } from "../src/lib/pane-git"
@@ -84,6 +84,13 @@ const api = {
   resumeConsume: (paneId: string, sessionId: string) =>
     ipcRenderer.send("agents:resume-consume", paneId, sessionId),
   shellIdle: (paneId: string) => ipcRenderer.send("agents:shell-idle", paneId),
+  agentHintWanted: (kind: AgentKind) =>
+    ipcRenderer.invoke("agents:hint-wanted", kind) as Promise<{
+      wanted: boolean
+      dismissals: number
+    }>,
+  agentHintDismiss: (kind: AgentKind, never: boolean) =>
+    ipcRenderer.invoke("agents:hint-dismiss", kind, never) as Promise<number>,
   agentMetaSnapshot: () =>
     ipcRenderer.invoke("agents:meta-snapshot") as Promise<[string, SessionMeta][]>,
 

@@ -2,6 +2,10 @@ import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import { execFileSync } from "node:child_process"
+import { AGENT_SHELL } from "./agents"
+
+/** Every agent's env that WSL must forward (WSLENV entries, with their flags). */
+const AGENT_WSLENV = AGENT_SHELL.flatMap((a) => a.wslenv)
 
 // Shell scripts inlined as line arrays (not template literals: they contain
 // ${...} and octal \033 which JS template literals would choke on).
@@ -72,13 +76,8 @@ export const ZSH_ZSHRC = [
   "fi",
   "",
   ZSH_HOOKS,
-  "# Route `claude` through minmux's scoped hook settings so the agents board can",
-  "# observe its sessions/sub-agents. Only when minmux provides the file; the user's",
-  "# global ~/.claude config is untouched. (M6 — docs/design/AGENT_OBSERVABILITY.md)",
-  'if [[ -o interactive && -n "${MINMUX_CLAUDE_SETTINGS-}" ]]; then',
-  '  claude() { command claude --settings "$MINMUX_CLAUDE_SETTINGS" "$@" }',
-  "fi",
-  "",
+  // Each agent's wrapper (electron/agents), after the user's rc so ours is the one defined.
+  ...AGENT_SHELL.flatMap((a) => [...a.zsh, ""]),
 ].join("\n")
 
 export const ZSH_ZPROFILE = [
@@ -155,14 +154,15 @@ export const BASH_HOOKS = [
   "fi",
   "trap '__minmux_preexec' DEBUG",
   "",
-  "# Route `claude` through minmux's scoped hook settings (agents board — M6).",
-  'if [[ $- == *i* && -n "${MINMUX_CLAUDE_SETTINGS-}" ]]; then',
-  '  claude() { command claude --settings "$MINMUX_CLAUDE_SETTINGS" "$@"; }',
-  "fi",
-  "",
 ].join("\n")
 
-export const BASH_RC = [...BASH_LOCAL_PRELUDE, BASH_HOOKS].join("\n")
+// Local panes only (BASH_HOOKS also goes to ssh hosts, where no agent is armed): each agent's
+// wrapper (electron/agents), after the user's rc and our hooks.
+export const BASH_RC = [
+  ...BASH_LOCAL_PRELUDE,
+  BASH_HOOKS,
+  ...AGENT_SHELL.flatMap((a) => [...a.bash, ""]),
+].join("\n")
 
 export interface ShellOption {
   id: string
@@ -273,9 +273,15 @@ export function wslInjection(
     return {
       args: ["--", "bash", "--rcfile", `${wslBase}/bash/bashrc`, "-i"],
       env: {},
-      // /p path-translates the (Windows) hook-settings path so claude-in-WSL can read it.
+      // /p path-translates the (Windows) agent paths and drop root for agents in WSL.
       // COLORFGBG crosses so agents in WSL can detect our light/dark theme.
-      wslenv: ["MINMUX_SHARE_HISTORY", "MINMUX_CLAUDE_SETTINGS/p", "MINMUX_PANE_ID", "COLORFGBG"],
+      wslenv: [
+        "MINMUX_SHARE_HISTORY",
+        ...AGENT_WSLENV,
+        "MINMUX_AGENT_EVENTS/p", // the agents' drop root, path-translated like the settings
+        "MINMUX_PANE_ID",
+        "COLORFGBG",
+      ],
     }
   }
   if (name === "zsh") {
@@ -294,7 +300,8 @@ export function wslInjection(
         "MINMUX_ZDOTDIR",
         "MINMUX_SHELL_INTEGRATION",
         "MINMUX_SHARE_HISTORY",
-        "MINMUX_CLAUDE_SETTINGS/p", // /p path-translates it for claude-in-WSL to read
+        ...AGENT_WSLENV, // each agent's paths (/p: translated for the agent inside WSL)
+        "MINMUX_AGENT_EVENTS/p", // the agents' drop root (hooks write there from WSL)
         "MINMUX_PANE_ID",
         "COLORFGBG", // so agents in WSL can detect our light/dark theme
       ],

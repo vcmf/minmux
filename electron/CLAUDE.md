@@ -9,6 +9,12 @@ ownership, native modules. No DOM, no React here. (Renderer rules: root `CLAUDE.
   controls/platform/git/workspace/metrics), the `PtySession` registry, quit guard, power/
   lifecycle diagnostics.
 - `preload.ts` — the **only** contextBridge; mirrors the `Ipc` shape in `src/lib/ipc.ts`.
+- `agents/` — one folder for every coding agent: `types.ts` (what an agent plugs in: an
+  `AgentSpec` with rc lines, env, resume/lead rules, and a per-launch `AgentAdapter`), `index.ts`
+  (the registry), one file per agent, and OpenCode's plugin source. Agent-specific code goes
+  here, nowhere else in main. → `../docs/GOTCHAS.md#codex`, `#opencode`
+- `agent-liveness.ts` — ends sessions whose process exited without a word (pure; main feeds it
+  and reaps on a timer). → `../docs/GOTCHAS.md#agent-liveness`
 - `shell-integration.ts` — inlined zsh/bash scripts (OSC 133 + OSC 7 cwd + mouse-reset),
   `buildInjection`, WSL `listShells`. Scripts are line-arrays, not template literals.
 - `git.ts` — pure git parsers + `gitStatus`/`gitDiff` for the changes panel.

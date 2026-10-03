@@ -5,7 +5,7 @@ import { TerminalManager } from "../terminal/terminal-manager"
 import { ipc } from "../lib/ipc"
 import { activeTheme, useStore } from "../store"
 import { sessionColor } from "../lib/session-color"
-import { claudePaneIds } from "../lib/agent-graph"
+import { agentByPane, type AgentKind } from "../lib/agent-graph"
 import { canMove, findPaneById, type MoveTarget } from "../lib/pane-tree"
 import { dropZone, insertIndex } from "../lib/drop-zone"
 import { displaySessionTitle, shellType } from "../lib/session-label"
@@ -18,7 +18,8 @@ import { resolveDefaultShell } from "../lib/shells"
 import type { DropZone, PaneLeaf } from "../types"
 import { ResumeBanner } from "./resume-banner"
 import { IntegrationHint } from "./integration-hint"
-import { ClaudeIcon } from "./claude-icon"
+import { AgentHint } from "./agent-hint"
+import { agentIcon } from "./agent-icon"
 
 /** A pane: a strip of terminal tabs (surfaces) + a mount point for the visible one.
  *  Terminals live in TerminalManager, so switching surfaces re-attaches (no respawn). */
@@ -28,16 +29,16 @@ export function TerminalPane({ pane, tabId }: { pane: PaneLeaf; tabId: string })
   const [menu, setMenu] = useState<{ x: number; y: number; hasSel: boolean } | null>(null)
   const activeId = pane.activeSessionId
   const surfaces = useStore(useShallow((s) => pane.sessionIds.map((id) => s.sessions[id])))
-  // Each surface's Claude session colour (/color, or derived from /rename) — undefined = none.
+  // Each surface's agent session colour (/color, or derived from /rename) — undefined = none.
   const agentMeta = useStore((s) => s.agentMeta) // stable ref — changes only on a meta update
   const scheme = useStore((s) => activeTheme(s).scheme)
   const accents = pane.sessionIds.map((id) => sessionColor(agentMeta[id], scheme))
-  // Which surfaces run Claude, as one string ("10…") so a hook event only re-renders the
-  // pane when that changes.
-  const claudeFlags = useStore((s) => {
-    const live = claudePaneIds(s.agents)
-    return pane.sessionIds.map((id) => (live.includes(id) ? "1" : "0")).join("")
-  })
+  // Which agent runs in each surface, as one string ("claude,,codex") so a hook event only
+  // re-renders the pane when that changes.
+  const agentFlags = useStore((s) => {
+    const byPane = agentByPane(s.agents)
+    return pane.sessionIds.map((id) => byPane[id] ?? "").join(",")
+  }).split(",")
   const home = useStore((s) => s.home)
   const session = surfaces[pane.sessionIds.indexOf(activeId)]
   const focused = useStore(
@@ -296,13 +297,14 @@ export function TerminalPane({ pane, tabId }: { pane: PaneLeaf; tabId: string })
                 }}
               >
                 {(() => {
-                  const Icon = claudeFlags[i] === "1" ? ClaudeIcon : s?.remote ? Globe : Terminal
+                  const kind = agentFlags[i] as AgentKind | ""
+                  const Icon = kind ? agentIcon(kind) : s?.remote ? Globe : Terminal
                   return (
                     <Icon
                       size={13}
                       weight="fill"
                       // The session's colour when it has one (the tab "dot"), else focus/dim.
-                      // A host's colour (a safety cue) beats a Claude /color accent.
+                      // A host's colour (a safety cue) beats an agent's /color accent.
                       color={
                         colorOf(s) ??
                         accents[i] ??
@@ -431,6 +433,7 @@ export function TerminalPane({ pane, tabId }: { pane: PaneLeaf; tabId: string })
       </div>
       <ResumeBanner sessionId={activeId} />
       <IntegrationHint sessionId={activeId} />
+      <AgentHint key={activeId} sessionId={activeId} />
       <div className="terminal-mount" ref={mountRef} />
       {/* While dragging: a transparent layer over the terminal (xterm's canvas would swallow
           the drag events) that shows where the surface would land. No animation — it sits

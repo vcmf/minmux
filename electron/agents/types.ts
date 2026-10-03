@@ -1,0 +1,78 @@
+// What one coding agent plugs into the main process (docs/design/MULTI_AGENT.md §4.2). Each
+// agent is one spec + adapter in this folder; nothing agent-specific in main lives elsewhere.
+
+import type { AgentEvent, AgentKind } from "../../src/lib/agent-graph"
+import type { DropNormalizer } from "../agent-hooks"
+import type { LedgerEntry } from "../agent-sessions"
+import type { ResolvePath } from "../agent-tokens"
+import type { MetaReader } from "../agent-meta"
+import type { SessionMeta } from "../transcript-meta"
+
+export type { ResolvePath }
+
+/** The rules the resume ledger applies to one agent's sessions. */
+export interface SessionRules {
+  /** The command that resumes this entry's session; null if its id can't be trusted. */
+  resumeCommand(e: LedgerEntry, allowBypass: boolean): string | null
+  /** Env for that command (POSIX shells type it as `K=V command`; others go without). */
+  resumeEnv?(e: LedgerEntry): Record<string, string>
+  /** Does `cwd` belong to the session filed at `transcriptPath`? undefined = can't tell. */
+  cwdFits(cwd: string | undefined, transcriptPath: string | undefined): boolean | undefined
+  /** A new session while one of this agent's leads the pane: a switch (vs a background agent)? */
+  isSwitch(ev: AgentEvent, lead: LedgerEntry): boolean
+  /** Its events' pid is the agent itself, so its exit ends its sessions (not Claude's: a hook shell). */
+  liveByPid?: true
+}
+
+/** The rc lines our zsh/bash integration adds for an agent, and its per-pane env. */
+export interface AgentShell {
+  zsh: string[]
+  bash: string[]
+  env: string[] // every minmux env name that may reach the agent (arming, resume): scrubbed from children
+  wslenv: string[] // the ones WSL must forward, with their WSLENV flags
+  /** The user's own vars the adapter adds to, each with how to take a minmux's part back out
+   *  (undefined: nothing of theirs left). Cleaned, never scrubbed: theirs is in it. */
+  merged?: Record<string, (value: string) => string | undefined>
+}
+
+export interface AgentAdapter {
+  kind: AgentKind
+  /** Write this launch's files into the config dir (hook settings…); throws on failure. */
+  install(cfgDir: string): void
+  /** Env that arms the agent in one local pane (after `install`). */
+  env(): Record<string, string>
+  /** A raw drop from this agent's folder → an event (or null). Never throws on bad input. */
+  normalize: DropNormalizer
+  /** Token totals for a batch of this agent's events, read off the hot path. */
+  usage?(batch: AgentEvent[], resolve: ResolvePath): Promise<AgentEvent[]>
+  /** Where the lead session's name/colour live: the file an event points to (null: none) and
+   *  how to read a session's meta from it (`watch: false`: not a file, nothing to watch). */
+  meta?: {
+    file(ev: AgentEvent): string | null
+    reader(): MetaReader
+    watch?: false
+  }
+  /** Every event of this agent, after the ledger (state an adapter keeps, e.g. pushed names). */
+  observe?(ev: AgentEvent): void
+  /** A pushed name known now (OpenCode's titles): the ledger takes it when the session leads. */
+  metaNow?(sessionId: string): SessionMeta
+  /** Has the user approved our hooks in the agent (Codex)? null = can't tell (don't nag). */
+  approved?(): Promise<boolean | null>
+}
+
+/** What an adapter may ask main. */
+export interface AdapterContext {
+  /** Was this session's name the user's, as recorded before (a resumed session)? */
+  userNamed(sessionId: string): boolean | undefined
+  /** Record whose name it is now (kept per session, across runs). */
+  setUserNamed(sessionId: string, user: boolean): void
+}
+
+/** One agent's registration: static parts (rc, env, rules) + its per-launch adapter factory. */
+export interface AgentSpec {
+  kind: AgentKind
+  windows?: false // not integrated on Windows (nor so its WSL panes) yet; mirrors agent-kinds
+  shell: AgentShell
+  rules: SessionRules
+  create(ctx?: AdapterContext): AgentAdapter
+}

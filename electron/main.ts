@@ -40,15 +40,19 @@ import { applyLoginShellEnv } from "./shell-env"
 import { buildEditorCommand, winQuote } from "./editor-command"
 import { orderMacEditors, planEditor, type EditorPlan, type EditorInfo } from "./editor-detect"
 import { checkForUpdate } from "./update-check"
-import { startHookWatcher } from "./agent-hooks"
-import type { AgentEvent } from "../src/lib/agent-graph"
-import { buildHookSettings } from "./hook-writer"
+import { startHookWatcher, type DropNormalizer } from "./agent-hooks"
+import { AGENT_RULES, createAdapters, type AgentAdapter } from "./agents"
+import { AgentLiveness, foldLiveness } from "./agent-liveness"
+import { UserNames } from "./agent-names"
+import { agentOf, type AgentEvent, type AgentKind } from "../src/lib/agent-graph"
+import { disabledAgentsIn, mergeAgentSwitches } from "../src/settings/agent-switches"
+import { agentPaneEnv, resumablePanes } from "./agents/arming"
+import { findOnPath, pathCandidates } from "./path-lookup"
 import { toDirListing } from "../src/lib/dir-listing"
-import { wslUncCandidates, winToMnt, uncToWslPath } from "./wsl-paths"
+import { wslUncCandidates, uncToWslPath } from "./wsl-paths"
 import { colorfgbg } from "./color"
-import { TranscriptTokens } from "./transcript-tokens"
-import { tokenEventsForBatch } from "./agent-tokens"
-import { AgentMetaTracker } from "./agent-meta"
+import { AgentMetaTracker, planMeta } from "./agent-meta"
+import { AgentHints } from "./agent-hints"
 import { SessionLedger } from "./agent-sessions"
 import {
   displayName,
@@ -144,21 +148,57 @@ const sessions = new Map<string, PtySession>()
 // down (gone from `sessions`). None may outlive Node: quitting drains this (pty-drain.ts).
 const livePtys = new Set<Drainable>()
 let mainWindow: BrowserWindow | null = null
-// Paths to the scoped Claude Code hook-settings files the `claude` shell wrapper loads
-// (set once the file-drop watcher is up). null ⇒ agents board stays empty. The WSL variant
-// (Windows only) points the drop dir at a /mnt/c path an in-WSL claude can write.
-let hookSettingsPath: string | null = null
-let hookSettingsPathWsl: string | null = null
+// Every coding agent minmux integrates (electron/agents), and the ones armed this launch:
+// their files are installed and their hooks write into the per-launch drop root
+// (`<root>/<agent>/`, passed to panes as MINMUX_AGENT_EVENTS). Empty ⇒ agents board stays
+// empty. Each pane's env carries every armed agent's paths; WSLENV /p translates them for an
+// agent inside WSL.
+// Whose name each agent session's is (kept per session: the colour survives a resume, D3).
+let userNamesStore: UserNames | null = null
+const userNames = () =>
+  (userNamesStore ??= new UserNames(path.join(configDir(), "agent-names.json")))
+void userNames().loaded // read now, async: the first OpenCode title finds it ready
+const adapters = createAdapters(process.platform, {
+  userNamed: (id) => userNames().has(id),
+  setUserNamed: (id, user) => userNames().set(id, user),
+})
+let armed: AgentAdapter[] = []
+let agentEventsDir: string | null = null
 let hookWatcher: { close: () => Promise<void> } | null = null
-// Accumulates per-transcript token totals across hook batches (session + sub-agent).
-const agentTokens = new TranscriptTokens()
+let reaper: ReturnType<typeof setInterval> | null = null // ends sessions whose process is gone
+const REAP_MS = 3000
 // Branch + GitHub PR per terminal (sidebar), via git + the user's `gh`.
 const paneGit = new PaneGitService()
-// Per-pane Claude `/color` + `/rename` (pane accent), read from each session's transcript.
-const agentMeta = new AgentMetaTracker((paneId, meta) => {
-  mainWindow?.webContents.send("agents:meta", paneId, meta)
-  sessionLedger().setName(paneId, meta?.name) // the /rename, for the resume banner
-})
+// Per pane, the lead session's name/colour (pane accent, resume banner), one tracker per
+// agent that keeps them somewhere: Claude's transcript (`/color`, `/rename`), Codex's index.
+const metaTrackers = new Map<AgentKind, AgentMetaTracker>()
+for (const a of adapters) {
+  if (!a.meta) continue
+  const kind = a.kind
+  const tracker = new AgentMetaTracker(
+    (paneId, meta, sessionId) => {
+      // An automatic name with no colour changes nothing on screen (D3): only the ledger
+      // wants it — skip the IPC and the panes' re-render.
+      if (!meta?.auto || meta.color !== undefined)
+        mainWindow?.webContents.send("agents:meta", paneId, meta)
+      // The name, for the resume banner: only onto the session it's for (a late read, or the
+      // null for a session a switch left, must not rename the pane's new lead).
+      const lead = sessionLedger().get(paneId)
+      if (lead && agentOf(lead) === kind && (!sessionId || lead.sessionId === sessionId))
+        sessionLedger().setName(paneId, meta?.name)
+    },
+    a.meta.watch === false ? () => null : undefined, // not a file: nothing to watch
+    undefined,
+    a.meta.reader(),
+  )
+  metaTrackers.set(kind, tracker)
+}
+// Whether to show an agent's "approve the hooks" hint, persisted (agent-hints.ts).
+let hints: AgentHints | null = null
+const agentHints = () => (hints ??= new AgentHints(path.join(configDir(), "agent-hints.json")))
+/** Stop every agent's meta tracking for a pane (its shell / PTY ended). */
+const untrackMeta = (paneId: string, notify = true) =>
+  metaTrackers.forEach((t) => t.untrack(paneId, notify))
 // Which Claude session each terminal is inside (persisted) → resume on relaunch.
 let ledger: SessionLedger | null = null
 const sessionLedger = () =>
@@ -180,10 +220,14 @@ const PTY_REPLAY_BYTES = 256 * 1024
 
 // Session lifecycle only (rare; never per-tool events or cwd changes): enough to trace resume.
 const TRACED_HOOKS = new Set(["SessionStart", "SessionEnd", "WorktreeCreate"])
+/** The armed adapter an event (or ledger entry) belongs to. */
+const adapterFor = (x: { agent?: AgentKind }): AgentAdapter | undefined =>
+  armed.find((a) => a.kind === agentOf(x))
 /** A hook event's diagnostics fields: which session, from which pane, where. */
 function hookTrace(ev: AgentEvent): Record<string, string> {
   return {
     ev: ev.event,
+    agent: agentOf(ev),
     sid: ev.sessionId.slice(0, 8),
     pane: (ev.paneId ?? "-").slice(0, 8),
     src: ev.source ?? ev.reason ?? "",
@@ -285,6 +329,7 @@ function startSettingsWatcher() {
   const p = settingsPath()
   fs.mkdirSync(path.dirname(p), { recursive: true })
   watch(p, { ignoreInitial: true }).on("all", () => {
+    switchesOff = null // re-read the agent switches on the next spawn
     mainWindow?.webContents.send("settings-changed")
     sshService?.settingsChanged() // reloads only if the ssh block itself changed
   })
@@ -292,8 +337,9 @@ function startSettingsWatcher() {
 
 // ── agent observability (M6) ───────────────────────────────────────
 // Start the file-drop watcher + write the scoped settings file(s). Best-effort: on any
-// failure the board just stays empty (never blocks startup or the terminal). Claude writes
-// each event as a file into `hook-events/`; the watcher reads + deletes them (agent-hooks).
+// failure the board just stays empty (never blocks startup or the terminal). Each agent's
+// hooks write every event as a file into `hook-events/<nonce>/<agent>/`; the watcher reads +
+// deletes them (agent-hooks).
 // No ports/networking — so nothing can go stale, and it crosses the WSL boundary.
 async function startAgentObservability(): Promise<void> {
   try {
@@ -301,69 +347,125 @@ async function startAgentObservability(): Promise<void> {
     // Per-launch nonce as the drop-dir name: a foreign local process can't guess where to
     // drop spoofed events (restores the auth boundary the old token gave), and it clears any
     // stale drops from a previous run for free. Wipe the parent so old nonces don't pile up.
+    // Hooks find it via the pane env (MINMUX_AGENT_EVENTS), so an agent still carrying an
+    // earlier launch's env (a tmux server started from an old pane) reports nothing; before,
+    // its events arrived tagged with a pane that no longer exists.
     const eventsRoot = path.join(cfg, "hook-events")
     fs.rmSync(eventsRoot, { recursive: true, force: true })
     const eventsDir = path.join(eventsRoot, randomUUID())
     fs.mkdirSync(eventsDir, { recursive: true })
-    hookWatcher = await startHookWatcher({
-      dir: eventsDir,
-      onBatch: (events: AgentEvent[]) => {
-        // Fold the batch into the resume ledger (which pane is inside which Claude session,
-        // + its WSL distro) and tag each event lead/nested from it, then forward it at once
-        // (keeps the board live). Token totals are priced from the transcripts afterwards,
-        // async and incremental — off the terminal hot path and the agent's loop.
-        for (const ev of events) {
-          // Session lifecycle only (never per-tool events): traceable when resume goes wrong.
-          if (TRACED_HOOKS.has(ev.event)) diag("hook", hookTrace(ev))
-          const r = sessionLedger().apply(
-            ev,
-            ev.paneId ? sessions.get(ev.paneId)?.wslDistro : undefined,
-          )
-          if (r.verdict) diag(`hook-cwd-${r.verdict}`, hookTrace(ev))
-          // The renderer's graph takes the ledger's folder: a replaced one is rewritten, a
-          // rejected one dropped (the graph keeps what it knew) — no second classifier there.
-          if (r.verdict === "fallback") ev.cwd = r.cwd
-          else if (r.verdict === "rejected") ev.cwd = undefined
-          // One classifier for "who leads this pane": the ledger. Tag every root event so the
-          // graph and the accent agree (and survive a renderer reload — the ledger lives here).
-          if (ev.paneId && !ev.agentId)
-            ev.nested = sessionLedger().isNested(ev.paneId, ev.sessionId)
-        }
-        mainWindow?.webContents.send("agents:events", events)
-        // Session-level events locate each Claude pane's transcript → track its /color and
-        // /rename for the pane accent (async + debounced; SessionEnd stops it).
-        for (const ev of events) {
-          if (!ev.paneId || !ev.transcriptPath || ev.agentId) continue
-          // Only the pane's own session (this event's own verdict, not the state after the whole
-          // batch): a background agent inherits the pane but mustn't take its accent.
-          if (ev.nested) continue
-          if (ev.event === "SessionEnd") agentMeta.untrack(ev.paneId, true, ev.transcriptPath)
-          else
-            agentMeta.track(
-              ev.paneId,
-              ev.transcriptPath,
-              transcriptTargets(ev.transcriptPath, ev.paneId),
-            )
-        }
-        void tokenEventsForBatch(agentTokens, events, transcriptTargets).then((tokenEvents) => {
-          if (tokenEvents.length) mainWindow?.webContents.send("agents:events", tokenEvents)
-        })
-      },
-    })
-    // Native settings: the drop dir as a host path.
-    const nativePath = path.join(cfg, "claude-hooks.json")
-    fs.writeFileSync(nativePath, buildHookSettings(eventsDir))
-    hookSettingsPath = nativePath
-    // WSL variant (Windows only): same physical dir, addressed via /mnt/c so an in-WSL
-    // `claude` can write into it. MINMUX_CLAUDE_SETTINGS is WSLENV-forwarded with /p, so
-    // this file's Windows path is translated for claude to read.
-    const mnt = process.platform === "win32" ? winToMnt(eventsDir) : null
-    if (mnt) {
-      const wslPath = path.join(cfg, "claude-hooks.wsl.json")
-      fs.writeFileSync(wslPath, buildHookSettings(mnt))
-      hookSettingsPathWsl = wslPath
+    // Arm each agent on its own: one that fails to install stays off, the others still work.
+    const ready: AgentAdapter[] = []
+    for (const a of adapters) {
+      try {
+        fs.mkdirSync(path.join(eventsDir, a.kind))
+        a.install(cfg)
+        ready.push(a)
+      } catch (err) {
+        diag("agent-install-failed", { agent: a.kind, err: String(err) })
+      }
     }
-    diag("agent-hooks-up", { dir: eventsDir })
+    if (ready.length === 0) {
+      diag("agent-hooks-none", {}) // nothing armed: plain terminals, empty board
+      return
+    }
+    armed = ready // before the watcher: its first batch looks adapters up here
+    const normalizers: Partial<Record<AgentKind, DropNormalizer>> = {}
+    for (const a of ready) normalizers[a.kind] = a.normalize
+    const fold = (events: AgentEvent[]) => {
+      // Fold the batch into the resume ledger (which pane is inside which Claude session,
+      // + its WSL distro) and tag each event lead/nested from it, then forward it at once
+      // (keeps the board live). Token totals are priced from the transcripts afterwards,
+      // async and incremental — off the terminal hot path and the agent's loop.
+      for (const ev of events) {
+        // Session lifecycle only (never per-tool events): traceable when resume goes wrong.
+        if (TRACED_HOOKS.has(ev.event)) diag("hook", hookTrace(ev))
+        const r = sessionLedger().apply(
+          ev,
+          ev.paneId ? sessions.get(ev.paneId)?.wslDistro : undefined,
+        )
+        if (r.verdict) diag(`hook-cwd-${r.verdict}`, hookTrace(ev))
+        // The renderer's graph takes the ledger's folder: a replaced one is rewritten, a
+        // rejected one dropped (the graph keeps what it knew) — no second classifier there.
+        if (r.verdict === "fallback") ev.cwd = r.cwd
+        else if (r.verdict === "rejected") ev.cwd = undefined
+        adapterFor(ev)?.observe?.(ev) // state an adapter keeps (OpenCode's pushed names)
+        // A pushed name may come before its session leads (a resumed OpenCode's title): the
+        // new entry takes it, and whether it's the user's.
+        if (ev.event === "SessionStart" && ev.paneId && !ev.agentId) {
+          const m = adapterFor(ev)?.metaNow?.(ev.sessionId)
+          if (m?.name && sessionLedger().get(ev.paneId)?.sessionId === ev.sessionId)
+            sessionLedger().setName(ev.paneId, m.name)
+        }
+        // One classifier for "who leads this pane": the ledger. Tag every root event so the
+        // graph and the accent agree (and survive a renderer reload — the ledger lives here).
+        if (ev.paneId && !ev.agentId) ev.nested = sessionLedger().isNested(ev.paneId, ev.sessionId)
+      }
+      // A title is main's alone (the meta tracker shows it), never a board event.
+      mainWindow?.webContents.send(
+        "agents:events",
+        events.filter((ev) => ev.event !== "SessionTitle"),
+      )
+      // Session-level events locate where each pane's session keeps its name/colour → track
+      // it for the pane accent (async + debounced; SessionEnd stops it).
+      const plan = planMeta(events, (ev) => {
+        const a = adapterFor(ev)
+        return a ? { kind: a.kind, file: a.meta?.file(ev) ?? null } : null
+      })
+      for (const m of plan) {
+        if (m.type === "clear-others") {
+          for (const [k, t] of metaTrackers) if (k !== m.kind) t.untrack(m.paneId)
+          continue
+        }
+        const t = metaTrackers.get(m.kind)
+        if (m.type === "untrack") t?.untrack(m.paneId, true, m.file, m.sessionId)
+        else t?.track(m.paneId, m.file, transcriptTargets(m.file, m.paneId), m.sessionId)
+      }
+      // Token totals per agent, from its own source (async, off the agent's loop), tagged
+      // with that agent like the watcher tags hook events.
+      for (const a of ready) {
+        const mine = events.filter((ev) => agentOf(ev) === a.kind)
+        if (!a.usage || mine.length === 0) continue
+        void a
+          .usage(mine, transcriptTargets)
+          .then((tokenEvents) => {
+            if (tokenEvents.length)
+              mainWindow?.webContents.send(
+                "agents:events",
+                tokenEvents.map((e) => ({ ...e, agent: a.kind })),
+              )
+          })
+          .catch(() => {}) // best-effort: no badge
+      }
+    }
+    // Sessions that end with their process (OpenCode on quit, fish/pwsh: no prompt mark) get
+    // the SessionEnd they never sent: before a batch that starts one, and every few seconds
+    // while any is tracked (signal 0 per process).
+    const liveness = new AgentLiveness((k) => !!AGENT_RULES[k]?.liveByPid)
+    // Ticks only while something is tracked: none when no Codex/OpenCode ever ran.
+    const tick = () => {
+      try {
+        const ends = liveness.reap()
+        if (ends.length) fold(ends)
+      } catch (err) {
+        diag("agent-reap-failed", { err: String(err) }) // never into Electron
+      }
+      if (!liveness.hasProcs() && reaper) {
+        clearInterval(reaper)
+        reaper = null
+      }
+    }
+    const onBatch = (batch: AgentEvent[]) => {
+      const events = foldLiveness(batch, liveness)
+      if (events.length) fold(events)
+      if (liveness.hasProcs() && !reaper) {
+        reaper = setInterval(tick, REAP_MS)
+        reaper.unref()
+      }
+    }
+    hookWatcher = await startHookWatcher({ dir: eventsDir, agents: normalizers, onBatch })
+    agentEventsDir = eventsDir
+    diag("agent-hooks-up", { dir: eventsDir, agents: ready.map((a) => a.kind).join(",") })
   } catch (err) {
     diag("agent-hooks-failed", { err: String(err) })
   }
@@ -547,7 +649,7 @@ function startPty(sender: Electron.WebContents, opts: SpawnOpts, spec: StartSpec
         rec.sender.send(`pty:exit:${opts.id}`, { code: e.exitCode, signal: e.signal ?? 0 })
       }
       sessions.delete(opts.id)
-      agentMeta.untrack(opts.id) // shell (and any claude in it) gone — drop the accent
+      untrackMeta(opts.id) // shell (and any agent in it) gone — drop the accent
       sessionLedger().drop(opts.id) // …and nothing to resume there (no-op during a quit)
     }
     livePtys.delete(live)
@@ -629,28 +731,6 @@ function execQuiet(
       },
     )
   })
-}
-
-// Where `cmd` could be on PATH (PATHEXT on Windows), in lookup order.
-function pathCandidates(cmd: string): string[] {
-  if (path.isAbsolute(cmd)) return [cmd]
-  const exts =
-    process.platform === "win32" ? (process.env.PATHEXT ?? ".EXE;.CMD;.BAT").split(";") : [""]
-  const dirs = (process.env.PATH ?? "").split(path.delimiter).filter(Boolean)
-  return dirs.flatMap((d) => exts.map((ext) => path.join(d, cmd + ext)))
-}
-
-// A file's full path on PATH, or null (sync: for the editor detection's quick checks).
-function findOnPath(cmd: string): string | null {
-  return (
-    pathCandidates(cmd).find((p) => {
-      try {
-        return fs.statSync(p).isFile()
-      } catch {
-        return false
-      }
-    }) ?? null
-  )
 }
 
 // The native ssh's full path (on Windows: PATH, else OpenSSH's standard System32 location).
@@ -760,16 +840,13 @@ function registerIpc() {
     const wslArgs = wsl ? wslCdArgs(opts.cwd) : []
     const startCwd = !wsl && opts.cwd && fs.existsSync(opts.cwd) ? opts.cwd : os.homedir()
     const env = baseSpawnEnv(opts, inj?.env)
-    // Let the injected `claude` wrapper route through our scoped hook settings, and tag
-    // this pane so the agents board knows which pane each session runs in (M6). WSL panes
-    // use the /mnt/c-addressed variant; wslInjection forwards both vars over WSLENV (the
-    // settings path with /p so its Windows form is translated for claude inside WSL).
-    if (hookSettingsPath) {
-      env.MINMUX_CLAUDE_SETTINGS = wsl
-        ? (hookSettingsPathWsl ?? hookSettingsPath)
-        : hookSettingsPath
-      env.MINMUX_PANE_ID = opts.id
-    }
+    // Arm every agent in this pane (Claude: the injected `claude` wrapper routes through our
+    // scoped hook settings), and tag the pane so the agents board knows which pane each
+    // session runs in (M6). The hooks find the drop root in MINMUX_AGENT_EVENTS. WSL:
+    // wslInjection forwards the paths over WSLENV with /p, so their Windows form is
+    // translated for an agent inside WSL.
+    if (agentEventsDir && armed.length)
+      Object.assign(env, agentPaneEnv(armed, disabledAgents(), agentEventsDir, opts.id))
     return startPty(event.sender, opts, {
       file: shellCmd,
       args: [...(opts.args ?? []), ...wslArgs, ...(inj?.args ?? [])],
@@ -798,7 +875,7 @@ function registerIpc() {
   // Which sessions have a live PTY here (a renderer reload restores its layout over them).
   ipcMain.handle("pty:live-ids", async () => [...sessions.keys()])
   ipcMain.on("pty:kill", (_e, id: string) => {
-    agentMeta.untrack(id, false) // the pane is gone — nothing left to accent
+    untrackMeta(id, false) // the pane is gone — nothing left to accent
     sessionLedger().drop(id) // closed on purpose — don't resume its Claude session
     pendingSpawns.kill(id) // still preparing: it must not start at all
     const rec = sessions.get(id)
@@ -868,8 +945,12 @@ function registerIpc() {
     if (!Array.isArray(paneIds)) return {}
     const l = sessionLedger()
     l.prune(new Set(paneIds))
+    // A switched-off agent isn't resumed: its pane opens plain and its entry goes (no hook
+    // would update it meanwhile, so re-enabling later must not resume a stale session).
+    const { resume, drop } = resumablePanes(paneIds, (id) => l.get(id), disabledAgents())
+    for (const id of drop) l.drop(id)
     return l.plan(
-      paneIds,
+      resume,
       (id) => sessions.has(id),
       // Async + host paths only; bounded. A WSL path isn't checked (a cold share could block
       // or wrongly say "gone") and a stat that times out (a hung network mount) means "can't
@@ -899,8 +980,22 @@ function registerIpc() {
   ipcMain.on("agents:resume-consume", (_e, paneId: string, sessionId: string) =>
     sessionLedger().consume(paneId, sessionId),
   )
+  // The approval hint: show it for this agent? Only if the agent itself says our hooks aren't
+  // approved (unknown → no), and the user hasn't said "Don't ask again".
+  ipcMain.handle("agents:hint-wanted", async (_e, kind: AgentKind) => {
+    // Not for an integration switched off in Settings (older panes still print the marker).
+    const a = disabledAgents().has(kind) ? undefined : armed.find((x) => x.kind === kind)
+    const approved = a?.approved ? await a.approved().catch(() => null) : null
+    const s = await agentHints().get(kind)
+    return { wanted: approved === false && !s.never, dismissals: s.dismissals }
+  })
+  ipcMain.handle("agents:hint-dismiss", async (_e, kind: AgentKind, never: boolean) =>
+    armed.some((a) => a.kind === kind) ? agentHints().dismiss(kind, never === true) : 0,
+  )
   // A (re)loaded renderer starts with no accents: hand it every tracked pane's current meta.
-  ipcMain.handle("agents:meta-snapshot", async () => agentMeta.snapshot())
+  ipcMain.handle("agents:meta-snapshot", async () =>
+    [...metaTrackers.values()].flatMap((t) => t.snapshot()),
+  )
   ipcMain.handle("window:is-maximized", async () => mainWindow?.isMaximized() ?? false)
 
   // Git — working-tree status + per-file diff for the changes panel.
@@ -1287,9 +1382,9 @@ app.whenReady().then(async () => {
     if (icon) app.dock?.setIcon(icon)
   }
   registerIpc()
-  // Start the hook receiver BEFORE the window so hookSettingsPath is set before the
-  // renderer can request the first pty:spawn — otherwise the initial pane launches
-  // without MINMUX_CLAUDE_SETTINGS and the `claude` wrapper never arms (M6).
+  // Start the hook receiver BEFORE the window so the agents are armed before the renderer
+  // can request the first pty:spawn — otherwise the initial pane launches without their env
+  // (MINMUX_CLAUDE_SETTINGS, MINMUX_AGENT_EVENTS) and the `claude` wrapper never arms (M6).
   await startAgentObservability()
   createWindow()
   startSettingsWatcher()
@@ -1325,9 +1420,10 @@ app.on("window-all-closed", () => {
 
 app.on("will-quit", () => {
   diag("will-quit", { ptys: sessions.size })
-  agentMeta.dispose() // close transcript watchers
+  metaTrackers.forEach((t) => t.dispose()) // close transcript / index watchers
   sshService?.dispose() // close the ssh config watchers
   void hookWatcher?.close() // stop the file-drop watcher
+  if (reaper) clearInterval(reaper)
 })
 app.on("quit", () => diag("quit"))
 
@@ -1381,6 +1477,20 @@ function shareHistoryEnabled(): boolean {
   } catch {
     return true
   }
+}
+
+// Agents switched off in settings (validated like the renderer's; default all on). Cached:
+// read once per settings change, not on every spawn (startSettingsWatcher clears it).
+let switchesOff: Set<AgentKind> | null = null
+function disabledAgents(): Set<AgentKind> {
+  if (switchesOff) return switchesOff
+  let raw: { agents?: unknown } = {}
+  try {
+    raw = (JSON.parse(readSettings() || "{}") as { agents?: unknown } | null) ?? {}
+  } catch {
+    // unreadable → defaults
+  }
+  return (switchesOff = disabledAgentsIn(mergeAgentSwitches(raw.agents)))
 }
 
 // Persist "don't warn again" back into settings.json (merge, best-effort).

@@ -25,7 +25,13 @@ import type { RemotePhase } from "./lib/remote-connect"
 import { reduceSignals } from "./lib/session-status"
 import type { SignalEvent } from "./lib/session-status"
 import { inGitKey, paneOfGitKey } from "./lib/agent-dirs"
-import { reduceAgentEvent, emptyGraph, dropPaneSessions, claudePaneIds } from "./lib/agent-graph"
+import {
+  reduceAgentEvent,
+  emptyGraph,
+  dropPaneSessions,
+  agentByPane,
+  type AgentKind,
+} from "./lib/agent-graph"
 import {
   tabCloseConfirm,
   terminalCloseConfirm,
@@ -113,7 +119,7 @@ interface AppState {
   rightPanelWidth: number // px width of the right panel (drag-resizable, persisted)
   sidebarCollapsed: boolean
   git: GitStatus | null
-  agents: AgentGraph // live tree of Claude agents/sub-agents (M6, fed by hook events)
+  agents: AgentGraph // live tree of agents/sub-agents (M6, fed by hook events)
   home: string
   platform: string // process.platform ("darwin"|"win32"|"linux"); "" until fetched
   profile: string // a non-default profile's name ("dev"), shown by the brand; "" otherwise
@@ -124,9 +130,11 @@ interface AppState {
   paneRoot: Record<string, string> // per-session Files-panel root override (absent = follow cwd)
   closeConfirm: CloseConfirm | null // a close awaiting the "are you sure?" dialog (lib/close-confirm)
   dragging: { tabId: string; sessionId: string } | null // surface being dragged (drop hints on)
-  agentMeta: Record<string, SessionMeta> // per pane: the Claude session's /color + /rename
+  agentMeta: Record<string, SessionMeta> // per pane: the agent session's /color + /rename
   paneGit: Record<string, PaneGitInfo> // per terminal: branch + GitHub PR (sidebar)
-  resume: Record<string, ResumeState> // per terminal: Claude-session resume banner
+  resume: Record<string, ResumeState> // per terminal: agent-session resume banner
+  // per terminal: the "approve minmux's hooks" hint for the agent launched there (Codex)
+  agentHint: Record<string, { kind: AgentKind; dismissals: number }>
 
   setHome: (home: string) => void
   setPlatform: (platform: string) => void
@@ -138,7 +146,7 @@ interface AppState {
   setSessionOscTitle: (sessionId: string, title: string) => void
   setGit: (git: GitStatus | null) => void
   applyAgentEvents: (events: AgentEvent[]) => void
-  claudeExited: (paneId: string) => void // the pane's shell prompt came back after Claude
+  agentExited: (paneId: string) => void // the pane's shell prompt came back after its agent
   setRightView: (view: RightView) => void
   setSessionCwd: (sessionId: string, cwd: string) => void
   // undefined = unknown again; verified = reported by our integrated shell (nonce-checked), by
@@ -190,6 +198,7 @@ interface AppState {
   setAgentMeta: (sessionId: string, meta: SessionMeta | null) => void
   setPaneGit: (fresh: Record<string, PaneGitInfo>, polled: string[]) => void
   setResume: (sessionId: string, state: ResumeState | null) => void
+  setAgentHint: (sessionId: string, hint: { kind: AgentKind; dismissals: number } | null) => void
   moveSurface: (tabId: string, sessionId: string, target: MoveTarget) => void // drag & drop
   setActivePane: (tabId: string, sessionId: string) => void
   focusSession: (sessionId: string) => void
@@ -209,14 +218,10 @@ const closing =
     return { ...next, closeConfirm: null }
   }
 
-/** What closing needs to know about terminals: running a command, or a live Claude. */
+/** What closing needs to know about terminals: running a command, or a live agent. */
 function terminalStates(state: AppState, ids: string[]): TerminalState[] {
-  const claude = claudePaneIds(state.agents)
-  return ids.map((id) => ({
-    id,
-    running: !!state.sessions[id]?.running,
-    claude: claude.includes(id),
-  }))
+  const agentIn = agentByPane(state.agents)
+  return ids.map((id) => ({ id, running: !!state.sessions[id]?.running, agent: agentIn[id] }))
 }
 
 /** Whether the user is actively looking at this exact session: window focused +
@@ -331,6 +336,7 @@ function dropSessions(
   | "agentMeta"
   | "paneGit"
   | "resume"
+  | "agentHint"
   | "remotePhase"
   | "remoteDetail"
   | "integrationHint"
@@ -340,12 +346,14 @@ function dropSessions(
   const agentMeta = { ...state.agentMeta }
   const paneGit = { ...state.paneGit }
   const resume = { ...state.resume }
+  const agentHint = { ...state.agentHint }
   const remotePhase = { ...state.remotePhase }
   const remoteDetail = { ...state.remoteDetail }
   for (const id of ids) {
     delete remotePhase[id]
     delete remoteDetail[id]
     delete resume[id]
+    delete agentHint[id]
     delete paneGit[id]
     delete paneGit[inGitKey(id)] // …and its Claude `in` folder's
     delete sessions[id]
@@ -361,6 +369,7 @@ function dropSessions(
     agentMeta,
     paneGit,
     resume,
+    agentHint,
     remotePhase,
     remoteDetail,
     integrationHint,
@@ -434,6 +443,7 @@ export const useStore = create<AppState>((set, get) => ({
   agentMeta: {},
   paneGit: {},
   resume: {},
+  agentHint: {},
 
   setHome: (home) => set({ home }),
   setPlatform: (platform) => set({ platform }),
@@ -470,7 +480,7 @@ export const useStore = create<AppState>((set, get) => ({
   // Fold a coalesced batch of hook events into the agent tree (one re-render per batch).
   applyAgentEvents: (events) =>
     set((state) => ({ agents: events.reduce(reduceAgentEvent, state.agents) })),
-  claudeExited: (paneId) =>
+  agentExited: (paneId) =>
     set((state) => {
       const agents = dropPaneSessions(state.agents, paneId)
       return agents === state.agents ? state : { agents }
@@ -864,6 +874,17 @@ export const useStore = create<AppState>((set, get) => ({
         delete next[id]
       }
       return next === state.paneGit ? {} : { paneGit: next }
+    }),
+
+  setAgentHint: (sessionId, hint) =>
+    set((state) => {
+      // Unchanged → the same state object, so nothing is notified.
+      if (hint && !state.sessions[sessionId]) return state
+      if (!hint && !(sessionId in state.agentHint)) return state
+      const agentHint = { ...state.agentHint }
+      if (hint) agentHint[sessionId] = hint
+      else delete agentHint[sessionId]
+      return { agentHint }
     }),
 
   setResume: (sessionId, st) =>

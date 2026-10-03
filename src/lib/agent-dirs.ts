@@ -1,15 +1,18 @@
-// Where a pane's Claude session works vs where it started. The shell's folder (`from`) is
-// where Claude saves the session; Claude's own cwd (`in`) moves with worktrees and `cd`s.
+// Where a pane's agent session works vs where it started. The shell's folder (`from`) is
+// where the agent was started (Claude saves the session there); the agent's own cwd (`in`)
+// moves with worktrees and `cd`s.
 // Pure — the sidebar, the branch/PR poll and the changes panel share these rules.
-import type { AgentGraph, Worktree } from "./agent-graph"
+import type { AgentGraph, AgentKind, Worktree } from "./agent-graph"
+import { agentInfo } from "./agent-kinds"
 import type { PaneGitInfo, PaneGitRequest } from "./pane-git"
 import type { Session } from "../types"
 import { wslContext } from "./wsl"
 import { shortCwd } from "./session-label"
 import { normalizeRootPath } from "./breadcrumb"
 
-/** A live Claude session's working folder + the session's other worktrees. */
+/** A live agent session's working folder + the session's other worktrees. */
 export interface WorkDir {
+  agent: AgentKind
   cwd: string
   others: Worktree[]
 }
@@ -30,15 +33,15 @@ export function isInside(child: string, parent: string): boolean {
 
 const memo = new WeakMap<AgentGraph, Record<string, WorkDir>>()
 
-/** Per pane: its newest live Claude session's cwd + other worktrees; memoized per graph. */
-export function claudeWorkDirs(graph: AgentGraph): Record<string, WorkDir> {
+/** Per pane: its newest live agent session's cwd + other worktrees; memoized per graph. */
+export function agentWorkDirs(graph: AgentGraph): Record<string, WorkDir> {
   const hit = memo.get(graph)
   if (hit) return hit
   const out: Record<string, WorkDir> = {}
   const best: Record<string, number> = {}
   for (const rid of graph.rootIds) {
     const n = graph.nodes[rid]
-    // Never a nested session (a background agent), even alone: it isn't the pane's Claude.
+    // Never a nested session (a background agent), even alone: it isn't the pane's agent.
     if (!n?.paneId || n.nested) continue
     const rank = n.started ?? 0 // the newest-started lead wins
     if (rank < (best[n.paneId] ?? -1)) continue
@@ -49,7 +52,7 @@ export function claudeWorkDirs(graph: AgentGraph): Record<string, WorkDir> {
       continue
     }
     const others = (n.worktrees ?? []).filter((w) => !samePath(w.path, cwd))
-    out[n.paneId] = { cwd, others }
+    out[n.paneId] = { agent: n.agent, cwd, others }
   }
   memo.set(graph, out)
   return out
@@ -57,12 +60,13 @@ export function claudeWorkDirs(graph: AgentGraph): Record<string, WorkDir> {
 
 const flatMemo = new WeakMap<AgentGraph, string[]>()
 
-/** claudeWorkDirs flattened to primitives [paneId, cwd, others…] for useShallow; memoized. */
-export function claudeWorkFlat(graph: AgentGraph): string[] {
+/** agentWorkDirs flattened to primitives [paneId, agent, cwd, others…] for useShallow. */
+export function agentWorkFlat(graph: AgentGraph): string[] {
   const hit = flatMemo.get(graph)
   if (hit) return hit
-  const out = Object.entries(claudeWorkDirs(graph)).flatMap(([id, d]) => [
+  const out = Object.entries(agentWorkDirs(graph)).flatMap(([id, d]) => [
     id,
+    d.agent,
     d.cwd,
     d.others.map((w) => w.path).join("\n"),
   ])
@@ -70,15 +74,20 @@ export function claudeWorkFlat(graph: AgentGraph): string[] {
   return out
 }
 
-/** Claude's `in` lookup if it still applies: asked for this folder, or Claude is inside its repo. */
-export function inGitFor(inGit: PaneGitInfo | undefined, work: string | undefined) {
+/** The agent's `in` lookup if it still applies: asked for this folder, or it's inside its repo. */
+export function inGitFor(
+  inGit: PaneGitInfo | undefined,
+  work: string | undefined,
+  agent: AgentKind | undefined, // its worktree layouts (undefined: no agent works there)
+) {
   if (!inGit || !work) return undefined
   if (inGit.forCwd === work) return inGit
   if (!inGit.root) return undefined
   if (samePath(work, inGit.root)) return inGit
-  // Inside the repo — but a nested worktree (Claude's own layout) is a new checkout.
+  // Inside the repo — but a nested worktree (the agent's own layout) is a new checkout.
   const rest = norm(work).slice(norm(inGit.root).length)
-  return isInside(work, inGit.root) && !rest.includes("/.claude/worktrees/") ? inGit : undefined
+  const nested = agentInfo(agent).worktreeMarkers.some((m) => rest.includes(m))
+  return isInside(work, inGit.root) && !nested ? inGit : undefined
 }
 
 /** Claude works in another checkout: other repo root, or by real path outside git; unknown → no. */
@@ -87,8 +96,9 @@ export function worksElsewhere(
   work: string | undefined,
   shellGit: PaneGitInfo | undefined,
   inGit: PaneGitInfo | undefined,
+  agent: AgentKind | undefined,
 ): boolean {
-  const known = inGitFor(inGit, work)
+  const known = inGitFor(inGit, work, agent)
   if (!shellCwd || !work || !known || samePath(shellCwd, work)) return false
   if (known.root) return !(shellGit?.root && samePath(shellGit.root, known.root))
   // Outside git: symlinked spellings and subfolders of the shell's folder are the same place.
@@ -97,16 +107,17 @@ export function worksElsewhere(
   return !samePath(from, to) && !isInside(to, from)
 }
 
-/** The folder a pane's git views follow: Claude's checkout root while it works elsewhere. */
+/** The folder a pane's git views follow: the agent's checkout root while it works elsewhere. */
 export function workCwd(
   graph: AgentGraph,
   paneGit: Record<string, PaneGitInfo>,
   paneId: string,
   shellCwd?: string,
 ): string | undefined {
-  const work = claudeWorkDirs(graph)[paneId]?.cwd
+  const dir = agentWorkDirs(graph)[paneId]
+  const work = dir?.cwd
   const inGit = paneGit[inGitKey(paneId)]
-  if (!worksElsewhere(shellCwd, work, paneGit[paneId], inGit)) return shellCwd
+  if (!worksElsewhere(shellCwd, work, paneGit[paneId], inGit, dir?.agent)) return shellCwd
   return inGit?.root ?? work // the checkout, not Claude's current subfolder (stable views)
 }
 

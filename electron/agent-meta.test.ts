@@ -2,7 +2,9 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest"
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
-import { AgentMetaTracker, type WatchFn } from "./agent-meta"
+import { AgentMetaTracker, planMeta, type WatchFn } from "./agent-meta"
+import type { AgentEvent } from "../src/lib/agent-graph"
+import { threadNameReader } from "./agents/codex"
 
 const color = (c: string) => JSON.stringify({ type: "agent-color", agentColor: c })
 const title = (t: string) => JSON.stringify({ type: "custom-title", customTitle: t })
@@ -175,5 +177,117 @@ describe("AgentMetaTracker", () => {
     }
     await settle()
     expect(emitted).toEqual([["pane1", { color: "red" }]])
+  })
+})
+
+describe("AgentMetaTracker over a shared file (Codex's thread-name index)", () => {
+  let dir: string
+  beforeEach(() => (dir = fs.mkdtempSync(path.join(os.tmpdir(), "minmux-am2-"))))
+  afterEach(() => fs.rmSync(dir, { recursive: true, force: true }))
+  const settle = () => new Promise((r) => setTimeout(r, 30))
+  const line = (id: string, name: string) => JSON.stringify({ id, thread_name: name })
+
+  it("gives each pane its own session's name from the one file, marked automatic", async () => {
+    const index = path.join(dir, "session_index.jsonl")
+    fs.writeFileSync(index, `${line("a", "Fix login")}\n${line("b", "Write docs")}\n`)
+    const emitted: [string, unknown][] = []
+    const w = fakeWatch()
+    const t = new AgentMetaTracker((id, m) => emitted.push([id, m]), w.watch, 0, threadNameReader())
+    t.track("p1", index, [index], "a")
+    t.track("p2", index, [index], "b")
+    await settle()
+    expect(Object.fromEntries(emitted)).toEqual({
+      p1: { name: "Fix login", auto: true },
+      p2: { name: "Write docs", auto: true },
+    })
+    // A /rename of one thread (a later line) reaches only its pane, as the user's name now.
+    emitted.length = 0
+    t.untrack("p2", false)
+    fs.appendFileSync(index, `${line("a", "Fix login flow")}\n`)
+    w.fire()
+    await settle()
+    expect(emitted).toEqual([["p1", { name: "Fix login flow" }]])
+  })
+
+  it("restarts when the pane's session changes, even in the same file", async () => {
+    const index = path.join(dir, "session_index.jsonl")
+    fs.writeFileSync(index, `${line("a", "One")}\n${line("b", "Two")}\n`)
+    const emitted: [string, unknown][] = []
+    const t = new AgentMetaTracker(
+      (id, m) => emitted.push([id, m]),
+      fakeWatch().watch,
+      0,
+      threadNameReader(),
+    )
+    t.track("p1", index, [index], "a")
+    await settle()
+    t.track("p1", index, [index], "b") // /new in the same Codex
+    await settle()
+    expect(emitted.at(-1)).toEqual(["p1", { name: "Two", auto: true }])
+    // a late SessionEnd of the old thread must not end the new one
+    t.untrack("p1", true, index, "a")
+    expect(t.snapshot()).toEqual([["p1", { name: "Two", auto: true }]])
+  })
+})
+
+describe("planMeta", () => {
+  const ev = (o: Partial<AgentEvent>): AgentEvent => ({
+    event: "Stop",
+    sessionId: "s",
+    paneId: "p",
+    ...o,
+  })
+  const claude = (e: AgentEvent) => ({ kind: "claude" as const, file: e.transcriptPath ?? null })
+  it("tracks the lead session's file and clears other agents' accents in its pane", () => {
+    expect(planMeta([ev({ transcriptPath: "/t.jsonl" })], claude)).toEqual([
+      { type: "clear-others", kind: "claude", paneId: "p" },
+      { type: "track", kind: "claude", paneId: "p", file: "/t.jsonl", sessionId: "s" },
+    ])
+  })
+  it("clears other agents' accents even when the new lead keeps no meta (OpenCode)", () => {
+    const none = () => ({ kind: "opencode" as const, file: null })
+    expect(planMeta([ev({})], none)).toEqual([
+      { type: "clear-others", kind: "opencode", paneId: "p" },
+    ])
+  })
+  it("untracks that session on SessionEnd; ignores sub-agents, background agents, unarmed agents", () => {
+    expect(planMeta([ev({ event: "SessionEnd", transcriptPath: "/t.jsonl" })], claude)).toEqual([
+      { type: "untrack", kind: "claude", paneId: "p", file: "/t.jsonl", sessionId: "s" },
+    ])
+    expect(
+      planMeta(
+        [ev({ agentId: "a", transcriptPath: "/t" }), ev({ nested: true, transcriptPath: "/t" })],
+        claude,
+      ),
+    ).toEqual([])
+    expect(planMeta([ev({ transcriptPath: "/t" })], () => null)).toEqual([])
+  })
+})
+
+describe("AgentMetaTracker — session switch in a shared file", () => {
+  let dir: string
+  beforeEach(() => (dir = fs.mkdtempSync(path.join(os.tmpdir(), "minmux-am3-"))))
+  afterEach(() => fs.rmSync(dir, { recursive: true, force: true }))
+  const settle = () => new Promise((r) => setTimeout(r, 30))
+  it("re-emits for the new session even when its name equals the old one's", async () => {
+    const index = path.join(dir, "session_index.jsonl")
+    const l = (id: string) => JSON.stringify({ id, thread_name: "Run tests" })
+    fs.writeFileSync(index, `${l("a")}\n${l("b")}\n`)
+    const emitted: [string, unknown][] = []
+    const t = new AgentMetaTracker(
+      (id, m) => emitted.push([id, m]),
+      fakeWatch().watch,
+      0,
+      threadNameReader(),
+    )
+    t.track("p1", index, [index], "a")
+    await settle()
+    t.track("p1", index, [index], "b")
+    await settle()
+    expect(emitted).toEqual([
+      ["p1", { name: "Run tests", auto: true }],
+      ["p1", null], // the old session's name goes at once…
+      ["p1", { name: "Run tests", auto: true }], // …and the new one's comes, same text or not
+    ])
   })
 })

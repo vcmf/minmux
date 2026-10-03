@@ -7,6 +7,8 @@
 > specific case of _official_ telemetry.
 
 Status: **DESIGN / accepted for Phase 1** (2026-07-13). Milestone: see `../ROADMAP.md` → M6.
+Codex and OpenCode (2026-10): `MULTI_AGENT.md`, which generalises this design to one adapter
+per agent.
 
 ---
 
@@ -161,7 +163,7 @@ Design rule (matches repo conventions): **the parsing/folding is a pure reducer*
 - **Phase 2 — OTEL trace overlay (later, opt-in, flagged beta).** Local OTLP receiver adds exact
   multi-level parent→child lineage + token/cost/latency. Gated behind a setting; degrades to Phase 1
   if telemetry is off or the interactive-CLI spike fails.
-- **Phase 3 — cross-agent generalisation (future).** The reducer is agent-agnostic; other agents
+- **Phase 3 — cross-agent generalisation (done 2026-10: Codex, OpenCode; `MULTI_AGENT.md`).** The reducer is agent-agnostic; other agents
   that emit OTEL or a documented hook contract can populate the same board.
 
 ---

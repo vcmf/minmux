@@ -1,6 +1,6 @@
 import type { ShellOption, SpawnOpts, SshHost } from "../types"
 import type { WslContext } from "./wsl"
-import type { AgentEvent } from "./agent-graph"
+import type { AgentEvent, AgentKind } from "./agent-graph"
 import type { SessionMeta } from "./session-color"
 import type { ResumePlan } from "./resume"
 import type { PaneGitInfo, PaneGitRequest } from "./pane-git"
@@ -46,6 +46,9 @@ export interface Ipc {
   // A Claude pane's /color + /rename (null = claude left the pane) → the pane accent.
   onAgentMeta: (cb: (paneId: string, meta: SessionMeta | null) => void) => () => void
   agentMetaSnapshot: () => Promise<[string, SessionMeta][]> // all current (renderer reload)
+  // The "approve the hooks" hint: wanted for this agent? / "Not now" or "Don't ask again".
+  agentHintWanted: (kind: AgentKind) => Promise<{ wanted: boolean; dismissals: number }>
+  agentHintDismiss: (kind: AgentKind, never: boolean) => Promise<number>
   // Claude sessions to resume in restored terminals; consume = attempted/dismissed (one shot).
   resumePlan: (paneIds: string[], allowBypass: boolean) => Promise<Record<string, ResumePlan>>
   resumeConsume: (paneId: string, sessionId: string) => void

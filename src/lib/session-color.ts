@@ -7,10 +7,11 @@
 export interface SessionMeta {
   color?: string | null
   name?: string
+  auto?: boolean // the name was given by the agent, not the user: shown, never a colour (D3)
 }
 
 /** The colours Claude Code's `/color` accepts (verified against the CLI docs + transcripts). */
-export const CLAUDE_COLORS = [
+export const ACCENT_COLORS = [
   "red",
   "blue",
   "green",
@@ -20,11 +21,11 @@ export const CLAUDE_COLORS = [
   "pink",
   "cyan",
 ] as const
-export type ClaudeColor = (typeof CLAUDE_COLORS)[number]
+export type AccentColor = (typeof ACCENT_COLORS)[number]
 
 // Per-scheme swatches: saturated enough to read as an accent on the pane header, and
 // darker in light themes so a 2px border still stands out against a pale background.
-const SWATCHES: Record<"dark" | "light", Record<ClaudeColor, string>> = {
+const SWATCHES: Record<"dark" | "light", Record<AccentColor, string>> = {
   dark: {
     red: "#f0625f",
     blue: "#5b9cf5",
@@ -47,8 +48,8 @@ const SWATCHES: Record<"dark" | "light", Record<ClaudeColor, string>> = {
   },
 }
 
-const isClaudeColor = (c: string): c is ClaudeColor =>
-  (CLAUDE_COLORS as readonly string[]).includes(c)
+const isAccentColor = (c: string): c is AccentColor =>
+  (ACCENT_COLORS as readonly string[]).includes(c)
 
 /** FNV-1a — a stable, well-spread 32-bit hash so a name always maps to the same colour. */
 function hash(s: string): number {
@@ -62,12 +63,13 @@ function hash(s: string): number {
 
 /** Which Claude colour a session shows: an explicit `/color` wins; else a renamed session gets
  *  a stable colour derived from its name (cmux-style); a reset or unnamed session has none. */
-export function sessionColorName(meta: SessionMeta | undefined): ClaudeColor | undefined {
+export function sessionColorName(meta: SessionMeta | undefined): AccentColor | undefined {
   if (!meta) return undefined
-  if (typeof meta.color === "string") return isClaudeColor(meta.color) ? meta.color : undefined
+  if (typeof meta.color === "string") return isAccentColor(meta.color) ? meta.color : undefined
   if (meta.color === null) return undefined // `/color default` — the user asked for none
+  if (meta.auto) return undefined // an automatic name (Codex's) colours nothing
   const name = meta.name?.trim()
-  return name ? CLAUDE_COLORS[hash(name) % CLAUDE_COLORS.length] : undefined
+  return name ? ACCENT_COLORS[hash(name) % ACCENT_COLORS.length] : undefined
 }
 
 /** The session's accent as a CSS colour for the current scheme (undefined = no accent). */

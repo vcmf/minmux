@@ -1213,7 +1213,7 @@ describe("closing a session / a terminal asks first when it'd kill work", () => 
       { event: "SessionStart", sessionId: "c", paneId: right.sessionIds[0]!, nested: false },
     ])
     st().requestClosePane(firstTab().id, right.id)
-    expect(st().closeConfirm).toMatchObject({ kind: "terminal", claude: true })
+    expect(st().closeConfirm).toMatchObject({ kind: "terminal", agent: "claude" })
   })
 
   it("a pending confirm is dropped when its target closes some other way", () => {
@@ -1245,7 +1245,7 @@ describe("closing a session / a terminal asks first when it'd kill work", () => 
     st().applyAgentEvents([{ event: "SessionStart", sessionId: "c", paneId: b!, nested: false }])
     st().newSurface()
     st().requestCloseTerminal(firstTab().id, b!)
-    expect(st().closeConfirm).toMatchObject({ kind: "terminal", sessionId: b, claude: true })
+    expect(st().closeConfirm).toMatchObject({ kind: "terminal", sessionId: b, agent: "claude" })
     st().confirmClose()
     expect(allSessionIds(firstTab().root)).not.toContain(b)
   })

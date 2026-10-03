@@ -8,6 +8,7 @@
 
 import fs from "node:fs"
 import path from "node:path"
+import { pidAlive } from "./pid"
 
 /** What's worth carrying: the config dir's state files + the user-data dir's localStorage. */
 export const LEGACY_ENTRIES = [
@@ -56,15 +57,6 @@ export function legacyInstanceRunning(
     return false
   } catch (err) {
     return (err as NodeJS.ErrnoException).code === "EBUSY"
-  }
-}
-
-function pidAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0)
-    return true
-  } catch (err) {
-    return (err as NodeJS.ErrnoException).code === "EPERM" // alive, just not ours
   }
 }
 

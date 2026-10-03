@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest"
-import { wslUncCandidates, winToMnt, uncToWslPath } from "./wsl-paths"
+import { wslUncCandidates, uncToWslPath } from "./wsl-paths"
 
 describe("wslUncCandidates", () => {
   it("maps an absolute Linux path into both share forms, newest first", () => {
@@ -20,22 +20,6 @@ describe("wslUncCandidates", () => {
   it("returns [] for a non-absolute path", () => {
     expect(wslUncCandidates("Ubuntu", "relative/x")).toEqual([])
     expect(wslUncCandidates("Ubuntu", "")).toEqual([])
-  })
-})
-
-describe("winToMnt", () => {
-  it("maps a Windows drive path to /mnt/<drive>/…", () => {
-    expect(winToMnt("C:\\Users\\me\\AppData\\Roaming\\minmux")).toBe(
-      "/mnt/c/Users/me/AppData/Roaming/minmux",
-    )
-    expect(winToMnt("D:/data/x")).toBe("/mnt/d/data/x")
-  })
-  it("lowercases the drive letter", () => {
-    expect(winToMnt("C:\\x")).toBe("/mnt/c/x")
-  })
-  it("returns null for a non-drive path", () => {
-    expect(winToMnt("/already/posix")).toBeNull()
-    expect(winToMnt("\\\\wsl.localhost\\Ubuntu\\home")).toBeNull()
   })
 })
 

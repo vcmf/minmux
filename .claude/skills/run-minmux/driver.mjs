@@ -142,12 +142,13 @@ export async function launch(o = {}) {
           : n.children.flatMap(walk)
       return walk(ws.tabs[0].root)
     },
-    /** Simulate a Claude Code hook event from pane `paneId` exactly as the injected hook
-     *  command would (a file in the per-launch drop dir). `payload` is Claude's raw hook JSON,
-     *  e.g. { hook_event_name: "Stop", session_id: "c1", last_assistant_message: "…" }. */
-    dropHook(paneId, payload) {
-      const hooks = JSON.parse(fs.readFileSync(path.join(cfg, "claude-hooks.json"), "utf8"))
-      const dir = hooks.hooks.SessionStart[0].hooks[0].args[2]
+    /** Simulate an agent hook event from pane `paneId` exactly as the injected hook command
+     *  would (a file in `hook-events/<nonce>/<agent>/`, Claude by default). `payload` is the
+     *  agent's raw hook JSON, e.g. { hook_event_name: "Stop", session_id: "c1" }. */
+    dropHook(paneId, payload, agent = "claude") {
+      // The per-launch drop root is the one folder under hook-events/; each agent has its own.
+      const events = path.join(cfg, "hook-events")
+      const dir = path.join(events, fs.readdirSync(events)[0], agent)
       const name = `${paneId}.1.${Date.now()}.${Math.random().toString(36).slice(2)}.json`
       fs.writeFileSync(path.join(dir, name), JSON.stringify(payload))
     },

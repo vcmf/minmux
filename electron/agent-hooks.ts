@@ -1,57 +1,26 @@
-// File-drop watcher for Claude Code hooks (M6). Claude writes each event as a file into
-// a watched directory (see electron/hook-writer.ts); we read + delete each file, normalise
-// it off any hot path, and forward coalesced batches to the renderer (which holds the
-// AgentGraph and runs the pure reducer). No HTTP server, no port — so nothing can go stale
-// (the old loopback receiver's ECONNREFUSED class) and it works across the WSL boundary,
-// where a Windows-loopback server is unreachable. See docs/design/AGENT_OBSERVABILITY.md.
+// File-drop watcher for coding-agent hooks (M6). Each agent writes every event as a file into
+// its own folder under a watched drop root (`<root>/<agent>/`, see electron/hook-writer.ts);
+// we read + delete each file, normalise it with that agent's normaliser off any hot path, and
+// forward coalesced batches to the renderer (which holds the AgentGraph and runs the pure
+// reducer). No HTTP server, no port — so nothing can go stale (the old loopback receiver's
+// ECONNREFUSED class) and it works across the WSL boundary, where a Windows-loopback server
+// is unreachable. See docs/design/AGENT_OBSERVABILITY.md and MULTI_AGENT.md.
 
 import fs from "node:fs"
 import path from "node:path"
 import { watch } from "chokidar"
-import type { AgentEvent } from "../src/lib/agent-graph"
-
-// tool_input keys that carry a file path, across the file-touching tools.
-const FILE_TOOL_KEYS = ["file_path", "path", "notebook_path"] as const
-
-/** Raw hook JSON (+ the pane id parsed from the drop file's name) → the normalised
- *  AgentEvent; null if the payload lacks the minimum (event name + session id). */
-export function normalizeHookEvent(raw: unknown, paneId?: string): AgentEvent | null {
-  if (typeof raw !== "object" || raw === null) return null
-  const r = raw as Record<string, unknown>
-  if (typeof r.hook_event_name !== "string" || typeof r.session_id !== "string") return null
-  const ti = (typeof r.tool_input === "object" && r.tool_input ? r.tool_input : {}) as Record<
-    string,
-    unknown
-  >
-  const filePath = FILE_TOOL_KEYS.map((k) => ti[k]).find((v) => typeof v === "string") as
-    string | undefined
-  const str = (v: unknown) => (typeof v === "string" ? v : undefined)
-  return {
-    event: r.hook_event_name,
-    sessionId: r.session_id,
-    paneId: paneId || undefined,
-    agentId: str(r.agent_id),
-    agentType: str(r.agent_type),
-    cwd: str(r.cwd),
-    toolName: str(r.tool_name),
-    filePath,
-    message: str(r.message) ?? str(r.last_assistant_message),
-    worktreePath: str(r.worktree_path),
-    baseBranch: str(r.base_branch),
-    transcriptPath: str(r.transcript_path),
-    agentTranscriptPath: str(r.agent_transcript_path),
-    source: str(r.source),
-    reason: str(r.reason),
-    permissionMode: str(r.permission_mode),
-  }
-}
+import type { AgentEvent, AgentKind } from "../src/lib/agent-graph"
 
 export interface HookWatcher {
   close: () => Promise<void>
 }
 
+/** A raw drop (parsed JSON + the pane id from its filename) → an event, or null to skip. */
+export type DropNormalizer = (raw: unknown, paneId?: string) => AgentEvent | null
+
 export interface HookWatcherOptions {
-  dir: string // the drop directory to watch (must already exist)
+  dir: string // the drop root; each agent writes into `<dir>/<agent>/` (all must already exist)
+  agents: Partial<Record<AgentKind, DropNormalizer>> // agent folder → its normaliser; others ignored
   onBatch: (events: AgentEvent[]) => void // coalesced, off any hot path
   coalesceMs?: number // batch window (default 50ms) — one emit per window
   sweepMs?: number // safety-net directory rescan (default 750ms)
@@ -59,8 +28,16 @@ export interface HookWatcherOptions {
 
 const MAX_DROP_BYTES = 1024 * 1024 // ignore a pathologically large drop (bound main memory)
 
-/** Watch `dir` for event files; claim + parse + delete each, tag it with the pane id from
- *  the filename, and forward coalesced batches. A periodic sweep re-scans the dir so a burst
+/** A drop's file name: `<pane>.<pid>.<ts>.<rand>.json` (anything else is a temp or a claim). */
+const isDropName = (p: string): boolean => p.endsWith(".json")
+
+/** Not a drop: chokidar doesn't even poll it (folders pass: they're what is watched). */
+export const notADrop = (p: string, st?: { isFile(): boolean }): boolean =>
+  !!st?.isFile() && !isDropName(p)
+
+/** Watch each agent's folder under `dir` for event files; claim + parse + delete each,
+ *  normalise it with its folder's normaliser (tagging the pane id from the filename), and
+ *  forward coalesced batches. A periodic sweep re-scans the dir so a burst
  *  the OS watcher coalesced/dropped is still picked up (guaranteed-ish delivery); the rename
  *  claim makes watcher + sweep consume each file exactly once. Best-effort per file. */
 export async function startHookWatcher(opts: HookWatcherOptions): Promise<HookWatcher> {
@@ -85,10 +62,21 @@ export async function startHookWatcher(opts: HookWatcherOptions): Promise<HookWa
     if (!timer) timer = setTimeout(flush, coalesceMs)
   }
 
+  // Each agent's folder (normalised, so a caller's trailing separator or relative root can't
+  // make every drop miss the lookup) → its normaliser.
+  const byFolder = new Map<string, { kind: AgentKind; normalize: DropNormalizer }>()
+  for (const [kind, normalize] of Object.entries(opts.agents) as [AgentKind, DropNormalizer][])
+    byFolder.set(path.resolve(opts.dir, kind), { kind, normalize })
+  const folders = [...byFolder.keys()]
+
   // Claim a drop by renaming it (atomic) → only one of {watcher, sweep} wins, so an event
   // is never delivered twice. Size-cap it, parse, emit, then remove the claimed file.
   const ingest = (file: string) => {
-    if (!file.endsWith(".json")) return // skip our own .rd claim files + anything else
+    if (!isDropName(file)) return // skip our own .rd claim files + anything else
+    // Only `<dir>/<known agent>/<drop>.json`: the folder names the agent; a file straight in
+    // the root, a deeper one or an unknown folder is not ours (left alone).
+    const agent = byFolder.get(path.dirname(path.resolve(file)))
+    if (!agent) return
     const claim = `${file}.rd`
     void fs.promises
       .rename(file, claim)
@@ -102,10 +90,23 @@ export async function startHookWatcher(opts: HookWatcherOptions): Promise<HookWa
           } catch {
             return // partial/corrupt drop — skip
           }
-          // Filename is `<paneId>.<pid>.<ts>.<rand>.json`; pane ids are UUIDs (no dots).
+          // Filename is `<paneId>.<agent pid>.<ts>.<rand>.json`; pane ids are UUIDs (no dots).
           const parts = path.basename(file).split(".")
           const paneId = parts[0] || undefined
-          const ev = normalizeHookEvent(raw, paneId)
+          let ev: AgentEvent | null = null
+          try {
+            const out = agent.normalize(raw, paneId)
+            const pid = Number(parts[1])
+            // The folder says which agent wrote it — never trust a normaliser to say so — and
+            // the filename which process ran the hook (an agent's lead rule may need it).
+            ev = out && {
+              ...out,
+              agent: agent.kind,
+              ...(Number.isInteger(pid) && pid > 1 ? { pid } : {}), // 1: orphaned, unknown
+            }
+          } catch {
+            // a normaliser must never take down the watcher
+          }
           if (ev) {
             const ts = Number(parts[2])
             pending.push({ ev, ts: Number.isFinite(ts) ? ts : Date.now() })
@@ -119,18 +120,24 @@ export async function startHookWatcher(opts: HookWatcherOptions): Promise<HookWa
   }
 
   const sweep = () => {
-    void fs.promises
-      .readdir(opts.dir)
-      .then((files) => {
-        for (const f of files) if (f.endsWith(".json")) ingest(path.join(opts.dir, f))
-      })
-      .catch(() => {})
+    for (const folder of folders)
+      void fs.promises
+        .readdir(folder)
+        .then((files) => {
+          for (const f of files) if (isDropName(f)) ingest(path.join(folder, f))
+        })
+        .catch(() => {})
   }
+
+  // Nothing to watch (no agent armed): chokidar would never report "ready" for no paths.
+  if (folders.length === 0) return { close: async () => {} }
 
   // awaitWriteFinish so we don't claim a half-written drop; ignoreInitial since the caller
   // clears stale files before starting (a leftover would replay an old event otherwise).
-  const watcher = watch(opts.dir, {
+  const watcher = watch(folders, {
     ignoreInitial: true,
+    depth: 0,
+    ignored: notADrop,
     awaitWriteFinish: { stabilityThreshold: 30, pollInterval: 10 },
   })
   watcher.on("add", ingest)

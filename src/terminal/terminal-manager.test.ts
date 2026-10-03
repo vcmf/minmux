@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { useStore } from "../store"
 import { ipc } from "../lib/ipc"
 import { resetStore, testHost, testShell } from "../test/helpers"
@@ -965,5 +965,151 @@ describe("TerminalManager — whose folder a report is", () => {
     expect(st().sessions[id]!.remoteCwd).toBe("/srv/app")
     term.osc[7]!("file://db/var/tmp") // db again: not this pane's host
     expect(st().sessions[id]!.remoteCwd).toBe("/srv/app")
+  })
+})
+
+describe("TerminalManager — the agent approval hint", () => {
+  const launch = async () => {
+    const r = start({ local: true })
+    await vi.advanceTimersByTimeAsync(0)
+    r.term.osc[133]!("C") // `codex` starts…
+    r.term.osc[6974]!("agent;codex") // …and its wrapper's marker follows
+    return r
+  }
+  beforeEach(() => {
+    vi.useFakeTimers()
+    vi.mocked(ipc.agentHintWanted).mockResolvedValue({ wanted: true, dismissals: 2 })
+  })
+  afterEach(() => vi.useRealTimers())
+
+  it("shows after the wait when main says the hooks aren't approved", async () => {
+    const { id } = await launch()
+    await vi.advanceTimersByTimeAsync(9_000)
+    expect(st().agentHint[id]).toBeUndefined()
+    await vi.advanceTimersByTimeAsync(1_500)
+    expect(ipc.agentHintWanted).toHaveBeenCalledWith("codex")
+    expect(st().agentHint[id]).toEqual({ kind: "codex", dismissals: 2 })
+  })
+
+  it("not when main says no, nor once a hook event came from the pane", async () => {
+    vi.mocked(ipc.agentHintWanted).mockResolvedValueOnce({ wanted: false, dismissals: 0 })
+    const { id } = await launch()
+    await vi.advanceTimersByTimeAsync(11_000)
+    expect(st().agentHint[id]).toBeUndefined()
+
+    const b = await launch()
+    TerminalManager.agentActive(b.id)
+    await vi.advanceTimersByTimeAsync(11_000)
+    expect(ipc.agentHintWanted).toHaveBeenCalledTimes(1) // only for the first pane
+    expect(st().agentHint[b.id]).toBeUndefined()
+  })
+
+  it("a hook event or the agent's exit clears it; a Ctrl-Z doesn't", async () => {
+    const { id, term } = await launch()
+    await vi.advanceTimersByTimeAsync(11_000)
+    term.osc[133]!("D;146") // suspended
+    expect(st().agentHint[id]).toBeDefined()
+    term.osc[133]!("C") // fg
+    TerminalManager.agentActive(id)
+    expect(st().agentHint[id]).toBeUndefined()
+
+    const b = await launch()
+    await vi.advanceTimersByTimeAsync(11_000)
+    b.term.osc[133]!("D;0")
+    expect(st().agentHint[b.id]).toBeUndefined()
+  })
+
+  it("an exit before the wait cancels it; a marker in a remote pane is ignored", async () => {
+    const { id, term } = await launch()
+    term.osc[133]!("D;0")
+    await vi.advanceTimersByTimeAsync(11_000)
+    expect(ipc.agentHintWanted).not.toHaveBeenCalled()
+    expect(st().agentHint[id]).toBeUndefined()
+
+    const r = start({})
+    await vi.advanceTimersByTimeAsync(0)
+    r.term.osc[6974]!("agent;codex")
+    await vi.advanceTimersByTimeAsync(11_000)
+    expect(ipc.agentHintWanted).not.toHaveBeenCalled()
+  })
+})
+
+describe("TerminalManager — a resume that runs unconfirmed (waiting)", () => {
+  const plan = {
+    agent: "codex" as const,
+    status: "resume" as const,
+    sessionId: "abc",
+    cwd: "/tmp/p",
+    command: "codex resume abc",
+  }
+  /** A restored local pane whose resume was typed and is still running at 25 s. */
+  const waiting = async () => {
+    vi.mocked(ipc.ptySpawn).mockResolvedValue({ reattached: false, integrated: true })
+    st().newTab(testShell)
+    const id = st().tabs[st().tabs.length - 1]!.activeSessionId
+    st().setResume(id, { phase: "pending", plan })
+    TerminalManager.ensureRunning(st().sessions[id] as Session)
+    const term = terms[terms.length - 1]!
+    await vi.advanceTimersByTimeAsync(0)
+    term.osc[133]!("D") // the first prompt: the resume is typed
+    expect(st().resume[id]?.phase).toBe("resuming")
+    term.osc[133]!("C") // codex runs…
+    await vi.advanceTimersByTimeAsync(26_000) // …on a screen of its own
+    expect(st().resume[id]?.phase).toBe("waiting")
+    return { id, term }
+  }
+  beforeEach(() => vi.useFakeTimers())
+  afterEach(() => vi.useRealTimers())
+
+  it("a clean quit just closes the banner (no failure, the entry stays)", async () => {
+    const { id, term } = await waiting()
+    term.osc[133]!("D;0")
+    expect(st().resume[id]).toBeUndefined()
+    expect(ipc.resumeConsume).not.toHaveBeenCalled()
+  })
+
+  it("a non-zero exit fails it, with the exit code", async () => {
+    const { id, term } = await waiting()
+    term.osc[133]!("D;1")
+    expect(st().resume[id]).toMatchObject({ phase: "failed", exitCode: 1 })
+    expect(ipc.resumeConsume).toHaveBeenCalledWith(id, "abc")
+  })
+
+  it("a Ctrl-Z leaves it waiting", async () => {
+    const { id, term } = await waiting()
+    term.osc[133]!("D;146")
+    expect(st().resume[id]?.phase).toBe("waiting")
+  })
+})
+
+describe("TerminalManager — typing a resume", () => {
+  const plan = {
+    agent: "opencode" as const,
+    status: "resume" as const,
+    sessionId: "ses_a",
+    cwd: "/tmp/p",
+    command: "opencode --session ses_a",
+    env: { MINMUX_RESUME_SESSION: "ses_a" },
+  }
+  /** A restored pane of `shell` whose first prompt types the resume. */
+  const typedIn = async (shell: string) => {
+    vi.mocked(ipc.ptySpawn).mockResolvedValue({ reattached: false, integrated: true })
+    st().newTab({ ...testShell, id: shell, command: shell })
+    const id = st().tabs[st().tabs.length - 1]!.activeSessionId
+    st().setResume(id, { phase: "pending", plan })
+    TerminalManager.ensureRunning(st().sessions[id] as Session)
+    await flush()
+    terms[terms.length - 1]!.osc[133]!("D")
+    return vi.mocked(ipc.ptyWrite).mock.calls.find((c) => c[0] === id)?.[1]
+  }
+
+  it("a POSIX shell gets the folder and the env with it", async () => {
+    expect(await typedIn("/bin/zsh")).toBe(
+      "\x15cd -- '/tmp/p' && MINMUX_RESUME_SESSION='ses_a' opencode --session ses_a\r",
+    )
+  })
+
+  it("another shell gets the command alone (no `K=V`: the first prompt confirms instead)", async () => {
+    expect(await typedIn("pwsh")).toBe("opencode --session ses_a\r")
   })
 })
