@@ -22,6 +22,7 @@ export interface HookWatcherOptions {
   dir: string // the drop root; each agent writes into `<dir>/<agent>/` (all must already exist)
   agents: Partial<Record<AgentKind, DropNormalizer>> // agent folder → its normaliser; others ignored
   onBatch: (events: AgentEvent[]) => void // coalesced, off any hot path
+  onDrop?: (agent: AgentKind, paneId: string, pid: number) => void // every drop's writer, event or not
   coalesceMs?: number // batch window (default 50ms) — one emit per window
   sweepMs?: number // safety-net directory rescan (default 750ms)
 }
@@ -93,16 +94,23 @@ export async function startHookWatcher(opts: HookWatcherOptions): Promise<HookWa
           // Filename is `<paneId>.<agent pid>.<ts>.<rand>.json`; pane ids are UUIDs (no dots).
           const parts = path.basename(file).split(".")
           const paneId = parts[0] || undefined
+          const n = Number(parts[1])
+          const pid = Number.isInteger(n) && n > 1 ? n : undefined // 1: orphaned, unknown
+          if (paneId && pid !== undefined)
+            try {
+              opts.onDrop?.(agent.kind, paneId, pid)
+            } catch {
+              // a consumer error must never take down the watcher
+            }
           let ev: AgentEvent | null = null
           try {
             const out = agent.normalize(raw, paneId)
-            const pid = Number(parts[1])
             // The folder says which agent wrote it — never trust a normaliser to say so — and
             // the filename which process ran the hook (an agent's lead rule may need it).
             ev = out && {
               ...out,
               agent: agent.kind,
-              ...(Number.isInteger(pid) && pid > 1 ? { pid } : {}), // 1: orphaned, unknown
+              ...(pid !== undefined ? { pid } : {}),
             }
           } catch {
             // a normaliser must never take down the watcher

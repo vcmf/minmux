@@ -224,6 +224,37 @@ describe("startHookWatcher", () => {
     }
   })
 
+  it("reports every drop's process, even one that is no event (OpenCode's at load)", async () => {
+    const dir = makeRoot("opencode")
+    const procs: [string, string, number][] = []
+    const seen: AgentEvent[] = []
+    const w = await startHookWatcher({
+      dir,
+      agents: { opencode: () => null }, // e.g. its `started`: no session yet
+      coalesceMs: 10,
+      onBatch: (b) => seen.push(...b),
+      onDrop: (agent, paneId, pid) => {
+        procs.push([agent, paneId, pid])
+        if (pid === 4243) throw new Error("a consumer error") // never takes the watcher down
+      },
+    })
+    try {
+      fs.writeFileSync(path.join(dir, "opencode", "pane-3.4243.1.a.json"), "{}")
+      fs.writeFileSync(path.join(dir, "opencode", "pane-3.4242.2.b.json"), "{}")
+      fs.writeFileSync(path.join(dir, "opencode", "pane-3.1.3.c.json"), "{}") // orphaned: unknown
+      await waitUntil(() => fs.readdirSync(path.join(dir, "opencode")).length === 0)
+      await waitUntil(() => procs.length === 2)
+      expect(procs.sort()).toEqual([
+        ["opencode", "pane-3", 4242],
+        ["opencode", "pane-3", 4243],
+      ])
+      expect(seen).toEqual([])
+    } finally {
+      await w.close()
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
   it("survives a normaliser that throws", async () => {
     const dir = makeRoot("claude")
     const seen: AgentEvent[] = []

@@ -15,6 +15,8 @@ ownership, native modules. No DOM, no React here. (Renderer rules: root `CLAUDE.
   here, nowhere else in main. → `../docs/GOTCHAS.md#codex`, `#opencode`
 - `agent-liveness.ts` — ends sessions whose process exited without a word (pure; main feeds it
   and reaps on a timer). → `../docs/GOTCHAS.md#agent-liveness`
+- `agent-procs.ts` — the agents running in each pane (pids from their drops); a pane close or a
+  quit SIGKILLs one that outlives the hang-up (via `pty-drain.ts`). → `../docs/GOTCHAS.md#session-survival`
 - `shell-integration.ts` — inlined zsh/bash scripts (OSC 133 + OSC 7 cwd + mouse-reset),
   `buildInjection`, WSL `listShells`. Scripts are line-arrays, not template literals.
 - `git.ts` — pure git parsers + `gitStatus`/`gitDiff` for the changes panel.
