@@ -105,12 +105,30 @@ of respawning and orphaning the live shell. Diagnosed via `electron/diagnostics.
 
 **True reattach across a full app quit** (live processes surviving a quit, via a detached
 daemon) is still **ROADMAP M5** — a full quit kills PTYs (they're children of main +
-`killAllPtys()`). See ARCHITECTURE Appendix A.
+`shutdownPtys()`). See ARCHITECTURE Appendix A.
 
 **Quit is guarded.** `before-quit` shows a native confirm dialog when PTYs are live
 (unless `settings.confirmQuit` is false); the frameless close button routes through
 `app.quit()` too. The dialog's "don't warn again" writes `confirmQuit:false` to
 settings.json.
+
+**Closing a terminal ends the coding agent running in it** (`electron/agent-procs.ts`). A quit
+or a pane close hangs up the shell, and the kernel passes the hang-up on to what runs in the
+terminal. An agent that ignores it would outlive minmux, re-parented to init: OpenCode stuck in
+its busy loop (see #opencode) ignores HUP, TERM and INT. So main notes, per pane, the process
+behind every drop of an agent whose drops carry its own pid (`liveByPid`: OpenCode, which drops
+one at load before any session; Codex once its hooks are approved, see #codex). Before the
+hang-up one `ps` (only for agents still alive) keeps the ones still in that pane's terminal's
+foreground job: a reused pid is never touched, and neither is an agent the user sent to the
+background (`nohup … &`). One still running after the same 1.5 s grace the shells get is
+SIGKILLed with its foreground job, the scope the hang-up had (the servers and tools it started).
+Terminals without a live agent are hung up at once, without waiting for that `ps`. A pane close
+drains as a quit does (`drainPtys`), and a quit waits for closed panes still in that grace.
+Everything else in a terminal is left to the hang-up, as in any terminal: a foreground `nohup`
+job keeps running, and Claude (whose pid minmux doesn't know) exits on the hang-up and may wait
+for its SessionEnd hooks. Not on Windows (WSL pids). A crash or force quit of minmux runs none
+of this, and neither does an OS logout (`killNow`: holding the quit would read as "cancelled";
+the OS ends what's left).
 
 ## zsh/bash history is shared across panes (cmux-like) {#history}
 
@@ -337,7 +355,7 @@ and `terminal-manager` types `claude --resume <id> [--permission-mode m]` at the
 
 - **Any `SessionEnd` while minmux runs clears the entry** — double Ctrl-C can report reason
   `other`, so reasons can't tell "user quit Claude" from anything else. Only a quit (the ledger
-  is **frozen and flushed before** `killAllPtys`, whose kills would fire SessionEnds) or a
+  is **frozen and flushed before** `shutdownPtys`, whose kills would fire SessionEnds) or a
   crash (no SessionEnd at all; the ledger is write-through) leaves entries to resume.
 - **Live PTYs are skipped** — after a renderer reload Claude is still running.
 - **One shot:** the entry is consumed on **failure or dismiss** — not when typed (a quit or
@@ -466,6 +484,9 @@ inside OpenCode and writes its own drops.
 - `/new` ends the session it left once that one is idle. Picking a session in `/sessions` sends
   nothing until its next prompt.
 - Not integrated on Windows yet (a Windows path in a `file:` URL is unverified).
+- **In a narrow pane (about 37 columns) OpenCode's TUI can draw nothing and spin at 100% CPU.**
+  Stuck like that it ignores HUP, TERM and INT, so only SIGKILL ends it. An upstream bug;
+  closing its pane or quitting minmux kills it (#session-survival).
 
 ## Sessions that end with their process {#agent-liveness}
 

@@ -33,7 +33,8 @@ import {
 import { gitStatus, gitDiff } from "./git"
 import { OutputCoalescer } from "./coalescer"
 import { OutputBuffer } from "./output-buffer"
-import { drainPtys, type Drainable } from "./pty-drain"
+import { drainPtys, type Drainable, type DrainOptions } from "./pty-drain"
+import { AgentProcs, noop, posixProcs } from "./agent-procs"
 import { quitStep, type QuitPhase } from "./quit-plan"
 import { appendDiag } from "./diagnostics"
 import { applyLoginShellEnv } from "./shell-env"
@@ -147,6 +148,8 @@ const sessions = new Map<string, PtySession>()
 // Every node-pty that hasn't reported its exit yet — including closed panes still winding
 // down (gone from `sessions`). None may outlive Node: quitting drains this (pty-drain.ts).
 const livePtys = new Set<Drainable>()
+const closingPanes = new Set<Promise<void>>() // closed panes whose agent may still be ending
+const agentProcs = new AgentProcs(posixProcs.alive) // per pane: the agents running in it
 let mainWindow: BrowserWindow | null = null
 // Every coding agent minmux integrates (electron/agents), and the ones armed this launch:
 // their files are installed and their hooks write into the per-launch drop root
@@ -463,7 +466,13 @@ async function startAgentObservability(): Promise<void> {
         reaper.unref()
       }
     }
-    hookWatcher = await startHookWatcher({ dir: eventsDir, agents: normalizers, onBatch })
+    // Every drop names the process that wrote it: an agent's own (liveByPid) is noted for its
+    // pane, so closing the pane ends it even if it never got to a session (agent-procs.ts).
+    const onDrop = (agent: AgentKind, paneId: string, pid: number) => {
+      if (AGENT_RULES[agent]?.liveByPid && process.platform !== "win32" && sessions.has(paneId))
+        agentProcs.note(paneId, pid)
+    }
+    hookWatcher = await startHookWatcher({ dir: eventsDir, agents: normalizers, onBatch, onDrop })
     agentEventsDir = eventsDir
     diag("agent-hooks-up", { dir: eventsDir, agents: ready.map((a) => a.kind).join(",") })
   } catch (err) {
@@ -590,7 +599,13 @@ function startPty(sender: Electron.WebContents, opts: SpawnOpts, spec: StartSpec
   const coalesce = process.env.MINMUX_NO_COALESCE !== "1"
   let markExited!: () => void
   const exited = new Promise<void>((res) => (markExited = res))
-  const live: Drainable = { kill: (sig) => proc.kill(sig), exited }
+  const live: Drainable = {
+    kill: (sig) => proc.kill(sig),
+    exited,
+    // node-pty's unix terminal names its tty (not in its typings); none on Windows
+    tty: (proc as { ptsName?: string }).ptsName,
+    agentPids: () => agentProcs.pidsOf(opts.id),
+  }
   livePtys.add(live)
   const rec: PtySession = {
     id: opts.id,
@@ -608,6 +623,7 @@ function startPty(sender: Electron.WebContents, opts: SpawnOpts, spec: StartSpec
     rec.coalescer = new OutputCoalescer(PTY_FLUSH_MS, PTY_MAX_FLUSH_BYTES, (d) => emit(rec, d))
   }
   proc.onData((data) => {
+    if (sessions.get(opts.id) !== rec) return // closed (or replaced): nobody shows it
     // An integrated ssh pane's bootstrap says hello once, right after login: answer it with
     // the nonce (its echo is off). A bounded scan — it stops for good once answered.
     if (rec.hello && !rec.hello.done) {
@@ -650,6 +666,7 @@ function startPty(sender: Electron.WebContents, opts: SpawnOpts, spec: StartSpec
       }
       sessions.delete(opts.id)
       untrackMeta(opts.id) // shell (and any agent in it) gone — drop the accent
+      agentProcs.forget(opts.id)
       sessionLedger().drop(opts.id) // …and nothing to resume there (no-op during a quit)
     }
     livePtys.delete(live)
@@ -882,13 +899,8 @@ function registerIpc() {
     if (!rec) return
     rec.coalescer?.dispose()
     rec.buffer.clear()
-    rec.live.killed = true // hung up below: a quit waits for it without signalling again
     sessions.delete(id)
-    try {
-      rec.proc.kill()
-    } catch {
-      // already gone
-    }
+    closePty(id, rec.live)
   })
 
   // Shells — per-OS defaults + WSL distro enumeration.
@@ -1441,6 +1453,26 @@ function killNow(): void {
   }
 }
 
+/** Drain a closed pane as a quit does: its agent ends with it (GOTCHAS #session-survival). */
+function closePty(id: string, live: Drainable): void {
+  const closing = drainPtys([live], ptyDrainOptions({ id })).then(noop, noop)
+  agentProcs.forget(id) // read above
+  closingPanes.add(closing) // a quit waits for the agent in it too
+  void closing.then(() => closingPanes.delete(closing))
+}
+
+/** How a PTY is drained here: Windows takes no signals; elsewhere its agents end with it. */
+function ptyDrainOptions(tag: Record<string, string>): DrainOptions {
+  const win32 = process.platform === "win32"
+  return {
+    signals: !win32,
+    settleMs: win32 ? 300 : 0,
+    procs: win32 ? undefined : posixProcs,
+    onAgentsKilled: (pids) => diag("agents-killed", { ...tag, pids: pids.join(",") }),
+    onLookupFailed: (err) => diag("agents-lookup-failed", { ...tag, err: String(err) }),
+  }
+}
+
 function shutdownPtys(): Promise<void> {
   if (!shutdown) {
     // Keep every "inside Claude" entry for the relaunch BEFORE our kill makes Claude fire
@@ -1448,11 +1480,8 @@ function shutdownPtys(): Promise<void> {
     sessionLedger().freeze()
     for (const rec of sessions.values()) rec.coalescer?.dispose()
     const count = livePtys.size
-    const win32 = process.platform === "win32"
-    shutdown = drainPtys([...livePtys], {
-      signals: !win32,
-      settleMs: win32 ? 300 : 0,
-    }).then((clean) => {
+    const drained = drainPtys([...livePtys], ptyDrainOptions({}))
+    shutdown = Promise.all([drained, ...closingPanes]).then(([clean]) => {
       diag("ptys-drained", { count, clean })
       sessions.clear()
     })
@@ -1511,7 +1540,7 @@ app.on("before-quit", (e) => {
     confirmed: quitConfirmed,
     // Spawns still preparing (an ssh probe) are about to be sessions: count them too.
     needsConfirm: sessions.size + pendingSpawns.live > 0 && confirmQuitEnabled() && !!mainWindow,
-    livePtys: livePtys.size,
+    livePtys: livePtys.size + closingPanes.size, // a closed pane's agent may still be ending
     osEnding,
   })
   diag("before-quit", { ptys: livePtys.size, step })
@@ -1529,7 +1558,7 @@ app.on("before-quit", (e) => {
   e.preventDefault()
   if (step === "hold") return
   if (step === "drain") {
-    // Hold the quit until every PTY has exited (≤ ~2 s), then quit for real.
+    // Hold the quit until every PTY has exited (≤ ~2 s; ≤ ~4 s if the agents' ps stalls).
     quitPhase = "draining"
     mainWindow?.hide() // feels instant while the shells wind down
     void shutdownPtys().finally(() => {
