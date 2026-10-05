@@ -592,7 +592,9 @@ describe("Sidebar — hover × closes (through the confirm rules)", () => {
 describe("Sidebar — renaming a session", () => {
   /** The session (tab) row's name, its row, and the rename field (when shown). */
   const nameEl = (i = 0) =>
-    document.querySelectorAll(".tree-group > .tree-row:first-child .tree-labels")[i]! as HTMLElement
+    document.querySelectorAll(".tree-group > .tree-row:first-child .tree-primary.session")[
+      i
+    ]! as HTMLElement
   const rowEl = (i = 0) =>
     document.querySelectorAll(".tree-group > .tree-row:first-child")[i]! as HTMLElement
   const field = () => document.querySelector(".tree-rename") as HTMLInputElement | null
@@ -706,7 +708,8 @@ describe("Sidebar — renaming a session", () => {
     const [first] = st().tabs
     render(<Sidebar />)
     expect(rowEl(0).getAttribute("draggable")).toBe("true")
-    openMenu(0) // a right-click doesn't select the session
+    fireEvent.mouseDown(rowEl(0), { button: 2 }) // a right-click doesn't select the session
+    openMenu(0)
     fireEvent.mouseDown(menuItem("Rename…"))
     expect(rowEl(0).getAttribute("draggable")).toBe("false")
     fireEvent.mouseDown(field()!)
@@ -726,6 +729,110 @@ describe("Sidebar — renaming a session", () => {
     expect(document.querySelectorAll(".tree-rename")).toHaveLength(1)
     expect(field()!.value).toBe("sh") // the second session's own name
     expect(screen.getByText("one")).toBeInTheDocument() // the first kept what was typed
+  })
+})
+
+describe("Sidebar — renaming: edge cases", () => {
+  const nameEl = (i = 0) =>
+    document.querySelectorAll(".tree-group > .tree-row:first-child .tree-primary.session")[
+      i
+    ]! as HTMLElement
+  const rowEl = (i = 0) =>
+    document.querySelectorAll(".tree-group > .tree-row:first-child")[i]! as HTMLElement
+  const field = () => document.querySelector(".tree-rename") as HTMLInputElement | null
+  const menuItem = (label: string) =>
+    [...document.querySelectorAll(".ctx-menu .shell-menu-item")].find((b) =>
+      b.textContent?.startsWith(label),
+    ) as HTMLButtonElement | undefined
+  const startEdit = (i = 0) => {
+    fireEvent.doubleClick(nameEl(i))
+    return field()!
+  }
+
+  it("clicking away from an untouched field leaves an unnamed session unnamed", () => {
+    st().newTab(testShell)
+    render(<Sidebar />)
+    fireEvent.blur(startEdit())
+    expect(st().tabs[0]!.title).toBe("") // still follows its pane's live title
+    expect(field()).toBeNull()
+  })
+
+  it("Enter on the untouched name pins it on purpose", () => {
+    st().newTab(testShell)
+    render(<Sidebar />)
+    fireEvent.keyDown(startEdit(), { key: "Enter" })
+    expect(st().tabs[0]!.title).toBe("sh")
+  })
+
+  it("an IME's Enter / Escape (picking or cancelling a candidate) doesn't end the edit", () => {
+    st().newTab(testShell)
+    render(<Sidebar />)
+    const input = startEdit()
+    fireEvent.change(input, { target: { value: "tiếng" } })
+    fireEvent.keyDown(input, { key: "Enter", isComposing: true })
+    fireEvent.keyDown(input, { key: "Escape", isComposing: true })
+    expect(field()).not.toBeNull()
+    expect(st().tabs[0]!.title).toBe("")
+    fireEvent.keyDown(input, { key: "Enter" }) // the real Enter after composing
+    expect(st().tabs[0]!.title).toBe("tiếng")
+  })
+
+  it("a blur from leaving the window (⌘Tab) keeps editing instead of saving", () => {
+    st().newTab(testShell)
+    render(<Sidebar />)
+    const input = startEdit()
+    fireEvent.change(input, { target: { value: "half" } })
+    const hasFocus = vi.spyOn(document, "hasFocus").mockReturnValue(false)
+    fireEvent.blur(input)
+    hasFocus.mockRestore()
+    expect(field()).not.toBeNull()
+    expect(st().tabs[0]!.title).toBe("")
+    fireEvent.change(input, { target: { value: "halfway" } })
+    fireEvent.keyDown(input, { key: "Enter" })
+    expect(st().tabs[0]!.title).toBe("halfway")
+  })
+
+  it("double-clicking the cwd subline or the shell badge doesn't start a rename", () => {
+    st().newTab(testShell)
+    const id = st().tabs[0]!.activeSessionId
+    st().setSessionCwd(id, "/home/u/proj")
+    render(<Sidebar />)
+    fireEvent.doubleClick(rowEl().querySelector(".tree-sub")!)
+    fireEvent.doubleClick(rowEl().querySelector(".pane-badge")!)
+    expect(field()).toBeNull()
+  })
+
+  it("a right-click in the field doesn't open the row's menu over the edit", () => {
+    st().newTab(testShell)
+    render(<Sidebar />)
+    const input = startEdit()
+    fireEvent.change(input, { target: { value: "typed" } })
+    fireEvent.contextMenu(input)
+    expect(document.querySelector(".ctx-menu")).toBeNull()
+    expect(field()!.value).toBe("typed")
+  })
+
+  it("Rename… on the row being edited keeps what's typed", () => {
+    st().newTab(testShell)
+    render(<Sidebar />)
+    const input = startEdit()
+    fireEvent.change(input, { target: { value: "typed" } })
+    fireEvent.contextMenu(rowEl().querySelector(".tree-meta")!) // elsewhere on the row
+    fireEvent.mouseDown(menuItem("Rename…")!)
+    expect(field()!.value).toBe("typed")
+  })
+
+  it("a right mousedown doesn't select the session; a left one does", () => {
+    st().newTab(testShell)
+    st().newTab(testShell) // the second is active
+    const [first, second] = st().tabs
+    render(<Sidebar />)
+    fireEvent.mouseDown(rowEl(0), { button: 2 }) // what a real right-click sends first
+    fireEvent.contextMenu(rowEl(0))
+    expect(st().activeTabId).toBe(second!.id)
+    fireEvent.mouseDown(document.querySelector(".menu-backdrop")!) // dismiss
+    fireEvent.mouseDown(rowEl(0), { button: 0 })
+    expect(st().activeTabId).toBe(first!.id)
   })
 })
 
@@ -789,6 +896,7 @@ describe("Sidebar — a session's right-click menu", () => {
     st().newTab(testShell) // active
     render(<Sidebar />)
     st().renameTab(st().tabs[0]!.id, "first")
+    fireEvent.mouseDown(rowEl(0), { button: 2 }) // a real right-click's mousedown
     openMenu(0)
     fireEvent.mouseDown(menuItem("Reset name")!)
     expect(st().tabs[0]!.title).toBe("")

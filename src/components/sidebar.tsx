@@ -1,6 +1,7 @@
 import { useCallback, useMemo, useState } from "react"
 import { useTabDrag } from "./use-tab-drag"
-import { refocusActiveTerminal, useTabRename } from "./use-tab-rename"
+import { useTabRename } from "./use-tab-rename"
+import { refocusActiveTerminal } from "./refocus-terminal"
 import { useShallow } from "zustand/react/shallow"
 import {
   CaretDown,
@@ -47,7 +48,7 @@ import {
   hostColorCss,
   remoteWhere,
 } from "../lib/ssh-hosts-ui"
-import type { SshHost } from "../types"
+import type { SshHost, Tab } from "../types"
 import { hostMenuItems, sidebarHosts, visibleHosts, type HostActionId } from "../lib/ssh-host-list"
 import { runHostAction } from "../lib/ssh-host-actions"
 import { sessionMenuItems, type SessionActionId } from "../lib/session-menu"
@@ -161,12 +162,7 @@ export function Sidebar() {
   // — the one you were typing in, or the split "Open terminal here" just made.
   const closeDirMenu = useCallback(() => {
     setDirMenu(null)
-    // …unless something else (a text field) still has focus — leave it there.
-    const el = document.activeElement
-    if (el && el !== document.body) return
-    const s = useStore.getState()
-    const sid = s.tabs.find((t) => t.id === s.activeTabId)?.activeSessionId
-    if (sid) requestAnimationFrame(() => TerminalManager.focus(sid))
+    refocusActiveTerminal() // …unless something else (a text field) has focus by then
   }, [])
   const onDirAction = (id: FileActionId) => {
     if (!dirMenu) return
@@ -188,10 +184,14 @@ export function Sidebar() {
     setSessionMenu(null)
     refocusActiveTerminal() // skipped if Rename's field or the close dialog took focus
   }, [])
+  // The menu's session; closed while the menu was open → no menu (and no action).
+  const menuTab = sessionMenu ? tabs.find((t) => t.id === sessionMenu.tabId) : undefined
+  // The name only: the live "+N" must not be pinned into a manual title.
+  const startRename = (tab: Tab) => rename.start(tab.id, tabTitleParts(tab, sessions, home).base)
   const onSessionAction = (id: SessionActionId) => {
-    const tab = sessionMenu && useStore.getState().tabs.find((t) => t.id === sessionMenu.tabId)
-    if (!tab) return // closed while the menu was open
-    if (id === "rename") rename.start(tab.id, tabTitleParts(tab, sessions, home).base)
+    const tab = menuTab
+    if (!tab) return
+    if (id === "rename") startRename(tab)
     else if (id === "resetName") useStore.getState().renameTab(tab.id, "")
     else if (id === "close") useStore.getState().requestCloseTab(tab.id)
   }
@@ -239,7 +239,10 @@ export function Sidebar() {
                 {...tabDrag.handleProps(tab.id, !editing)}
                 className={`tree-row${active ? " active" : ""}`}
                 style={{ paddingLeft: 12 }}
-                onMouseDown={() => useStore.getState().setActiveTab(tab.id)}
+                // A left click selects; a right-click only opens this row's menu.
+                onMouseDown={(e) => {
+                  if (e.button === 0) useStore.getState().setActiveTab(tab.id)
+                }}
                 onContextMenu={(e) => {
                   e.preventDefault()
                   setSessionMenu({ x: e.clientX, y: e.clientY, tabId: tab.id })
@@ -259,13 +262,7 @@ export function Sidebar() {
                 >
                   {open ? <CaretDown size={13} /> : <CaretRight size={13} />}
                 </button>
-                <div
-                  className="tree-labels"
-                  // The name only: the live "+N" must not be pinned into a manual title.
-                  onDoubleClick={() =>
-                    rename.start(tab.id, tabTitleParts(tab, sessions, home).base)
-                  }
-                >
+                <div className="tree-labels">
                   <span className="tree-primary-row">
                     {editing ? (
                       <input
@@ -274,7 +271,9 @@ export function Sidebar() {
                         {...rename.inputProps}
                       />
                     ) : (
-                      <span className="tree-primary session">{tabTitle(tab, sessions, home)}</span>
+                      <span className="tree-primary session" onDoubleClick={() => startRename(tab)}>
+                        {tabTitle(tab, sessions, home)}
+                      </span>
                     )}
                     {focused && <span className="pane-badge">{shellType(focused.command)}</span>}
                   </span>
@@ -438,19 +437,15 @@ export function Sidebar() {
           onClose={closeDirMenu}
         />
       )}
-      {sessionMenu &&
-        (() => {
-          const tab = tabs.find((t) => t.id === sessionMenu.tabId)
-          return tab ? (
-            <ContextMenu
-              x={sessionMenu.x}
-              y={sessionMenu.y}
-              items={sessionMenuItems(tab)}
-              onSelect={onSessionAction}
-              onClose={closeSessionMenu}
-            />
-          ) : null
-        })()}
+      {sessionMenu && menuTab && (
+        <ContextMenu
+          x={sessionMenu.x}
+          y={sessionMenu.y}
+          items={sessionMenuItems(menuTab)}
+          onSelect={onSessionAction}
+          onClose={closeSessionMenu}
+        />
+      )}
       <div className="legend">
         <span className="legend-item">
           <span className="dot accent" /> running
