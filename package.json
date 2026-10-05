@@ -2,7 +2,7 @@
   "name": "minmux",
   "productName": "minmux",
   "private": true,
-  "version": "0.1.46",
+  "version": "0.1.47",
   "type": "module",
   "description": "Cross-platform terminal for running coding agents — tabs, split panes, agent-aware notifications.",
   "author": "minmux authors",
