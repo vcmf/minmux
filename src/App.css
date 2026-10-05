@@ -527,6 +527,13 @@ body {
 .tree-primary.session {
   font-weight: 600;
 }
+/* The sidebar's rename field fills the row (the top bar's is a fixed 110px). */
+.tab-rename.tree-rename {
+  flex: 1 1 auto;
+  width: auto;
+  min-width: 0;
+  font-weight: 600;
+}
 .tree-sub {
   font-size: 10.5px;
   color: var(--faint);

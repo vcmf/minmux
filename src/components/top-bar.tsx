@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useRef, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import { useTabDrag } from "./use-tab-drag"
+import { useTabRename } from "./use-tab-rename"
 import {
   Plus,
   CaretDown,
@@ -70,16 +71,8 @@ export function TopBar() {
   const [maximized, setMaximized] = useState(false)
   const [shellMenu, setShellMenu] = useState(false)
 
-  const [editingId, setEditingId] = useState<string | null>(null)
-  const [draft, setDraft] = useState("")
-  const inputRef = useRef<HTMLInputElement>(null)
-
-  useEffect(() => {
-    if (editingId && inputRef.current) {
-      inputRef.current.focus()
-      inputRef.current.select()
-    }
-  }, [editingId])
+  const rename = useTabRename()
+  const editingId = rename.editingId
 
   useEffect(() => {
     void ipc.isMaximized().then(setMaximized)
@@ -115,18 +108,6 @@ export function TopBar() {
     store.setActiveTab(target.tabId)
     store.setActivePane(target.tabId, target.sessionId)
     requestAnimationFrame(() => TerminalManager.focus(target.sessionId))
-  }
-
-  const startRename = (id: string, title: string) => {
-    setDraft(title)
-    setEditingId(id)
-  }
-  const commitRename = () => {
-    if (editingId) {
-      const name = draft.trim()
-      if (name) useStore.getState().renameTab(editingId, name)
-    }
-    setEditingId(null)
   }
 
   return (
@@ -193,7 +174,7 @@ export function TopBar() {
                 })()}
                 onMouseDown={() => useStore.getState().setActiveTab(tab.id)}
                 // The name only: the live "+N" must not be pinned into a manual title.
-                onDoubleClick={() => startRename(tab.id, tabTitleParts(tab, sessions, home).base)}
+                onDoubleClick={() => rename.start(tab.id, tabTitleParts(tab, sessions, home).base)}
               >
                 {(badge || remote) && (
                   <span
@@ -202,18 +183,7 @@ export function TopBar() {
                   />
                 )}
                 {editingId === tab.id ? (
-                  <input
-                    ref={inputRef}
-                    className="tab-rename"
-                    value={draft}
-                    onChange={(e) => setDraft(e.target.value)}
-                    onBlur={commitRename}
-                    onMouseDown={(e) => e.stopPropagation()}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") commitRename()
-                      else if (e.key === "Escape") setEditingId(null)
-                    }}
-                  />
+                  <input className="tab-rename" aria-label="Session name" {...rename.inputProps} />
                 ) : (
                   (() => {
                     const { base, more } = tabTitleParts(tab, sessions, home)

@@ -1,5 +1,7 @@
 import { useCallback, useMemo, useState } from "react"
 import { useTabDrag } from "./use-tab-drag"
+import { useTabRename } from "./use-tab-rename"
+import { refocusActiveTerminal } from "./refocus-terminal"
 import { useShallow } from "zustand/react/shallow"
 import {
   CaretDown,
@@ -46,12 +48,14 @@ import {
   hostColorCss,
   remoteWhere,
 } from "../lib/ssh-hosts-ui"
-import type { SshHost } from "../types"
+import type { SshHost, Tab } from "../types"
 import { hostMenuItems, sidebarHosts, visibleHosts, type HostActionId } from "../lib/ssh-host-list"
 import { runHostAction } from "../lib/ssh-host-actions"
+import { sessionMenuItems, type SessionActionId } from "../lib/session-menu"
 import {
   remoteRowTitle,
   tabTitle,
+  tabTitleParts,
   sessionSubline,
   branchLine,
   displaySessionTitle,
@@ -158,12 +162,7 @@ export function Sidebar() {
   // — the one you were typing in, or the split "Open terminal here" just made.
   const closeDirMenu = useCallback(() => {
     setDirMenu(null)
-    // …unless something else (a text field) still has focus — leave it there.
-    const el = document.activeElement
-    if (el && el !== document.body) return
-    const s = useStore.getState()
-    const sid = s.tabs.find((t) => t.id === s.activeTabId)?.activeSessionId
-    if (sid) requestAnimationFrame(() => TerminalManager.focus(sid))
+    refocusActiveTerminal() // …unless something else (a text field) has focus by then
   }, [])
   const onDirAction = (id: FileActionId) => {
     if (!dirMenu) return
@@ -174,6 +173,27 @@ export function Sidebar() {
       // takes focus. A pane closed meanwhile → no-op.
       useStore.getState().splitPaneAt(dirMenu.sessionId, dirMenu.path)
     }
+  }
+
+  // Rename a session in place (double-click its name), or from its right-click menu.
+  const rename = useTabRename()
+  const [sessionMenu, setSessionMenu] = useState<{ x: number; y: number; tabId: string } | null>(
+    null,
+  )
+  const closeSessionMenu = useCallback(() => {
+    setSessionMenu(null)
+    refocusActiveTerminal() // skipped if Rename's field or the close dialog took focus
+  }, [])
+  // The menu's session; closed while the menu was open → no menu (and no action).
+  const menuTab = sessionMenu ? tabs.find((t) => t.id === sessionMenu.tabId) : undefined
+  // The name only: the live "+N" must not be pinned into a manual title.
+  const startRename = (tab: Tab) => rename.start(tab.id, tabTitleParts(tab, sessions, home).base)
+  const onSessionAction = (id: SessionActionId) => {
+    const tab = menuTab
+    if (!tab) return
+    if (id === "rename") startRename(tab)
+    else if (id === "resetName") useStore.getState().renameTab(tab.id, "")
+    else if (id === "close") useStore.getState().requestCloseTab(tab.id)
   }
 
   const branchFor = (sessionId: string) => paneGit[sessionId]?.branch
@@ -208,6 +228,7 @@ export function Sidebar() {
           const active = tab.id === activeTabId
           const focused = sessions[tab.activeSessionId]
           const groupSub = sessionSubline(focused?.cwd, home, branchFor(tab.activeSessionId))
+          const editing = rename.editingId === tab.id
           return (
             <div
               key={tab.id}
@@ -215,10 +236,17 @@ export function Sidebar() {
               className={`tree-group${tabDrag.dragging === tab.id ? " dragging" : ""}`}
             >
               <div
-                {...tabDrag.handleProps(tab.id)}
+                {...tabDrag.handleProps(tab.id, !editing)}
                 className={`tree-row${active ? " active" : ""}`}
                 style={{ paddingLeft: 12 }}
-                onMouseDown={() => useStore.getState().setActiveTab(tab.id)}
+                // A left click selects; a right-click only opens this row's menu.
+                onMouseDown={(e) => {
+                  if (e.button === 0) useStore.getState().setActiveTab(tab.id)
+                }}
+                onContextMenu={(e) => {
+                  e.preventDefault()
+                  setSessionMenu({ x: e.clientX, y: e.clientY, tabId: tab.id })
+                }}
               >
                 <button
                   className="tree-caret tree-icon"
@@ -236,7 +264,17 @@ export function Sidebar() {
                 </button>
                 <div className="tree-labels">
                   <span className="tree-primary-row">
-                    <span className="tree-primary session">{tabTitle(tab, sessions, home)}</span>
+                    {editing ? (
+                      <input
+                        className="tab-rename tree-rename"
+                        aria-label="Session name"
+                        {...rename.inputProps}
+                      />
+                    ) : (
+                      <span className="tree-primary session" onDoubleClick={() => startRename(tab)}>
+                        {tabTitle(tab, sessions, home)}
+                      </span>
+                    )}
                     {focused && <span className="pane-badge">{shellType(focused.command)}</span>}
                   </span>
                   {groupSub && (
@@ -397,6 +435,15 @@ export function Sidebar() {
           items={folderMenuItems(revealLabel(platform), dirMenu.revealHint)}
           onSelect={onDirAction}
           onClose={closeDirMenu}
+        />
+      )}
+      {sessionMenu && menuTab && (
+        <ContextMenu
+          x={sessionMenu.x}
+          y={sessionMenu.y}
+          items={sessionMenuItems(menuTab)}
+          onSelect={onSessionAction}
+          onClose={closeSessionMenu}
         />
       )}
       <div className="legend">

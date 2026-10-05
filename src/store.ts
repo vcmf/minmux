@@ -182,7 +182,7 @@ interface AppState {
   moveTab: (tabId: string, insertAt: number) => void // reorder (drag & drop; lands before insertAt)
   moveActiveTab: (delta: -1 | 1) => void // ⌘K "Move session left/right"
   setActiveTab: (tabId: string) => void
-  renameTab: (tabId: string, title: string) => void
+  renameTab: (tabId: string, title: string) => void // trimmed; "" unpins (back to the live title)
   splitActive: (direction: "row" | "column", fallback?: ShellOption) => void
   openFolderInSplit: (cwd: string, paneId?: string) => void // split active pane at cwd; shell from paneId
   splitPaneAt: (paneId: string, cwd: string) => void // split beside that pane (its shell); not "seen"
@@ -693,9 +693,12 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   renameTab: (tabId, title) =>
-    set((state) => ({
-      tabs: state.tabs.map((t) => (t.id === tabId ? { ...t, title } : t)),
-    })),
+    set((state) => {
+      const name = title.trim()
+      const tab = state.tabs.find((t) => t.id === tabId)
+      if (!tab || tab.title === name) return state // same reference: no reconcile, no save
+      return { tabs: state.tabs.map((t) => (t === tab ? { ...t, title: name } : t)) }
+    }),
 
   // Split the active pane with a given shell (e.g. an ssh host), not the source's own.
   splitWith: (direction, shell) => {

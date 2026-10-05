@@ -90,6 +90,38 @@ describe("store — tabs & panes", () => {
     expect(firstTab().title).toBe("build")
   })
 
+  it("renameTab trims the name", () => {
+    st().newTab(shell)
+    st().renameTab(firstTab().id, "  build  ")
+    expect(firstTab().title).toBe("build")
+  })
+
+  it('renameTab "" unpins the name (the tab shows its live title again)', () => {
+    st().newTab(shell)
+    st().renameTab(firstTab().id, "build")
+    st().renameTab(firstTab().id, "   ")
+    expect(firstTab().title).toBe("")
+  })
+
+  it("renameTab keeps the same tabs reference when nothing changes", () => {
+    st().newTab(shell)
+    st().renameTab(firstTab().id, "build")
+    const before = st().tabs
+    st().renameTab(firstTab().id, "build")
+    st().renameTab(firstTab().id, " build ") // trims to the same name
+    st().renameTab("no-such-tab", "x")
+    expect(st().tabs).toBe(before)
+  })
+
+  it("renameTab replaces only the renamed tab", () => {
+    st().newTab(shell)
+    st().newTab(shell)
+    const [a, b] = st().tabs
+    st().renameTab(b!.id, "second")
+    expect(st().tabs[0]).toBe(a)
+    expect(st().tabs[1]!.title).toBe("second")
+  })
+
   it("setActivePane changes the tab's focused session", () => {
     st().newTab(shell)
     st().splitActive("row", shell)
