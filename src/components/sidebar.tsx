@@ -1,5 +1,6 @@
 import { useCallback, useMemo, useState } from "react"
 import { useTabDrag } from "./use-tab-drag"
+import { refocusActiveTerminal, useTabRename } from "./use-tab-rename"
 import { useShallow } from "zustand/react/shallow"
 import {
   CaretDown,
@@ -49,9 +50,11 @@ import {
 import type { SshHost } from "../types"
 import { hostMenuItems, sidebarHosts, visibleHosts, type HostActionId } from "../lib/ssh-host-list"
 import { runHostAction } from "../lib/ssh-host-actions"
+import { sessionMenuItems, type SessionActionId } from "../lib/session-menu"
 import {
   remoteRowTitle,
   tabTitle,
+  tabTitleParts,
   sessionSubline,
   branchLine,
   displaySessionTitle,
@@ -176,6 +179,23 @@ export function Sidebar() {
     }
   }
 
+  // Rename a session in place (double-click its name), or from its right-click menu.
+  const rename = useTabRename()
+  const [sessionMenu, setSessionMenu] = useState<{ x: number; y: number; tabId: string } | null>(
+    null,
+  )
+  const closeSessionMenu = useCallback(() => {
+    setSessionMenu(null)
+    refocusActiveTerminal() // skipped if Rename's field or the close dialog took focus
+  }, [])
+  const onSessionAction = (id: SessionActionId) => {
+    const tab = sessionMenu && useStore.getState().tabs.find((t) => t.id === sessionMenu.tabId)
+    if (!tab) return // closed while the menu was open
+    if (id === "rename") rename.start(tab.id, tabTitleParts(tab, sessions, home).base)
+    else if (id === "resetName") useStore.getState().renameTab(tab.id, "")
+    else if (id === "close") useStore.getState().requestCloseTab(tab.id)
+  }
+
   const branchFor = (sessionId: string) => paneGit[sessionId]?.branch
 
   const lastMessage: Record<string, string> = {}
@@ -208,6 +228,7 @@ export function Sidebar() {
           const active = tab.id === activeTabId
           const focused = sessions[tab.activeSessionId]
           const groupSub = sessionSubline(focused?.cwd, home, branchFor(tab.activeSessionId))
+          const editing = rename.editingId === tab.id
           return (
             <div
               key={tab.id}
@@ -215,10 +236,14 @@ export function Sidebar() {
               className={`tree-group${tabDrag.dragging === tab.id ? " dragging" : ""}`}
             >
               <div
-                {...tabDrag.handleProps(tab.id)}
+                {...tabDrag.handleProps(tab.id, !editing)}
                 className={`tree-row${active ? " active" : ""}`}
                 style={{ paddingLeft: 12 }}
                 onMouseDown={() => useStore.getState().setActiveTab(tab.id)}
+                onContextMenu={(e) => {
+                  e.preventDefault()
+                  setSessionMenu({ x: e.clientX, y: e.clientY, tabId: tab.id })
+                }}
               >
                 <button
                   className="tree-caret tree-icon"
@@ -234,9 +259,23 @@ export function Sidebar() {
                 >
                   {open ? <CaretDown size={13} /> : <CaretRight size={13} />}
                 </button>
-                <div className="tree-labels">
+                <div
+                  className="tree-labels"
+                  // The name only: the live "+N" must not be pinned into a manual title.
+                  onDoubleClick={() =>
+                    rename.start(tab.id, tabTitleParts(tab, sessions, home).base)
+                  }
+                >
                   <span className="tree-primary-row">
-                    <span className="tree-primary session">{tabTitle(tab, sessions, home)}</span>
+                    {editing ? (
+                      <input
+                        className="tab-rename tree-rename"
+                        aria-label="Session name"
+                        {...rename.inputProps}
+                      />
+                    ) : (
+                      <span className="tree-primary session">{tabTitle(tab, sessions, home)}</span>
+                    )}
                     {focused && <span className="pane-badge">{shellType(focused.command)}</span>}
                   </span>
                   {groupSub && (
@@ -399,6 +438,19 @@ export function Sidebar() {
           onClose={closeDirMenu}
         />
       )}
+      {sessionMenu &&
+        (() => {
+          const tab = tabs.find((t) => t.id === sessionMenu.tabId)
+          return tab ? (
+            <ContextMenu
+              x={sessionMenu.x}
+              y={sessionMenu.y}
+              items={sessionMenuItems(tab)}
+              onSelect={onSessionAction}
+              onClose={closeSessionMenu}
+            />
+          ) : null
+        })()}
       <div className="legend">
         <span className="legend-item">
           <span className="dot accent" /> running

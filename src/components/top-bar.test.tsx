@@ -205,6 +205,45 @@ describe("TopBar — renaming a tab that spans hosts", () => {
   })
 })
 
+describe("TopBar — renaming a tab", () => {
+  const field = () => document.querySelector(".tab-rename") as HTMLInputElement | null
+
+  it("double-click, type, Enter: saves the trimmed name and closes the field", () => {
+    st().newTab(testShell)
+    render(<TopBar />)
+    fireEvent.doubleClick(document.querySelector(".tab")!)
+    expect(document.activeElement).toBe(field())
+    fireEvent.change(field()!, { target: { value: " build " } })
+    fireEvent.keyDown(field()!, { key: "Enter" })
+    expect(st().tabs[0]!.title).toBe("build")
+    expect(field()).toBeNull()
+    expect(document.querySelector(".tab-title")!.textContent).toBe("build")
+  })
+
+  it("Escape cancels, even with the blur the field's unmount fires", () => {
+    st().newTab(testShell)
+    render(<TopBar />)
+    fireEvent.doubleClick(document.querySelector(".tab")!)
+    const input = field()!
+    fireEvent.change(input, { target: { value: "nope" } })
+    act(() => {
+      fireEvent.keyDown(input, { key: "Escape" })
+      fireEvent.blur(input)
+    })
+    expect(st().tabs[0]!.title).toBe("")
+  })
+
+  it("an empty name keeps the old one", () => {
+    st().newTab(testShell)
+    st().renameTab(st().tabs[0]!.id, "keep")
+    render(<TopBar />)
+    fireEvent.doubleClick(document.querySelector(".tab")!)
+    fireEvent.change(field()!, { target: { value: "" } })
+    fireEvent.blur(field()!)
+    expect(st().tabs[0]!.title).toBe("keep")
+  })
+})
+
 describe("TopBar — the new-tab menu's hosts", () => {
   it("lists the first few (pinned, recent, then config order) and All hosts… for the rest", () => {
     st().setSshHosts([
