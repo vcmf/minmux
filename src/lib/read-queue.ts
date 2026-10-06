@@ -20,6 +20,7 @@ export interface ReadTask {
   run: () => Promise<unknown>
   urgent?: boolean // the user is waiting: ahead of background reads
   front?: boolean // …and ahead of other urgent ones (a click on a folder not yet listed)
+  skipIfReadWithin?: number // ms: dropped if this folder's last read started that recently
   big?: boolean // its last listing was big: backed off
 }
 
@@ -69,6 +70,9 @@ export class ReadQueue {
   }
 
   request(t: ReadTask): void {
+    const last = this.lastByKey.get(t.key)
+    if (t.skipIfReadWithin && last !== undefined && this.clock.now() - last < t.skipIfReadWithin)
+      return
     if (this.running === t.key) {
       this.again = this.again ? merge(this.again, t) : t
       return
@@ -95,7 +99,12 @@ export class ReadQueue {
 
   // After the urgent reads already waiting: a batch (Refresh) keeps its order, parents first.
   private insertUrgent(t: ReadTask): void {
-    if (t.front) return void this.queue.unshift({ ...t, urgent: true })
+    if (t.front) {
+      // After the clicks already waiting: clicked folders are read in the order clicked.
+      const firstOther = this.queue.findIndex((q) => !q.front)
+      this.queue.splice(firstOther < 0 ? this.queue.length : firstOther, 0, { ...t, urgent: true })
+      return
+    }
     const firstBackground = this.queue.findIndex((q) => !q.urgent)
     this.queue.splice(firstBackground < 0 ? this.queue.length : firstBackground, 0, t)
   }

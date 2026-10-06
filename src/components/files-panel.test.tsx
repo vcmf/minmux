@@ -136,6 +136,7 @@ describe("FilesPanel — staying current", () => {
     await waitFor(() => expect(screen.getByText("src")).toBeInTheDocument())
     fireEvent.mouseDown(screen.getByText("src"), { button: 0 })
     await waitFor(() => expect(screen.getByText("a.ts")).toBeInTheDocument())
+    await new Promise((r) => setTimeout(r, 1100)) // past the "read moments ago" skip
     fireEvent.mouseDown(screen.getByText("src"), { button: 0 }) // collapse
     vi.mocked(ipc.readdir).mockImplementation(async (dir: string) =>
       dir.endsWith("/src") ? ls(["a.ts", false], ["b.ts", false]) : ls(["src", true]),

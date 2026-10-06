@@ -183,6 +183,34 @@ describe("ReadQueue", () => {
     expect(started).toEqual(["dead:/a", "dead:/b", "dead:/a"])
   })
 
+  it("several clicks are read in the order clicked", async () => {
+    const { q, clock, started, task, finish } = setup()
+    q.request(task("bg"))
+    await flush()
+    q.request(task("A", { front: true }))
+    q.request(task("B", { front: true }))
+    await finish("bg")
+    await clock.advance(250)
+    await finish("A")
+    await clock.advance(250)
+    expect(started).toEqual(["bg", "A", "B"])
+  })
+
+  it("skipIfReadWithin drops a request for a folder read moments ago", async () => {
+    const { q, clock, started, task, finish } = setup()
+    q.request(task("a"))
+    await flush()
+    await finish("a")
+    q.request(task("a", { skipIfReadWithin: 1000 }))
+    await clock.advance(500)
+    expect(started).toEqual(["a"])
+    q.request(task("a", { skipIfReadWithin: 1000 }))
+    await clock.advance(600)
+    q.request(task("a", { skipIfReadWithin: 1000 }))
+    await clock.advance(10)
+    expect(started).toEqual(["a", "a"])
+  })
+
   it("front (a click on a folder not yet listed) goes ahead of an urgent batch", async () => {
     const { q, clock, started, task, finish } = setup()
     q.request(task("bg"))

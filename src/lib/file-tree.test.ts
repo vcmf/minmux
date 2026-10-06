@@ -6,6 +6,7 @@ import {
   emptyTree,
   setListing,
   hasListing,
+  shownOpenDirs,
   toggleDir,
   visibleRows,
   openDirs,
@@ -68,6 +69,13 @@ describe("tree state — immutability", () => {
     expect(setListing(s1, "/repo", listing([["b.ts", false]]))).not.toBe(s1)
     expect(setListing(s1, "/repo", listing([["a.ts", true]]))).not.toBe(s1)
     expect(setListing(s1, "/repo", { ...listing([["a.ts", false]]), total: 9 })).not.toBe(s1)
+  })
+  it("a successful read replaces a failed one even when it looks the same", () => {
+    const failed = { entries: [], truncated: false, error: true }
+    const s1 = setListing(emptyTree("/r"), "/r", failed)
+    expect(
+      setListing(s1, "/r", { entries: [], truncated: false }).listings["/r"]?.error,
+    ).toBeFalsy()
   })
   it("hasListing: a failed read's listing doesn't count", () => {
     const failed = { entries: [], truncated: false, error: true }
@@ -254,5 +262,23 @@ describe("FileTreeCache (LRU)", () => {
 
   it("missing key → undefined", () => {
     expect(new FileTreeCache(2).get("/nope")).toBeUndefined()
+  })
+})
+
+describe("shownOpenDirs", () => {
+  it("skips expanded folders hidden under a collapsed parent", () => {
+    let s = setListing(
+      emptyTree("/r"),
+      "/r",
+      listing([
+        ["a", true],
+        ["b", true],
+      ]),
+    )
+    s = setListing(s, "/r/a", listing([["deep", true]]))
+    s = { ...s, expanded: new Set(["/r/a", "/r/a/deep", "/r/b"]) }
+    expect(shownOpenDirs(s)).toEqual(["/r", "/r/a", "/r/a/deep", "/r/b"])
+    s = { ...s, expanded: new Set(["/r/a/deep", "/r/b"]) } // /r/a collapsed
+    expect(shownOpenDirs(s)).toEqual(["/r", "/r/b"])
   })
 })

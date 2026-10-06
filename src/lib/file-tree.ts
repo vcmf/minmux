@@ -30,6 +30,7 @@ export const emptyTree = (root: string): FileTreeState => ({
 /** Same entries, cap state and total: a re-read that changed nothing. */
 export function sameListing(a: DirListing | undefined, b: DirListing): boolean {
   if (!a || a.truncated !== b.truncated || a.total !== b.total) return false
+  if (!!a.error !== !!b.error) return false // a successful read replaces a failed one
   if (a.entries.length !== b.entries.length) return false
   return a.entries.every((e, i) => e.name === b.entries[i]!.name && e.isDir === b.entries[i]!.isDir)
 }
@@ -145,6 +146,21 @@ export function visibleRows(s: FileTreeState): VisibleRow[] {
  *  every expanded dir). Used to background-refresh a restored tree. Pure. */
 export function openDirs(s: FileTreeState): string[] {
   return [s.root, ...[...s.expanded].filter((d) => d !== s.root)]
+}
+
+/** The open folders you can see: the root, then expanded folders whose parents are all
+ *  expanded (one under a collapsed parent stays expanded but hidden — no need to read it). */
+export function shownOpenDirs(s: FileTreeState): string[] {
+  const out: string[] = []
+  const walk = (dir: string) => {
+    out.push(dir)
+    for (const e of s.listings[dir]?.entries ?? []) {
+      const p = joinPath(dir, e.name)
+      if (e.isDir && s.expanded.has(p)) walk(p)
+    }
+  }
+  walk(s.root)
+  return out
 }
 
 /** LRU cache of file-tree states keyed by cwd. Bounds memory to `capacity` folders

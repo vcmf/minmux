@@ -20,6 +20,7 @@ import {
   visibleRows,
   showAllIn,
   openDirs,
+  shownOpenDirs,
   hasListing,
   type FileTreeState,
 } from "../lib/file-tree"
@@ -74,7 +75,7 @@ export function FilesPanel() {
   }, [])
   // `urgent` = the user is waiting on it (first visit, a folder with no listing yet, Refresh).
   const load = useCallback(
-    (key: string, dir: string, urgent = false, front = false) => {
+    (key: string, dir: string, urgent = false, front = false, skipIfReadWithin = 0) => {
       // Pass the focused pane's WSL context so a distro's Linux path is read via its
       // \\wsl.localhost\ share (a stale read for a pane you've left is dropped by `apply`).
       const wsl = getActiveWsl()
@@ -85,6 +86,7 @@ export function FilesPanel() {
         urgent,
         front,
         big,
+        skipIfReadWithin,
         run: () =>
           ipc.readdir(dir, wsl).then((listing) => apply(key, (s) => setListing(s, dir, listing))),
       })
@@ -103,14 +105,14 @@ export function FilesPanel() {
     const cached = cache.get(root)
     if (cached) {
       setTree(cached) // instant restore…
-      // …then refresh open dirs in the background — but NOT for a WSL pane: each read
-      // goes over the slow \\wsl.localhost\ (9p) share, so N at once would stall the
-      // refocus. The cached tree is shown as-is; expanding a dir re-reads it fresh.
+      // …then refresh the open dirs you can see in the background — but NOT for a WSL pane:
+      // each read goes over the slow \\wsl.localhost\ (9p) share; Refresh re-reads there.
       // A folder without a good listing (its read was dropped, or failed) is read either way.
       const wsl = !!getActiveWsl()
+      const shown = new Set(shownOpenDirs(cached))
       for (const dir of openDirs(cached)) {
         if (!hasListing(cached, dir)) load(root, dir, true)
-        else if (!wsl) load(root, dir)
+        else if (!wsl && shown.has(dir)) load(root, dir)
       }
     } else {
       const t = emptyTree(root)
@@ -132,16 +134,19 @@ export function FilesPanel() {
     setTree(state)
     // A folder with no listing yet is awaited; a cached one shows at once and re-reads.
     // A click on a folder not listed yet goes ahead even of a Refresh batch.
+    // On a WSL pane a cached folder isn't re-read on expand (each read is a slow 9p trip;
+    // Refresh re-reads). A folder read under a second ago isn't read again (rapid toggling).
     if (needsLoad) {
       const waiting = !hasListing(cur, needsLoad)
-      load(root, needsLoad, waiting, waiting)
+      if (waiting) load(root, needsLoad, true, true)
+      else if (!getActiveWsl()) load(root, needsLoad, false, false, 1000)
     }
   }
 
   // Re-read every open folder (root + expanded), e.g. after files changed outside the app.
   const refresh = () => {
     const cur = root ? (cache.get(root) ?? tree) : null
-    if (root && cur) openDirs(cur).forEach((d) => load(root, d, true))
+    if (root && cur) shownOpenDirs(cur).forEach((d) => load(root, d, true))
   }
 
   // "Show all" on a big folder's "N more" row (past the first-10 preview).
@@ -175,10 +180,11 @@ export function FilesPanel() {
     <div className="diffpanel">
       <div className="diffpanel-header">
         <span className="section-label">Files</span>
+        <span style={{ flex: 1 }} />
         {root && (
           <button
             className="iconbtn"
-            style={{ width: 22, height: 22, marginLeft: "auto" }}
+            style={{ width: 22, height: 22 }}
             title="Refresh"
             onClick={refresh}
           >
