@@ -49,7 +49,7 @@ import { agentOf, type AgentEvent, type AgentKind } from "../src/lib/agent-graph
 import { disabledAgentsIn, mergeAgentSwitches } from "../src/settings/agent-switches"
 import { agentPaneEnv, resumablePanes } from "./agents/arming"
 import { findOnPath, pathCandidates } from "./path-lookup"
-import { toDirListing } from "../src/lib/dir-listing"
+import { readDirListing } from "./read-dir"
 import { wslUncCandidates, uncToWslPath } from "./wsl-paths"
 import { colorfgbg } from "./color"
 import { AgentMetaTracker, planMeta } from "./agent-meta"
@@ -1076,31 +1076,14 @@ function registerIpc() {
   ipcMain.on("clipboard:write", (_e, text: string) => clipboard.writeText(text))
   ipcMain.handle("clipboard:read", async () => clipboard.readText())
 
-  // Files browser: list ONE directory (lazy — never a recursive walk). Sorting /
-  // .git-filter / cap live in the pure, tested lib/dir-listing; here we just gather
-  // entries (resolving symlinked dirs via stat so they browse, not open as files).
+  // Files browser: list ONE directory (lazy — never a recursive walk), bounded so a huge
+  // folder can't block main (read-dir; sort / .git filter / cap in lib/dir-listing).
   ipcMain.handle("fs:readdir", async (_e, dir: string, wsl?: WslContext) => {
     // A WSL pane's dir is a Linux path the host can't see — read it through the distro's
     // UNC share instead (wslTargets); non-WSL panes read the host path.
     for (const target of wslTargets(dir, wsl)) {
       try {
-        const ents = await fs.promises.readdir(target, { withFileTypes: true })
-        const raw = await Promise.all(
-          ents.map(async (e) => {
-            let isDir = e.isDirectory()
-            if (e.isSymbolicLink()) {
-              // isDirectory() is false for a symlink even when it targets a dir — stat
-              // the target so a symlinked directory expands instead of opening.
-              try {
-                isDir = (await fs.promises.stat(path.join(target, e.name))).isDirectory()
-              } catch {
-                // dangling link → treat as a file
-              }
-            }
-            return { name: e.name, isDir }
-          }),
-        )
-        return toDirListing(raw)
+        return await readDirListing(target) // capped first, links stat-ed in small batches
       } catch {
         // this candidate didn't resolve (wrong share form, or unreadable) — try the next
       }

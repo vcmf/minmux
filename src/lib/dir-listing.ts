@@ -33,11 +33,19 @@ export function previewEntries<T>(
   return { shown, hidden: total - shown.length }
 }
 
+// Same order as String#localeCompare with no arguments, built once (35k compares per big folder).
+const collator = new Intl.Collator()
+
+/** Drop `.git` and sort: dirs first, then by name. Pure; returns a new array. */
+export function sortEntries<T extends DirEntry>(entries: T[]): T[] {
+  return entries
+    .filter((e) => e.name !== ".git")
+    .sort((a, b) => (a.isDir === b.isDir ? collator.compare(a.name, b.name) : a.isDir ? -1 : 1))
+}
+
 /** Filter `.git`, sort (dirs first, then name), and cap. Pure. */
 export function toDirListing(entries: DirEntry[], cap: number = READDIR_CAP): DirListing {
-  const filtered = entries
-    .filter((e) => e.name !== ".git")
-    .sort((a, b) => (a.isDir === b.isDir ? a.name.localeCompare(b.name) : a.isDir ? -1 : 1))
+  const filtered = sortEntries(entries)
   return {
     entries: filtered.slice(0, cap),
     truncated: filtered.length > cap,
