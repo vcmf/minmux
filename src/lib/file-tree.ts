@@ -29,6 +29,7 @@ export const emptyTree = (root: string): FileTreeState => ({
 
 /** Cache a directory's listing (from readdir). Pure. */
 export function setListing(s: FileTreeState, dir: string, listing: DirListing): FileTreeState {
+  if (listing.error && s.listings[dir]) return s // a failed re-read keeps what we had
   return { ...s, listings: { ...s.listings, [dir]: listing } }
 }
 
@@ -47,7 +48,9 @@ export function toggleDir(
     return { state: { ...s, expanded }, needsLoad: null }
   }
   expanded.add(dir)
-  return { state: { ...s, expanded }, needsLoad: s.listings[dir] ? null : dir }
+  // Read it unless we hold a good listing (a failed read is retried on the next expand).
+  const held = s.listings[dir]
+  return { state: { ...s, expanded }, needsLoad: held && !held.error ? null : dir }
 }
 
 export interface VisibleRow {

@@ -1,12 +1,16 @@
 // Main's side of the fs worker (fs-worker.ts). Started on first use; requests carry an id.
-// A request unanswered for HUNG_MS means the worker's threads are stuck on a dead mount: every
-// waiting request fails, the worker is killed, and the next request starts a fresh one. A
-// worker idle for IDLE_MS is shut down (it costs a process while alive). Main never touches a
-// possibly-dead path itself.
-import type { FsReply, FsRequest, FsResult } from "./fs-worker-ops"
+// A request unanswered for HUNG_MS is stuck on a dead mount: that request alone fails, the
+// worker is retired (no new requests; its other reads may still finish) and a fresh one takes
+// new requests. A retired worker is killed once nothing it holds can still finish. A process
+// blocked in a dead mount may not die even when killed, so at most MAX_RETIRED of them may be
+// waiting to exit; past that, requests fail fast instead of spawning more. A worker idle for
+// IDLE_MS is shut down. The files browser's folder reads never touch a possibly-dead path in
+// main.
+import type { FsCall, FsReply, FsRequest, FsResult } from "./fs-worker-ops"
 
 export const HUNG_MS = 30_000
 export const IDLE_MS = 5 * 60_000
+export const MAX_RETIRED = 3
 
 /** The bits of Electron's UtilityProcess we use (a fake in tests). */
 export interface WorkerProc {
@@ -16,18 +20,23 @@ export interface WorkerProc {
   kill(): boolean
 }
 
-type Pending = { resolve: (v: FsResult) => void; reject: (e: Error) => void; at: number }
+type Pending = {
+  resolve: (v: FsResult) => void
+  reject: (e: Error) => void
+  at: number
+  hung?: boolean // failed as hung; its late reply is ignored
+}
+
+/** One worker process and the requests it holds. */
+type Worker = { proc: WorkerProc; pending: Map<number, Pending>; retired: boolean }
 
 const fail = (code: string) => Object.assign(new Error(code), { code })
 
-type DistOp<T> = T extends { op: infer O } ? Omit<T, "id"> & { op: O } : never
-export type FsCall = DistOp<FsRequest>
-
 /** Sends fs requests to a worker process it starts, watches and replaces. */
 export class FsWorkerClient {
-  private proc: WorkerProc | null = null
+  private live: Worker | null = null
+  private retired = new Set<Worker>() // replaced, not exited yet
   private nextId = 1
-  private pending = new Map<number, Pending>()
   private hungTimer: ReturnType<typeof setInterval> | null = null
   private idleTimer: ReturnType<typeof setTimeout> | null = null
 
@@ -38,74 +47,126 @@ export class FsWorkerClient {
   ) {}
 
   call(req: FsCall): Promise<FsResult> {
-    const proc = this.ensure()
+    const w = this.ensure()
+    if (!w) return Promise.reject(fail("EBUSY")) // too many stuck workers: don't add another
     const id = this.nextId++
     return new Promise<FsResult>((resolve, reject) => {
-      this.pending.set(id, { resolve, reject, at: Date.now() })
+      w.pending.set(id, { resolve, reject, at: Date.now() })
       this.clearIdle()
+      this.armHungCheck()
       try {
-        proc.postMessage({ ...req, id } as FsRequest)
+        w.proc.postMessage({ ...req, id })
       } catch {
-        this.restart("EWORKER")
+        this.end(w, "EWORKER")
       }
     })
   }
 
-  /** Stop the worker (app quit). */
+  /** Stop every worker (app quit). */
   dispose(): void {
-    this.restart("EWORKER")
+    if (this.live) this.end(this.live, "EWORKER")
+    for (const w of [...this.retired]) this.end(w, "EWORKER")
   }
 
-  private ensure(): WorkerProc {
-    if (this.proc) return this.proc
-    const proc = this.spawn()
-    this.proc = proc
-    proc.on("message", (reply) => {
-      if (this.proc !== proc) return // a reply from a worker we already replaced
-      const p = this.pending.get(reply.id)
+  private ensure(): Worker | null {
+    if (this.live) return this.live
+    if (this.retired.size >= MAX_RETIRED) return null
+    const w: Worker = { proc: this.spawn(), pending: new Map(), retired: false }
+    this.live = w
+    w.proc.on("message", (reply) => {
+      const p = w.pending.get(reply.id)
       if (!p) return
-      this.pending.delete(reply.id)
-      if (reply.ok) p.resolve(reply.value)
-      else p.reject(fail(reply.code))
-      if (!this.pending.size) this.armIdle()
+      w.pending.delete(reply.id)
+      if (!p.hung) {
+        if (reply.ok) p.resolve(reply.value)
+        else p.reject(fail(reply.code))
+      }
+      this.settle(w)
     })
-    proc.on("exit", () => {
-      if (this.proc === proc) this.restart("EWORKER") // crashed: fail what it held
+    w.proc.on("exit", () => {
+      this.retired.delete(w) // a retired one finally exited: room for another
+      if (this.live === w)
+        this.end(w, "EWORKER") // crashed: fail what it held
+      else for (const p of w.pending.values()) if (!p.hung) p.reject(fail("EWORKER"))
+      w.pending.clear()
     })
-    // Check for a hung request a few times per HUNG_MS (no timer per request).
-    this.hungTimer = setInterval(() => this.checkHung(), Math.max(10, this.hungMs / 4))
-    this.hungTimer.unref?.()
-    return proc
+    return w
+  }
+
+  /** After a reply: kill a retired worker with nothing left that can finish; idle-arm. */
+  private settle(w: Worker): void {
+    if (w.retired && [...w.pending.values()].every((p) => p.hung)) this.kill(w)
+    if (w === this.live && !w.pending.size) this.armIdle()
+    this.armHungCheck()
   }
 
   private checkHung(): void {
     const now = Date.now()
-    for (const p of this.pending.values()) {
-      if (now - p.at >= this.hungMs) return this.restart("EHUNG")
+    for (const w of [this.live, ...this.retired]) {
+      if (!w) continue
+      let stuck = false
+      for (const p of w.pending.values()) {
+        if (p.hung || now - p.at < this.hungMs) continue
+        p.hung = true // fail just this one; healthy reads beside it may still finish
+        p.reject(fail("EHUNG"))
+        stuck = true
+      }
+      if (stuck && !w.retired) this.retire(w)
+      if (w.retired && [...w.pending.values()].every((p) => p.hung)) this.kill(w)
+    }
+    this.armHungCheck()
+  }
+
+  /** Stop sending to `w`; the next call starts a fresh worker. */
+  private retire(w: Worker): void {
+    w.retired = true
+    this.retired.add(w)
+    if (this.live === w) this.live = null
+  }
+
+  /** Kill a retired worker (it stays counted until it actually exits). */
+  private kill(w: Worker): void {
+    try {
+      w.proc.kill()
+    } catch {
+      this.retired.delete(w) // already gone
     }
   }
 
-  /** Fail every waiting request with `code`, kill the worker; the next call starts a new one. */
-  private restart(code: string): void {
-    const proc = this.proc
-    this.proc = null
-    if (this.hungTimer) clearInterval(this.hungTimer)
-    this.hungTimer = null
-    this.clearIdle()
-    const waiting = [...this.pending.values()]
-    this.pending.clear()
-    for (const p of waiting) p.reject(fail(code))
+  /** Fail everything `w` holds with `code` and kill it. */
+  private end(w: Worker, code: string): void {
+    if (this.live === w) this.live = null
+    this.retired.delete(w)
+    for (const p of w.pending.values()) if (!p.hung) p.reject(fail(code))
+    w.pending.clear()
     try {
-      proc?.kill()
+      w.proc.kill()
     } catch {
       // already gone
+    }
+    this.clearIdle()
+    this.armHungCheck()
+  }
+
+  // The hung check runs only while some request can still hang.
+  private armHungCheck(): void {
+    const waiting = [this.live, ...this.retired].some(
+      (w) => w && [...w.pending.values()].some((p) => !p.hung),
+    )
+    if (waiting && !this.hungTimer) {
+      this.hungTimer = setInterval(() => this.checkHung(), Math.max(10, this.hungMs / 4))
+      this.hungTimer.unref?.()
+    } else if (!waiting && this.hungTimer) {
+      clearInterval(this.hungTimer)
+      this.hungTimer = null
     }
   }
 
   private armIdle(): void {
     this.clearIdle()
     this.idleTimer = setTimeout(() => {
-      if (!this.pending.size) this.restart("EWORKER")
+      const w = this.live
+      if (w && !w.pending.size) this.end(w, "EWORKER")
     }, this.idleMs)
     this.idleTimer.unref?.()
   }

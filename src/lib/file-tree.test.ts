@@ -38,6 +38,13 @@ describe("tree state — immutability", () => {
     expect(s.listings).toEqual({})
     expect([...s.expanded]).toEqual([])
   })
+  it("a failed re-read keeps the cached listing, and a failed folder is read again on expand", () => {
+    const failed = { entries: [], truncated: false, error: true }
+    const s1 = setListing(emptyTree("/repo"), "/repo/src", listing([["a.ts", false]]))
+    expect(setListing(s1, "/repo/src", failed)).toBe(s1)
+    const s2 = setListing(emptyTree("/repo"), "/repo/src", failed) // first read failed
+    expect(toggleDir(s2, "/repo/src").needsLoad).toBe("/repo/src")
+  })
   it("setListing returns a new state and doesn't mutate the input", () => {
     const s0 = emptyTree("/repo")
     const s1 = setListing(s0, "/repo", listing([["a.ts", false]]))

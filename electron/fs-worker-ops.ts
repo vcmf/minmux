@@ -4,8 +4,8 @@ import fs from "node:fs"
 import { readDirListing } from "./read-dir"
 import type { DirListing } from "../src/lib/dir-listing"
 
-export type FsRequest =
-  { id: number; op: "readdir"; path: string } | { id: number; op: "stat"; path: string }
+export type FsCall = { op: "readdir" | "stat"; path: string }
+export type FsRequest = FsCall & { id: number }
 
 export type FsResult = DirListing | { isDir: boolean }
 

@@ -251,8 +251,6 @@ function defaultShell(): string {
   return process.env.SHELL ?? (process.platform === "win32" ? "powershell.exe" : "/bin/zsh")
 }
 
-// Host-fs targets for a path, in try order: for a WSL pane, the distro's UNC share
-// candidates (default distro resolved, both share forms); otherwise the path itself.
 // The files browser's folder reads run in a utility process (fs-worker): a read stuck on a dead
 // mount ties up its threads, never main's, and it's killed and replaced when one hangs.
 const fsWorker = new FsWorkerClient(
@@ -263,10 +261,12 @@ const fsWorker = new FsWorkerClient(
     }) as unknown as WorkerProc,
 )
 
-/** The volume / share root of `p` answers (so ENOENT under it means "deleted"). */
+/** The volume / share root of `p` answers (so ENOENT under it means "deleted"). A POSIX
+ *  "/" always does; a drive or UNC share root (a WSL distro, a mapped drive) is asked. */
 async function rootReachable(p: string): Promise<boolean> {
   const root = path.parse(p).root
   if (!root) return false
+  if (root === "/") return true
   try {
     await fsWorker.call({ op: "stat", path: root })
     return true
@@ -275,6 +275,8 @@ async function rootReachable(p: string): Promise<boolean> {
   }
 }
 
+// Host-fs targets for a path, in try order: for a WSL pane, the distro's UNC share
+// candidates (default distro resolved, both share forms); otherwise the path itself.
 // Shared by fs:readdir + fs:read-preview so the WSL translation lives in one place.
 function wslTargets(p: string, wsl?: WslContext): string[] {
   const candidates = wsl ? wslUncCandidates(wsl.distro ?? defaultWslDistro(), p) : []
@@ -1106,17 +1108,21 @@ function registerIpc() {
     // A WSL pane's dir is a Linux path the host can't see — read it through the distro's
     // UNC share instead (wslTargets); non-WSL panes read the host path.
     // The read runs in the fs worker (capped first, links stat-ed in small batches).
-    let gone = false
+    // Deleted only if EVERY form said "no such folder" with its share / volume root
+    // answering (a stopped WSL distro reports ENOENT for everything); otherwise an error.
+    let gone = true
     for (const target of wslTargets(dir, wsl)) {
       try {
         return (await fsWorker.call({ op: "readdir", path: target })) as DirListing
       } catch (e) {
         // This candidate didn't resolve (wrong share form, unreadable, hung) — try the next.
-        // "No such folder" counts as deleted only where the share / volume root answers: a
-        // stopped WSL distro reports ENOENT for everything.
         const code = (e as { code?: string }).code
-        if ((code === "ENOENT" || code === "ENOTDIR") && (await rootReachable(target))) gone = true
-        if (code === "EHUNG") break // the worker was replaced: don't hang the next form too
+        if (code === "EHUNG" || code === "EBUSY") {
+          gone = false
+          break // a dead mount: don't hang (or refuse) the next form too
+        }
+        const missing = code === "ENOENT" || code === "ENOTDIR"
+        if (!missing || !(await rootReachable(target))) gone = false
       }
     }
     // Deleted → an empty folder. Any other failure → flagged, so the panel keeps what it had.
