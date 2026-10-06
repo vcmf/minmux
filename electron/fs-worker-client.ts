@@ -15,8 +15,10 @@ import type { FsCall, FsEvent, FsReply, FsRequest, FsResult } from "./fs-worker-
 export const HUNG_MS = 30_000
 export const IDLE_MS = 5 * 60_000
 export const MAX_RETIRED = 3
+// Re-adding lost / failed watches backs off: 1 s, 2 s, 4 s … WATCH_RETRY_MAX_MS, back to 1 s
+// after a watch succeeds. Never gives up (a crash loop just slows down).
 export const WATCH_RETRY_MS = 1000
-export const WATCH_RETRIES = 30 // then a lost folder stays unwatched (Refresh / focus still read)
+export const WATCH_RETRY_MAX_MS = 60_000
 
 /** The bits of Electron's UtilityProcess we use (a fake in tests). */
 export interface WorkerProc {
@@ -55,6 +57,7 @@ export class FsWorkerClient {
   private wanted = new Set<string>()
   private watching = new Set<string>()
   private adding = new Set<string>()
+  private rearm = new Set<string>() // wanted folders that were watched and lost their watcher
   private unwatchable = new Set<string>()
   private retryTimer: ReturnType<typeof setTimeout> | null = null
   private retries = 0
@@ -91,6 +94,7 @@ export class FsWorkerClient {
   /** The folders to watch (the whole set; [] stops watching). */
   setWatched(dirs: string[]): void {
     this.wanted = new Set(dirs.filter((d) => !this.unwatchable.has(d)))
+    for (const d of this.rearm) if (!this.wanted.has(d)) this.rearm.delete(d)
     this.retries = 0
     this.reconcile()
     // Nothing wanted any more and nothing in flight: the idle clock starts now.
@@ -118,16 +122,20 @@ export class FsWorkerClient {
           if (gen !== this.gen) return // its worker is gone; the fresh one re-adds it
           this.adding.delete(d)
           this.retries = 0
-          if (this.wanted.has(d)) this.watching.add(d)
-          else this.call({ op: "unwatch", path: d }).catch(() => {}) // unwanted meanwhile
+          if (!this.wanted.has(d)) return void this.call({ op: "unwatch", path: d }).catch(() => {})
+          this.watching.add(d)
+          // A re-add (its folder was replaced, or its worker died): whatever changed while it
+          // wasn't watched is read now. A first add needs nothing — the panel just read it.
+          if (this.rearm.delete(d)) this.onChanged([d])
         },
         (e: { code?: string }) => {
           if (gen !== this.gen) return
           this.adding.delete(d)
-          // EHUNG: checkHung already dropped it for good. Missing: stays wanted, tried again
-          // shortly (it may be recreated). Other errors (EACCES): left until the set changes.
-          const missing = e.code === "ENOENT" || e.code === "ENOTDIR"
-          if (missing && this.wanted.has(d)) this.retrySoon()
+          // EHUNG: checkHung already dropped it for good. Missing (it may be recreated), no
+          // worker free (EBUSY) or a worker gone: tried again with backoff. Other errors
+          // (EACCES): left until the set changes.
+          const transient = ["ENOENT", "ENOTDIR", "EBUSY", "EWORKER"].includes(e.code ?? "")
+          if (transient && this.wanted.has(d)) this.retrySoon()
         },
       )
     }
@@ -135,22 +143,24 @@ export class FsWorkerClient {
 
   /** Re-add lost / failed watches a little later (a folder deleted then recreated). */
   private retrySoon(): void {
-    if (this.retryTimer || this.retries >= WATCH_RETRIES) return
+    if (this.retryTimer) return
+    const delay = Math.min(WATCH_RETRY_MAX_MS, WATCH_RETRY_MS * 2 ** this.retries)
     this.retries++
     this.retryTimer = setTimeout(() => {
       this.retryTimer = null
       this.reconcile()
-    }, WATCH_RETRY_MS)
+    }, delay)
     this.retryTimer.unref?.()
   }
 
   /** The live worker is gone: its watchers went with it. */
   private lostWorker(): void {
     this.gen++
+    for (const d of this.watching) this.rearm.add(d)
     this.watching.clear()
     this.adding.clear()
     // Re-add on a fresh worker (a hung watch's folder was already dropped by checkHung) —
-    // through the capped retry, so a worker that dies at once isn't respawned in a loop.
+    // through the backoff, so a worker that dies at once isn't respawned in a loop.
     if (this.wanted.size) this.retrySoon()
   }
 
@@ -173,7 +183,10 @@ export class FsWorkerClient {
         if (msg.event === "changed") this.onChanged(msg.dirs)
         else {
           this.watching.delete(msg.dir)
-          if (this.wanted.has(msg.dir)) this.retrySoon()
+          if (this.wanted.has(msg.dir)) {
+            this.rearm.add(msg.dir)
+            this.retrySoon()
+          }
         }
         return
       }
@@ -243,7 +256,10 @@ export class FsWorkerClient {
     for (const [id, p] of [...w.pending]) {
       if (p.hung) continue
       w.pending.delete(id)
-      this.send(p)
+      // A stranded watch / unwatch isn't re-sent: the fresh worker starts with no watchers
+      // and the watch set is re-added to it (lostWorker).
+      if (p.req.op === "watch" || p.req.op === "unwatch") p.reject(fail("EWORKER"))
+      else this.send(p)
     }
   }
 

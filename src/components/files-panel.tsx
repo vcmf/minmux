@@ -205,6 +205,7 @@ export function FilesPanel() {
   const gitKey = wslPane ? (git?.files ?? []).map((f) => `${f.status}${f.path}`).join("\n") : ""
   const lastGit = useRef({ root, gitRoot, gitKey })
   useEffect(() => {
+    if (wslPane && !gitRoot) return // a poll with no status yet: keep comparing to the last one
     const prev = lastGit.current
     lastGit.current = { root, gitRoot, gitKey }
     const sameRepo = !!gitRoot && prev.root === root && prev.gitRoot === gitRoot

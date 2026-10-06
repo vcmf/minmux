@@ -238,3 +238,73 @@ describe("FsWorkerClient — watch bookkeeping", () => {
     expect(procs[0]!.killed).toBe(true)
   })
 })
+
+describe("FsWorkerClient — re-arming", () => {
+  const ops = (p: ReturnType<typeof fakeProc>) => p.sent.map((r) => `${r.op} ${r.path}`)
+  const flush = async () => {
+    for (let i = 0; i < 5; i++) await Promise.resolve()
+  }
+
+  it("a re-added folder is read once (it may have changed while unwatched); a first add isn't", async () => {
+    const c = client()
+    const seen: string[][] = []
+    c.onChanged = (d) => seen.push(d)
+    c.setWatched(["/dist"])
+    procs[0]!.ackWatches()
+    await flush()
+    expect(seen).toEqual([]) // first add: the panel just read it
+    procs[0]!.reply({ event: "lost", dir: "/dist" })
+    vi.advanceTimersByTime(1000)
+    procs[0]!.ackWatches()
+    await flush()
+    expect(seen).toEqual([["/dist"]])
+  })
+
+  it("retries back off (1 s, 2 s, 4 s …) and never give up", async () => {
+    const c = new FsWorkerClient(
+      () => {
+        const p = fakeProc()
+        procs.push(p)
+        return p as unknown as WorkerProc
+      },
+      1e9, // no hang detection here: retries sit unanswered for a while
+      1e9,
+    )
+    c.setWatched(["/gone"])
+    const failNext = () => {
+      const r = procs[0]!.sent.splice(0)[0]!
+      procs[0]!.reply({ id: r.id, ok: false, code: "ENOENT" })
+    }
+    failNext()
+    await flush()
+    vi.advanceTimersByTime(999)
+    expect(ops(procs[0]!)).toEqual([])
+    vi.advanceTimersByTime(1)
+    expect(ops(procs[0]!)).toEqual(["watch /gone"]) // after 1 s
+    failNext()
+    await flush()
+    vi.advanceTimersByTime(1999)
+    expect(ops(procs[0]!)).toEqual([])
+    vi.advanceTimersByTime(1)
+    expect(ops(procs[0]!)).toEqual(["watch /gone"]) // after 2 s
+    for (let i = 0; i < 40; i++) {
+      failNext()
+      await flush()
+      vi.advanceTimersByTime(60_000)
+    }
+    expect(ops(procs[0]!)).toEqual(["watch /gone"]) // still trying, capped at 60 s apart
+  })
+
+  it("a watch stranded on a retired worker isn't re-sent; the fresh worker gets the set", async () => {
+    const c = client()
+    const read = c.call({ op: "readdir", path: "/mnt/dead" })
+    vi.advanceTimersByTime(500)
+    c.setWatched(["/x"]) // queued behind the dead read on the same worker
+    vi.advanceTimersByTime(800) // the read hangs: worker retired
+    await expect(read).rejects.toMatchObject({ code: "EHUNG" })
+    await flush()
+    vi.advanceTimersByTime(1000)
+    expect(procs).toHaveLength(2)
+    expect(ops(procs[1]!)).toEqual(["watch /x"]) // once, from the re-add — not re-sent too
+  })
+})

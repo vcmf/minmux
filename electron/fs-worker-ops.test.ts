@@ -65,12 +65,7 @@ describe("Watches (in the fs worker)", () => {
     vi.useFakeTimers()
     const out: FsEvent[] = []
     const fw = fakeWatch()
-    const w = new Watches(
-      (e) => out.push(e),
-      fw.fn,
-      false,
-      async () => "1",
-    )
+    const w = new Watches((e) => out.push(e), { watchFn: fw.fn, linux: false, idNow: () => "1" })
     w.add("/a")
     w.add("/b")
     for (let i = 0; i < 500; i++) fw.live.get("/a")!.fire("rename", `f${i}`)
@@ -85,12 +80,7 @@ describe("Watches (in the fs worker)", () => {
     vi.useFakeTimers()
     const out: FsEvent[] = []
     const fw = fakeWatch()
-    const w = new Watches(
-      (e) => out.push(e),
-      fw.fn,
-      true,
-      async () => "1",
-    )
+    const w = new Watches((e) => out.push(e), { watchFn: fw.fn, linux: true, idNow: () => "1" })
     w.add("/log")
     fw.live.get("/log")!.fire("change", "app.log")
     vi.advanceTimersByTime(WATCH_BATCH_MS)
@@ -98,7 +88,7 @@ describe("Watches (in the fs worker)", () => {
     vi.useRealTimers()
   })
 
-  it("a folder deleted or replaced under its watcher is reported lost (Linux goes silent)", async () => {
+  it("Linux: a folder deleted or replaced under its watcher is reported lost", async () => {
     vi.useFakeTimers()
     const out: FsEvent[] = []
     const fw = fakeWatch()
@@ -107,16 +97,15 @@ describe("Watches (in the fs worker)", () => {
       ["/src", "7"],
       ["/keep", "3"],
     ])
-    const w = new Watches(
-      (e) => out.push(e),
-      fw.fn,
-      false,
-      async (d) => ids.get(d) ?? null,
-    )
+    const w = new Watches((e) => out.push(e), {
+      watchFn: fw.fn,
+      linux: true,
+      idOf: async (d) => ids.get(d) ?? null,
+      idNow: (d) => ids.get(d) ?? null,
+    })
     w.add("/dist")
     w.add("/src")
     w.add("/keep")
-    await vi.advanceTimersByTimeAsync(0) // identities recorded
     ids.set("/dist", "2") // rm -rf dist && mkdir dist: a new folder in its place
     ids.delete("/src") // deleted
     fw.live.get("/dist")!.fire("rename", "dist") // Linux names the folder itself
@@ -134,15 +123,53 @@ describe("Watches (in the fs worker)", () => {
     vi.useRealTimers()
   })
 
+  it("Linux: a rename during an identity check is checked again after it", async () => {
+    vi.useFakeTimers()
+    const out: FsEvent[] = []
+    const fw = fakeWatch()
+    let id: string | null = "1"
+    let release!: () => void
+    const first = new Promise<void>((r) => (release = r))
+    let calls = 0
+    const w = new Watches((e) => out.push(e), {
+      watchFn: fw.fn,
+      linux: true,
+      idNow: () => "1",
+      idOf: async () => {
+        if (calls++ === 0) await first // the first check's stat ran before the folder went
+        return calls === 1 ? "1" : id
+      },
+    })
+    w.add("/dist")
+    fw.live.get("/dist")!.fire("rename", "a.js") // a child: check starts (still "1")
+    id = null // now the folder itself goes…
+    fw.live.get("/dist")!.fire("rename", "dist") // …during that check
+    release()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(out.filter((e) => e.event === "lost")).toEqual([{ event: "lost", dir: "/dist" }])
+    vi.useRealTimers()
+  })
+
+  it("macOS: no identity checks (FSEvents follows the path)", async () => {
+    let checks = 0
+    const fw = fakeWatch()
+    const w = new Watches(() => {}, {
+      watchFn: fw.fn,
+      linux: false,
+      idNow: () => "1",
+      idOf: async () => (checks++, "1"),
+    })
+    w.add("/logs")
+    for (let i = 0; i < 50; i++) fw.live.get("/logs")!.fire("rename", "app.log") // appends
+    await Promise.resolve()
+    expect(checks).toBe(0)
+    w.closeAll()
+  })
+
   it("a watcher error: closed and reported lost", () => {
     const out: FsEvent[] = []
     const fw = fakeWatch()
-    const w = new Watches(
-      (e) => out.push(e),
-      fw.fn,
-      false,
-      async () => "1",
-    )
+    const w = new Watches((e) => out.push(e), { watchFn: fw.fn, linux: false, idNow: () => "1" })
     w.add("/x")
     fw.live.get("/x")!.err()
     expect(out).toEqual([{ event: "lost", dir: "/x" }])
