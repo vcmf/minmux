@@ -1,5 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
-import { CaretRight, CaretDown, Folder, File as FileIcon, X } from "@phosphor-icons/react"
+import {
+  ArrowClockwise,
+  CaretRight,
+  CaretDown,
+  Folder,
+  File as FileIcon,
+  X,
+} from "@phosphor-icons/react"
 import { useStore } from "../store"
 import { ipc } from "../lib/ipc"
 import { useActiveRemote, useFilesRoot, getActiveWsl } from "../lib/use-active-cwd"
@@ -13,8 +20,12 @@ import {
   visibleRows,
   showAllIn,
   openDirs,
+  shownOpenDirs,
+  hasListing,
   type FileTreeState,
 } from "../lib/file-tree"
+import { BIG_FOLDER } from "../lib/dir-listing"
+import { ReadQueue } from "../lib/read-queue"
 import { buildGitDecorations, statusLetter, statusColor } from "../lib/git-decorations"
 import { useFileMenu } from "./use-file-menu"
 import { RootBreadcrumb } from "./root-breadcrumb"
@@ -23,6 +34,10 @@ import { RootBreadcrumb } from "./root-breadcrumb"
 // tree instantly instead of re-listing. Bounded to 16 folders (each listing itself capped
 // by the backend → a few-MB ceiling). Module-level so it survives the panel unmounting.
 const cache = new FileTreeCache(16)
+// Every folder read goes through one queue: one at a time, rate-limited, big folders backed
+// off (lib/read-queue). Module-level like the cache; a closed panel drops its queued reads,
+// and a running read's late result is cached (or dropped by `apply` for a root you've left).
+const reads = new ReadQueue()
 
 /** Right-rail lazy file browser rooted at the focused pane's root (its cwd by default, or
  *  a per-pane override chosen via the breadcrumb / double-click). Reads ONE directory per
@@ -52,23 +67,37 @@ export function FilesPanel() {
     // Drop a late read for a root that's neither active nor still cached — otherwise it
     // would rebuild a one-listing tree, re-insert it as MRU, and evict a live entry.
     if (rootRef.current !== key && !cache.has(key)) return
-    const next = fn(cache.get(key) ?? emptyTree(key))
-    cache.set(key, next)
+    const cur = cache.peek(key) // a background result mustn't reorder the LRU…
+    const next = fn(cur ?? emptyTree(key))
+    if (next === cur) return // …and an unchanged re-read doesn't re-render
+    cache.replace(key, next)
     if (rootRef.current === key) setTree(next)
   }, [])
+  // `urgent` = the user is waiting on it (first visit, a folder with no listing yet, Refresh).
   const load = useCallback(
-    (key: string, dir: string) => {
+    (key: string, dir: string, urgent = false, front = false, skipIfReadWithin = 0) => {
       // Pass the focused pane's WSL context so a distro's Linux path is read via its
       // \\wsl.localhost\ share (a stale read for a pane you've left is dropped by `apply`).
-      void ipc
-        .readdir(dir, getActiveWsl())
-        .then((listing) => apply(key, (s) => setListing(s, dir, listing)))
+      const wsl = getActiveWsl()
+      // Same test as the tree's preview (lib/dir-listing previewEntries): over BIG_FOLDER.
+      const big = (cache.peek(key)?.listings[dir]?.total ?? 0) > BIG_FOLDER
+      reads.request({
+        key: `${key}\0${dir}`,
+        urgent,
+        front,
+        big,
+        skipIfReadWithin,
+        run: () =>
+          ipc.readdir(dir, wsl).then((listing) => apply(key, (s) => setListing(s, dir, listing))),
+      })
     },
     [apply],
   )
 
   useEffect(() => {
     rootRef.current = root
+    // Queued reads for roots no longer shown would hold up this one's.
+    reads.drop((k) => !root || !k.startsWith(`${root}\0`))
     if (!root) {
       setTree(null)
       return
@@ -76,19 +105,25 @@ export function FilesPanel() {
     const cached = cache.get(root)
     if (cached) {
       setTree(cached) // instant restore…
-      // …then refresh open dirs in the background — but NOT for a WSL pane: each read
-      // goes over the slow \\wsl.localhost\ (9p) share, so N at once would stall the
-      // refocus. The cached tree is shown as-is; expanding a dir re-reads it fresh.
-      // A folder whose read failed is retried either way.
+      // …then refresh the open dirs you can see in the background — but NOT for a WSL pane:
+      // each read goes over the slow \\wsl.localhost\ (9p) share; Refresh re-reads there.
+      // A folder without a good listing (its read was dropped, or failed) is read either way.
       const wsl = !!getActiveWsl()
-      openDirs(cached).forEach((d) => (!wsl || cached.listings[d]?.error) && load(root, d))
+      const shown = new Set(shownOpenDirs(cached))
+      for (const dir of openDirs(cached)) {
+        if (!hasListing(cached, dir)) load(root, dir, true)
+        else if (!wsl && shown.has(dir)) load(root, dir)
+      }
     } else {
       const t = emptyTree(root)
       cache.set(root, t)
       setTree(t)
-      load(root, root) // first visit: read the root
+      load(root, root, true) // first visit: read the root
     }
   }, [root, load])
+
+  // A closed panel shows nothing: its queued reads would only hold up the next one.
+  useEffect(() => () => reads.drop(() => true), [])
 
   const toggle = (dir: string) => {
     if (!root) return
@@ -97,7 +132,21 @@ export function FilesPanel() {
     const { state, needsLoad } = toggleDir(cur, dir)
     cache.set(root, state)
     setTree(state)
-    if (needsLoad) load(root, needsLoad)
+    // A folder with no listing yet is awaited; a cached one shows at once and re-reads.
+    // A click on a folder not listed yet goes ahead even of a Refresh batch.
+    // On a WSL pane a cached folder isn't re-read on expand (each read is a slow 9p trip;
+    // Refresh re-reads). A folder read under a second ago isn't read again (rapid toggling).
+    if (needsLoad) {
+      const waiting = !hasListing(cur, needsLoad)
+      if (waiting) load(root, needsLoad, true, true)
+      else if (!getActiveWsl()) load(root, needsLoad, false, false, 1000)
+    }
+  }
+
+  // Re-read every open folder (root + expanded), e.g. after files changed outside the app.
+  const refresh = () => {
+    const cur = root ? (cache.get(root) ?? tree) : null
+    if (root && cur) shownOpenDirs(cur).forEach((d) => load(root, d, true))
   }
 
   // "Show all" on a big folder's "N more" row (past the first-10 preview).
@@ -131,6 +180,17 @@ export function FilesPanel() {
     <div className="diffpanel">
       <div className="diffpanel-header">
         <span className="section-label">Files</span>
+        <span style={{ flex: 1 }} />
+        {root && (
+          <button
+            className="iconbtn"
+            style={{ width: 22, height: 22 }}
+            title="Refresh"
+            onClick={refresh}
+          >
+            <ArrowClockwise size={13} />
+          </button>
+        )}
         <button className="iconbtn" style={{ width: 22, height: 22 }} title="Close" onClick={close}>
           <X size={13} />
         </button>
