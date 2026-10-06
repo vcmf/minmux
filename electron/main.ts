@@ -51,7 +51,7 @@ import { disabledAgentsIn, mergeAgentSwitches } from "../src/settings/agent-swit
 import { agentPaneEnv, resumablePanes } from "./agents/arming"
 import { findOnPath, pathCandidates } from "./path-lookup"
 import { FsWorkerClient, type WorkerProc } from "./fs-worker-client"
-import type { DirListing } from "../src/lib/dir-listing"
+import { WATCH_CAP, type DirListing } from "../src/lib/dir-listing"
 import { wslUncCandidates, uncToWslPath } from "./wsl-paths"
 import { colorfgbg } from "./color"
 import { AgentMetaTracker, planMeta } from "./agent-meta"
@@ -253,7 +253,6 @@ function defaultShell(): string {
 
 // The files browser's folder reads run in a utility process (fs-worker): a read stuck on a dead
 // mount ties up its threads, never main's, and it's killed and replaced when one hangs.
-const FS_WATCH_CAP = 32 // folders watched at once (the visible panel's open ones)
 const fsWorker = new FsWorkerClient(
   () =>
     utilityProcess.fork(path.join(dir, "fs-worker.js"), [], {
@@ -1110,17 +1109,20 @@ function registerIpc() {
   ipcMain.on("clipboard:write", (_e, text: string) => clipboard.writeText(text))
   ipcMain.handle("clipboard:read", async () => clipboard.readText())
 
-  // Files browser: list ONE directory (lazy — never a recursive walk), bounded so a huge
-  // folder can't block main (read-dir; sort / .git filter / cap in lib/dir-listing).
   // Files browser: watch these folders (the whole set; [] stops). Host paths only: the
   // renderer doesn't send WSL panes' folders (a 9p share can't be watched reliably).
   ipcMain.handle("fs:watch", (_e, dirs: unknown) => {
     const list = Array.isArray(dirs)
       ? dirs.filter((d): d is string => typeof d === "string" && path.isAbsolute(d))
       : []
-    fsWorker.setWatched(list.slice(0, FS_WATCH_CAP))
+    // Not on Windows: a watched folder's open handle blocks renaming / deleting it and its
+    // parents there (focus and Refresh still read).
+    fsWorker.setWatched(process.platform === "win32" ? [] : list.slice(0, WATCH_CAP))
   })
+  ipcMain.handle("fs:watching", () => fsWorker.watchingNow())
 
+  // Files browser: list ONE directory (lazy — never a recursive walk), bounded so a huge
+  // folder can't block main (read-dir; sort / .git filter / cap in lib/dir-listing).
   ipcMain.handle("fs:readdir", async (_e, dir: string, wsl?: WslContext) => {
     // A WSL pane's dir is a Linux path the host can't see — read it through the distro's
     // UNC share instead (wslTargets); non-WSL panes read the host path.

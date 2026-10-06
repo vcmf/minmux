@@ -65,7 +65,12 @@ describe("Watches (in the fs worker)", () => {
     vi.useFakeTimers()
     const out: FsEvent[] = []
     const fw = fakeWatch()
-    const w = new Watches((e) => out.push(e), fw.fn, false)
+    const w = new Watches(
+      (e) => out.push(e),
+      fw.fn,
+      false,
+      async () => "1",
+    )
     w.add("/a")
     w.add("/b")
     for (let i = 0; i < 500; i++) fw.live.get("/a")!.fire("rename", `f${i}`)
@@ -80,7 +85,12 @@ describe("Watches (in the fs worker)", () => {
     vi.useFakeTimers()
     const out: FsEvent[] = []
     const fw = fakeWatch()
-    const w = new Watches((e) => out.push(e), fw.fn, true)
+    const w = new Watches(
+      (e) => out.push(e),
+      fw.fn,
+      true,
+      async () => "1",
+    )
     w.add("/log")
     fw.live.get("/log")!.fire("change", "app.log")
     vi.advanceTimersByTime(WATCH_BATCH_MS)
@@ -88,24 +98,56 @@ describe("Watches (in the fs worker)", () => {
     vi.useRealTimers()
   })
 
-  it("the folder itself deleted (no name) or a watcher error: closed and reported lost", () => {
+  it("a folder deleted or replaced under its watcher is reported lost (Linux goes silent)", async () => {
     vi.useFakeTimers()
     const out: FsEvent[] = []
     const fw = fakeWatch()
-    const w = new Watches((e) => out.push(e), fw.fn, false)
+    const ids = new Map([
+      ["/dist", "1"],
+      ["/src", "7"],
+      ["/keep", "3"],
+    ])
+    const w = new Watches(
+      (e) => out.push(e),
+      fw.fn,
+      false,
+      async (d) => ids.get(d) ?? null,
+    )
     w.add("/dist")
     w.add("/src")
-    fw.live.get("/dist")!.fire("rename", null)
-    fw.live.get("/src")!.err()
-    expect(out).toEqual([
+    w.add("/keep")
+    await vi.advanceTimersByTimeAsync(0) // identities recorded
+    ids.set("/dist", "2") // rm -rf dist && mkdir dist: a new folder in its place
+    ids.delete("/src") // deleted
+    fw.live.get("/dist")!.fire("rename", "dist") // Linux names the folder itself
+    fw.live.get("/src")!.fire("rename", "src")
+    fw.live.get("/keep")!.fire("rename", "a-file") // a file inside renamed: same folder
+    await vi.advanceTimersByTimeAsync(0)
+    expect(out.filter((e) => e.event === "lost")).toEqual([
       { event: "lost", dir: "/dist" },
       { event: "lost", dir: "/src" },
     ])
     expect(fw.closed).toEqual(["/dist", "/src"])
-    expect(w.size).toBe(0)
-    vi.advanceTimersByTime(WATCH_BATCH_MS)
-    expect(out.at(-1)).toEqual({ event: "changed", dirs: ["/dist", "/src"] })
+    expect(w.size).toBe(1)
+    await vi.advanceTimersByTimeAsync(WATCH_BATCH_MS)
+    expect(out.at(-1)).toEqual({ event: "changed", dirs: ["/dist", "/src", "/keep", "/"] })
     vi.useRealTimers()
+  })
+
+  it("a watcher error: closed and reported lost", () => {
+    const out: FsEvent[] = []
+    const fw = fakeWatch()
+    const w = new Watches(
+      (e) => out.push(e),
+      fw.fn,
+      false,
+      async () => "1",
+    )
+    w.add("/x")
+    fw.live.get("/x")!.err()
+    expect(out).toEqual([{ event: "lost", dir: "/x" }])
+    expect(w.size).toBe(0)
+    w.closeAll()
   })
 
   it("watch / unwatch requests; a folder that can't be watched replies with its code", async () => {

@@ -110,6 +110,7 @@ const api = {
   clipboardRead: () => ipcRenderer.invoke("clipboard:read") as Promise<string>,
   readdir: (dir: string, wsl?: WslContext) => ipcRenderer.invoke("fs:readdir", dir, wsl),
   fsWatch: (dirs: string[]) => ipcRenderer.invoke("fs:watch", dirs),
+  fsWatching: () => ipcRenderer.invoke("fs:watching") as Promise<string[]>,
   onFsChanged: (cb: (dirs: string[]) => void) => {
     const listener = (_e: unknown, dirs: string[]) => cb(dirs)
     ipcRenderer.on("fs:changed", listener)

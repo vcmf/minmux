@@ -24,7 +24,7 @@ import {
   hasListing,
   type FileTreeState,
 } from "../lib/file-tree"
-import { BIG_FOLDER } from "../lib/dir-listing"
+import { BIG_FOLDER, WATCH_CAP } from "../lib/dir-listing"
 import { ReadQueue } from "../lib/read-queue"
 import { buildGitDecorations, statusLetter, statusColor } from "../lib/git-decorations"
 import { useFileMenu } from "./use-file-menu"
@@ -38,7 +38,6 @@ const cache = new FileTreeCache(16)
 // off (lib/read-queue). Module-level like the cache; a closed panel drops its queued reads,
 // and a running read's late result is cached (or dropped by `apply` for a root you've left).
 const reads = new ReadQueue()
-const WATCH_CAP = 32 // folders watched at once (main caps the same)
 const SETTLE_MS = 2000 // one more read this long after a folder's last change event
 
 /** Right-rail lazy file browser rooted at the focused pane's root (its cwd by default, or
@@ -131,19 +130,18 @@ export function FilesPanel() {
   // Watched: the open folders you can see, on a local pane (a WSL 9p share can't be watched
   // reliably — it refreshes on git changes and focus instead). Capped like main's cap.
   const wslPane = !!getActiveWsl()
+  const platform = useStore((s) => s.platform)
   const watched = useMemo(
     () =>
       tree && root && !remote && !wslPane
         ? shownOpenDirs(tree)
-            .filter((d) => isAbsoluteHostPath(d))
+            .filter((d) => isAbsoluteHostPath(d, platform))
             .slice(0, WATCH_CAP)
         : [],
-    [tree, root, remote, wslPane],
+    [tree, root, remote, wslPane, platform],
   )
   const watchKey = watched.join("\0")
-  const watchedRef = useRef<ReadonlySet<string>>(new Set())
   useEffect(() => {
-    watchedRef.current = new Set(watched)
     void ipc.fsWatch(watched).catch(() => {})
     // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on the set's content
   }, [watchKey])
@@ -183,26 +181,37 @@ export function FilesPanel() {
     }
   }, [load, shownNow])
 
-  // Back to the window: re-read the open folders no watcher covers (a WSL pane, past the cap).
+  // Back to the window: re-read the open folders no watcher covers (a WSL pane, past the cap,
+  // a folder main couldn't watch) — asked of main, which knows what it really watches.
   useEffect(() => {
     const onFocus = () => {
-      const now = shownNow()
-      if (now) now.dirs.filter((d) => !watchedRef.current.has(d)).forEach((d) => load(now.r, d))
+      void ipc
+        .fsWatching()
+        .catch(() => [] as string[])
+        .then((list) => {
+          const now = shownNow()
+          const on = new Set(list)
+          if (now) now.dirs.filter((d) => !on.has(d)).forEach((d) => load(now.r, d))
+        })
     }
     window.addEventListener("focus", onFocus)
     return () => window.removeEventListener("focus", onFocus)
   }, [load, shownNow])
 
-  // A WSL pane: re-read its open folders when the polled git status really changes (an agent
-  // writing files shows up there), not on every poll.
+  // A WSL pane: re-read its open folders when the polled git status really changes in the
+  // same repo (an agent writing files shows up there) — not on every poll, nor when switching
+  // panes or repos (the cached tree is shown as-is then, like the restore above).
+  const gitRoot = wslPane ? (git?.root ?? "") : ""
   const gitKey = wslPane ? (git?.files ?? []).map((f) => `${f.status}${f.path}`).join("\n") : ""
-  const lastGitKey = useRef(gitKey)
+  const lastGit = useRef({ root, gitRoot, gitKey })
   useEffect(() => {
-    if (gitKey === lastGitKey.current) return
-    lastGitKey.current = gitKey
+    const prev = lastGit.current
+    lastGit.current = { root, gitRoot, gitKey }
+    const sameRepo = !!gitRoot && prev.root === root && prev.gitRoot === gitRoot
+    if (!wslPane || !sameRepo || prev.gitKey === gitKey) return
     const now = shownNow()
-    if (wslPane && now) now.dirs.forEach((d) => load(now.r, d))
-  }, [gitKey, wslPane, load, shownNow])
+    if (now) now.dirs.forEach((d) => load(now.r, d))
+  }, [gitKey, gitRoot, root, wslPane, load, shownNow])
 
   const toggle = (dir: string) => {
     if (!root) return
@@ -237,8 +246,6 @@ export function FilesPanel() {
     cache.set(root, state)
     setTree(state)
   }
-  const platform = useStore((s) => s.platform)
-
   const rows = useMemo(() => (tree ? visibleRows(tree) : []), [tree])
 
   const { menu, openFileMenu } = useFileMenu()

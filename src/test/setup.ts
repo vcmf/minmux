@@ -38,6 +38,7 @@ const minmuxStub = {
   clipboardRead: vi.fn(async () => ""),
   readdir: vi.fn(async () => ({ entries: [], truncated: false })),
   fsWatch: vi.fn(async () => {}),
+  fsWatching: vi.fn(async () => [] as string[]),
   onFsChanged: vi.fn(unsub),
   readFilePreview: vi.fn(async () => ({ kind: "text", text: "", truncated: false, size: 0 })),
   pickDirectory: vi.fn(async () => null),

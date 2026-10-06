@@ -176,8 +176,10 @@ describe("FsWorkerClient — watches", () => {
     procs[0]!.ackWatches()
     await Promise.resolve()
     procs[0]!.exit()
+    vi.advanceTimersByTime(999)
+    expect(procs).toHaveLength(1) // not respawned in a tight loop…
     vi.advanceTimersByTime(1)
-    expect(procs).toHaveLength(2)
+    expect(procs).toHaveLength(2) // …but a moment later
     expect(ops(procs[1]!)).toEqual(["watch /a"])
   })
 
@@ -187,7 +189,7 @@ describe("FsWorkerClient — watches", () => {
     procs[0]!.reply({ id: procs[0]!.sent[1]!.id, ok: true, value: { watching: true } }) // /home ok
     vi.advanceTimersByTime(1300) // /mnt/dead's watch hangs → EHUNG, worker retired
     await Promise.resolve()
-    vi.advanceTimersByTime(1)
+    vi.advanceTimersByTime(1000)
     expect(procs).toHaveLength(2)
     expect(ops(procs[1]!)).toEqual(["watch /home"])
     c.setWatched(["/mnt/dead", "/home"])
@@ -208,6 +210,31 @@ describe("FsWorkerClient — watches", () => {
     procs[0]!.ackWatches()
     await Promise.resolve()
     vi.advanceTimersByTime(6_000)
+    expect(procs[0]!.killed).toBe(true)
+  })
+})
+
+describe("FsWorkerClient — watch bookkeeping", () => {
+  it("watchingNow lists only folders a worker confirmed", async () => {
+    const c = client()
+    c.setWatched(["/a", "/b"])
+    const [a, b] = procs[0]!.sent
+    procs[0]!.reply({ id: a!.id, ok: true, value: { watching: true } })
+    procs[0]!.reply({ id: b!.id, ok: false, code: "EACCES" })
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(c.watchingNow()).toEqual(["/a"])
+  })
+
+  it("an emptied watch set starts the idle clock even if nothing was ever watched", async () => {
+    const c = client()
+    c.setWatched(["/x"])
+    procs[0]!.reply({ id: procs[0]!.sent[0]!.id, ok: false, code: "EACCES" })
+    await Promise.resolve()
+    vi.advanceTimersByTime(6000)
+    expect(procs[0]!.killed).toBe(false) // still wanted
+    c.setWatched([])
+    vi.advanceTimersByTime(6000)
     expect(procs[0]!.killed).toBe(true)
   })
 })

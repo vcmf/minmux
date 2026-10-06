@@ -58,6 +58,7 @@ export class FsWorkerClient {
   private unwatchable = new Set<string>()
   private retryTimer: ReturnType<typeof setTimeout> | null = null
   private retries = 0
+  private gen = 0 // bumped when the live worker goes: a late watch reply from it doesn't count
   /** Folders whose listing may have changed (from the live worker's watchers). */
   onChanged: (dirs: string[]) => void = () => {}
 
@@ -92,6 +93,13 @@ export class FsWorkerClient {
     this.wanted = new Set(dirs.filter((d) => !this.unwatchable.has(d)))
     this.retries = 0
     this.reconcile()
+    // Nothing wanted any more and nothing in flight: the idle clock starts now.
+    if (!this.wanted.size && this.live && !this.live.pending.size) this.armIdle()
+  }
+
+  /** The folders actually being watched right now (others need reading some other way). */
+  watchingNow(): string[] {
+    return [...this.watching]
   }
 
   private reconcile(): void {
@@ -104,18 +112,22 @@ export class FsWorkerClient {
     for (const d of this.wanted) {
       if (this.watching.has(d) || this.adding.has(d)) continue
       this.adding.add(d)
+      const gen = this.gen
       this.call({ op: "watch", path: d }).then(
         () => {
+          if (gen !== this.gen) return // its worker is gone; the fresh one re-adds it
           this.adding.delete(d)
           this.retries = 0
           if (this.wanted.has(d)) this.watching.add(d)
           else this.call({ op: "unwatch", path: d }).catch(() => {}) // unwanted meanwhile
         },
         (e: { code?: string }) => {
+          if (gen !== this.gen) return
           this.adding.delete(d)
-          // EHUNG: checkHung already dropped it for good. ENOENT etc.: stays wanted, tried
-          // again shortly (it may be recreated).
-          if (e.code !== "EHUNG" && this.wanted.has(d)) this.retrySoon()
+          // EHUNG: checkHung already dropped it for good. Missing: stays wanted, tried again
+          // shortly (it may be recreated). Other errors (EACCES): left until the set changes.
+          const missing = e.code === "ENOENT" || e.code === "ENOTDIR"
+          if (missing && this.wanted.has(d)) this.retrySoon()
         },
       )
     }
@@ -134,10 +146,12 @@ export class FsWorkerClient {
 
   /** The live worker is gone: its watchers went with it. */
   private lostWorker(): void {
+    this.gen++
     this.watching.clear()
     this.adding.clear()
-    // Re-add on a fresh worker (a hung watch's folder was already dropped by checkHung).
-    if (this.wanted.size) setTimeout(() => this.reconcile(), 0)
+    // Re-add on a fresh worker (a hung watch's folder was already dropped by checkHung) —
+    // through the capped retry, so a worker that dies at once isn't respawned in a loop.
+    if (this.wanted.size) this.retrySoon()
   }
 
   /** Stop every worker (app quit). */
