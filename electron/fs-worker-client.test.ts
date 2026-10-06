@@ -308,3 +308,24 @@ describe("FsWorkerClient — re-arming", () => {
     expect(ops(procs[1]!)).toEqual(["watch /x"]) // once, from the re-add — not re-sent too
   })
 })
+
+describe("FsWorkerClient — a worker that keeps dying", () => {
+  it("is respawned further and further apart, even when its watches took", async () => {
+    const c = client()
+    c.setWatched(["/a"])
+    const gaps: number[] = []
+    let last = Date.now()
+    for (let i = 0; i < 4; i++) {
+      const p = procs[procs.length - 1]!
+      p.ackWatches() // the watch takes…
+      await Promise.resolve()
+      await Promise.resolve()
+      p.exit() // …then the worker dies
+      const n = procs.length
+      while (procs.length === n) vi.advanceTimersByTime(100)
+      gaps.push(Date.now() - last)
+      last = Date.now()
+    }
+    expect(gaps.map((g) => Math.round(g / 1000))).toEqual([1, 2, 4, 8])
+  })
+})

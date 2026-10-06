@@ -60,7 +60,10 @@ export class FsWorkerClient {
   private rearm = new Set<string>() // wanted folders that were watched and lost their watcher
   private unwatchable = new Set<string>()
   private retryTimer: ReturnType<typeof setTimeout> | null = null
-  private retries = 0
+  private retries = 0 // folder retries (missing, busy), backing off
+  private respawns = 0 // re-adds after a lost worker, backing off on their own
+  private respawnTimer: ReturnType<typeof setTimeout> | null = null
+  private spawnedAt = 0
   private gen = 0 // bumped when the live worker goes: a late watch reply from it doesn't count
   /** Folders whose listing may have changed (from the live worker's watchers). */
   onChanged: (dirs: string[]) => void = () => {}
@@ -131,18 +134,26 @@ export class FsWorkerClient {
         (e: { code?: string }) => {
           if (gen !== this.gen) return
           this.adding.delete(d)
-          // EHUNG: checkHung already dropped it for good. Missing (it may be recreated), no
-          // worker free (EBUSY) or a worker gone: tried again with backoff. Other errors
-          // (EACCES): left until the set changes.
-          const transient = ["ENOENT", "ENOTDIR", "EBUSY", "EWORKER"].includes(e.code ?? "")
-          if (transient && this.wanted.has(d)) this.retrySoon()
+          // EHUNG: checkHung already dropped it for good. Missing (it may be recreated) or no
+          // worker free (EBUSY): tried again with backoff. A worker gone: the gen check above
+          // returned; lostWorker re-adds. Other errors (EACCES): left until the set changes.
+          const transient = ["ENOENT", "ENOTDIR", "EBUSY"].includes(e.code ?? "")
+          if (transient && this.wanted.has(d)) {
+            this.rearm.add(d) // unwatched for a while: read it once when the watch takes
+            this.retrySoon()
+          }
         },
       )
     }
   }
 
   /** Re-add lost / failed watches a little later (a folder deleted then recreated). */
-  private retrySoon(): void {
+  private retrySoon(fresh = false): void {
+    if (fresh) {
+      this.retries = 0
+      if (this.retryTimer) clearTimeout(this.retryTimer)
+      this.retryTimer = null
+    }
     if (this.retryTimer) return
     const delay = Math.min(WATCH_RETRY_MAX_MS, WATCH_RETRY_MS * 2 ** this.retries)
     this.retries++
@@ -157,17 +168,28 @@ export class FsWorkerClient {
   private lostWorker(): void {
     this.gen++
     for (const d of this.watching) this.rearm.add(d)
+    for (const d of this.adding) this.rearm.add(d) // in flight: maybe never took
     this.watching.clear()
     this.adding.clear()
-    // Re-add on a fresh worker (a hung watch's folder was already dropped by checkHung) —
-    // through the backoff, so a worker that dies at once isn't respawned in a loop.
-    if (this.wanted.size) this.retrySoon()
+    // Re-add on a fresh worker (a hung watch's folder was already dropped by checkHung), with
+    // its own backoff: a worker that keeps dying is respawned 1 s, 2 s, 4 s … 60 s apart; one
+    // that lived a minute starts over.
+    if (!this.wanted.size || this.respawnTimer) return
+    if (Date.now() - this.spawnedAt > 60_000) this.respawns = 0
+    const delay = Math.min(WATCH_RETRY_MAX_MS, WATCH_RETRY_MS * 2 ** this.respawns)
+    this.respawns++
+    this.respawnTimer = setTimeout(() => {
+      this.respawnTimer = null
+      this.reconcile()
+    }, delay)
+    this.respawnTimer.unref?.()
   }
 
   /** Stop every worker (app quit). */
   dispose(): void {
     this.wanted.clear()
     if (this.retryTimer) clearTimeout(this.retryTimer)
+    if (this.respawnTimer) clearTimeout(this.respawnTimer)
     if (this.live) this.end(this.live, "EWORKER")
     for (const w of [...this.retired]) this.end(w, "EWORKER")
   }
@@ -176,6 +198,7 @@ export class FsWorkerClient {
     if (this.live) return this.live
     if (this.retired.size >= MAX_RETIRED) return null
     const w: Worker = { proc: this.spawn(), pending: new Map(), retired: false }
+    this.spawnedAt = Date.now()
     this.live = w
     w.proc.on("message", (msg) => {
       if ("event" in msg) {
@@ -185,7 +208,7 @@ export class FsWorkerClient {
           this.watching.delete(msg.dir)
           if (this.wanted.has(msg.dir)) {
             this.rearm.add(msg.dir)
-            this.retrySoon()
+            this.retrySoon(true) // a fresh loss: a quick retry, whatever the backoff was
           }
         }
         return

@@ -150,6 +150,28 @@ describe("Watches (in the fs worker)", () => {
     vi.useRealTimers()
   })
 
+  it("Linux: an old watcher's late identity check can't drop the new watcher", async () => {
+    const out: FsEvent[] = []
+    const fw = fakeWatch()
+    let release!: (v: string | null) => void
+    const w = new Watches((e) => out.push(e), {
+      watchFn: fw.fn,
+      linux: true,
+      idNow: () => "1",
+      idOf: () => new Promise((r) => (release = r)),
+    })
+    w.add("/dist")
+    fw.live.get("/dist")!.fire("rename", "dist") // check starts on the old watcher
+    w.remove("/dist") // collapsed…
+    w.add("/dist") // …and expanded again: a new watcher
+    release(null) // the old check finally says "gone"
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(out.filter((e) => e.event === "lost")).toEqual([])
+    expect(w.size).toBe(1)
+    w.closeAll()
+  })
+
   it("macOS: no identity checks (FSEvents follows the path)", async () => {
     let checks = 0
     const fw = fakeWatch()

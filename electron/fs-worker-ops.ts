@@ -67,7 +67,6 @@ export interface WatchesOpts {
 export class Watches {
   private watches = new Map<string, Watch>()
   private ids = new Map<string, string | null>() // folder → identity when watched
-  private checking = new Map<string, boolean>() // folder → a re-check is owed after this one
   private dirty = new Set<string>()
   private timer: ReturnType<typeof setTimeout> | null = null
   private readonly watchFn: WatchFn
@@ -87,26 +86,34 @@ export class Watches {
 
   add(dir: string): void {
     if (this.watches.has(dir)) return
+    const self: { w?: Watch } = {} // this watcher, once made
+    const mine = () => !!self.w && this.watches.get(dir) === self.w // not replaced since
     const lose = () => {
-      if (!this.watches.has(dir)) return
+      if (!mine()) return
       this.remove(dir)
       this.emit({ event: "lost", dir }) // main re-adds it if it's still wanted (and exists)
       this.mark(dir)
       this.mark(path.dirname(dir)) // the folder that actually changed
     }
+    let checking = false
+    let owed = false // a rename arrived during the check: check once more after it
     const check = () => {
-      if (this.checking.has(dir)) return void this.checking.set(dir, true) // once more after
-      this.checking.set(dir, false)
+      if (checking) return void (owed = true)
+      checking = true
       void this.idOf(dir).then((id) => {
-        const again = this.checking.get(dir)
-        this.checking.delete(dir)
-        if (!this.watches.has(dir)) return
-        if (id === null || id !== this.ids.get(dir)) return lose()
-        if (again) check()
+        checking = false
+        if (!mine()) return // a check from a watcher that's since been replaced
+        const was = this.ids.get(dir)
+        if (id === null || (was != null && id !== was)) return lose()
+        if (was == null) this.ids.set(dir, id) // no baseline yet: this is it
+        if (owed) {
+          owed = false
+          check()
+        }
       })
     }
-    // The baseline before the watch starts: a folder replaced right after still differs.
-    const id = this.idNow(dir)
+    // Linux: the baseline before the watch starts (a folder replaced right after differs).
+    const id = this.linux ? this.idNow(dir) : null
     const w = this.watchFn(
       dir,
       (type) => {
@@ -116,6 +123,7 @@ export class Watches {
       },
       lose,
     )
+    self.w = w
     this.watches.set(dir, w)
     this.ids.set(dir, id)
   }

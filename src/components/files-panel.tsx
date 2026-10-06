@@ -205,7 +205,12 @@ export function FilesPanel() {
   const gitKey = wslPane ? (git?.files ?? []).map((f) => `${f.status}${f.path}`).join("\n") : ""
   const lastGit = useRef({ root, gitRoot, gitKey })
   useEffect(() => {
-    if (wslPane && !gitRoot) return // a poll with no status yet: keep comparing to the last one
+    if (wslPane && !gitRoot) {
+      // No status (a poll with none yet, or not a repo): keep comparing to the last one — but
+      // a different pane starts over, so coming back isn't taken for a change.
+      if (lastGit.current.root !== root) lastGit.current = { root, gitRoot: "", gitKey: "" }
+      return
+    }
     const prev = lastGit.current
     lastGit.current = { root, gitRoot, gitKey }
     const sameRepo = !!gitRoot && prev.root === root && prev.gitRoot === gitRoot
