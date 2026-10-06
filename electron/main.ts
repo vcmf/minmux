@@ -8,6 +8,7 @@ import {
   powerMonitor,
   clipboard,
   nativeImage,
+  utilityProcess,
 } from "electron"
 import { fileURLToPath } from "node:url"
 import path from "node:path"
@@ -49,7 +50,8 @@ import { agentOf, type AgentEvent, type AgentKind } from "../src/lib/agent-graph
 import { disabledAgentsIn, mergeAgentSwitches } from "../src/settings/agent-switches"
 import { agentPaneEnv, resumablePanes } from "./agents/arming"
 import { findOnPath, pathCandidates } from "./path-lookup"
-import { readDirListing } from "./read-dir"
+import { FsWorkerClient, type WorkerProc } from "./fs-worker-client"
+import type { DirListing } from "../src/lib/dir-listing"
 import { wslUncCandidates, uncToWslPath } from "./wsl-paths"
 import { colorfgbg } from "./color"
 import { AgentMetaTracker, planMeta } from "./agent-meta"
@@ -251,6 +253,28 @@ function defaultShell(): string {
 
 // Host-fs targets for a path, in try order: for a WSL pane, the distro's UNC share
 // candidates (default distro resolved, both share forms); otherwise the path itself.
+// The files browser's folder reads run in a utility process (fs-worker): a read stuck on a dead
+// mount ties up its threads, never main's, and it's killed and replaced when one hangs.
+const fsWorker = new FsWorkerClient(
+  () =>
+    utilityProcess.fork(path.join(dir, "fs-worker.js"), [], {
+      serviceName: "minmux fs",
+      stdio: "ignore",
+    }) as unknown as WorkerProc,
+)
+
+/** The volume / share root of `p` answers (so ENOENT under it means "deleted"). */
+async function rootReachable(p: string): Promise<boolean> {
+  const root = path.parse(p).root
+  if (!root) return false
+  try {
+    await fsWorker.call({ op: "stat", path: root })
+    return true
+  } catch {
+    return false
+  }
+}
+
 // Shared by fs:readdir + fs:read-preview so the WSL translation lives in one place.
 function wslTargets(p: string, wsl?: WslContext): string[] {
   const candidates = wsl ? wslUncCandidates(wsl.distro ?? defaultWslDistro(), p) : []
@@ -1081,14 +1105,24 @@ function registerIpc() {
   ipcMain.handle("fs:readdir", async (_e, dir: string, wsl?: WslContext) => {
     // A WSL pane's dir is a Linux path the host can't see — read it through the distro's
     // UNC share instead (wslTargets); non-WSL panes read the host path.
+    // The read runs in the fs worker (capped first, links stat-ed in small batches).
+    let gone = false
     for (const target of wslTargets(dir, wsl)) {
       try {
-        return await readDirListing(target) // capped first, links stat-ed in small batches
-      } catch {
-        // this candidate didn't resolve (wrong share form, or unreadable) — try the next
+        return (await fsWorker.call({ op: "readdir", path: target })) as DirListing
+      } catch (e) {
+        // This candidate didn't resolve (wrong share form, unreadable, hung) — try the next.
+        // "No such folder" counts as deleted only where the share / volume root answers: a
+        // stopped WSL distro reports ENOENT for everything.
+        const code = (e as { code?: string }).code
+        if ((code === "ENOENT" || code === "ENOTDIR") && (await rootReachable(target))) gone = true
+        if (code === "EHUNG") break // the worker was replaced: don't hang the next form too
       }
     }
-    return { entries: [], truncated: false }
+    // Deleted → an empty folder. Any other failure → flagged, so the panel keeps what it had.
+    return gone
+      ? { entries: [], truncated: false, total: 0 }
+      : { entries: [], truncated: false, error: true }
   })
 
   // Read a file for the preview popup: guard the size, read up to the cap, and
@@ -1419,6 +1453,7 @@ app.on("will-quit", () => {
   sshService?.dispose() // close the ssh config watchers
   void hookWatcher?.close() // stop the file-drop watcher
   if (reaper) clearInterval(reaper)
+  fsWorker.dispose() // stop the fs worker process
 })
 app.on("quit", () => diag("quit"))
 
