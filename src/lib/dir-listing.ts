@@ -43,12 +43,14 @@ export function sortEntries<T extends DirEntry>(entries: T[]): T[] {
     .sort((a, b) => (a.isDir === b.isDir ? collator.compare(a.name, b.name) : a.isDir ? -1 : 1))
 }
 
-/** Filter `.git`, sort (dirs first, then name), and cap. Pure. */
-export function toDirListing(entries: DirEntry[], cap: number = READDIR_CAP): DirListing {
-  const filtered = sortEntries(entries)
-  return {
-    entries: filtered.slice(0, cap),
-    truncated: filtered.length > cap,
-    total: filtered.length,
-  }
+/** Filter `.git`, sort (dirs first, then name), and cap. `total` is the folder's real count
+ *  when `entries` is already a pre-capped subset of it. Pure. */
+export function toDirListing(
+  entries: DirEntry[],
+  cap: number = READDIR_CAP,
+  total?: number,
+): DirListing {
+  const filtered = sortEntries(entries).map(({ name, isDir }) => ({ name, isDir }))
+  const n = total ?? filtered.length
+  return { entries: filtered.slice(0, cap), truncated: n > cap, total: n }
 }

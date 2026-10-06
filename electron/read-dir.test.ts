@@ -18,8 +18,25 @@ const mk = (name: string) => {
   fs.mkdirSync(d, { recursive: true })
   return d
 }
+const pad = (i: number) => String(i).padStart(3, "0")
 
-describe.skipIf(!posix)("readDirListing", () => {
+describe("readDirListing", () => {
+  it("caps a big folder of plain files and reports its real total", async () => {
+    const d = mk("plain")
+    for (let i = 0; i < 30; i++) fs.writeFileSync(path.join(d, `f${pad(i)}`), "")
+    fs.mkdirSync(path.join(d, "sub"))
+    const l = await readDirListing(d, { cap: 10 })
+    expect(l.entries[0]).toEqual({ name: "sub", isDir: true })
+    expect(l.entries).toHaveLength(10)
+    expect(l).toMatchObject({ truncated: true, total: 31 })
+  })
+
+  it("a missing folder rejects (the handler then tries the next candidate)", async () => {
+    await expect(readDirListing(path.join(tmp, "nope"))).rejects.toThrow()
+  })
+})
+
+describe.skipIf(!posix)("readDirListing — symlinks", () => {
   it("dirs first; a symlinked folder browses as a folder, a dangling link is a file; .git dropped", async () => {
     const d = mk("basic")
     fs.mkdirSync(path.join(d, "real"))
@@ -39,11 +56,18 @@ describe.skipIf(!posix)("readDirListing", () => {
     })
   })
 
-  it("over the cap: only the kept entries' links are stat-ed, and the total is the real count", async () => {
+  it("a big folder with few links resolves them all: a linked folder sorts with the folders", async () => {
+    const d = mk("few-links")
+    for (let i = 0; i < 30; i++) fs.writeFileSync(path.join(d, `a${pad(i)}`), "")
+    fs.symlinkSync(mk("few-links-target"), path.join(d, "zz-node"))
+    const l = await readDirListing(d, { cap: 10 })
+    expect(l.entries[0]).toEqual({ name: "zz-node", isDir: true })
+  })
+
+  it("more links than the cap: only the kept entries' links are stat-ed", async () => {
     const d = mk("big")
     const target = mk("big-target")
-    for (let i = 0; i < 300; i++)
-      fs.symlinkSync(target, path.join(d, `l${String(i).padStart(3, "0")}`))
+    for (let i = 0; i < 300; i++) fs.symlinkSync(target, path.join(d, `l${pad(i)}`))
     const stat = vi.spyOn(fs.promises, "stat")
     const l = await readDirListing(d, { cap: 20 })
     expect(stat).toHaveBeenCalledTimes(20)
@@ -72,7 +96,11 @@ describe.skipIf(!posix)("readDirListing", () => {
     expect(l.entries).toHaveLength(100)
   })
 
-  it("a missing folder rejects (the handler then tries the next candidate)", async () => {
-    await expect(readDirListing(path.join(tmp, "nope"))).rejects.toThrow()
+  it("a link into a hung mount doesn't hold the listing: it shows as a file after the timeout", async () => {
+    const d = mk("hung")
+    fs.symlinkSync(mk("hung-target"), path.join(d, "mnt"))
+    vi.spyOn(fs.promises, "stat").mockImplementation(() => new Promise(() => {}))
+    const l = await readDirListing(d, { statTimeout: 50 })
+    expect(l.entries).toEqual([{ name: "mnt", isDir: false }])
   })
 })
