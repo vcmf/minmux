@@ -16,6 +16,8 @@ export interface DirListing {
 }
 
 export const READDIR_CAP = 500
+// Folders the Files panel watches at once (its visible open ones); main enforces the same.
+export const WATCH_CAP = 32
 
 // A folder with more direct entries than this shows only its first BIG_FOLDER_PREVIEW, then
 // "N more · Show all · Open in Finder" — generated/vendored folders (node_modules/.pnpm, build

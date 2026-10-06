@@ -1,11 +1,11 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest"
 import { FsWorkerClient, type WorkerProc } from "./fs-worker-client"
-import type { FsReply, FsRequest } from "./fs-worker-ops"
+import type { FsEvent, FsReply, FsRequest } from "./fs-worker-ops"
 
 /** A fake utility process: records requests; the test answers them. */
 function fakeProc() {
   const sent: FsRequest[] = []
-  let onMessage: (m: FsReply) => void = () => {}
+  let onMessage: (m: FsReply | FsEvent) => void = () => {}
   let onExit: (c: number) => void = () => {}
   const proc = {
     sent,
@@ -16,7 +16,14 @@ function fakeProc() {
       else onExit = fn as typeof onExit
     },
     kill: () => (proc.killed = true),
-    reply: (m: FsReply) => onMessage(m),
+    reply: (m: FsReply | FsEvent) => onMessage(m),
+    /** Answer every unanswered watch / unwatch request OK. */
+    ackWatches: () => {
+      for (const r of sent.splice(0)) {
+        if (r.op === "watch" || r.op === "unwatch")
+          onMessage({ id: r.id, ok: true, value: { watching: r.op === "watch" } })
+      }
+    },
     exit: () => onExit(1),
   }
   return proc
@@ -125,5 +132,200 @@ describe("FsWorkerClient", () => {
     c.dispose()
     await expect(p).rejects.toMatchObject({ code: "EWORKER" })
     expect(procs[0]!.killed).toBe(true)
+  })
+})
+
+describe("FsWorkerClient — watches", () => {
+  const ops = (p: ReturnType<typeof fakeProc>) => p.sent.map((r) => `${r.op} ${r.path}`)
+
+  it("setWatched adds and removes watchers to match; [] with no worker starts none", async () => {
+    const c = client()
+    c.setWatched([])
+    expect(procs).toHaveLength(0)
+    c.setWatched(["/a", "/b"])
+    expect(ops(procs[0]!)).toEqual(["watch /a", "watch /b"])
+    procs[0]!.ackWatches()
+    await Promise.resolve()
+    c.setWatched(["/b", "/c"])
+    expect(ops(procs[0]!)).toEqual(["unwatch /a", "watch /c"])
+  })
+
+  it("forwards 'changed' from the live worker only", async () => {
+    const c = client()
+    const seen: string[][] = []
+    c.onChanged = (dirs) => seen.push(dirs)
+    c.setWatched(["/a"])
+    procs[0]!.reply({ event: "changed", dirs: ["/a"] })
+    expect(seen).toEqual([["/a"]])
+  })
+
+  it("a lost watcher is re-added a moment later (its folder recreated)", async () => {
+    const c = client()
+    c.setWatched(["/dist"])
+    procs[0]!.ackWatches()
+    await Promise.resolve()
+    procs[0]!.reply({ event: "lost", dir: "/dist" })
+    expect(ops(procs[0]!)).toEqual([])
+    vi.advanceTimersByTime(1000)
+    expect(ops(procs[0]!)).toEqual(["watch /dist"])
+  })
+
+  it("a fresh worker (after a crash) gets the watch set again", async () => {
+    const c = client()
+    c.setWatched(["/a"])
+    procs[0]!.ackWatches()
+    await Promise.resolve()
+    procs[0]!.exit()
+    vi.advanceTimersByTime(999)
+    expect(procs).toHaveLength(1) // not respawned in a tight loop…
+    vi.advanceTimersByTime(1)
+    expect(procs).toHaveLength(2) // …but a moment later
+    expect(ops(procs[1]!)).toEqual(["watch /a"])
+  })
+
+  it("a folder whose watch call hung is never watched again; the others move on", async () => {
+    const c = client()
+    c.setWatched(["/mnt/dead", "/home"])
+    procs[0]!.reply({ id: procs[0]!.sent[1]!.id, ok: true, value: { watching: true } }) // /home ok
+    vi.advanceTimersByTime(1300) // /mnt/dead's watch hangs → EHUNG, worker retired
+    await Promise.resolve()
+    vi.advanceTimersByTime(1000)
+    expect(procs).toHaveLength(2)
+    expect(ops(procs[1]!)).toEqual(["watch /home"])
+    c.setWatched(["/mnt/dead", "/home"])
+    procs[1]!.ackWatches()
+    await Promise.resolve()
+    c.setWatched(["/mnt/dead", "/home"])
+    expect(ops(procs[1]!)).toEqual([])
+  })
+
+  it("a worker holding watchers isn't shut down when idle", async () => {
+    const c = client()
+    c.setWatched(["/a"])
+    procs[0]!.ackWatches()
+    await Promise.resolve()
+    vi.advanceTimersByTime(10_000)
+    expect(procs[0]!.killed).toBe(false)
+    c.setWatched([])
+    procs[0]!.ackWatches()
+    await Promise.resolve()
+    vi.advanceTimersByTime(6_000)
+    expect(procs[0]!.killed).toBe(true)
+  })
+})
+
+describe("FsWorkerClient — watch bookkeeping", () => {
+  it("watchingNow lists only folders a worker confirmed", async () => {
+    const c = client()
+    c.setWatched(["/a", "/b"])
+    const [a, b] = procs[0]!.sent
+    procs[0]!.reply({ id: a!.id, ok: true, value: { watching: true } })
+    procs[0]!.reply({ id: b!.id, ok: false, code: "EACCES" })
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(c.watchingNow()).toEqual(["/a"])
+  })
+
+  it("an emptied watch set starts the idle clock even if nothing was ever watched", async () => {
+    const c = client()
+    c.setWatched(["/x"])
+    procs[0]!.reply({ id: procs[0]!.sent[0]!.id, ok: false, code: "EACCES" })
+    await Promise.resolve()
+    vi.advanceTimersByTime(6000)
+    expect(procs[0]!.killed).toBe(false) // still wanted
+    c.setWatched([])
+    vi.advanceTimersByTime(6000)
+    expect(procs[0]!.killed).toBe(true)
+  })
+})
+
+describe("FsWorkerClient — re-arming", () => {
+  const ops = (p: ReturnType<typeof fakeProc>) => p.sent.map((r) => `${r.op} ${r.path}`)
+  const flush = async () => {
+    for (let i = 0; i < 5; i++) await Promise.resolve()
+  }
+
+  it("a re-added folder is read once (it may have changed while unwatched); a first add isn't", async () => {
+    const c = client()
+    const seen: string[][] = []
+    c.onChanged = (d) => seen.push(d)
+    c.setWatched(["/dist"])
+    procs[0]!.ackWatches()
+    await flush()
+    expect(seen).toEqual([]) // first add: the panel just read it
+    procs[0]!.reply({ event: "lost", dir: "/dist" })
+    vi.advanceTimersByTime(1000)
+    procs[0]!.ackWatches()
+    await flush()
+    expect(seen).toEqual([["/dist"]])
+  })
+
+  it("retries back off (1 s, 2 s, 4 s …) and never give up", async () => {
+    const c = new FsWorkerClient(
+      () => {
+        const p = fakeProc()
+        procs.push(p)
+        return p as unknown as WorkerProc
+      },
+      1e9, // no hang detection here: retries sit unanswered for a while
+      1e9,
+    )
+    c.setWatched(["/gone"])
+    const failNext = () => {
+      const r = procs[0]!.sent.splice(0)[0]!
+      procs[0]!.reply({ id: r.id, ok: false, code: "ENOENT" })
+    }
+    failNext()
+    await flush()
+    vi.advanceTimersByTime(999)
+    expect(ops(procs[0]!)).toEqual([])
+    vi.advanceTimersByTime(1)
+    expect(ops(procs[0]!)).toEqual(["watch /gone"]) // after 1 s
+    failNext()
+    await flush()
+    vi.advanceTimersByTime(1999)
+    expect(ops(procs[0]!)).toEqual([])
+    vi.advanceTimersByTime(1)
+    expect(ops(procs[0]!)).toEqual(["watch /gone"]) // after 2 s
+    for (let i = 0; i < 40; i++) {
+      failNext()
+      await flush()
+      vi.advanceTimersByTime(60_000)
+    }
+    expect(ops(procs[0]!)).toEqual(["watch /gone"]) // still trying, capped at 60 s apart
+  })
+
+  it("a watch stranded on a retired worker isn't re-sent; the fresh worker gets the set", async () => {
+    const c = client()
+    const read = c.call({ op: "readdir", path: "/mnt/dead" })
+    vi.advanceTimersByTime(500)
+    c.setWatched(["/x"]) // queued behind the dead read on the same worker
+    vi.advanceTimersByTime(800) // the read hangs: worker retired
+    await expect(read).rejects.toMatchObject({ code: "EHUNG" })
+    await flush()
+    vi.advanceTimersByTime(1000)
+    expect(procs).toHaveLength(2)
+    expect(ops(procs[1]!)).toEqual(["watch /x"]) // once, from the re-add — not re-sent too
+  })
+})
+
+describe("FsWorkerClient — a worker that keeps dying", () => {
+  it("is respawned further and further apart, even when its watches took", async () => {
+    const c = client()
+    c.setWatched(["/a"])
+    const gaps: number[] = []
+    let last = Date.now()
+    for (let i = 0; i < 4; i++) {
+      const p = procs[procs.length - 1]!
+      p.ackWatches() // the watch takes…
+      await Promise.resolve()
+      await Promise.resolve()
+      p.exit() // …then the worker dies
+      const n = procs.length
+      while (procs.length === n) vi.advanceTimersByTime(100)
+      gaps.push(Date.now() - last)
+      last = Date.now()
+    }
+    expect(gaps.map((g) => Math.round(g / 1000))).toEqual([1, 2, 4, 8])
   })
 })

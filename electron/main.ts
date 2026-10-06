@@ -51,7 +51,7 @@ import { disabledAgentsIn, mergeAgentSwitches } from "../src/settings/agent-swit
 import { agentPaneEnv, resumablePanes } from "./agents/arming"
 import { findOnPath, pathCandidates } from "./path-lookup"
 import { FsWorkerClient, type WorkerProc } from "./fs-worker-client"
-import type { DirListing } from "../src/lib/dir-listing"
+import { WATCH_CAP, type DirListing } from "../src/lib/dir-listing"
 import { wslUncCandidates, uncToWslPath } from "./wsl-paths"
 import { colorfgbg } from "./color"
 import { AgentMetaTracker, planMeta } from "./agent-meta"
@@ -260,6 +260,8 @@ const fsWorker = new FsWorkerClient(
       stdio: "ignore",
     }) as unknown as WorkerProc,
 )
+// A watched folder changed: the renderer re-reads it (through its read queue).
+fsWorker.onChanged = (dirs) => mainWindow?.webContents.send("fs:changed", dirs)
 
 /** Does the folder holding `p` still exist? Then a missing `p` was deleted — not an
  *  unmounted share (/Volumes/NAS gone) or a stopped WSL distro, whose parents are gone too.
@@ -333,7 +335,11 @@ function createWindow() {
   win.on("session-end", () => sessionLedger().freeze(60_000)) // Windows logout/shutdown — see onPower
   win.on("closed", () => {
     mainWindow = null
+    fsWorker.setWatched([])
   })
+  // A reloaded or crashed renderer re-sends its watch set when its Files panel shows again.
+  win.webContents.on("did-start-loading", () => fsWorker.setWatched([]))
+  win.webContents.on("render-process-gone", () => fsWorker.setWatched([]))
 
   // Tell the renderer when maximize state changes (custom controls swap icon).
   const sendMax = () => win.webContents.send("window:maximize-change", win.isMaximized())
@@ -1102,6 +1108,18 @@ function registerIpc() {
   // Clipboard (copy/paste) — main owns it; renderer never imports Electron.
   ipcMain.on("clipboard:write", (_e, text: string) => clipboard.writeText(text))
   ipcMain.handle("clipboard:read", async () => clipboard.readText())
+
+  // Files browser: watch these folders (the whole set; [] stops). Host paths only: the
+  // renderer doesn't send WSL panes' folders (a 9p share can't be watched reliably).
+  ipcMain.handle("fs:watch", (_e, dirs: unknown) => {
+    const list = Array.isArray(dirs)
+      ? dirs.filter((d): d is string => typeof d === "string" && path.isAbsolute(d))
+      : []
+    // Not on Windows: a watched folder's open handle blocks renaming / deleting it and its
+    // parents there (focus and Refresh still read).
+    fsWorker.setWatched(process.platform === "win32" ? [] : list.slice(0, WATCH_CAP))
+  })
+  ipcMain.handle("fs:watching", () => fsWorker.watchingNow())
 
   // Files browser: list ONE directory (lazy — never a recursive walk), bounded so a huge
   // folder can't block main (read-dir; sort / .git filter / cap in lib/dir-listing).

@@ -171,3 +171,44 @@ describe("FilesPanel — staying current", () => {
     ).toEqual(["/repo-refresh", "/repo-refresh/lib"])
   })
 })
+
+describe("FilesPanel — live refresh", () => {
+  beforeEach(() => {
+    resetStore()
+    vi.clearAllMocks()
+  })
+  const ls = (...names: [string, boolean][]) => ({
+    entries: names.map(([name, isDir]) => ({ name, isDir })),
+    truncated: false,
+  })
+
+  it("watches the open folders you can see, re-reads one on a change, stops when closed", async () => {
+    let onChanged: (dirs: string[]) => void = () => {}
+    vi.mocked(ipc.onFsChanged).mockImplementation((cb) => {
+      onChanged = cb
+      return () => {}
+    })
+    vi.mocked(ipc.readdir).mockImplementation(async (dir: string) =>
+      dir.endsWith("/lib") ? ls(["x.ts", false]) : ls(["lib", true]),
+    )
+    st().newTab(testShell)
+    const id = allSessionIds(st().tabs[0]!.root)[0]!
+    st().setSessionCwd(id, "/repo-watch")
+    const { unmount } = render(<FilesPanel />)
+    await waitFor(() => expect(screen.getByText("lib")).toBeInTheDocument())
+    fireEvent.mouseDown(screen.getByText("lib"), { button: 0 })
+    await waitFor(() => expect(screen.getByText("x.ts")).toBeInTheDocument())
+    await waitFor(() =>
+      expect(ipc.fsWatch).toHaveBeenLastCalledWith(["/repo-watch", "/repo-watch/lib"]),
+    )
+    // An agent writes a file: the watcher reports the folder; no click needed.
+    vi.mocked(ipc.readdir).mockImplementation(async (dir: string) =>
+      dir.endsWith("/lib") ? ls(["x.ts", false], ["y.ts", false]) : ls(["lib", true]),
+    )
+    onChanged(["/repo-watch/lib", "/somewhere/else"])
+    await waitFor(() => expect(screen.getByText("y.ts")).toBeInTheDocument())
+    expect(ipc.readdir).not.toHaveBeenCalledWith("/somewhere/else", undefined)
+    unmount()
+    expect(ipc.fsWatch).toHaveBeenLastCalledWith([])
+  })
+})

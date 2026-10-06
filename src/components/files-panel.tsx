@@ -24,7 +24,7 @@ import {
   hasListing,
   type FileTreeState,
 } from "../lib/file-tree"
-import { BIG_FOLDER } from "../lib/dir-listing"
+import { BIG_FOLDER, WATCH_CAP } from "../lib/dir-listing"
 import { ReadQueue } from "../lib/read-queue"
 import { buildGitDecorations, statusLetter, statusColor } from "../lib/git-decorations"
 import { useFileMenu } from "./use-file-menu"
@@ -38,6 +38,7 @@ const cache = new FileTreeCache(16)
 // off (lib/read-queue). Module-level like the cache; a closed panel drops its queued reads,
 // and a running read's late result is cached (or dropped by `apply` for a root you've left).
 const reads = new ReadQueue()
+const SETTLE_MS = 2000 // one more read this long after a folder's last change event
 
 /** Right-rail lazy file browser rooted at the focused pane's root (its cwd by default, or
  *  a per-pane override chosen via the breadcrumb / double-click). Reads ONE directory per
@@ -125,6 +126,99 @@ export function FilesPanel() {
   // A closed panel shows nothing: its queued reads would only hold up the next one.
   useEffect(() => () => reads.drop(() => true), [])
 
+  // ── Live refresh (watchers in main's fs worker) ──
+  // Watched: the open folders you can see, on a local pane (a WSL 9p share can't be watched
+  // reliably — it refreshes on git changes and focus instead). Capped like main's cap.
+  const wslPane = !!getActiveWsl()
+  const platform = useStore((s) => s.platform)
+  const watched = useMemo(
+    () =>
+      tree && root && !remote && !wslPane
+        ? shownOpenDirs(tree)
+            .filter((d) => isAbsoluteHostPath(d, platform))
+            .slice(0, WATCH_CAP)
+        : [],
+    [tree, root, remote, wslPane, platform],
+  )
+  const watchKey = watched.join("\0")
+  useEffect(() => {
+    void ipc.fsWatch(watched).catch(() => {})
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on the set's content
+  }, [watchKey])
+  useEffect(() => () => void ipc.fsWatch([]).catch(() => {}), []) // panel closed: stop
+
+  // The open folders you can see now (for the fallbacks below), from the cache's latest.
+  const shownNow = useCallback(() => {
+    const r = rootRef.current
+    const t = r ? cache.peek(r) : undefined
+    return r && t ? { r, dirs: shownOpenDirs(t) } : null
+  }, [])
+
+  // A watched folder changed: re-read it now, and once more SETTLE_MS after its last event
+  // (in case the OS dropped events mid-burst). Both go through the read queue.
+  useEffect(() => {
+    const settle = new Map<string, ReturnType<typeof setTimeout>>()
+    const off = ipc.onFsChanged((dirs) => {
+      const now = shownNow()
+      if (!now) return
+      const shown = new Set(now.dirs)
+      for (const d of dirs) {
+        if (!shown.has(d)) continue
+        load(now.r, d)
+        clearTimeout(settle.get(d))
+        settle.set(
+          d,
+          setTimeout(() => {
+            settle.delete(d)
+            if (rootRef.current === now.r) load(now.r, d)
+          }, SETTLE_MS),
+        )
+      }
+    })
+    return () => {
+      off()
+      settle.forEach((t) => clearTimeout(t))
+    }
+  }, [load, shownNow])
+
+  // Back to the window: re-read the open folders no watcher covers (a WSL pane, past the cap,
+  // a folder main couldn't watch) — asked of main, which knows what it really watches.
+  useEffect(() => {
+    const onFocus = () => {
+      void ipc
+        .fsWatching()
+        .catch(() => [] as string[])
+        .then((list) => {
+          const now = shownNow()
+          const on = new Set(list)
+          if (now) now.dirs.filter((d) => !on.has(d)).forEach((d) => load(now.r, d))
+        })
+    }
+    window.addEventListener("focus", onFocus)
+    return () => window.removeEventListener("focus", onFocus)
+  }, [load, shownNow])
+
+  // A WSL pane: re-read its open folders when the polled git status really changes in the
+  // same repo (an agent writing files shows up there) — not on every poll, nor when switching
+  // panes or repos (the cached tree is shown as-is then, like the restore above).
+  const gitRoot = wslPane ? (git?.root ?? "") : ""
+  const gitKey = wslPane ? (git?.files ?? []).map((f) => `${f.status}${f.path}`).join("\n") : ""
+  const lastGit = useRef({ root, gitRoot, gitKey })
+  useEffect(() => {
+    if (wslPane && !gitRoot) {
+      // No status (a poll with none yet, or not a repo): keep comparing to the last one — but
+      // a different pane starts over, so coming back isn't taken for a change.
+      if (lastGit.current.root !== root) lastGit.current = { root, gitRoot: "", gitKey: "" }
+      return
+    }
+    const prev = lastGit.current
+    lastGit.current = { root, gitRoot, gitKey }
+    const sameRepo = !!gitRoot && prev.root === root && prev.gitRoot === gitRoot
+    if (!wslPane || !sameRepo || prev.gitKey === gitKey) return
+    const now = shownNow()
+    if (now) now.dirs.forEach((d) => load(now.r, d))
+  }, [gitKey, gitRoot, root, wslPane, load, shownNow])
+
   const toggle = (dir: string) => {
     if (!root) return
     const cur = cache.get(root) ?? tree // cache is the source of truth (has the latest listings)
@@ -158,8 +252,6 @@ export function FilesPanel() {
     cache.set(root, state)
     setTree(state)
   }
-  const platform = useStore((s) => s.platform)
-
   const rows = useMemo(() => (tree ? visibleRows(tree) : []), [tree])
 
   const { menu, openFileMenu } = useFileMenu()
