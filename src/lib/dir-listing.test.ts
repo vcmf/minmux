@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest"
-import { previewEntries, toDirListing, READDIR_CAP } from "./dir-listing"
+import { previewEntries, sortEntries, toDirListing, READDIR_CAP } from "./dir-listing"
 import type { DirEntry } from "./dir-listing"
 
 const e = (name: string, isDir = false): DirEntry => ({ name, isDir })
@@ -54,5 +54,28 @@ describe("previewEntries", () => {
     expect(previewEntries(xs, 150, false)).toEqual({ shown: xs.slice(0, 10), hidden: 140 })
     expect(previewEntries(xs, 150, true)).toEqual({ shown: xs, hidden: 0 })
     expect(previewEntries(xs.slice(0, 50), 1240, true).hidden).toBe(1190) // past the backend cap
+  })
+})
+
+describe("sortEntries", () => {
+  it("drops .git, dirs first, by name — and keeps extra fields on each entry", () => {
+    const out = sortEntries([
+      { name: "b", isDir: false, link: true },
+      { name: ".git", isDir: true, link: false },
+      { name: "z", isDir: true, link: false },
+      { name: "a", isDir: false, link: false },
+    ])
+    expect(out).toEqual([
+      { name: "z", isDir: true, link: false },
+      { name: "a", isDir: false, link: false },
+      { name: "b", isDir: false, link: true },
+    ])
+  })
+})
+
+describe("toDirListing with a pre-capped subset", () => {
+  it("reports the folder's real total and truncation, and strips extra fields", () => {
+    const out = toDirListing([{ name: "a", isDir: false, link: true } as DirEntry], 1, 300)
+    expect(out).toEqual({ entries: [{ name: "a", isDir: false }], truncated: true, total: 300 })
   })
 })
