@@ -21,6 +21,7 @@ export interface WorkerProc {
 }
 
 type Pending = {
+  req: FsCall // kept so a read stranded on a retired worker can be re-sent
   resolve: (v: FsResult) => void
   reject: (e: Error) => void
   at: number
@@ -28,7 +29,12 @@ type Pending = {
 }
 
 /** One worker process and the requests it holds. */
-type Worker = { proc: WorkerProc; pending: Map<number, Pending>; retired: boolean }
+type Worker = {
+  proc: WorkerProc
+  pending: Map<number, Pending>
+  retired: boolean
+  killed?: boolean
+}
 
 const fail = (code: string) => Object.assign(new Error(code), { code })
 
@@ -47,19 +53,23 @@ export class FsWorkerClient {
   ) {}
 
   call(req: FsCall): Promise<FsResult> {
+    return new Promise<FsResult>((resolve, reject) => this.send({ req, resolve, reject, at: 0 }))
+  }
+
+  /** Hand a request to the live worker (starting one if needed). */
+  private send(p: Pending): void {
     const w = this.ensure()
-    if (!w) return Promise.reject(fail("EBUSY")) // too many stuck workers: don't add another
+    if (!w) return p.reject(fail("EBUSY")) // too many stuck workers: don't add another
     const id = this.nextId++
-    return new Promise<FsResult>((resolve, reject) => {
-      w.pending.set(id, { resolve, reject, at: Date.now() })
-      this.clearIdle()
-      this.armHungCheck()
-      try {
-        w.proc.postMessage({ ...req, id })
-      } catch {
-        this.end(w, "EWORKER")
-      }
-    })
+    p.at = Date.now()
+    w.pending.set(id, p)
+    this.clearIdle()
+    this.armHungCheck()
+    try {
+      w.proc.postMessage({ ...p.req, id })
+    } catch {
+      this.end(w, "EWORKER")
+    }
   }
 
   /** Stop every worker (app quit). */
@@ -93,9 +103,14 @@ export class FsWorkerClient {
     return w
   }
 
+  /** A retired worker holding nothing that can still finish. */
+  private canKill(w: Worker): boolean {
+    return w.retired && !w.killed && [...w.pending.values()].every((p) => p.hung)
+  }
+
   /** After a reply: kill a retired worker with nothing left that can finish; idle-arm. */
   private settle(w: Worker): void {
-    if (w.retired && [...w.pending.values()].every((p) => p.hung)) this.kill(w)
+    if (this.canKill(w)) this.kill(w)
     if (w === this.live && !w.pending.size) this.armIdle()
     this.armHungCheck()
   }
@@ -112,20 +127,28 @@ export class FsWorkerClient {
         stuck = true
       }
       if (stuck && !w.retired) this.retire(w)
-      if (w.retired && [...w.pending.values()].every((p) => p.hung)) this.kill(w)
+      if (this.canKill(w)) this.kill(w)
     }
     this.armHungCheck()
   }
 
-  /** Stop sending to `w`; the next call starts a fresh worker. */
+  /** Stop sending to `w`; the next call starts a fresh worker. Its other reads may be queued
+   *  behind the hung ones on its threads: re-send them to the fresh worker (a read is
+   *  idempotent; the old worker's late reply is ignored). */
   private retire(w: Worker): void {
     w.retired = true
     this.retired.add(w)
     if (this.live === w) this.live = null
+    for (const [id, p] of [...w.pending]) {
+      if (p.hung) continue
+      w.pending.delete(id)
+      this.send(p)
+    }
   }
 
   /** Kill a retired worker (it stays counted until it actually exits). */
   private kill(w: Worker): void {
+    w.killed = true
     try {
       w.proc.kill()
     } catch {

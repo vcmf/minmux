@@ -45,6 +45,22 @@ describe("tree state — immutability", () => {
     const s2 = setListing(emptyTree("/repo"), "/repo/src", failed) // first read failed
     expect(toggleDir(s2, "/repo/src").needsLoad).toBe("/repo/src")
   })
+  it("a folder whose read failed shows a note, not an empty folder", () => {
+    const s = setListing(emptyTree("/repo"), "/repo", {
+      entries: [],
+      truncated: false,
+      error: true,
+    })
+    expect(visibleRows(s)).toEqual([
+      {
+        path: "note:/repo",
+        name: "Couldn't read this folder",
+        depth: 0,
+        kind: "note",
+        expanded: false,
+      },
+    ])
+  })
   it("setListing returns a new state and doesn't mutate the input", () => {
     const s0 = emptyTree("/repo")
     const s1 = setListing(s0, "/repo", listing([["a.ts", false]]))

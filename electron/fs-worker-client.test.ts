@@ -55,20 +55,22 @@ describe("FsWorkerClient", () => {
     await expect(a).rejects.toMatchObject({ code: "ENOENT" })
   })
 
-  it("a hung request fails alone; the worker is retired and a fresh one takes new requests", async () => {
+  it("a hung request fails alone; reads stranded behind it move to a fresh worker", async () => {
     const c = client()
     const stuck = c.call({ op: "readdir", path: "/mnt/dead" })
     vi.advanceTimersByTime(800)
-    const healthy = c.call({ op: "readdir", path: "/home" }) // same worker, sent later
+    const healthy = c.call({ op: "readdir", path: "/home" }) // queued behind it, same worker
     vi.advanceTimersByTime(500) // the first passes the hung limit; the second doesn't
     await expect(stuck).rejects.toMatchObject({ code: "EHUNG" })
-    expect(procs[0]!.killed).toBe(false) // it still holds a read that can finish
-    const next = c.call({ op: "readdir", path: "/x" })
-    expect(procs).toHaveLength(2) // new requests go to a fresh worker
-    procs[0]!.reply({ id: procs[0]!.sent[1]!.id, ok: true, value: listing })
-    await expect(healthy).resolves.toEqual(listing) // not collateral
-    expect(procs[0]!.killed).toBe(true) // only the hung read is left: retired worker killed
+    expect(procs).toHaveLength(2) // a fresh worker…
+    expect(procs[1]!.sent.map((r) => r.path)).toEqual(["/home"]) // …got the stranded read
+    expect(procs[0]!.killed).toBe(true) // only the hung read was left on the old one
+    procs[0]!.reply({ id: procs[0]!.sent[1]!.id, ok: true, value: { isDir: true } }) // ignored
     procs[1]!.reply({ id: procs[1]!.sent[0]!.id, ok: true, value: listing })
+    await expect(healthy).resolves.toEqual(listing) // not collateral
+    const next = c.call({ op: "readdir", path: "/x" })
+    expect(procs).toHaveLength(2) // new requests go to the fresh worker
+    procs[1]!.reply({ id: procs[1]!.sent[1]!.id, ok: true, value: listing })
     await expect(next).resolves.toEqual(listing)
   })
 

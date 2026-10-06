@@ -261,17 +261,18 @@ const fsWorker = new FsWorkerClient(
     }) as unknown as WorkerProc,
 )
 
-/** The volume / share root of `p` answers (so ENOENT under it means "deleted"). A POSIX
- *  "/" always does; a drive or UNC share root (a WSL distro, a mapped drive) is asked. */
-async function rootReachable(p: string): Promise<boolean> {
-  const root = path.parse(p).root
-  if (!root) return false
-  if (root === "/") return true
+/** Does the folder holding `p` still exist? Then a missing `p` was deleted — not an
+ *  unmounted share (/Volumes/NAS gone) or a stopped WSL distro, whose parents are gone too.
+ *  "stuck" when asking hung (a dead mount). */
+async function parentExists(p: string): Promise<"yes" | "no" | "stuck"> {
+  const parent = path.dirname(p)
+  if (parent === p) return "no"
   try {
-    await fsWorker.call({ op: "stat", path: root })
-    return true
-  } catch {
-    return false
+    await fsWorker.call({ op: "stat", path: parent })
+    return "yes"
+  } catch (e) {
+    const code = (e as { code?: string }).code
+    return code === "EHUNG" || code === "EBUSY" ? "stuck" : "no"
   }
 }
 
@@ -1108,21 +1109,21 @@ function registerIpc() {
     // A WSL pane's dir is a Linux path the host can't see — read it through the distro's
     // UNC share instead (wslTargets); non-WSL panes read the host path.
     // The read runs in the fs worker (capped first, links stat-ed in small batches).
-    // Deleted only if EVERY form said "no such folder" with its share / volume root
-    // answering (a stopped WSL distro reports ENOENT for everything); otherwise an error.
-    let gone = true
+    // Deleted if some form says "no such folder" while its parent exists (an unsupported
+    // share form, a stopped distro or an unmounted share isn't a deletion).
+    let gone = false
     for (const target of wslTargets(dir, wsl)) {
       try {
         return (await fsWorker.call({ op: "readdir", path: target })) as DirListing
       } catch (e) {
         // This candidate didn't resolve (wrong share form, unreadable, hung) — try the next.
         const code = (e as { code?: string }).code
-        if (code === "EHUNG" || code === "EBUSY") {
-          gone = false
-          break // a dead mount: don't hang (or refuse) the next form too
+        if (code === "EHUNG" || code === "EBUSY") break // a dead mount: don't hang the next form
+        if (code === "ENOENT" || code === "ENOTDIR") {
+          const parent = await parentExists(target)
+          if (parent === "stuck") break
+          if (parent === "yes") gone = true
         }
-        const missing = code === "ENOENT" || code === "ENOTDIR"
-        if (!missing || !(await rootReachable(target))) gone = false
       }
     }
     // Deleted → an empty folder. Any other failure → flagged, so the panel keeps what it had.

@@ -77,6 +77,17 @@ export function visibleRows(s: FileTreeState): VisibleRow[] {
   const walk = (dir: string, depth: number) => {
     const listing = s.listings[dir]
     if (!listing) return
+    if (listing.error) {
+      // Not "empty": say so (expanding it again retries).
+      out.push({
+        path: `note:${dir}`,
+        name: "Couldn't read this folder",
+        depth,
+        kind: "note",
+        expanded: false,
+      })
+      return
+    }
     const total = listing.total ?? listing.entries.length
     const { shown, hidden } = previewEntries(listing.entries, total, !!s.showAll?.has(dir))
     for (const e of shown) {
