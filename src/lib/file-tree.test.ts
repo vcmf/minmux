@@ -5,6 +5,7 @@ import {
   baseName,
   emptyTree,
   setListing,
+  hasListing,
   toggleDir,
   visibleRows,
   openDirs,
@@ -61,6 +62,19 @@ describe("tree state — immutability", () => {
       },
     ])
   })
+  it("setListing with an unchanged listing returns the same state (no re-render)", () => {
+    const s1 = setListing(emptyTree("/repo"), "/repo", listing([["a.ts", false]]))
+    expect(setListing(s1, "/repo", listing([["a.ts", false]]))).toBe(s1)
+    expect(setListing(s1, "/repo", listing([["b.ts", false]]))).not.toBe(s1)
+    expect(setListing(s1, "/repo", listing([["a.ts", true]]))).not.toBe(s1)
+    expect(setListing(s1, "/repo", { ...listing([["a.ts", false]]), total: 9 })).not.toBe(s1)
+  })
+  it("hasListing: a failed read's listing doesn't count", () => {
+    const failed = { entries: [], truncated: false, error: true }
+    expect(hasListing(emptyTree("/r"), "/r")).toBe(false)
+    expect(hasListing(setListing(emptyTree("/r"), "/r", failed), "/r")).toBe(false)
+    expect(hasListing(setListing(emptyTree("/r"), "/r", listing([["a", false]])), "/r")).toBe(true)
+  })
   it("setListing returns a new state and doesn't mutate the input", () => {
     const s0 = emptyTree("/repo")
     const s1 = setListing(s0, "/repo", listing([["a.ts", false]]))
@@ -78,10 +92,10 @@ describe("toggleDir", () => {
     expect(state.expanded.has("/repo/src")).toBe(true)
     expect(s.expanded.has("/repo/src")).toBe(false) // input untouched
   })
-  it("expanding an already-cached dir needs no load", () => {
+  it("expanding an already-cached dir re-reads it (the cached listing may be stale)", () => {
     const s = setListing(emptyTree("/repo"), "/repo/src", listing([["x.ts", false]]))
     const { needsLoad, state } = toggleDir(s, "/repo/src")
-    expect(needsLoad).toBeNull()
+    expect(needsLoad).toBe("/repo/src")
     expect(state.expanded.has("/repo/src")).toBe(true)
   })
   it("collapsing removes it and needs no load", () => {
@@ -187,6 +201,17 @@ describe("openDirs", () => {
 })
 
 describe("FileTreeCache (LRU)", () => {
+  it("replace updates an entry without making it most recently used", () => {
+    const c = new FileTreeCache(2)
+    const st = (r: string) => emptyTree(r)
+    c.set("/a", st("/a"))
+    c.set("/b", st("/b"))
+    c.replace("/a", setListing(st("/a"), "/a", listing([["x", false]]))) // a background result
+    c.set("/c", st("/c")) // over capacity → /a is still the LRU and goes
+    expect(c.has("/a")).toBe(false)
+    expect(c.has("/b")).toBe(true)
+  })
+
   const st = (root: string): FileTreeState => emptyTree(root)
 
   it("get/set round-trips and get marks MRU", () => {

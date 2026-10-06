@@ -111,3 +111,62 @@ describe("FilesPanel — a big folder", () => {
     expect(screen.getAllByText(/^f\d\d\d$/)).toHaveLength(150)
   })
 })
+
+describe("FilesPanel — staying current", () => {
+  beforeEach(() => {
+    resetStore()
+    vi.clearAllMocks()
+  })
+  const ls = (...names: [string, boolean][]) => ({
+    entries: names.map(([name, isDir]) => ({ name, isDir })),
+    truncated: false,
+  })
+  const open = (cwd: string) => {
+    st().newTab(testShell)
+    const id = allSessionIds(st().tabs[0]!.root)[0]!
+    st().setSessionCwd(id, cwd)
+    return render(<FilesPanel />)
+  }
+
+  it("re-expanding a folder re-reads it: a file created since shows up", async () => {
+    vi.mocked(ipc.readdir).mockImplementation(async (dir: string) =>
+      dir.endsWith("/src") ? ls(["a.ts", false]) : ls(["src", true]),
+    )
+    open("/repo-reexpand")
+    await waitFor(() => expect(screen.getByText("src")).toBeInTheDocument())
+    fireEvent.mouseDown(screen.getByText("src"), { button: 0 })
+    await waitFor(() => expect(screen.getByText("a.ts")).toBeInTheDocument())
+    fireEvent.mouseDown(screen.getByText("src"), { button: 0 }) // collapse
+    vi.mocked(ipc.readdir).mockImplementation(async (dir: string) =>
+      dir.endsWith("/src") ? ls(["a.ts", false], ["b.ts", false]) : ls(["src", true]),
+    )
+    fireEvent.mouseDown(screen.getByText("src"), { button: 0 }) // expand again
+    expect(screen.getByText("a.ts")).toBeInTheDocument() // the cached listing, at once
+    await waitFor(() => expect(screen.getByText("b.ts")).toBeInTheDocument())
+  })
+
+  it("Refresh re-reads every open folder", async () => {
+    vi.mocked(ipc.readdir).mockImplementation(async (dir: string) =>
+      dir.endsWith("/lib") ? ls(["x.ts", false]) : ls(["lib", true]),
+    )
+    open("/repo-refresh")
+    await waitFor(() => expect(screen.getByText("lib")).toBeInTheDocument())
+    fireEvent.mouseDown(screen.getByText("lib"), { button: 0 })
+    await waitFor(() => expect(screen.getByText("x.ts")).toBeInTheDocument())
+    vi.mocked(ipc.readdir).mockClear()
+    vi.mocked(ipc.readdir).mockImplementation(async (dir: string) =>
+      dir.endsWith("/lib")
+        ? ls(["x.ts", false], ["y.ts", false])
+        : ls(["lib", true], ["new.md", false]),
+    )
+    fireEvent.click(screen.getByTitle("Refresh"))
+    await waitFor(() => expect(screen.getByText("y.ts")).toBeInTheDocument())
+    expect(screen.getByText("new.md")).toBeInTheDocument()
+    expect(
+      vi
+        .mocked(ipc.readdir)
+        .mock.calls.map((c) => c[0])
+        .sort(),
+    ).toEqual(["/repo-refresh", "/repo-refresh/lib"])
+  })
+})

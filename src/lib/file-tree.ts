@@ -27,14 +27,29 @@ export const emptyTree = (root: string): FileTreeState => ({
   expanded: new Set(),
 })
 
-/** Cache a directory's listing (from readdir). Pure. */
+/** Same entries, cap state and total: a re-read that changed nothing. */
+export function sameListing(a: DirListing | undefined, b: DirListing): boolean {
+  if (!a || a.truncated !== b.truncated || a.total !== b.total) return false
+  if (a.entries.length !== b.entries.length) return false
+  return a.entries.every((e, i) => e.name === b.entries[i]!.name && e.isDir === b.entries[i]!.isDir)
+}
+
+/** We hold a usable listing for `dir` (not missing, not a failed read). */
+export const hasListing = (s: FileTreeState, dir: string) => {
+  const l = s.listings[dir]
+  return !!l && !l.error
+}
+
+/** Cache a directory's listing (from readdir). Pure; returns `s` itself when nothing changed
+ *  (a refresh of an unchanged folder mustn't re-render the tree). */
 export function setListing(s: FileTreeState, dir: string, listing: DirListing): FileTreeState {
+  if (sameListing(s.listings[dir], listing)) return s
   if (listing.error && s.listings[dir]) return s // a failed re-read keeps what we had
   return { ...s, listings: { ...s.listings, [dir]: listing } }
 }
 
-/** Expand/collapse a directory. Returns the new state and, if it was just expanded
- *  and isn't cached yet, the dir that needs a readdir (else null). Pure. */
+/** Expand/collapse a directory. Returns the new state and, if it was just expanded, the dir
+ *  to (re-)read: always — a cached listing shows at once and may be stale. Pure. */
 export function toggleDir(
   s: FileTreeState,
   dir: string,
@@ -48,9 +63,7 @@ export function toggleDir(
     return { state: { ...s, expanded }, needsLoad: null }
   }
   expanded.add(dir)
-  // Read it unless we hold a good listing (a failed read is retried on the next expand).
-  const held = s.listings[dir]
-  return { state: { ...s, expanded }, needsLoad: held && !held.error ? null : dir }
+  return { state: { ...s, expanded }, needsLoad: dir }
 }
 
 export interface VisibleRow {
@@ -78,7 +91,7 @@ export function visibleRows(s: FileTreeState): VisibleRow[] {
     const listing = s.listings[dir]
     if (!listing) return
     if (listing.error) {
-      // Not "empty": say so (expanding it again retries).
+      // Not "empty": say so (expanding it again, or Refresh, retries).
       out.push({
         path: `note:${dir}`,
         name: "Couldn't read this folder",
@@ -140,6 +153,18 @@ export function openDirs(s: FileTreeState): string[] {
 export class FileTreeCache {
   private map = new Map<string, FileTreeState>() // insertion order = LRU → MRU
   constructor(private readonly capacity: number) {}
+
+  /** Update an entry in place, keeping its LRU position (a background result). */
+  replace(cwd: string, state: FileTreeState): void {
+    if (this.map.has(cwd))
+      this.map.set(cwd, state) // Map.set on an existing key keeps its slot
+    else this.set(cwd, state)
+  }
+
+  /** Read without marking it used (a background check mustn't reorder the LRU). */
+  peek(cwd: string): FileTreeState | undefined {
+    return this.map.get(cwd)
+  }
 
   get(cwd: string): FileTreeState | undefined {
     const v = this.map.get(cwd)
