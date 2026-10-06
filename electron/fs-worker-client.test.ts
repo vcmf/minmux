@@ -1,11 +1,11 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest"
 import { FsWorkerClient, type WorkerProc } from "./fs-worker-client"
-import type { FsReply, FsRequest } from "./fs-worker-ops"
+import type { FsEvent, FsReply, FsRequest } from "./fs-worker-ops"
 
 /** A fake utility process: records requests; the test answers them. */
 function fakeProc() {
   const sent: FsRequest[] = []
-  let onMessage: (m: FsReply) => void = () => {}
+  let onMessage: (m: FsReply | FsEvent) => void = () => {}
   let onExit: (c: number) => void = () => {}
   const proc = {
     sent,
@@ -16,7 +16,14 @@ function fakeProc() {
       else onExit = fn as typeof onExit
     },
     kill: () => (proc.killed = true),
-    reply: (m: FsReply) => onMessage(m),
+    reply: (m: FsReply | FsEvent) => onMessage(m),
+    /** Answer every unanswered watch / unwatch request OK. */
+    ackWatches: () => {
+      for (const r of sent.splice(0)) {
+        if (r.op === "watch" || r.op === "unwatch")
+          onMessage({ id: r.id, ok: true, value: { watching: r.op === "watch" } })
+      }
+    },
     exit: () => onExit(1),
   }
   return proc
@@ -124,6 +131,83 @@ describe("FsWorkerClient", () => {
     const p = c.call({ op: "readdir", path: "/a" })
     c.dispose()
     await expect(p).rejects.toMatchObject({ code: "EWORKER" })
+    expect(procs[0]!.killed).toBe(true)
+  })
+})
+
+describe("FsWorkerClient — watches", () => {
+  const ops = (p: ReturnType<typeof fakeProc>) => p.sent.map((r) => `${r.op} ${r.path}`)
+
+  it("setWatched adds and removes watchers to match; [] with no worker starts none", async () => {
+    const c = client()
+    c.setWatched([])
+    expect(procs).toHaveLength(0)
+    c.setWatched(["/a", "/b"])
+    expect(ops(procs[0]!)).toEqual(["watch /a", "watch /b"])
+    procs[0]!.ackWatches()
+    await Promise.resolve()
+    c.setWatched(["/b", "/c"])
+    expect(ops(procs[0]!)).toEqual(["unwatch /a", "watch /c"])
+  })
+
+  it("forwards 'changed' from the live worker only", async () => {
+    const c = client()
+    const seen: string[][] = []
+    c.onChanged = (dirs) => seen.push(dirs)
+    c.setWatched(["/a"])
+    procs[0]!.reply({ event: "changed", dirs: ["/a"] })
+    expect(seen).toEqual([["/a"]])
+  })
+
+  it("a lost watcher is re-added a moment later (its folder recreated)", async () => {
+    const c = client()
+    c.setWatched(["/dist"])
+    procs[0]!.ackWatches()
+    await Promise.resolve()
+    procs[0]!.reply({ event: "lost", dir: "/dist" })
+    expect(ops(procs[0]!)).toEqual([])
+    vi.advanceTimersByTime(1000)
+    expect(ops(procs[0]!)).toEqual(["watch /dist"])
+  })
+
+  it("a fresh worker (after a crash) gets the watch set again", async () => {
+    const c = client()
+    c.setWatched(["/a"])
+    procs[0]!.ackWatches()
+    await Promise.resolve()
+    procs[0]!.exit()
+    vi.advanceTimersByTime(1)
+    expect(procs).toHaveLength(2)
+    expect(ops(procs[1]!)).toEqual(["watch /a"])
+  })
+
+  it("a folder whose watch call hung is never watched again; the others move on", async () => {
+    const c = client()
+    c.setWatched(["/mnt/dead", "/home"])
+    procs[0]!.reply({ id: procs[0]!.sent[1]!.id, ok: true, value: { watching: true } }) // /home ok
+    vi.advanceTimersByTime(1300) // /mnt/dead's watch hangs → EHUNG, worker retired
+    await Promise.resolve()
+    vi.advanceTimersByTime(1)
+    expect(procs).toHaveLength(2)
+    expect(ops(procs[1]!)).toEqual(["watch /home"])
+    c.setWatched(["/mnt/dead", "/home"])
+    procs[1]!.ackWatches()
+    await Promise.resolve()
+    c.setWatched(["/mnt/dead", "/home"])
+    expect(ops(procs[1]!)).toEqual([])
+  })
+
+  it("a worker holding watchers isn't shut down when idle", async () => {
+    const c = client()
+    c.setWatched(["/a"])
+    procs[0]!.ackWatches()
+    await Promise.resolve()
+    vi.advanceTimersByTime(10_000)
+    expect(procs[0]!.killed).toBe(false)
+    c.setWatched([])
+    procs[0]!.ackWatches()
+    await Promise.resolve()
+    vi.advanceTimersByTime(6_000)
     expect(procs[0]!.killed).toBe(true)
   })
 })

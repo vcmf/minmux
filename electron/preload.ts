@@ -109,6 +109,12 @@ const api = {
   clipboardWrite: (text: string) => ipcRenderer.send("clipboard:write", text),
   clipboardRead: () => ipcRenderer.invoke("clipboard:read") as Promise<string>,
   readdir: (dir: string, wsl?: WslContext) => ipcRenderer.invoke("fs:readdir", dir, wsl),
+  fsWatch: (dirs: string[]) => ipcRenderer.invoke("fs:watch", dirs),
+  onFsChanged: (cb: (dirs: string[]) => void) => {
+    const listener = (_e: unknown, dirs: string[]) => cb(dirs)
+    ipcRenderer.on("fs:changed", listener)
+    return () => ipcRenderer.removeListener("fs:changed", listener)
+  },
   readFilePreview: (path: string, wsl?: WslContext) =>
     ipcRenderer.invoke("fs:read-preview", path, wsl),
   pickDirectory: (defaultPath?: string, wsl?: WslContext) =>

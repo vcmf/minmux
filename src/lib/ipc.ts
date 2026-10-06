@@ -67,6 +67,9 @@ export interface Ipc {
   // Lazy, one directory at a time (files browser). `wsl` translates a WSL pane's Linux
   // path to a \\wsl.localhost\ UNC so the Windows host can list it.
   readdir: (dir: string, wsl?: WslContext) => Promise<DirListing>
+  // Watch these folders (the whole set; [] stops); fs:changed names folders that changed.
+  fsWatch: (dirs: string[]) => Promise<void>
+  onFsChanged: (cb: (dirs: string[]) => void) => () => void
 
   // Read a file for the preview popup; `wsl` reads a WSL pane's Linux path via its UNC share.
   readFilePreview: (path: string, wsl?: WslContext) => Promise<PreviewData>

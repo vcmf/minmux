@@ -1,8 +1,8 @@
-import { describe, it, expect, beforeAll, afterAll } from "vitest"
+import { describe, it, expect, beforeAll, afterAll, vi } from "vitest"
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
-import { handleFsRequest } from "./fs-worker-ops"
+import { handleFsRequest, Watches, WATCH_BATCH_MS, type FsEvent } from "./fs-worker-ops"
 
 let tmp = ""
 beforeAll(() => {
@@ -42,5 +42,95 @@ describe("handleFsRequest", () => {
       ok: false,
       code: "ENOENT",
     })
+  })
+})
+
+describe("Watches (in the fs worker)", () => {
+  /** A fake fs.watch: the test fires events / errors per folder. */
+  const fakeWatch = () => {
+    const live = new Map<string, { fire: (t: string, n: string | null) => void; err: () => void }>()
+    const closed: string[] = []
+    const fn = (
+      dir: string,
+      onEvent: (t: string, n: string | null) => void,
+      onError: () => void,
+    ) => {
+      live.set(dir, { fire: onEvent, err: onError })
+      return { close: () => void closed.push(dir) }
+    }
+    return { fn, live, closed }
+  }
+
+  it("batches events per WATCH_BATCH_MS into one 'changed' naming each folder once", () => {
+    vi.useFakeTimers()
+    const out: FsEvent[] = []
+    const fw = fakeWatch()
+    const w = new Watches((e) => out.push(e), fw.fn, false)
+    w.add("/a")
+    w.add("/b")
+    for (let i = 0; i < 500; i++) fw.live.get("/a")!.fire("rename", `f${i}`)
+    fw.live.get("/b")!.fire("change", "x")
+    expect(out).toEqual([])
+    vi.advanceTimersByTime(WATCH_BATCH_MS)
+    expect(out).toEqual([{ event: "changed", dirs: ["/a", "/b"] }])
+    vi.useRealTimers()
+  })
+
+  it("on Linux, content-only changes are ignored", () => {
+    vi.useFakeTimers()
+    const out: FsEvent[] = []
+    const fw = fakeWatch()
+    const w = new Watches((e) => out.push(e), fw.fn, true)
+    w.add("/log")
+    fw.live.get("/log")!.fire("change", "app.log")
+    vi.advanceTimersByTime(WATCH_BATCH_MS)
+    expect(out).toEqual([])
+    vi.useRealTimers()
+  })
+
+  it("the folder itself deleted (no name) or a watcher error: closed and reported lost", () => {
+    vi.useFakeTimers()
+    const out: FsEvent[] = []
+    const fw = fakeWatch()
+    const w = new Watches((e) => out.push(e), fw.fn, false)
+    w.add("/dist")
+    w.add("/src")
+    fw.live.get("/dist")!.fire("rename", null)
+    fw.live.get("/src")!.err()
+    expect(out).toEqual([
+      { event: "lost", dir: "/dist" },
+      { event: "lost", dir: "/src" },
+    ])
+    expect(fw.closed).toEqual(["/dist", "/src"])
+    expect(w.size).toBe(0)
+    vi.advanceTimersByTime(WATCH_BATCH_MS)
+    expect(out.at(-1)).toEqual({ event: "changed", dirs: ["/dist", "/src"] })
+    vi.useRealTimers()
+  })
+
+  it("watch / unwatch requests; a folder that can't be watched replies with its code", async () => {
+    const w = new Watches(() => {})
+    expect(await handleFsRequest({ id: 1, op: "watch", path: tmp }, w)).toMatchObject({ ok: true })
+    expect(w.size).toBe(1)
+    expect(await handleFsRequest({ id: 2, op: "unwatch", path: tmp }, w)).toMatchObject({
+      ok: true,
+    })
+    expect(w.size).toBe(0)
+    expect(await handleFsRequest({ id: 3, op: "watch", path: path.join(tmp, "nope") }, w)).toEqual({
+      id: 3,
+      ok: false,
+      code: "ENOENT",
+    })
+    w.closeAll()
+  })
+
+  it("a real watcher reports a file created in the folder", async () => {
+    const out: FsEvent[] = []
+    const w = new Watches((e) => out.push(e))
+    w.add(tmp)
+    fs.writeFileSync(path.join(tmp, "new.txt"), "")
+    await new Promise((r) => setTimeout(r, WATCH_BATCH_MS + 400))
+    w.closeAll()
+    expect(out).toContainEqual({ event: "changed", dirs: [tmp] })
   })
 })

@@ -253,6 +253,7 @@ function defaultShell(): string {
 
 // The files browser's folder reads run in a utility process (fs-worker): a read stuck on a dead
 // mount ties up its threads, never main's, and it's killed and replaced when one hangs.
+const FS_WATCH_CAP = 32 // folders watched at once (the visible panel's open ones)
 const fsWorker = new FsWorkerClient(
   () =>
     utilityProcess.fork(path.join(dir, "fs-worker.js"), [], {
@@ -260,6 +261,8 @@ const fsWorker = new FsWorkerClient(
       stdio: "ignore",
     }) as unknown as WorkerProc,
 )
+// A watched folder changed: the renderer re-reads it (through its read queue).
+fsWorker.onChanged = (dirs) => mainWindow?.webContents.send("fs:changed", dirs)
 
 /** Does the folder holding `p` still exist? Then a missing `p` was deleted — not an
  *  unmounted share (/Volumes/NAS gone) or a stopped WSL distro, whose parents are gone too.
@@ -333,7 +336,11 @@ function createWindow() {
   win.on("session-end", () => sessionLedger().freeze(60_000)) // Windows logout/shutdown — see onPower
   win.on("closed", () => {
     mainWindow = null
+    fsWorker.setWatched([])
   })
+  // A reloaded or crashed renderer re-sends its watch set when its Files panel shows again.
+  win.webContents.on("did-start-loading", () => fsWorker.setWatched([]))
+  win.webContents.on("render-process-gone", () => fsWorker.setWatched([]))
 
   // Tell the renderer when maximize state changes (custom controls swap icon).
   const sendMax = () => win.webContents.send("window:maximize-change", win.isMaximized())
@@ -1105,6 +1112,15 @@ function registerIpc() {
 
   // Files browser: list ONE directory (lazy — never a recursive walk), bounded so a huge
   // folder can't block main (read-dir; sort / .git filter / cap in lib/dir-listing).
+  // Files browser: watch these folders (the whole set; [] stops). Host paths only: the
+  // renderer doesn't send WSL panes' folders (a 9p share can't be watched reliably).
+  ipcMain.handle("fs:watch", (_e, dirs: unknown) => {
+    const list = Array.isArray(dirs)
+      ? dirs.filter((d): d is string => typeof d === "string" && path.isAbsolute(d))
+      : []
+    fsWorker.setWatched(list.slice(0, FS_WATCH_CAP))
+  })
+
   ipcMain.handle("fs:readdir", async (_e, dir: string, wsl?: WslContext) => {
     // A WSL pane's dir is a Linux path the host can't see — read it through the distro's
     // UNC share instead (wslTargets); non-WSL panes read the host path.
