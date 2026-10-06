@@ -8,6 +8,7 @@ import {
   powerMonitor,
   clipboard,
   nativeImage,
+  utilityProcess,
 } from "electron"
 import { fileURLToPath } from "node:url"
 import path from "node:path"
@@ -49,7 +50,8 @@ import { agentOf, type AgentEvent, type AgentKind } from "../src/lib/agent-graph
 import { disabledAgentsIn, mergeAgentSwitches } from "../src/settings/agent-switches"
 import { agentPaneEnv, resumablePanes } from "./agents/arming"
 import { findOnPath, pathCandidates } from "./path-lookup"
-import { readDirListing } from "./read-dir"
+import { FsWorkerClient, type WorkerProc } from "./fs-worker-client"
+import type { DirListing } from "../src/lib/dir-listing"
 import { wslUncCandidates, uncToWslPath } from "./wsl-paths"
 import { colorfgbg } from "./color"
 import { AgentMetaTracker, planMeta } from "./agent-meta"
@@ -247,6 +249,31 @@ function emit(rec: PtySession, data: string): void {
 
 function defaultShell(): string {
   return process.env.SHELL ?? (process.platform === "win32" ? "powershell.exe" : "/bin/zsh")
+}
+
+// The files browser's folder reads run in a utility process (fs-worker): a read stuck on a dead
+// mount ties up its threads, never main's, and it's killed and replaced when one hangs.
+const fsWorker = new FsWorkerClient(
+  () =>
+    utilityProcess.fork(path.join(dir, "fs-worker.js"), [], {
+      serviceName: "minmux fs",
+      stdio: "ignore",
+    }) as unknown as WorkerProc,
+)
+
+/** Does the folder holding `p` still exist? Then a missing `p` was deleted — not an
+ *  unmounted share (/Volumes/NAS gone) or a stopped WSL distro, whose parents are gone too.
+ *  "stuck" when asking hung (a dead mount). */
+async function parentExists(p: string): Promise<"yes" | "no" | "stuck"> {
+  const parent = path.dirname(p)
+  if (parent === p) return "no"
+  try {
+    await fsWorker.call({ op: "stat", path: parent })
+    return "yes"
+  } catch (e) {
+    const code = (e as { code?: string }).code
+    return code === "EHUNG" || code === "EBUSY" ? "stuck" : "no"
+  }
 }
 
 // Host-fs targets for a path, in try order: for a WSL pane, the distro's UNC share
@@ -1081,14 +1108,28 @@ function registerIpc() {
   ipcMain.handle("fs:readdir", async (_e, dir: string, wsl?: WslContext) => {
     // A WSL pane's dir is a Linux path the host can't see — read it through the distro's
     // UNC share instead (wslTargets); non-WSL panes read the host path.
+    // The read runs in the fs worker (capped first, links stat-ed in small batches).
+    // Deleted if some form says "no such folder" while its parent exists (an unsupported
+    // share form, a stopped distro or an unmounted share isn't a deletion).
+    let gone = false
     for (const target of wslTargets(dir, wsl)) {
       try {
-        return await readDirListing(target) // capped first, links stat-ed in small batches
-      } catch {
-        // this candidate didn't resolve (wrong share form, or unreadable) — try the next
+        return (await fsWorker.call({ op: "readdir", path: target })) as DirListing
+      } catch (e) {
+        // This candidate didn't resolve (wrong share form, unreadable, hung) — try the next.
+        const code = (e as { code?: string }).code
+        if (code === "EHUNG" || code === "EBUSY") break // a dead mount: don't hang the next form
+        if (code === "ENOENT" || code === "ENOTDIR") {
+          const parent = await parentExists(target)
+          if (parent === "stuck") break
+          if (parent === "yes") gone = true
+        }
       }
     }
-    return { entries: [], truncated: false }
+    // Deleted → an empty folder. Any other failure → flagged, so the panel keeps what it had.
+    return gone
+      ? { entries: [], truncated: false, total: 0 }
+      : { entries: [], truncated: false, error: true }
   })
 
   // Read a file for the preview popup: guard the size, read up to the cap, and
@@ -1419,6 +1460,7 @@ app.on("will-quit", () => {
   sshService?.dispose() // close the ssh config watchers
   void hookWatcher?.close() // stop the file-drop watcher
   if (reaper) clearInterval(reaper)
+  fsWorker.dispose() // stop the fs worker process
 })
 app.on("quit", () => diag("quit"))
 

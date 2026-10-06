@@ -12,6 +12,7 @@ export interface DirListing {
   entries: DirEntry[] // dirs first, then alphabetical
   truncated: boolean // more entries existed than the cap (surfaced, not hidden)
   total?: number // how many entries the folder really has (after filtering) — the "N more" line
+  error?: boolean // the read failed (not an empty or deleted folder): keep what was shown
 }
 
 export const READDIR_CAP = 500

@@ -6,7 +6,8 @@ export default defineConfig({
     plugins: [externalizeDepsPlugin()],
     build: {
       outDir: "out/main",
-      lib: { entry: "electron/main.ts" },
+      // fs-worker: the utility process for folder reads (fs-worker-client forks it).
+      lib: { entry: { main: "electron/main.ts", "fs-worker": "electron/fs-worker.ts" } },
     },
   },
   preload: {

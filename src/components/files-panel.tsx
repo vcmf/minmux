@@ -79,7 +79,9 @@ export function FilesPanel() {
       // …then refresh open dirs in the background — but NOT for a WSL pane: each read
       // goes over the slow \\wsl.localhost\ (9p) share, so N at once would stall the
       // refocus. The cached tree is shown as-is; expanding a dir re-reads it fresh.
-      if (!getActiveWsl()) openDirs(cached).forEach((dir) => load(root, dir))
+      // A folder whose read failed is retried either way.
+      const wsl = !!getActiveWsl()
+      openDirs(cached).forEach((d) => (!wsl || cached.listings[d]?.error) && load(root, d))
     } else {
       const t = emptyTree(root)
       cache.set(root, t)
