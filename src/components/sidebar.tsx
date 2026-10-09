@@ -334,7 +334,8 @@ export function Sidebar() {
                       // Left button only: a right-click (folder menu) mustn't switch tabs or
                       // focus the terminal (Escape closing the menu would reach a running Claude).
                       // (macOS Ctrl-click is a right-click that reports button 0.)
-                      onMouseDown={(e) =>
+                      // On click, not press: pressing to drag it elsewhere mustn't switch groups.
+                      onClick={(e) =>
                         e.button === 0 &&
                         !(e.ctrlKey && platform === "darwin") &&
                         focusPane(tab.id, id)

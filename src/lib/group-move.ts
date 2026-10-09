@@ -2,9 +2,11 @@
 // or become a new group of its own. Pure; the store applies the result. The terminal keeps
 // its session (it re-attaches, never respawns).
 import type { Tab } from "../types"
+import { moveTo } from "./tab-order"
 import {
   allSessionIds,
   findPane,
+  findPaneById,
   firstSessionId,
   insertSurface,
   joinRight,
@@ -38,8 +40,7 @@ export function canDrop(tabs: Tab[], sessionId: string, drop: GroupDrop): boolea
   if (!src) return false
   if (drop.kind === "new") {
     if (allSessionIds(src.root).length > 1) return true
-    const from = tabs.indexOf(src)
-    return drop.insertAt !== from && drop.insertAt !== from + 1 // its own group: a reorder
+    return moveTo(tabs, src.id, drop.insertAt) !== tabs // its own group: a reorder
   }
   return drop.tabId !== src.id && tabs.some((t) => t.id === drop.tabId)
 }
@@ -55,24 +56,23 @@ export function moveTerminal(
   if (!canDrop(tabs, sessionId, drop)) return null
   const src = tabOf(tabs, sessionId)!
   const rest = removeNode(src.root, sessionId)
-  // The source group without it: gone if it was its only terminal.
+  // The source group without it: gone if it was its only terminal. If it had the focus, the
+  // surface now shown in its pane takes it (as when closing it), else the first pane.
+  const srcPane = findPane(src.root, sessionId)!
   const srcAfter: Tab | null = rest
     ? {
         ...src,
         root: rest,
         activeSessionId:
-          src.activeSessionId === sessionId ? firstSessionId(rest) : src.activeSessionId,
+          src.activeSessionId === sessionId
+            ? (findPaneById(rest, srcPane.id)?.activeSessionId ?? firstSessionId(rest))
+            : src.activeSessionId,
       }
     : null
 
   if (drop.kind === "new") {
-    if (!srcAfter) {
-      // Its only terminal: the group itself moves (a reorder).
-      const from = tabs.indexOf(src)
-      const out = tabs.filter((t) => t !== src)
-      out.splice(drop.insertAt > from ? drop.insertAt - 1 : drop.insertAt, 0, src)
-      return { tabs: out, activeTabId: src.id }
-    }
+    // Its only terminal: the group itself moves (a reorder).
+    if (!srcAfter) return { tabs: moveTo(tabs, src.id, drop.insertAt), activeTabId: src.id }
     const fresh: Tab = {
       id: ids.tabId,
       title: "",

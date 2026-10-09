@@ -25,10 +25,13 @@ export function useTabDrag(axis: "x" | "y") {
   const dragId = useRef<string | null>(null)
   // A dragged terminal held over a group: that group (highlighted; dropping joins it).
   const [joinId, setJoinId] = useState<string | null>(null)
-  const spring = useRef<{ tabId: string; timer: ReturnType<typeof setTimeout> } | null>(null)
+  // The group being held over (fired: already opened — nothing to re-arm while still over it).
+  const spring = useRef<{ tabId: string; timer?: ReturnType<typeof setTimeout> } | null>(null)
+  const lastPos = useRef<string>("") // dragover fires ~20×/s even when still
   const stopSpring = () => {
-    if (spring.current) clearTimeout(spring.current.timer)
+    if (spring.current?.timer) clearTimeout(spring.current.timer)
     spring.current = null
+    lastPos.current = ""
   }
 
   const reset = () => {
@@ -125,7 +128,7 @@ export function useTabDrag(axis: "x" | "y") {
     spring.current = {
       tabId,
       timer: setTimeout(() => {
-        spring.current = null
+        if (spring.current) spring.current.timer = undefined // fired: keep the group marked
         const s = useStore.getState()
         if (s.dragging && s.activeTabId !== tabId) s.setActiveTab(tabId)
       }, SPRING_MS),
@@ -136,6 +139,9 @@ export function useTabDrag(axis: "x" | "y") {
     e.preventDefault()
     e.dataTransfer.dropEffect = "move"
     autoScroll(e)
+    const pos = `${e.clientX},${e.clientY},${listRef.current?.scrollTop},${listRef.current?.scrollLeft}`
+    if (pos === lastPos.current) return // still: same answer as last time
+    lastPos.current = pos
     const s = useStore.getState()
     const hit = locateSurface(e)
     const ok = !!hit && canDrop(s.tabs, s.dragging!.sessionId, hit.drop)

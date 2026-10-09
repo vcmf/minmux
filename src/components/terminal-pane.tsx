@@ -7,7 +7,7 @@ import { activeTheme, useStore } from "../store"
 import { sessionColor } from "../lib/session-color"
 import { agentByPane, type AgentKind } from "../lib/agent-graph"
 import { canMove, findPaneById, type MoveTarget } from "../lib/pane-tree"
-import { SURFACE_DRAG_TYPE } from "../lib/group-move"
+import { SURFACE_DRAG_TYPE, tabOf } from "../lib/group-move"
 import { dropZone, insertIndex } from "../lib/drop-zone"
 import { displaySessionTitle, shellType } from "../lib/session-label"
 import { hostColor, hostColorCss, remoteWhere } from "../lib/ssh-hosts-ui"
@@ -150,7 +150,10 @@ export function TerminalPane({ pane, tabId }: { pane: PaneLeaf; tabId: string })
   const wouldMove = (target: MoveTarget) => {
     const s = useStore.getState()
     const tab = s.tabs.find((t) => t.id === tabId)
-    return !!tab && !!s.dragging && canMove(tab.root, s.dragging.sessionId, target)
+    if (!tab || !s.dragging) return false
+    // A terminal from another group must still exist (its shell may exit mid-drag).
+    const id = s.dragging.sessionId
+    return canMove(tab.root, id, target) && !!tabOf(s.tabs, id)
   }
   const clearDropState = () => {
     lastZone.current = null

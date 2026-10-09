@@ -37,6 +37,20 @@ describe("moveTerminal — join another group", () => {
     expect(r.tabs[0]!.activeSessionId).toBe("a1") // the source refocuses what's left
   })
 
+  it("focus left behind goes to the surface now shown in its pane, as when closing it", () => {
+    // A = [a1 | (x, y)] with x focused; moving x shows y there — y gets A's focus, not a1.
+    const t: Tab[] = [
+      tab(
+        "A",
+        split("sA", leaf("pa1", "a1"), { ...leaf("pxy", "x"), sessionIds: ["x", "y"] }),
+        "x",
+      ),
+      tab("B", leaf("pb1", "b1")),
+    ]
+    const r = moveTerminal(t, "x", { kind: "join", tabId: "B" }, ids)!
+    expect(r.tabs[0]!.activeSessionId).toBe("y")
+  })
+
   it("a group's last terminal merges it into the other; the empty group disappears", () => {
     const r = moveTerminal(tabs(), "b1", { kind: "join", tabId: "C" }, ids)!
     expect(order(r.tabs)).toEqual(["A:a1,a2", "C:c1,b1"])

@@ -10,7 +10,6 @@ import { SearchBar } from "./components/search-bar"
 import { DiffPanel } from "./components/diff-panel"
 import { AgentsPanel } from "./components/agents-panel"
 import { FilesPanel } from "./components/files-panel"
-import { useSurfaceDragGuard } from "./components/use-surface-drag-guard"
 import { PaneLayout } from "./components/pane-layout"
 import { SettingsPanel } from "./components/settings-panel"
 import { FilePreview } from "./components/file-preview"
@@ -41,7 +40,6 @@ let persistBlocked = false
 const SSH_HOSTS_DELAY_MS = 800
 
 function App() {
-  useSurfaceDragGuard() // a terminal drag whose source unmounted still ends
   const tabs = useStore((s) => s.tabs)
   const activeTabId = useStore((s) => s.activeTabId)
   const settings = useStore((s) => s.settings)
