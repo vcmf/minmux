@@ -4,7 +4,7 @@
 //  - a terminal (SURFACE_DRAG_TYPE, from a pane's tab strip or a sidebar row): onto a group's
 //    middle joins it (hovering SPRING_MS opens it, to drop on an exact pane), onto an edge or a
 //    gap makes it a new group there.
-import { useEffect, useRef, useState, type DragEvent } from "react"
+import { useCallback, useEffect, useRef, useState, type DragEvent } from "react"
 import { useStore } from "../store"
 import { TAB_DRAG_TYPE } from "../lib/tab-order"
 import { insertIndex } from "../lib/drop-zone"
@@ -28,18 +28,19 @@ export function useTabDrag(axis: "x" | "y") {
   // The group being held over (fired: already opened — nothing to re-arm while still over it).
   const spring = useRef<{ tabId: string; timer?: ReturnType<typeof setTimeout> } | null>(null)
   const lastPos = useRef<string>("") // dragover fires ~20×/s even when still
-  const stopSpring = () => {
+  // Stable (refs + setters only), so the effects below can list them.
+  const stopSpring = useCallback(() => {
     if (spring.current?.timer) clearTimeout(spring.current.timer)
     spring.current = null
-  }
+  }, [])
 
-  const reset = () => {
+  const reset = useCallback(() => {
     dragId.current = null
     setDragging(null)
     setTarget(null)
     setJoinId(null)
     stopSpring()
-  }
+  }, [stopSpring])
   // A terminal drag that ends anywhere (another drop target, Esc) clears our hints.
   const surfaceDragging = useStore((s) => !!s.dragging)
   useEffect(() => {
@@ -49,8 +50,8 @@ export function useTabDrag(axis: "x" | "y") {
       lastPos.current = ""
       if (!dragId.current) setTarget(null)
     }
-  }, [surfaceDragging])
-  useEffect(() => stopSpring, [])
+  }, [surfaceDragging, stopSpring])
+  useEffect(() => stopSpring, [stopSpring])
 
   // A lost dragend (the dragged element unmounted mid-drag) mustn't leave a stale line.
   useEffect(() => {
@@ -62,7 +63,7 @@ export function useTabDrag(axis: "x" | "y") {
       window.removeEventListener("dragend", end, true)
       window.removeEventListener("drop", end, true)
     }
-  }, [dragging])
+  }, [dragging, reset])
 
   const items = () =>
     Array.from(listRef.current?.querySelectorAll<HTMLElement>("[data-tab-drag]") ?? [])
