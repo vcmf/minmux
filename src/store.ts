@@ -1,5 +1,6 @@
 import { create } from "zustand"
 import { moveTo } from "./lib/tab-order"
+import { moveTerminal as moveTerminalPure, type GroupDrop } from "./lib/group-move"
 import type { Session, ShellOption, SshHost, Tab } from "./types"
 import {
   addSurface,
@@ -200,6 +201,8 @@ interface AppState {
   setResume: (sessionId: string, state: ResumeState | null) => void
   setAgentHint: (sessionId: string, hint: { kind: AgentKind; dismissals: number } | null) => void
   moveSurface: (tabId: string, sessionId: string, target: MoveTarget) => void // drag & drop
+  // Drag a terminal to another group, into one of its panes, or out into a new group.
+  moveTerminal: (sessionId: string, drop: GroupDrop) => void
   setActivePane: (tabId: string, sessionId: string) => void
   focusSession: (sessionId: string) => void
   setWindowFocused: (focused: boolean) => void
@@ -913,7 +916,11 @@ export const useStore = create<AppState>((set, get) => ({
 
   // Drop a dragged surface: the terminal keeps its session (re-attaches, no respawn),
   // becomes visible where it lands and takes focus.
-  moveSurface: (tabId, sessionId, target) =>
+  moveSurface: (tabId, sessionId, target) => {
+    // A terminal from another group (its group was spring-loaded open mid-drag).
+    const here = get().tabs.find((t) => t.id === tabId)
+    if (here && !findPane(here.root, sessionId))
+      return get().moveTerminal(sessionId, { kind: "pane", tabId, target })
     set((state) => {
       const tab = state.tabs.find((t) => t.id === tabId)
       // Stale drop (the surface or target pane went away mid-drag): just end the drag.
@@ -930,7 +937,22 @@ export const useStore = create<AppState>((set, get) => ({
         ),
         sessions: markSeen(state.sessions, sessionId),
       }
-    }),
+    })
+  },
+
+  moveTerminal: (sessionId, drop) => {
+    const state = get()
+    const ids = { splitId: newId(), paneId: newId(), tabId: newId() }
+    const r = moveTerminalPure(state.tabs, sessionId, drop, ids)
+    if (!r) return set({ dragging: null })
+    set({
+      dragging: null,
+      tabs: r.tabs,
+      activeTabId: r.activeTabId,
+      sessions: markSeen(state.sessions, sessionId),
+    })
+    get().revealTab(r.activeTabId)
+  },
 
   setActivePane: (tabId, sessionId) =>
     set((state) => ({

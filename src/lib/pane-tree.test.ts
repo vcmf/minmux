@@ -306,8 +306,8 @@ describe("paneTree", () => {
       expect(canMove(tree, "a", { paneId: "pa", index: 2 })).toBe(true)
       expect(canMove(tree, "b", { paneId: "pa", index: 0 })).toBe(true)
     })
-    it("unknown surface or pane → false", () => {
-      expect(canMove(tree, "zzz", { paneId: "pa", zone: "center" })).toBe(false)
+    it("a surface from another group can go anywhere; an unknown pane → false", () => {
+      expect(canMove(tree, "zzz", { paneId: "pa", zone: "center" })).toBe(true)
       expect(canMove(tree, "a", { paneId: "zzz", zone: "center" })).toBe(false)
     })
   })

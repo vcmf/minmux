@@ -165,7 +165,7 @@ export function TopBar() {
                 {...tabDrag.itemProps(tab.id, editingId !== tab.id)}
                 className={`tab${tab.id === activeTabId ? " active" : ""}${
                   tabDrag.dragging === tab.id ? " dragging" : ""
-                }`}
+                }${tabDrag.joinId === tab.id ? " drop-join" : ""}`}
                 // The focused pane's host colour, as an underline (a prod tab reads as prod).
                 style={(() => {
                   const r = sessions[tab.activeSessionId]?.remote

@@ -93,11 +93,13 @@ function splitPaneAt(
 /** A drop target: a pane's zone (edge = new split, centre = join) or a slot in its tab strip. */
 export type MoveTarget = { paneId: string; zone: DropZone } | { paneId: string; index: number }
 
-/** Whether moving a surface to `target` would change the layout (drives the drop hints). */
+/** Whether moving a surface to `target` would change the layout (drives the drop hints). A
+ *  surface from another tree (another group) can go anywhere there. */
 export function canMove(node: PaneNode, sessionId: string, target: MoveTarget): boolean {
   const src = findPane(node, sessionId)
   const dst = findPaneById(node, target.paneId)
-  if (!src || !dst) return false
+  if (!dst) return false
+  if (!src) return true
   const samePane = src.id === dst.id
   if ("index" in target) {
     if (!samePane) return true
@@ -152,6 +154,43 @@ export function moveSurface(
   if (samePane && src.sessionIds.length === 1) return node
   const rest = removeNode(node, sessionId)! // dst survives: different pane, or it kept others
   return splitPaneAt(rest, dst.id, target.zone, makeLeaf(ids.paneId, sessionId), ids.splitId)
+}
+
+/** Put a surface from another tree at `target` (it becomes visible there); same reference if
+ *  the target pane isn't in this tree. */
+export function insertSurface(
+  node: PaneNode,
+  sessionId: string,
+  target: MoveTarget,
+  ids: { splitId: string; paneId: string },
+): PaneNode {
+  const dst = findPaneById(node, target.paneId)
+  if (!dst || findPane(node, sessionId)) return node
+  if ("index" in target) {
+    return addSurface(
+      node,
+      dst.id,
+      sessionId,
+      Math.max(0, Math.min(target.index, dst.sessionIds.length)),
+    )
+  }
+  if (target.zone === "center") return addSurface(node, dst.id, sessionId)
+  return splitPaneAt(node, dst.id, target.zone, makeLeaf(ids.paneId, sessionId), ids.splitId)
+}
+
+/** A surface from another tree joins this one as a new pane on the right of everything. */
+export function joinRight(
+  node: PaneNode,
+  sessionId: string,
+  ids: { splitId: string; paneId: string },
+): PaneNode {
+  if (findPane(node, sessionId)) return node
+  return {
+    type: "split",
+    id: ids.splitId,
+    direction: "row",
+    children: [node, makeLeaf(ids.paneId, sessionId)],
+  }
 }
 
 /** Make `sessionId` the visible surface of whichever pane holds it. */

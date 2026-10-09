@@ -7,6 +7,7 @@ import { activeTheme, useStore } from "../store"
 import { sessionColor } from "../lib/session-color"
 import { agentByPane, type AgentKind } from "../lib/agent-graph"
 import { canMove, findPaneById, type MoveTarget } from "../lib/pane-tree"
+import { SURFACE_DRAG_TYPE } from "../lib/group-move"
 import { dropZone, insertIndex } from "../lib/drop-zone"
 import { displaySessionTitle, shellType } from "../lib/session-label"
 import { hostColor, hostColorCss, remoteWhere } from "../lib/ssh-hosts-ui"
@@ -75,8 +76,9 @@ export function TerminalPane({ pane, tabId }: { pane: PaneLeaf; tabId: string })
     return tab ? tab.root.type === "split" : false
   })
   const multi = pane.sessionIds.length > 1
-  // A surface of THIS tab is being dragged → show drop targets (overlay + strip markers).
-  const dragging = useStore((s) => (s.dragging?.tabId === tabId ? s.dragging : null))
+  // A terminal is being dragged — from this group or another (whose drag opened this one) —
+  // → show drop targets (overlay + strip markers).
+  const dragging = useStore((s) => s.dragging)
   const [dropHint, setDropHint] = useState<DropZone | null>(null)
   const [stripSlot, setStripSlot] = useState<number | null>(null)
   // Last raw zone/slot under the cursor: dragover fires ~20×/s even when still, so only
@@ -278,7 +280,7 @@ export function TerminalPane({ pane, tabId }: { pane: PaneLeaf; tabId: string })
                 draggable
                 onDragStart={(e) => {
                   e.dataTransfer.effectAllowed = "move"
-                  e.dataTransfer.setData("application/x-minmux-surface", id)
+                  e.dataTransfer.setData(SURFACE_DRAG_TYPE, id)
                   useStore.getState().setDragging({ tabId, sessionId: id })
                 }}
                 onDragEnd={() => useStore.getState().setDragging(null)}
