@@ -1,5 +1,6 @@
 import { useCallback, useMemo, useState } from "react"
 import { useTabDrag } from "./use-tab-drag"
+import { SURFACE_DRAG_TYPE } from "../lib/group-move"
 import { useTabRename } from "./use-tab-rename"
 import { refocusActiveTerminal } from "./refocus-terminal"
 import { useShallow } from "zustand/react/shallow"
@@ -233,7 +234,9 @@ export function Sidebar() {
             <div
               key={tab.id}
               {...tabDrag.spanProps(tab.id)}
-              className={`tree-group${tabDrag.dragging === tab.id ? " dragging" : ""}`}
+              className={`tree-group${tabDrag.dragging === tab.id ? " dragging" : ""}${
+                tabDrag.joinId === tab.id ? " drop-join" : ""
+              }`}
             >
               <div
                 {...tabDrag.handleProps(tab.id, !editing)}
@@ -319,10 +322,20 @@ export function Sidebar() {
                       // A surface hidden behind another in its pane reads dimmer.
                       className={`tree-row${isActive ? " active" : ""}${visible.has(id) ? "" : " surface-hidden"}`}
                       style={{ paddingLeft: 32 }}
+                      // Drag it onto another group, into a gap (a new group), or onto a pane.
+                      draggable
+                      onDragStart={(e) => {
+                        e.stopPropagation() // not a reorder of its group
+                        e.dataTransfer.effectAllowed = "move"
+                        e.dataTransfer.setData(SURFACE_DRAG_TYPE, id)
+                        useStore.getState().setDragging({ tabId: tab.id, sessionId: id })
+                      }}
+                      onDragEnd={() => useStore.getState().setDragging(null)}
                       // Left button only: a right-click (folder menu) mustn't switch tabs or
                       // focus the terminal (Escape closing the menu would reach a running Claude).
                       // (macOS Ctrl-click is a right-click that reports button 0.)
-                      onMouseDown={(e) =>
+                      // On click, not press: pressing to drag it elsewhere mustn't switch groups.
+                      onClick={(e) =>
                         e.button === 0 &&
                         !(e.ctrlKey && platform === "darwin") &&
                         focusPane(tab.id, id)
@@ -569,9 +582,17 @@ function PrLine({ pr }: { pr: PrInfo }) {
       <button
         className="tree-pr-link"
         title={pr.url}
-        // Don't let the row's mousedown focus the pane — this is a link.
+        // A link: neither focus the row's pane (its click) nor drag its terminal.
         onMouseDown={(e) => e.stopPropagation()}
-        onClick={() => ipc.openExternal(pr.url)}
+        onClick={(e) => {
+          e.stopPropagation()
+          void ipc.openExternal(pr.url)
+        }}
+        draggable={false}
+        onDragStart={(e) => {
+          e.preventDefault()
+          e.stopPropagation()
+        }}
       >
         PR #{pr.number}
       </button>

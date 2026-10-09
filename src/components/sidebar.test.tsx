@@ -73,7 +73,7 @@ describe("Sidebar", () => {
     expect(screen.getByText("Claude needs your permission")).toBeInTheDocument()
   })
 
-  it("clicking a pane row focuses that session", () => {
+  it("clicking a pane row focuses that session; pressing it (to drag) doesn't", () => {
     st().newTab(testShell)
     st().splitActive("row", testShell)
     const ids = allSessionIds(st().tabs[0]!.root)
@@ -81,7 +81,9 @@ describe("Sidebar", () => {
     st().setSessionCwd(ids[0]!, "/w/alpha")
     st().setSessionCwd(ids[1]!, "/w/beta")
     render(<Sidebar />)
-    fireEvent.mouseDown(screen.getByText("alpha"))
+    fireEvent.mouseDown(screen.getByText("alpha"), { button: 0 })
+    expect(st().tabs[0]!.activeSessionId).toBe(ids[1]) // a press may be a drag's start
+    fireEvent.click(screen.getByText("alpha"))
     expect(st().tabs[0]!.activeSessionId).toBe(ids[0])
   })
 })
@@ -249,11 +251,11 @@ describe("Sidebar — folder lines: full path + right-click menu", () => {
     const line = [...container.querySelectorAll(".tree-dir")].find((el) =>
       el.getAttribute("title")?.includes("/Users/test/work/term"),
     )!
-    fireEvent.mouseDown(line, { button: 2 })
-    fireEvent.mouseDown(line, { button: 0, ctrlKey: true }) // macOS Ctrl-click = right-click
+    fireEvent.click(line, { button: 2 })
+    fireEvent.click(line, { button: 0, ctrlKey: true }) // macOS Ctrl-click = right-click
     fireEvent.contextMenu(line)
     expect(st().activeTabId).toBe(other)
-    fireEvent.mouseDown(line, { button: 0 }) // a plain left click still focuses it
+    fireEvent.click(line, { button: 0 }) // a plain left click still focuses it
     expect(st().activeTabId).not.toBe(other)
     void id
   })

@@ -2297,6 +2297,13 @@ body.resizing-col {
   right: 8px;
   height: 2px;
 }
+/* A terminal held over a group: dropping joins it (holding opens it). */
+.tab.drop-join,
+.tree-group.drop-join {
+  box-shadow: inset 0 0 0 1px var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  border-radius: 4px;
+}
 .tab.dragging,
 .tree-group.dragging {
   opacity: 0.45;

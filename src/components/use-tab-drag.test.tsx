@@ -5,6 +5,8 @@ import { Sidebar } from "./sidebar"
 import { useStore } from "../store"
 import { resetStore, testShell } from "../test/helpers"
 import { TAB_DRAG_TYPE } from "../lib/tab-order"
+import { allSessionIds } from "../lib/pane-tree"
+import { SPRING_MS } from "./use-tab-drag"
 
 vi.mock("../terminal/terminal-manager", () => ({
   TerminalManager: { attach: vi.fn(), fit: vi.fn(), focus: vi.fn(), dispose: vi.fn() },
@@ -175,5 +177,95 @@ describe("⌘K — move session left / right", () => {
     render(<CommandPalette />)
     fireEvent.mouseDown(screen.getByText("Move session left"))
     expect(order()).toEqual([b, a])
+  })
+})
+
+describe("dragging a terminal onto the list of groups", () => {
+  const SURF = "application/x-minmux-surface"
+  /** Groups A (2 terminals), B, C; the sidebar's groups get 100px boxes. */
+  const setupSurface = () => {
+    const utils = setup("side") // groups A, B, C
+    act(() => {
+      st().setActiveTab(st().tabs[0]!.id)
+      st().splitWith("row", testShell) // A: two terminals
+    })
+    const [A] = st().tabs
+    const moved = allSessionIds(A!.root)[1]!
+    act(() => st().setDragging({ tabId: A!.id, sessionId: moved }))
+    return { ...utils, moved, data: dt({ [SURF]: moved }) }
+  }
+  const groups = () => st().tabs.map((t) => allSessionIds(t.root).length)
+
+  it("onto another group's middle: it joins that group, which becomes active", () => {
+    const { list, moved, data } = setupSurface()
+    const [, B] = st().tabs
+    drag("dragOver", list, { y: 150 }, data) // the middle of B (B spans 100–200)
+    expect(list.querySelector(".tree-group.drop-join")).not.toBeNull()
+    drag("drop", list, { y: 150 }, data)
+    expect(groups()).toEqual([1, 2, 1])
+    expect(st().activeTabId).toBe(B!.id)
+    expect(st().tabs[1]!.activeSessionId).toBe(moved)
+    expect(st().dragging).toBeNull()
+  })
+
+  it("onto a gap between groups: a new group of its own there", () => {
+    const { list, moved, data } = setupSurface()
+    drag("dragOver", list, { y: 203 }, data) // the top edge of C → the gap before it
+    expect(list.querySelector(".tab-drop-line")).not.toBeNull()
+    expect(list.querySelector(".drop-join")).toBeNull()
+    drag("drop", list, { y: 203 }, data)
+    expect(groups()).toEqual([1, 1, 1, 1])
+    expect(allSessionIds(st().tabs[2]!.root)).toEqual([moved])
+    expect(st().activeTabId).toBe(st().tabs[2]!.id)
+  })
+
+  it("held over a group, that group opens (to drop onto one of its panes)", () => {
+    vi.useFakeTimers()
+    const { list, data } = setupSurface()
+    const [, , C] = st().tabs
+    drag("dragOver", list, { y: 250 }, data)
+    act(() => vi.advanceTimersByTime(SPRING_MS - 50))
+    expect(st().activeTabId).not.toBe(C!.id)
+    act(() => vi.advanceTimersByTime(100))
+    expect(st().activeTabId).toBe(C!.id)
+    expect(st().dragging).not.toBeNull() // still dragging
+    vi.useRealTimers()
+  })
+
+  it("opening a group by holding over it doesn't clear its needs-input signal", () => {
+    vi.useFakeTimers()
+    const { list, data } = setupSurface()
+    const [, , C] = st().tabs
+    const c1 = allSessionIds(C!.root)[0]!
+    act(() =>
+      useStore.setState((x) => ({
+        sessions: { ...x.sessions, [c1]: { ...x.sessions[c1]!, status: "attention" } },
+      })),
+    )
+    drag("dragOver", list, { y: 250 }, data)
+    act(() => vi.advanceTimersByTime(SPRING_MS + 50))
+    expect(st().activeTabId).toBe(C!.id)
+    expect(st().sessions[c1]!.status).toBe("attention") // shown while passing, not "seen"
+    vi.useRealTimers()
+  })
+
+  it("onto its own group: no highlight, nothing moves", () => {
+    const { list, data } = setupSurface()
+    const before = groups()
+    drag("dragOver", list, { y: 50 }, data)
+    expect(list.querySelector(".drop-join")).toBeNull()
+    drag("drop", list, { y: 50 }, data)
+    expect(groups()).toEqual(before)
+  })
+
+  it("a sidebar terminal row starts a terminal drag (not a group reorder)", () => {
+    setupSurface()
+    act(() => st().setDragging(null))
+    const rows = document.querySelectorAll<HTMLElement>(".tree-group .tree-row[draggable='true']")
+    const termRow = [...rows].find((r) => r.style.paddingLeft === "32px")!
+    const data = dt({})
+    fireEvent.dragStart(termRow, { dataTransfer: data })
+    expect(data.setData).toHaveBeenCalledWith(SURF, expect.any(String))
+    expect(st().dragging?.tabId).toBe(st().tabs[0]!.id)
   })
 })

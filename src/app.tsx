@@ -463,9 +463,10 @@ function App() {
   }, [])
 
   // Surface drag lifecycle. A drag can end without reaching a target (Esc, dropped
-  // outside); and if the source tab remounts mid-drag its dragend goes to a detached node
-  // and never reaches window — so while dragging, the first mouse move with no button held
-  // also ends it. Whenever a drag ends, keyboard focus returns to the focused terminal
+  // outside); and if the source tab remounts mid-drag (holding a terminal over another group
+  // opens it) its dragend goes to a detached node and never reaches window — so while
+  // dragging, the first mouse move with no button held, or any press, also ends it (a drag
+  // sends neither). Whenever a drag ends, keyboard focus returns to the focused terminal
   // (the tab's mousedown blurred it and the drag swallowed the pane's mouseup refocus).
   useEffect(() => {
     const end = () => {
@@ -475,9 +476,13 @@ function App() {
       if (e.buttons === 0) end()
     }
     const unsub = useStore.subscribe((state, prev) => {
-      if (!prev.dragging && state.dragging) window.addEventListener("mousemove", onMove)
+      if (!prev.dragging && state.dragging) {
+        window.addEventListener("mousemove", onMove)
+        window.addEventListener("mousedown", end, true)
+      }
       if (prev.dragging && !state.dragging) {
         window.removeEventListener("mousemove", onMove)
+        window.removeEventListener("mousedown", end, true)
         requestAnimationFrame(() => {
           const s = useStore.getState()
           const sid = s.tabs.find((t) => t.id === s.activeTabId)?.activeSessionId
@@ -490,6 +495,7 @@ function App() {
     return () => {
       unsub()
       window.removeEventListener("mousemove", onMove)
+      window.removeEventListener("mousedown", end, true)
       window.removeEventListener("dragend", end)
       window.removeEventListener("drop", end)
     }
