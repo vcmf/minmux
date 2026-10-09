@@ -31,7 +31,6 @@ export function useTabDrag(axis: "x" | "y") {
   const stopSpring = () => {
     if (spring.current?.timer) clearTimeout(spring.current.timer)
     spring.current = null
-    lastPos.current = ""
   }
 
   const reset = () => {
@@ -47,6 +46,7 @@ export function useTabDrag(axis: "x" | "y") {
     if (!surfaceDragging) {
       setJoinId(null)
       stopSpring()
+      lastPos.current = ""
       if (!dragId.current) setTarget(null)
     }
   }, [surfaceDragging])
@@ -122,7 +122,7 @@ export function useTabDrag(axis: "x" | "y") {
 
   // Hold a terminal over a group: after SPRING_MS that group opens (drop onto a pane there).
   const armSpring = (tabId: string | null) => {
-    if (spring.current?.tabId === tabId) return
+    if ((spring.current?.tabId ?? null) === tabId) return
     stopSpring()
     if (!tabId) return
     spring.current = {
@@ -130,7 +130,10 @@ export function useTabDrag(axis: "x" | "y") {
       timer: setTimeout(() => {
         if (spring.current) spring.current.timer = undefined // fired: keep the group marked
         const s = useStore.getState()
-        if (s.dragging && s.activeTabId !== tabId) s.setActiveTab(tabId)
+        // Shown, not "seen": passing over a group mustn't clear its needs-input signal (the
+        // drop that moves a terminal there reveals it). It may have closed meanwhile.
+        if (s.dragging && s.activeTabId !== tabId && s.tabs.some((t) => t.id === tabId))
+          useStore.setState({ activeTabId: tabId })
       }, SPRING_MS),
     }
   }
@@ -139,7 +142,9 @@ export function useTabDrag(axis: "x" | "y") {
     e.preventDefault()
     e.dataTransfer.dropEffect = "move"
     autoScroll(e)
-    const pos = `${e.clientX},${e.clientY},${listRef.current?.scrollTop},${listRef.current?.scrollLeft}`
+    // Same pointer, scroll and layout (the active group changes widths) → same answer.
+    const st = useStore.getState()
+    const pos = `${e.clientX},${e.clientY},${listRef.current?.scrollTop},${listRef.current?.scrollLeft},${st.activeTabId},${st.tabs.length}`
     if (pos === lastPos.current) return // still: same answer as last time
     lastPos.current = pos
     const s = useStore.getState()
@@ -203,6 +208,7 @@ export function useTabDrag(axis: "x" | "y") {
         setTarget(null)
         setJoinId(null)
         stopSpring()
+        lastPos.current = ""
       }
     },
     onDrop: (e: DragEvent) => {

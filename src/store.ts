@@ -945,12 +945,15 @@ export const useStore = create<AppState>((set, get) => ({
     const ids = { splitId: newId(), paneId: newId(), tabId: newId() }
     const r = moveTerminalPure(state.tabs, sessionId, drop, ids)
     if (!r) return set({ dragging: null })
-    set({
-      dragging: null,
-      tabs: r.tabs,
-      activeTabId: r.activeTabId,
-      sessions: markSeen(state.sessions, sessionId),
-    })
+    // closing(): a pending close confirm naming the emptied group / the moved terminal goes.
+    set(
+      closing(() => ({
+        dragging: null,
+        tabs: r.tabs,
+        activeTabId: r.activeTabId,
+        sessions: markSeen(state.sessions, sessionId),
+      })),
+    )
     get().revealTab(r.activeTabId)
   },
 

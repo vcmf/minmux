@@ -232,6 +232,23 @@ describe("dragging a terminal onto the list of groups", () => {
     vi.useRealTimers()
   })
 
+  it("opening a group by holding over it doesn't clear its needs-input signal", () => {
+    vi.useFakeTimers()
+    const { list, data } = setupSurface()
+    const [, , C] = st().tabs
+    const c1 = allSessionIds(C!.root)[0]!
+    act(() =>
+      useStore.setState((x) => ({
+        sessions: { ...x.sessions, [c1]: { ...x.sessions[c1]!, status: "attention" } },
+      })),
+    )
+    drag("dragOver", list, { y: 250 }, data)
+    act(() => vi.advanceTimersByTime(SPRING_MS + 50))
+    expect(st().activeTabId).toBe(C!.id)
+    expect(st().sessions[c1]!.status).toBe("attention") // shown while passing, not "seen"
+    vi.useRealTimers()
+  })
+
   it("onto its own group: no highlight, nothing moves", () => {
     const { list, data } = setupSurface()
     const before = groups()

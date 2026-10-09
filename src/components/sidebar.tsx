@@ -582,9 +582,17 @@ function PrLine({ pr }: { pr: PrInfo }) {
       <button
         className="tree-pr-link"
         title={pr.url}
-        // Don't let the row's mousedown focus the pane — this is a link.
+        // A link: neither focus the row's pane (its click) nor drag its terminal.
         onMouseDown={(e) => e.stopPropagation()}
-        onClick={() => ipc.openExternal(pr.url)}
+        onClick={(e) => {
+          e.stopPropagation()
+          void ipc.openExternal(pr.url)
+        }}
+        draggable={false}
+        onDragStart={(e) => {
+          e.preventDefault()
+          e.stopPropagation()
+        }}
       >
         PR #{pr.number}
       </button>
