@@ -5,7 +5,7 @@ import {
   agentWorkFlat,
   inLabel,
   workCwd,
-  workDiffers,
+  inLine,
   worksElsewhere,
   isInside,
   inGitFor,
@@ -162,12 +162,44 @@ describe("worksElsewhere", () => {
   })
 })
 
-describe("workDiffers (worth an `in` line)", () => {
-  it("any other folder, a subfolder of the same repo included; not the same one or its real path", () => {
-    expect(workDiffers("/w/rts", "/w/rts/output/soldier-animation")).toBe(true)
-    expect(workDiffers("/w/rts", "/w/rts/")).toBe(false)
-    expect(workDiffers("/tmp/x", "/private/tmp/x", "/private/tmp/x")).toBe(false) // a symlink
-    expect(workDiffers("/w/rts", "/w/api")).toBe(true)
+describe("inLine (the sidebar's `in` line)", () => {
+  const repo = { root: "/w/rts", forCwd: "/w/rts" }
+  const at = (cwd: string, extra = {}) => ({ root: "/w/rts", forCwd: cwd, ...extra })
+
+  it("a subfolder of the same repo: shown, not 'elsewhere' (no git line of its own)", () => {
+    const w = "/w/rts/output/soldier-animation"
+    expect(inLine("/w/rts", w, repo, at(w), "claude")).toMatchObject({ elsewhere: false })
+  })
+
+  it("waits for git's answer (no flicker before it)", () => {
+    expect(inLine("/w/rts", "/w/rts/output", repo, undefined, "claude")).toBeNull()
+  })
+
+  it("the same folder spelled through a symlink: not shown", () => {
+    const shell = { root: "/w/rts", real: "/w/rts", forCwd: "/link/rts" }
+    expect(inLine("/link/rts", "/w/rts", shell, at("/w/rts"), "claude")).toBeNull()
+    // …nor the agent's side spelled through one
+    expect(
+      inLine("/w/rts", "/link/rts", repo, at("/link/rts", { real: "/w/rts" }), "codex"),
+    ).toBeNull()
+  })
+
+  it("WSL: no real paths, but git's root places both — /home/u/proj ≡ /mnt/d/proj", () => {
+    const shell = { root: "/mnt/d/proj", forCwd: "/home/u/proj" }
+    const inGit = { root: "/mnt/d/proj", forCwd: "/mnt/d/proj" }
+    expect(inLine("/home/u/proj", "/mnt/d/proj", shell, inGit, "claude")).toBeNull()
+    const deeper = { root: "/mnt/d/proj", forCwd: "/mnt/d/proj/sub" }
+    expect(inLine("/home/u/proj", "/mnt/d/proj/sub", shell, deeper, "claude")).not.toBeNull()
+  })
+
+  it("a drive letter's case doesn't make another folder", () => {
+    const g = { root: "C:/proj", forCwd: "C:\\proj" }
+    expect(inLine("c:\\proj", "C:\\proj", g, g, "claude")).toBeNull()
+  })
+
+  it("another repo: elsewhere (its own branch / PR)", () => {
+    const api = { root: "/w/api", forCwd: "/w/api", branch: "dev" }
+    expect(inLine("/w/rts", "/w/api", repo, api, "claude")).toMatchObject({ elsewhere: true })
   })
 })
 

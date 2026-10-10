@@ -20,8 +20,12 @@ export interface WorkDir {
 /** Same folder, ignoring a trailing separator. */
 export const samePath = (a: string, b: string): boolean => norm(a) === norm(b)
 
-// normalizeRootPath + one separator ("C:/x" from git ≡ "C:\\x" from a Windows shell).
-const norm = (p: string) => normalizeRootPath(p).replace(/\\/g, "/")
+// normalizeRootPath + one separator ("C:/x" from git ≡ "C:\\x" from a Windows shell) + a
+// lower-case drive letter ("c:\\x" from one shell ≡ "C:\\x" from another).
+const norm = (p: string) =>
+  normalizeRootPath(p)
+    .replace(/\\/g, "/")
+    .replace(/^([A-Za-z]):/, (_, d: string) => `${d.toLowerCase()}:`)
 
 /** `child` is strictly inside `parent` (a root like "/" or "C:\\" included). */
 export function isInside(child: string, parent: string): boolean {
@@ -107,11 +111,34 @@ export function worksElsewhere(
   return !samePath(from, to) && !isInside(to, from)
 }
 
-/** The agent's folder isn't the shell's (a symlinked spelling of it doesn't count): worth an
- *  `in` line even inside the same checkout (a sub-project folder), where worksElsewhere says
- *  no and the git views stay put. */
-export function workDiffers(shellCwd: string, work: string, shellReal?: string): boolean {
-  return !samePath(shellCwd, work) && !(shellReal && samePath(shellReal, work))
+/** Where `p` sits in `root` ("" = the root itself); undefined if not inside it. */
+function relIn(p: string, root: string): string | undefined {
+  if (samePath(p, root)) return ""
+  return isInside(p, root) ? norm(p).slice(norm(root).replace(/\/$/, "").length + 1) : undefined
+}
+
+/** The sidebar's `in` line: shown for another checkout (`elsewhere`: its own branch / PR), or
+ *  another folder of the same one (a sub-project). Decided once git has answered (no flicker)
+ *  and by position inside the repo's real root, so symlinked / WSL spellings don't count. */
+export function inLine(
+  shellCwd: string | undefined,
+  work: string | undefined,
+  shellGit: PaneGitInfo | undefined,
+  inGit: PaneGitInfo | undefined,
+  agent: AgentKind | undefined,
+): { elsewhere: boolean; known: PaneGitInfo } | null {
+  const known = inGitFor(inGit, work, agent)
+  if (!shellCwd || !work || !known || samePath(shellCwd, work)) return null
+  if (worksElsewhere(shellCwd, work, shellGit, inGit, agent)) return { elsewhere: true, known }
+  if (!known.root) return null // outside git, the same place (worksElsewhere said so)
+  // The same checkout: where each sits in it. A shell we can't place (a symlinked or WSL
+  // spelling git resolved) counts as the root.
+  const at = relIn(known.real ?? work, known.root) ?? relIn(work, known.root)
+  const shellAt =
+    (shellGit?.root &&
+      (relIn(shellGit.real ?? shellCwd, shellGit.root) ?? relIn(shellCwd, shellGit.root))) ||
+    ""
+  return at !== undefined && at !== shellAt ? { elsewhere: false, known } : null
 }
 
 /** The folder a pane's git views follow: the agent's checkout root while it works elsewhere. */
