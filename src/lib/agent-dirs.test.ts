@@ -5,6 +5,7 @@ import {
   agentWorkFlat,
   inLabel,
   workCwd,
+  workDiffers,
   worksElsewhere,
   isInside,
   inGitFor,
@@ -158,6 +159,15 @@ describe("worksElsewhere", () => {
       true,
     )
     expect(worksElsewhere("/", "/Users/me", undefined, at("/Users/me"), "claude")).toBe(false) // shell at /
+  })
+})
+
+describe("workDiffers (worth an `in` line)", () => {
+  it("any other folder, a subfolder of the same repo included; not the same one or its real path", () => {
+    expect(workDiffers("/w/rts", "/w/rts/output/soldier-animation")).toBe(true)
+    expect(workDiffers("/w/rts", "/w/rts/")).toBe(false)
+    expect(workDiffers("/tmp/x", "/private/tmp/x", "/private/tmp/x")).toBe(false) // a symlink
+    expect(workDiffers("/w/rts", "/w/api")).toBe(true)
   })
 })
 

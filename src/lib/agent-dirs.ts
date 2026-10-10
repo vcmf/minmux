@@ -107,6 +107,13 @@ export function worksElsewhere(
   return !samePath(from, to) && !isInside(to, from)
 }
 
+/** The agent's folder isn't the shell's (a symlinked spelling of it doesn't count): worth an
+ *  `in` line even inside the same checkout (a sub-project folder), where worksElsewhere says
+ *  no and the git views stay put. */
+export function workDiffers(shellCwd: string, work: string, shellReal?: string): boolean {
+  return !samePath(shellCwd, work) && !(shellReal && samePath(shellReal, work))
+}
+
 /** The folder a pane's git views follow: the agent's checkout root while it works elsewhere. */
 export function workCwd(
   graph: AgentGraph,
