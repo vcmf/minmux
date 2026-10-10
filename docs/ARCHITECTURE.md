@@ -444,6 +444,9 @@ Open: notification triggers to ship first (rec: OSC 9 + output-idle); whether/wh
 
 ## Appendix A — Session persistence via a detached daemon (design sketch)
 
+> **Promoted to an RFC:** this sketch now lives, expanded, in
+> [`design/SESSION_DAEMON.md`](design/SESSION_DAEMON.md) (two-reconnects framing, the screen-model
+> plan, auto-update/versioning policy, staged build). The summary below is retained for context.
 > **Status: exploratory, post-v1.** Not on the v1 path — written down so the port doesn't foreclose it.
 > The one actionable takeaway for now is [A.6](#a6-what-to-keep-cheap-now).
 
