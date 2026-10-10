@@ -536,7 +536,7 @@ function DirLines({
         <span className="tree-dir-path">
           {branchLine(
             line.elsewhere ? line.known.branch : undefined,
-            inLabel(shellCwd, work.cwd, home, shellGit?.real),
+            line.label ?? inLabel(shellCwd, work.cwd, home, shellGit?.real),
           )}
         </span>
         {more}

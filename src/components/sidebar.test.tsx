@@ -146,9 +146,15 @@ describe("Sidebar — from / in folders", () => {
     ])
     st().setPaneGit(
       {
-        [id]: { root: "/w/term", branch: "main", pr: { number: 3, state: "open", url: "u" } },
+        [id]: {
+          root: "/w/term",
+          prefix: "",
+          branch: "main",
+          pr: { number: 3, state: "open", url: "u" },
+        },
         [`${id}@in`]: {
           root: "/w/term",
+          prefix: "output/soldier-animation",
           branch: "main",
           forCwd: "/w/term/output/soldier-animation",
           pr: { number: 3, state: "open", url: "u" },

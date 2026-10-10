@@ -163,42 +163,57 @@ describe("worksElsewhere", () => {
 })
 
 describe("inLine (the sidebar's `in` line)", () => {
-  const repo = { root: "/w/rts", forCwd: "/w/rts" }
-  const at = (cwd: string, extra = {}) => ({ root: "/w/rts", forCwd: cwd, ...extra })
+  const repo = { root: "/w/rts", forCwd: "/w/rts", prefix: "" }
+  const at = (cwd: string, prefix: string, extra = {}) => ({
+    root: "/w/rts",
+    forCwd: cwd,
+    prefix,
+    ...extra,
+  })
 
-  it("a subfolder of the same repo: shown, not 'elsewhere' (no git line of its own)", () => {
+  it("a subfolder of the same repo: shown with its place in the repo, not 'elsewhere'", () => {
     const w = "/w/rts/output/soldier-animation"
-    expect(inLine("/w/rts", w, repo, at(w), "claude")).toMatchObject({ elsewhere: false })
+    expect(inLine("/w/rts", w, repo, at(w, "output/soldier-animation"), "claude")).toEqual({
+      elsewhere: false,
+      known: at(w, "output/soldier-animation"),
+      label: "output/soldier-animation",
+    })
   })
 
-  it("waits for git's answer (no flicker before it)", () => {
+  it("waits for git's answer for THIS folder (no flicker, no stale answer)", () => {
     expect(inLine("/w/rts", "/w/rts/output", repo, undefined, "claude")).toBeNull()
+    const old = at("/w/rts/output/x", "output/x")
+    expect(inLine("/w/rts", "/w/rts/output", repo, old, "claude")).toBeNull()
   })
 
-  it("the same folder spelled through a symlink: not shown", () => {
-    const shell = { root: "/w/rts", real: "/w/rts", forCwd: "/link/rts" }
-    expect(inLine("/link/rts", "/w/rts", shell, at("/w/rts"), "claude")).toBeNull()
-    // …nor the agent's side spelled through one
+  it("symlinked or WSL spellings of the same place: git's prefixes agree — no line", () => {
+    // WSL: the shell is at /home/u/proj/sub (a symlink to /mnt/d/proj), the agent reports
+    // /mnt/d/proj/sub; no real paths there, but git places both at "sub".
+    const shell = { root: "/mnt/d/proj", forCwd: "/home/u/proj/sub", prefix: "sub" }
+    const inGit = { root: "/mnt/d/proj", forCwd: "/mnt/d/proj/sub", prefix: "sub" }
+    expect(inLine("/home/u/proj/sub", "/mnt/d/proj/sub", shell, inGit, "claude")).toBeNull()
+    // …and a real move from there (cd ..) does show
+    const up = { root: "/mnt/d/proj", forCwd: "/mnt/d/proj", prefix: "" }
+    expect(inLine("/home/u/proj/sub", "/mnt/d/proj", shell, up, "claude")).not.toBeNull()
+  })
+
+  it("no prefix known for the shell: no line (never a guess)", () => {
+    const w = "/w/rts/output"
+    expect(inLine("/w/rts", w, { root: "/w/rts" }, at(w, "output"), "claude")).toBeNull()
+  })
+
+  it("outside git: a folder below the shell's shows; the same one (real path) doesn't", () => {
+    const shell = { real: "/n/notes" }
     expect(
-      inLine("/w/rts", "/link/rts", repo, at("/link/rts", { real: "/w/rts" }), "codex"),
+      inLine("/n/notes", "/n/notes/drafts", shell, { forCwd: "/n/notes/drafts" }, "claude"),
+    ).toMatchObject({ elsewhere: false })
+    expect(
+      inLine("/link/notes", "/n/notes", shell, { forCwd: "/n/notes", real: "/n/notes" }, "claude"),
     ).toBeNull()
   })
 
-  it("WSL: no real paths, but git's root places both — /home/u/proj ≡ /mnt/d/proj", () => {
-    const shell = { root: "/mnt/d/proj", forCwd: "/home/u/proj" }
-    const inGit = { root: "/mnt/d/proj", forCwd: "/mnt/d/proj" }
-    expect(inLine("/home/u/proj", "/mnt/d/proj", shell, inGit, "claude")).toBeNull()
-    const deeper = { root: "/mnt/d/proj", forCwd: "/mnt/d/proj/sub" }
-    expect(inLine("/home/u/proj", "/mnt/d/proj/sub", shell, deeper, "claude")).not.toBeNull()
-  })
-
-  it("a drive letter's case doesn't make another folder", () => {
-    const g = { root: "C:/proj", forCwd: "C:\\proj" }
-    expect(inLine("c:\\proj", "C:\\proj", g, g, "claude")).toBeNull()
-  })
-
   it("another repo: elsewhere (its own branch / PR)", () => {
-    const api = { root: "/w/api", forCwd: "/w/api", branch: "dev" }
+    const api = { root: "/w/api", forCwd: "/w/api", branch: "dev", prefix: "" }
     expect(inLine("/w/rts", "/w/api", repo, api, "claude")).toMatchObject({ elsewhere: true })
   })
 })

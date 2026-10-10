@@ -111,34 +111,33 @@ export function worksElsewhere(
   return !samePath(from, to) && !isInside(to, from)
 }
 
-/** Where `p` sits in `root` ("" = the root itself); undefined if not inside it. */
-function relIn(p: string, root: string): string | undefined {
-  if (samePath(p, root)) return ""
-  return isInside(p, root) ? norm(p).slice(norm(root).replace(/\/$/, "").length + 1) : undefined
-}
-
 /** The sidebar's `in` line: shown for another checkout (`elsewhere`: its own branch / PR), or
- *  another folder of the same one (a sub-project). Decided once git has answered (no flicker)
- *  and by position inside the repo's real root, so symlinked / WSL spellings don't count. */
+ *  another folder of the same one / below the shell's (`label`: where, relative). */
 export function inLine(
   shellCwd: string | undefined,
   work: string | undefined,
   shellGit: PaneGitInfo | undefined,
   inGit: PaneGitInfo | undefined,
   agent: AgentKind | undefined,
-): { elsewhere: boolean; known: PaneGitInfo } | null {
+): { elsewhere: boolean; known: PaneGitInfo; label?: string } | null {
   const known = inGitFor(inGit, work, agent)
   if (!shellCwd || !work || !known || samePath(shellCwd, work)) return null
   if (worksElsewhere(shellCwd, work, shellGit, inGit, agent)) return { elsewhere: true, known }
-  if (!known.root) return null // outside git, the same place (worksElsewhere said so)
-  // The same checkout: where each sits in it. A shell we can't place (a symlinked or WSL
-  // spelling git resolved) counts as the root.
-  const at = relIn(known.real ?? work, known.root) ?? relIn(work, known.root)
-  const shellAt =
-    (shellGit?.root &&
-      (relIn(shellGit.real ?? shellCwd, shellGit.root) ?? relIn(shellCwd, shellGit.root))) ||
-    ""
-  return at !== undefined && at !== shellAt ? { elsewhere: false, known } : null
+  // Same place or not: decided from THIS folder's answer only (an older one is for elsewhere).
+  if (known.forCwd !== work) return null
+  if (known.root) {
+    // The same checkout: git's own place of each folder in it — symlinked and WSL spellings
+    // can't fool it. Not known for either: no line (never a guess).
+    const at = known.prefix
+    const from = shellGit?.prefix
+    if (at === undefined || from === undefined || at === from) return null
+    const below = from === "" ? at : at.startsWith(from + "/") ? at.slice(from.length + 1) : ""
+    return { elsewhere: false, known, ...(below ? { label: below } : {}) }
+  }
+  // Outside git: a folder below the shell's (by real paths where known).
+  const to = known.real ?? work
+  const base = shellGit?.real ?? shellCwd
+  return isInside(to, base) ? { elsewhere: false, known } : null
 }
 
 /** The folder a pane's git views follow: the agent's checkout root while it works elsewhere. */

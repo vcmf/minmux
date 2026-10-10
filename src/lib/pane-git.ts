@@ -14,6 +14,7 @@ export interface PaneGitInfo {
   branch?: string
   root?: string // the repo's top-level folder (symlinks resolved) — identifies the checkout
   real?: string // the looked-up folder itself, symlinks resolved (host only)
+  prefix?: string // its place in the repo, from git ("" = the root): no path spelling involved
   forCwd?: string // renderer-side: the cwd this answer is for (Claude's `in` folder moves)
   kept?: boolean // renderer-side: a failed lookup kept this previous answer (only once)
   pr?: PrInfo

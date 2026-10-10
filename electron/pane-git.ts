@@ -11,11 +11,14 @@ import { wslArgs } from "./git"
 
 const exec = promisify(execFile)
 
-/** `git rev-parse --abbrev-ref HEAD --show-toplevel` → branch (null if detached) + repo root. */
-export function parseHeadInfo(out: string): { branch: string | null; root: string } | null {
-  const [branch, root] = out.trim().split(/\r?\n/)
+/** `git rev-parse --abbrev-ref HEAD --show-toplevel --show-prefix` → branch (null if
+ *  detached) + repo root + the folder's place in it ("" = the root; git resolves symlinks). */
+export function parseHeadInfo(
+  out: string,
+): { branch: string | null; root: string; prefix: string } | null {
+  const [branch, root, prefix = ""] = out.split(/\r?\n/) // the prefix line is empty at the root
   if (!branch || !root) return null
-  return { branch: branch === "HEAD" ? null : branch, root }
+  return { branch: branch === "HEAD" ? null : branch, root, prefix: prefix.replace(/\/+$/, "") }
 }
 
 /** `gh pr view --json number,state,url,isDraft` → PrInfo (null if unparseable). */
@@ -73,7 +76,7 @@ interface Cached<T> {
 }
 
 export class PaneGitService {
-  private heads = new Map<string, Cached<{ branch: string | null; root: string } | null>>()
+  private heads = new Map<string, Cached<ReturnType<typeof parseHeadInfo>>>()
   private reals = new Map<string, Cached<string | null>>()
   private prs = new Map<string, Cached<PrInfo | null>>()
   private inflight = new Map<string, Promise<unknown>>()
@@ -104,6 +107,7 @@ export class PaneGitService {
         if (!head) return // not a repo: just the real path
         if (head.branch) info.branch = head.branch
         info.root = head.root
+        info.prefix = head.prefix
         if (head.branch && !r.noPr) {
           const hit = this.prs.get(this.prKey(r, head.root, head.branch))
           if (hit?.value) info.pr = hit.value // (a stale value beats a blank while refreshing)
@@ -133,7 +137,7 @@ export class PaneGitService {
         return parseHeadInfo(
           await this.run(
             "git",
-            ["rev-parse", "--abbrev-ref", "HEAD", "--show-toplevel"],
+            ["rev-parse", "--abbrev-ref", "HEAD", "--show-toplevel", "--show-prefix"],
             r.cwd,
             r.wsl,
           ),
