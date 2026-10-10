@@ -4,7 +4,7 @@
 // stores no token); if gh is missing / logged out / there's no PR, the line just stays hidden.
 
 import { execFile } from "node:child_process"
-import { access, realpath, stat } from "node:fs/promises"
+import { access, readFile, realpath } from "node:fs/promises"
 import { promisify } from "node:util"
 import type { PaneGitInfo, PaneGitRequest, PrInfo, PrState } from "../src/lib/pane-git"
 import { wslArgs } from "./git"
@@ -71,11 +71,14 @@ export const defaultRunner: Runner = async (cmd, args, cwd, wsl) => {
 
 // How long a cached answer is trusted. An open PR can change any time; a merged/closed one
 // is effectively final; "no PR" is rechecked sometimes (one may get opened). Past HEAD_TTL a
-// branch answer is re-validated by its HEAD file's mtime (no git launch when unchanged); a
-// folder that isn't a repo is re-asked every NO_REPO_TTL (it may get `git init`ed).
+// branch answer is re-validated by its HEAD file's CONTENTS (read before git ran; no launch
+// while unchanged), but git itself re-checks it at least every RENEW_MAX (the folder may have
+// left that checkout: a removed worktree, a `git init` inside, a re-pointed symlink). A folder
+// that isn't a repo is re-asked every NO_REPO_TTL (it may get `git init`ed).
 const HEAD_TTL = 8_000
+const RENEW_MAX = 60_000
 const NO_REPO_TTL = 30_000
-const REAL_TTL = 60_000 // a folder's resolved path (symlinks) rarely changes
+const REAL_TTL = 20_000 // a folder's resolved path (symlinks): rarely changes
 const PR_TTL: Record<PrState | "none", number> = {
   open: 60_000,
   draft: 60_000,
@@ -103,11 +106,11 @@ export class PaneGitService {
   private inflight = new Map<string, Promise<unknown>>()
   // Per environment ("host" / "wsl:<distro>"): gh can be missing in one and present in another.
   private ghMissingUntil = new Map<string, number>()
-  private ghRunning = 0
-  private ghQueue: (() => void)[] = []
-  private gitRunning = 0
-  private gitQueue: (() => void)[] = []
-  private headMtimes = new Map<string, number>() // head cache key → its HEAD file's mtime
+  private gh = new Limiter(MAX_GH)
+  private git = new Limiter(MAX_GIT)
+  // head cache key → its HEAD file's contents as git answered, and when git last ran there
+  private stamps = new Map<string, { stamp: string; since: number }>()
+  private noRepo = new Set<string>() // head keys git said aren't in a repo (the longer TTL)
   private ghLoggedOut = new Set<string>() // environments where gh said "not logged in"
 
   constructor(
@@ -115,12 +118,12 @@ export class PaneGitService {
     private readonly now: () => number = Date.now,
     private readonly resolve: (p: string) => Promise<string> = realpath,
     private readonly files: {
-      mtime: (p: string) => Promise<number | null>
+      read: (p: string) => Promise<string | null>
       exists: (p: string) => Promise<boolean>
     } = {
-      mtime: (p) =>
-        stat(p).then(
-          (st) => st.mtimeMs,
+      read: (p) =>
+        readFile(p, "utf8").then(
+          (t) => t,
           () => null,
         ),
       exists: (p) =>
@@ -153,8 +156,6 @@ export class PaneGitService {
         if (head.branch && !r.noPr) {
           if (this.now() < (this.ghMissingUntil.get(env) ?? 0)) info.gh = "missing"
           else if (this.ghLoggedOut.has(env)) info.gh = "unauthenticated"
-        }
-        if (head.branch && !r.noPr) {
           const hit = this.prs.get(this.prKey(r, head.root, head.branch))
           if (hit?.value) info.pr = hit.value // (a stale value beats a blank while refreshing)
           if (!hit || this.now() - hit.at >= hit.ttl) {
@@ -180,21 +181,30 @@ export class PaneGitService {
   private async head(r: PaneGitRequest) {
     const key = `${this.envKey(r)}|${r.cwd}`
     const hit = this.heads.get(key)
-    // Expired, but its HEAD file unchanged (no checkout, no branch rename): still right — renew
-    // without launching git. (WSL: a Linux path can't be checked from Windows; relaunch.)
-    if (hit && this.now() - hit.at >= hit.ttl && hit.value?.gitDir && !r.wsl) {
-      const was = this.headMtimes.get(key)
-      if (was !== undefined && (await this.files.mtime(headFile(hit.value.gitDir))) === was) {
+    if (hit && this.now() - hit.at < hit.ttl) return hit.value
+    // Expired, but HEAD's contents unchanged since git answered (no checkout, no branch
+    // rename): still right — renew without a launch, up to RENEW_MAX. (WSL: a Linux path
+    // can't be read from Windows; relaunch.)
+    const st = this.stamps.get(key)
+    const gitDir = hit?.value?.gitDir
+    if (hit && gitDir && st && !r.wsl && this.now() - st.since < RENEW_MAX) {
+      const now = await this.once(`stamp|${key}`, () => this.files.read(headFile(gitDir)))
+      if (now !== null && now === st.stamp) {
         hit.at = this.now()
+        this.heads.delete(key) // re-insert: a renewed entry is a recently used one
+        this.heads.set(key, hit)
         return hit.value
       }
     }
-    const ttl = (v: HeadInfo | null) => (v ? HEAD_TTL : NO_REPO_TTL)
+    const ttl = (v: HeadInfo | null) => (v || !this.noRepo.has(key) ? HEAD_TTL : NO_REPO_TTL)
     return this.cached(this.heads, key, ttl, async () => {
-      let out: HeadInfo | null
+      // HEAD's contents BEFORE git runs: a checkout landing after this read makes them differ
+      // next time (read after, it could pair the new HEAD with the old branch).
+      const before = gitDir && !r.wsl ? await this.files.read(headFile(gitDir)) : null
+      let out: HeadInfo | null = null
       try {
         out = parseHeadInfo(
-          await this.withGitSlot(() =>
+          await this.git.run(() =>
             this.run(
               "git",
               [
@@ -210,17 +220,38 @@ export class PaneGitService {
             ),
           ),
         )
-      } catch {
-        out = null // not a repo (or git missing)
+        this.noRepo.delete(key)
+      } catch (e) {
+        // Not a repo: re-asked less often. Anything else (no commit yet, a timeout): soon.
+        const msg = String((e as { stderr?: string }).stderr ?? e)
+        if (/not a git repository/i.test(msg)) this.noRepo.add(key)
+        else this.noRepo.delete(key)
       }
-      // Remember HEAD's mtime as of this answer (read after git ran: a change since shows).
-      const m = out?.gitDir && !r.wsl ? await this.files.mtime(headFile(out.gitDir)) : null
-      if (m !== null) this.headMtimes.set(key, m)
-      else this.headMtimes.delete(key)
-      if (this.headMtimes.size > CACHE_MAX)
-        this.headMtimes.delete(this.headMtimes.keys().next().value!)
+      // The stamp: what HEAD said when git answered. First answer for this folder (no git dir
+      // known before): read now — a checkout in that tiny window is caught by RENEW_MAX.
+      const stamp =
+        !out?.gitDir || r.wsl
+          ? null
+          : out.gitDir === gitDir
+            ? before
+            : await this.files.read(headFile(out.gitDir))
+      // Reftable repos keep a fixed stub in HEAD (the real HEAD lives in reftable/): no shortcut.
+      if (stamp !== null && !stamp.includes("refs/heads/.invalid"))
+        this.stamps.set(key, { stamp, since: this.now() })
+      else this.stamps.delete(key)
+      if (this.stamps.size > CACHE_MAX) this.stamps.delete(this.stamps.keys().next().value!)
+      if (this.noRepo.size > CACHE_MAX) this.noRepo.delete(this.noRepo.values().next().value!)
       return out
     })
+  }
+
+  /** One in-flight run per key (a read of the same file is shared, never stacked). */
+  private once<T>(key: string, fn: () => Promise<T>): Promise<T> {
+    const running = this.inflight.get(key) as Promise<T> | undefined
+    if (running) return running
+    const p = fn().finally(() => this.inflight.delete(key))
+    this.inflight.set(key, p)
+    return p
   }
 
   private pr(r: PaneGitRequest, root: string, branch: string) {
@@ -228,7 +259,7 @@ export class PaneGitService {
     const ttl = (v: PrInfo | null) => PR_TTL[v?.state ?? "none"]
     return this.cached(this.prs, this.prKey(r, root, branch), ttl, async () => {
       if (this.now() < (this.ghMissingUntil.get(env) ?? 0)) return null
-      return this.withGhSlot(async () => {
+      return this.gh.run(async () => {
         try {
           // No branch argument: gh resolves the checked-out branch's PR from its tracking
           // config and matches the head REPO too. `gh pr view <name>` matches by head-branch
@@ -243,16 +274,19 @@ export class PaneGitService {
           return parsePrView(json)
         } catch (e) {
           const code = (e as { code?: string | number }).code
-          if (code === 4)
+          if (code === 4) {
             this.ghLoggedOut.add(env) // gh's "not logged in" exit code
-          // gh not installed (host: ENOENT; inside WSL: exit 127) → stop spawning it in this
-          // environment for a while (no PR line; no noise). But a spawn whose cwd is gone also
-          // says ENOENT — a deleted worktree must not switch PRs off for every pane.
-          else if (
+          } else if (code === 1) {
+            this.ghLoggedOut.delete(env) // gh ran logged in (e.g. "no pull requests found")
+          } else if (
+            // gh not installed (host: ENOENT; inside WSL: exit 127) → stop spawning it in this
+            // environment for a while (no PR line; no noise). But a spawn whose cwd is gone
+            // also says ENOENT — a deleted worktree mustn't switch PRs off for every pane.
             code === 127 ||
             (code === "ENOENT" && (r.wsl || (await this.files.exists(root))))
-          )
+          ) {
             this.ghMissingUntil.set(env, this.now() + GH_MISSING_BACKOFF)
+          }
           return null // no PR for this branch / not logged in / offline / no GitHub remote
         }
       })
@@ -280,26 +314,25 @@ export class PaneGitService {
     this.inflight.set(key, p)
     return p
   }
+}
 
-  private async withGitSlot<T>(fn: () => Promise<T>): Promise<T> {
-    if (this.gitRunning >= MAX_GIT) await new Promise<void>((res) => this.gitQueue.push(res))
-    this.gitRunning++
+/** At most `max` runs at once; a finished run hands its slot straight to the next waiter (so
+ *  a newcomer can't slip in between and exceed the cap). */
+class Limiter {
+  private running = 0
+  private queue: (() => void)[] = []
+  constructor(private readonly max: number) {}
+
+  async run<T>(fn: () => Promise<T>): Promise<T> {
+    if (this.running >= this.max) await new Promise<void>((res) => this.queue.push(res))
+    else this.running++
     try {
       return await fn()
     } finally {
-      this.gitRunning--
-      this.gitQueue.shift()?.()
-    }
-  }
-
-  private async withGhSlot<T>(fn: () => Promise<T>): Promise<T> {
-    if (this.ghRunning >= MAX_GH) await new Promise<void>((res) => this.ghQueue.push(res))
-    this.ghRunning++
-    try {
-      return await fn()
-    } finally {
-      this.ghRunning--
-      this.ghQueue.shift()?.()
+      const next = this.queue.shift()
+      if (next)
+        next() // the slot passes on: `running` unchanged
+      else this.running--
     }
   }
 }

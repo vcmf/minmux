@@ -250,58 +250,98 @@ describe("PaneGitService", () => {
 })
 
 describe("PaneGitService — cheap polls", () => {
-  /** A fake git whose answers carry a git dir, counting launches; fake HEAD mtimes. */
-  const setup = () => {
+  /** A fake git whose answers carry a git dir, counting launches; fake HEAD contents. */
+  const setup = (head = "ref: refs/heads/main\n") => {
     let t = 0
-    const mtimes = new Map<string, number>([["/r/.git/HEAD", 1]])
+    const heads = new Map<string, string>([["/r/.git/HEAD", head]])
     let gits = 0
     let running = 0
     let peak = 0
+    let duringGit: (() => void) | undefined
     const run: Runner = async (cmd, _args, cwd) => {
       if (cmd === "gh") throw new Error("no pull requests found")
       gits++
       running++
       peak = Math.max(peak, running)
+      duringGit?.()
       await new Promise((r) => setTimeout(r, 2))
       running--
       if (cwd.startsWith("/r")) return "main\n/r\n/r/.git\n\n"
-      throw new Error("not a git repository")
+      throw Object.assign(new Error("x"), { stderr: "fatal: not a git repository" })
     }
     const svc = new PaneGitService(
       run,
       () => t,
       async (p) => p,
       {
-        mtime: async (p) => mtimes.get(p) ?? null,
+        read: async (p) => heads.get(p) ?? null,
         exists: async () => true,
       },
     )
     return {
       svc,
       advance: (ms: number) => (t += ms),
-      mtimes,
+      heads,
       gits: () => gits,
       peak: () => peak,
+      onGit: (fn: () => void) => (duringGit = fn),
     }
   }
   const ask = (svc: PaneGitService, cwd = "/r") => svc.lookup([{ paneId: "a", cwd, noPr: true }])
 
   it("an unchanged HEAD renews the answer without launching git", async () => {
     const f = setup()
-    await ask(f.svc)
-    expect(f.gits()).toBe(1)
-    f.advance(10_000) // past the TTL
+    await ask(f.svc) // git: the answer + HEAD's contents as its stamp
+    f.advance(10_000)
     expect((await ask(f.svc)).a?.branch).toBe("main")
-    expect(f.gits()).toBe(1) // re-validated by HEAD's mtime: no launch
+    f.advance(10_000)
+    await ask(f.svc)
+    expect(f.gits()).toBe(1) // re-validated by HEAD's contents: no launch
   })
 
   it("a checkout (HEAD rewritten) relaunches git", async () => {
     const f = setup()
     await ask(f.svc)
     f.advance(10_000)
-    f.mtimes.set("/r/.git/HEAD", 2)
+    f.heads.set("/r/.git/HEAD", "ref: refs/heads/feat\n")
     await ask(f.svc)
     expect(f.gits()).toBe(2)
+  })
+
+  it("a checkout landing while git runs is caught next time (HEAD read before git)", async () => {
+    const f = setup()
+    await ask(f.svc) // git #1
+    f.advance(10_000)
+    f.heads.set("/r/.git/HEAD", "ref: refs/heads/x\n") // a checkout → git #2, HEAD read first
+    f.onGit(() => f.heads.set("/r/.git/HEAD", "ref: refs/heads/y\n")) // another, mid-launch
+    await ask(f.svc)
+    f.onGit(() => {})
+    f.advance(10_000)
+    await ask(f.svc) // the stamp is x (read before git), HEAD now says y → relaunch
+    expect(f.gits()).toBe(3)
+  })
+
+  it("git re-checks at least every minute, whatever HEAD says", async () => {
+    const f = setup()
+    await ask(f.svc) // git at t=0
+    for (let i = 0; i < 5; i++) {
+      f.advance(10_000)
+      await ask(f.svc) // renewed by the stamp (t=10…50 s)
+    }
+    expect(f.gits()).toBe(1)
+    f.advance(10_000) // 60 s since git last ran
+    await ask(f.svc)
+    expect(f.gits()).toBe(2)
+  })
+
+  it("a reftable repo (HEAD is a fixed stub) never takes the shortcut", async () => {
+    const f = setup("ref: refs/heads/.invalid\n")
+    await ask(f.svc)
+    f.advance(10_000)
+    await ask(f.svc)
+    f.advance(10_000)
+    await ask(f.svc)
+    expect(f.gits()).toBe(3)
   })
 
   it("a folder that isn't a repo is re-asked every 30 s, not every poll", async () => {
@@ -315,7 +355,7 @@ describe("PaneGitService — cheap polls", () => {
     expect(f.gits()).toBe(2)
   })
 
-  it("at most 4 git launches at a time", async () => {
+  it("at most 4 git launches at a time, exactly (a slot passes straight to the next)", async () => {
     const f = setup()
     await f.svc.lookup(
       Array.from({ length: 12 }, (_, i) => ({ paneId: `p${i}`, cwd: `/x${i}`, noPr: true })),
@@ -337,7 +377,7 @@ describe("PaneGitService — gh states", () => {
       () => t,
       async (p) => p,
       {
-        mtime: async () => null,
+        read: async () => null,
         exists: async () => rootExists,
       },
     )
@@ -349,6 +389,31 @@ describe("PaneGitService — gh states", () => {
     await svc.lookup([{ paneId: "a", cwd: "/r" }])
     await tick()
     expect((await svc.lookup([{ paneId: "a", cwd: "/r" }])).a?.gh).toBe("unauthenticated")
+  })
+
+  it("after logging in, a branch without a PR (exit 1) clears the 'log in' hint", async () => {
+    let code: number = 4
+    let t = 0
+    const run: Runner = async (cmd, _args, cwd) => {
+      if (cmd === "git") return `main\n${cwd}`
+      throw Object.assign(new Error("gh"), { code })
+    }
+    const svc = new PaneGitService(
+      run,
+      () => t,
+      async (p) => p,
+      {
+        read: async () => null,
+        exists: async () => true,
+      },
+    )
+    await svc.lookup([{ paneId: "a", cwd: "/r" }])
+    await tick()
+    code = 1 // logged in now; this branch just has no PR
+    t += 3 * 60_000 // past the "no PR" TTL
+    await svc.lookup([{ paneId: "a", cwd: "/r" }])
+    await tick()
+    expect((await svc.lookup([{ paneId: "a", cwd: "/r" }])).a?.gh).toBeUndefined()
   })
 
   it("gh missing (ENOENT with the folder there): answers say so", async () => {
