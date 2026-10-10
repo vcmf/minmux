@@ -505,7 +505,11 @@ function DirLines({
   if (!shellCwd || !work || !line) {
     return (
       <>
-        <span className="tree-sub tree-dir" title={shellCwd} onContextMenu={menuFor(shellCwd)}>
+        <span
+          className="tree-sub tree-dir"
+          title={withGhHint(shellCwd ?? "", shellGit)}
+          onContextMenu={menuFor(shellCwd)}
+        >
           <span className="tree-dir-path">
             {sessionSubline(shellCwd, home, shellGit?.branch) || "shell"}
           </span>
@@ -520,7 +524,10 @@ function DirLines({
     <>
       <span
         className="tree-sub tree-dir"
-        title={`Claude started here (the session is saved under it):\n${shellCwd}`}
+        title={withGhHint(
+          `Claude started here (the session is saved under it):\n${shellCwd}`,
+          shellGit,
+        )}
         onContextMenu={menuFor(shellCwd)}
       >
         <span className="tree-dir-label">from</span>
@@ -529,7 +536,10 @@ function DirLines({
       {shellGit?.pr && <PrLine pr={shellGit.pr} />}
       <span
         className="tree-sub tree-dir"
-        title={`Claude is working here now:\n${work.cwd}`}
+        title={withGhHint(
+          `Claude is working here now:\n${work.cwd}`,
+          line.elsewhere ? line.known : undefined,
+        )}
         onContextMenu={menuFor(work.cwd)}
       >
         <span className="tree-dir-label">in</span>
@@ -544,6 +554,14 @@ function DirLines({
       {line.elsewhere && line.known.pr && <PrLine pr={line.known.pr} />}
     </>
   )
+}
+
+/** A folder line's tooltip, plus why its PR line can't show (gh missing / logged out). */
+function withGhHint(text: string, git: PaneGitInfo | undefined): string {
+  if (git?.gh === "missing") return `${text}\n\nInstall GitHub CLI (gh) to see this branch's PR.`
+  if (git?.gh === "unauthenticated")
+    return `${text}\n\nRun \`gh auth login\` to see this branch's PR.`
+  return text
 }
 
 /** A row's hover ×: takes the meta's place while the row is hovered / focused (CSS only). */

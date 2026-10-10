@@ -225,6 +225,24 @@ describe("Sidebar — from / in folders", () => {
   })
 })
 
+describe("Sidebar — why no PR line", () => {
+  it("a folder line's tooltip says gh is missing / logged out", () => {
+    st().newTab(testShell)
+    const id = st().tabs[0]!.activeSessionId
+    st().setSessionCwd(id, "/w/term")
+    st().setPaneGit({ [id]: { root: "/w/term", branch: "main", gh: "missing" } }, [])
+    const { container, unmount } = render(<Sidebar />)
+    const line = () => container.querySelector(".tree-row .tree-dir")!
+    expect(line().getAttribute("title")).toContain("Install GitHub CLI (gh)")
+    unmount()
+    st().setPaneGit({ [id]: { root: "/w/term", branch: "main", gh: "unauthenticated" } }, [])
+    const again = render(<Sidebar />)
+    expect(again.container.querySelector(".tree-row .tree-dir")!.getAttribute("title")).toContain(
+      "gh auth login",
+    )
+  })
+})
+
 describe("Sidebar — folder lines: full path + right-click menu", () => {
   const setup = () => {
     st().newTab(testShell)
