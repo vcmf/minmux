@@ -4,25 +4,35 @@
 // stores no token); if gh is missing / logged out / there's no PR, the line just stays hidden.
 
 import { execFile } from "node:child_process"
-import { realpath } from "node:fs/promises"
+import { access, realpath, stat } from "node:fs/promises"
 import { promisify } from "node:util"
 import type { PaneGitInfo, PaneGitRequest, PrInfo, PrState } from "../src/lib/pane-git"
 import { wslArgs } from "./git"
 
 const exec = promisify(execFile)
 
-/** `git rev-parse --abbrev-ref HEAD --show-toplevel --show-prefix` → branch (null if
- *  detached) + repo root + the folder's place in it ("" = the root; git resolves symlinks). */
-export function parseHeadInfo(
-  out: string,
-): { branch: string | null; root: string; prefix?: string } | null {
+const headFile = (gitDir: string) => `${gitDir}/HEAD`
+
+export interface HeadInfo {
+  branch: string | null
+  root: string
+  gitDir?: string // the checkout's git dir (a worktree's own): its HEAD says if the branch moved
+  prefix?: string
+}
+
+/** `git rev-parse --abbrev-ref HEAD --show-toplevel --absolute-git-dir --show-prefix` →
+ *  branch (null if detached) + repo root + git dir + the folder's place in the repo ("" = the
+ *  root; git resolves symlinks). */
+export function parseHeadInfo(out: string): HeadInfo | null {
   // git ends its output with a newline: drop that one, so a missing prefix line stays missing
   // (at the root the prefix line is there, just empty).
-  const [branch, root, prefix] = out.replace(/\r?\n$/, "").split(/\r?\n/)
+  const [branch, root, gitDir, prefix] = out.replace(/\r?\n$/, "").split(/\r?\n/)
   if (!branch || !root) return null
-  const head = { branch: branch === "HEAD" ? null : branch, root }
+  const head: HeadInfo = { branch: branch === "HEAD" ? null : branch, root }
+  if (gitDir) head.gitDir = gitDir
   // No prefix line at all: unknown (never taken for the root).
-  return prefix === undefined ? head : { ...head, prefix: prefix.replace(/\/+$/, "") }
+  if (prefix !== undefined) head.prefix = prefix.replace(/\/+$/, "")
+  return head
 }
 
 /** `gh pr view --json number,state,url,isDraft` → PrInfo (null if unparseable). */
@@ -60,8 +70,12 @@ export const defaultRunner: Runner = async (cmd, args, cwd, wsl) => {
 }
 
 // How long a cached answer is trusted. An open PR can change any time; a merged/closed one
-// is effectively final; "no PR" is rechecked sometimes (one may get opened).
+// is effectively final; "no PR" is rechecked sometimes (one may get opened). Past HEAD_TTL a
+// branch answer is re-validated by its HEAD file's mtime (no git launch when unchanged); a
+// folder that isn't a repo is re-asked every NO_REPO_TTL (it may get `git init`ed).
 const HEAD_TTL = 8_000
+const NO_REPO_TTL = 30_000
+const REAL_TTL = 60_000 // a folder's resolved path (symlinks) rarely changes
 const PR_TTL: Record<PrState | "none", number> = {
   open: 60_000,
   draft: 60_000,
@@ -71,6 +85,9 @@ const PR_TTL: Record<PrState | "none", number> = {
 }
 const GH_MISSING_BACKOFF = 10 * 60_000
 const MAX_GH = 2 // concurrent gh processes (each is a network call)
+// Concurrent git launches: a launch blocks main's event loop for a few ms (the spawn itself),
+// so a poll over many terminals is spread out instead of landing as one long stall.
+const MAX_GIT = 4
 const CACHE_MAX = 256 // entries per cache — bounds memory as terminals visit many folders
 
 interface Cached<T> {
@@ -88,11 +105,30 @@ export class PaneGitService {
   private ghMissingUntil = new Map<string, number>()
   private ghRunning = 0
   private ghQueue: (() => void)[] = []
+  private gitRunning = 0
+  private gitQueue: (() => void)[] = []
+  private headMtimes = new Map<string, number>() // head cache key → its HEAD file's mtime
+  private ghLoggedOut = new Set<string>() // environments where gh said "not logged in"
 
   constructor(
     private readonly run: Runner = defaultRunner,
     private readonly now: () => number = Date.now,
     private readonly resolve: (p: string) => Promise<string> = realpath,
+    private readonly files: {
+      mtime: (p: string) => Promise<number | null>
+      exists: (p: string) => Promise<boolean>
+    } = {
+      mtime: (p) =>
+        stat(p).then(
+          (st) => st.mtimeMs,
+          () => null,
+        ),
+      exists: (p) =>
+        access(p).then(
+          () => true,
+          () => false,
+        ),
+    },
   ) {}
 
   /** Branch + PR for each requested terminal, plus its real path (symlinks resolved — host
@@ -112,6 +148,12 @@ export class PaneGitService {
         if (head.branch) info.branch = head.branch
         info.root = head.root
         if (head.prefix !== undefined) info.prefix = head.prefix
+        // Why no PR line can show here (the sidebar says so on hover).
+        const env = this.envKey(r)
+        if (head.branch && !r.noPr) {
+          if (this.now() < (this.ghMissingUntil.get(env) ?? 0)) info.gh = "missing"
+          else if (this.ghLoggedOut.has(env)) info.gh = "unauthenticated"
+        }
         if (head.branch && !r.noPr) {
           const hit = this.prs.get(this.prKey(r, head.root, head.branch))
           if (hit?.value) info.pr = hit.value // (a stale value beats a blank while refreshing)
@@ -128,27 +170,56 @@ export class PaneGitService {
   // The folder's real path (host only: a WSL path can't be resolved from Windows).
   private real(r: PaneGitRequest) {
     if (r.wsl) return Promise.resolve(null)
-    return this.cached(this.reals, r.cwd, HEAD_TTL, () => this.resolve(r.cwd).catch(() => null))
+    return this.cached(this.reals, r.cwd, REAL_TTL, () => this.resolve(r.cwd).catch(() => null))
   }
 
   private envKey = (r: PaneGitRequest) => (r.wsl ? `wsl:${r.wsl.distro ?? ""}` : "host")
   private prKey = (r: PaneGitRequest, root: string, branch: string) =>
     `${this.envKey(r)}|${root}|${branch}`
 
-  private head(r: PaneGitRequest) {
-    return this.cached(this.heads, `${this.envKey(r)}|${r.cwd}`, HEAD_TTL, async () => {
+  private async head(r: PaneGitRequest) {
+    const key = `${this.envKey(r)}|${r.cwd}`
+    const hit = this.heads.get(key)
+    // Expired, but its HEAD file unchanged (no checkout, no branch rename): still right — renew
+    // without launching git. (WSL: a Linux path can't be checked from Windows; relaunch.)
+    if (hit && this.now() - hit.at >= hit.ttl && hit.value?.gitDir && !r.wsl) {
+      const was = this.headMtimes.get(key)
+      if (was !== undefined && (await this.files.mtime(headFile(hit.value.gitDir))) === was) {
+        hit.at = this.now()
+        return hit.value
+      }
+    }
+    const ttl = (v: HeadInfo | null) => (v ? HEAD_TTL : NO_REPO_TTL)
+    return this.cached(this.heads, key, ttl, async () => {
+      let out: HeadInfo | null
       try {
-        return parseHeadInfo(
-          await this.run(
-            "git",
-            ["rev-parse", "--abbrev-ref", "HEAD", "--show-toplevel", "--show-prefix"],
-            r.cwd,
-            r.wsl,
+        out = parseHeadInfo(
+          await this.withGitSlot(() =>
+            this.run(
+              "git",
+              [
+                "rev-parse",
+                "--abbrev-ref",
+                "HEAD",
+                "--show-toplevel",
+                "--absolute-git-dir",
+                "--show-prefix",
+              ],
+              r.cwd,
+              r.wsl,
+            ),
           ),
         )
       } catch {
-        return null // not a repo (or git missing)
+        out = null // not a repo (or git missing)
       }
+      // Remember HEAD's mtime as of this answer (read after git ran: a change since shows).
+      const m = out?.gitDir && !r.wsl ? await this.files.mtime(headFile(out.gitDir)) : null
+      if (m !== null) this.headMtimes.set(key, m)
+      else this.headMtimes.delete(key)
+      if (this.headMtimes.size > CACHE_MAX)
+        this.headMtimes.delete(this.headMtimes.keys().next().value!)
+      return out
     })
   }
 
@@ -168,14 +239,20 @@ export class PaneGitService {
             root,
             r.wsl,
           )
+          this.ghLoggedOut.delete(env)
           return parsePrView(json)
         } catch (e) {
-          // gh not installed (host: ENOENT; inside WSL: exit 127) → stop spawning it in this
-          // environment for a while (no PR line; no noise).
           const code = (e as { code?: string | number }).code
-          if (code === "ENOENT" || code === 127) {
+          if (code === 4)
+            this.ghLoggedOut.add(env) // gh's "not logged in" exit code
+          // gh not installed (host: ENOENT; inside WSL: exit 127) → stop spawning it in this
+          // environment for a while (no PR line; no noise). But a spawn whose cwd is gone also
+          // says ENOENT — a deleted worktree must not switch PRs off for every pane.
+          else if (
+            code === 127 ||
+            (code === "ENOENT" && (r.wsl || (await this.files.exists(root))))
+          )
             this.ghMissingUntil.set(env, this.now() + GH_MISSING_BACKOFF)
-          }
           return null // no PR for this branch / not logged in / offline / no GitHub remote
         }
       })
@@ -202,6 +279,17 @@ export class PaneGitService {
     })
     this.inflight.set(key, p)
     return p
+  }
+
+  private async withGitSlot<T>(fn: () => Promise<T>): Promise<T> {
+    if (this.gitRunning >= MAX_GIT) await new Promise<void>((res) => this.gitQueue.push(res))
+    this.gitRunning++
+    try {
+      return await fn()
+    } finally {
+      this.gitRunning--
+      this.gitQueue.shift()?.()
+    }
   }
 
   private async withGhSlot<T>(fn: () => Promise<T>): Promise<T> {
