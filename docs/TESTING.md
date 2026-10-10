@@ -48,6 +48,22 @@ Both tsconfigs are `strict`; the renderer one adds `noUncheckedIndexedAccess`.
   chunk size to force lines across chunk boundaries.
 - **Test the invariants, not just the happy path:** "same reference when nothing changed",
   "a stale / out-of-order event is ignored", "an older build can still read this file".
+- **Never sleep, then assert.** A fixed delay (`await sleep(30); expect(…)`) passes on a quiet
+  machine and fails under load: the full suite, the pre-push hook, or two runs at once (worktrees
+  share `node_modules`). Wait for the condition instead:
+  - **Code you own:** expose when it's done (`AgentMetaTracker.idle()`) and await that.
+  - **The OS or a library** (fs.watch, chokidar, a killed process group): poll the condition
+    with a generous cap. Retry the action if one try can be missed; e.g. a watcher starts
+    asynchronously, so keep writing until it reports.
+  - **A child process:** have it print "ready" when its setup is done; don't guess.
+  - **Fire-and-forget writes:** wait for the folder to go quiet (no temp file, nothing new for a
+    moment). Delete test folders with `maxRetries`, since a late write can refill one mid-delete
+    (`ENOTEMPTY`).
+  - **Shared paths:** give each test process its own (pid + thread), so parallel runs can't
+    delete each other's files.
+
+  A short sleep before a _negative_ assertion ("nothing else happened") is fine: under load it
+  can only pass when it shouldn't, never fail when it shouldn't.
 
 ## 4. Verifying in the real app
 

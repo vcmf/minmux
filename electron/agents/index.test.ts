@@ -36,7 +36,7 @@ describe("agent registry", () => {
         for (const w of spec.shell.wslenv) expect(spec.shell.env).toContain(w.replace(/\/.*$/, ""))
       }
     } finally {
-      fs.rmSync(dir, { recursive: true, force: true })
+      fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })
     }
   })
 })

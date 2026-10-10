@@ -10,7 +10,7 @@ beforeAll(() => {
   fs.mkdirSync(path.join(tmp, "sub"))
   fs.writeFileSync(path.join(tmp, "a.txt"), "")
 })
-afterAll(() => fs.rmSync(tmp, { recursive: true, force: true }))
+afterAll(() => fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }))
 
 describe("handleFsRequest", () => {
   it("readdir replies with the bounded listing", async () => {
@@ -219,8 +219,15 @@ describe("Watches (in the fs worker)", () => {
     const out: FsEvent[] = []
     const w = new Watches((e) => out.push(e))
     w.add(tmp)
-    fs.writeFileSync(path.join(tmp, "new.txt"), "")
-    await new Promise((r) => setTimeout(r, WATCH_BATCH_MS + 400))
+    // macOS FSEvents registers asynchronously: a write right after add() can go unseen, and a
+    // busy machine delays delivery. So keep creating files until one is reported (~3.5 s max,
+    // under the 5 s test timeout so a failure reports the assertion).
+    const seen = () => out.some((e) => e.event === "changed" && e.dirs.includes(tmp))
+    const deadline = Date.now() + 3500 // by the clock, under the 5 s test timeout
+    for (let i = 0; !seen() && Date.now() < deadline; i++) {
+      fs.writeFileSync(path.join(tmp, `new-${i}.txt`), "")
+      await new Promise((r) => setTimeout(r, WATCH_BATCH_MS / 2))
+    }
     w.closeAll()
     expect(out).toContainEqual({ event: "changed", dirs: [tmp] })
   })

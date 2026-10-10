@@ -59,6 +59,23 @@ describe("parseProcs", () => {
   })
 })
 
+/** Start `sh -c script` and resolve once it printed "ready" (its trap is installed) — not after
+ *  a guessed delay, which a busy machine outruns. */
+const spawnReady = (script: string, detached = false) => {
+  const child = spawn("sh", ["-c", script], { detached, stdio: ["ignore", "pipe", "ignore"] })
+  const ready = new Promise<void>((resolve, reject) => {
+    let out = ""
+    child.stdout!.on("data", (d: Buffer) => {
+      out += d.toString()
+      if (out.includes("ready")) resolve()
+    })
+    // Dead before it got ready: fail now, not as a test timeout.
+    child.on("error", reject)
+    child.on("exit", (code) => reject(new Error(`exited (${code}) before "ready"`)))
+  })
+  return { child, ready }
+}
+
 describe.skipIf(process.platform === "win32")("posixProcs + endProcs (real processes)", () => {
   const spawned: number[] = []
   afterEach(() => {
@@ -66,13 +83,13 @@ describe.skipIf(process.platform === "win32")("posixProcs + endProcs (real proce
   })
 
   it("SIGKILLs an agent that ignores HUP, TERM and INT", async () => {
-    const child = spawn("sh", ["-c", 'trap "" HUP TERM INT; while :; do sleep 0.05; done'], {
-      stdio: "ignore",
-    })
+    const { child, ready } = spawnReady(
+      'trap "" HUP TERM INT; echo ready; while :; do sleep 0.05; done',
+    )
     const pid = child.pid!
     spawned.push(pid)
     const gone = new Promise((r) => child.on("exit", (_c, sig) => r(sig)))
-    await sleep(100) // let the trap install
+    await ready // the trap is installed
     for (const sig of ["SIGHUP", "SIGTERM", "SIGINT"] as const) process.kill(pid, sig)
     expect(posixProcs.alive(pid)).toBe(true)
     expect(await endProcs([{ pid }], posixProcs, { graceMs: 150 })).toEqual([pid])
@@ -89,18 +106,28 @@ describe.skipIf(process.platform === "win32")("posixProcs + endProcs (real proce
   })
 
   it("SIGKILLs a stuck agent with its foreground job (what it started goes too)", async () => {
-    const child = spawn(
-      "sh",
-      ["-c", 'trap "" HUP TERM INT; sleep 30 & while :; do sleep 0.05; done'],
-      { detached: true, stdio: "ignore" }, // a job of its own, as a shell starts one
+    const { child, ready } = spawnReady(
+      'trap "" HUP TERM INT; sleep 30 & echo ready; while :; do sleep 0.05; done',
+      true, // a job of its own, as a shell starts one
     )
     const pid = child.pid!
     spawned.push(pid)
-    await sleep(100)
+    await ready
     expect(await endProcs([{ pid, pgid: pid }], posixProcs, { graceMs: 50 })).toEqual([pid])
     await new Promise((r) => child.on("exit", r))
-    await sleep(50)
-    expect(() => process.kill(-pid, 0)).toThrow() // its `sleep 30` went with it
+    // Its `sleep 30` went with it — the OS reaps a killed group asynchronously (slower when
+    // busy): poll for it to be gone rather than guessing a delay.
+    const alive = () => {
+      try {
+        process.kill(-pid, 0)
+        return true
+      } catch {
+        return false
+      }
+    }
+    const deadline = Date.now() + 3500 // by the clock, under the 5 s test timeout
+    while (alive() && Date.now() < deadline) await sleep(10)
+    expect(() => process.kill(-pid, 0)).toThrow()
   })
 
   it("a ps that fails outright rejects (reported, never read as no agents)", async () => {

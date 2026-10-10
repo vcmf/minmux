@@ -27,7 +27,7 @@ describe("AgentHints", () => {
       fs.writeFileSync(f, "{not json")
       expect(await new AgentHints(f).get("codex")).toEqual({ dismissals: 0, never: false })
     } finally {
-      fs.rmSync(dir, { recursive: true, force: true })
+      fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })
     }
   })
 })

@@ -29,7 +29,7 @@ describe("UserNames", () => {
       await junk.loaded
       expect(junk.has("ses_c")).toBe(true) // junk skipped
     } finally {
-      fs.rmSync(dir, { recursive: true, force: true })
+      fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })
     }
   })
 
@@ -44,7 +44,7 @@ describe("UserNames", () => {
       expect(n.has("ses_old")).toBe(true)
       expect(n.has("ses_new")).toBe(true)
     } finally {
-      fs.rmSync(dir, { recursive: true, force: true })
+      fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })
     }
   })
 

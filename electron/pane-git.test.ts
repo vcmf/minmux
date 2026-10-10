@@ -41,6 +41,8 @@ describe("parsePrView", () => {
   })
 })
 
+let ghRunning = 0 // gh calls in flight, across fakes (the PR lookups run in the background)
+
 /** A fake runner: git answers per cwd, gh per checked-out branch (of that cwd); counts calls. */
 function fake(opts: {
   heads?: Record<string, string> // cwd → rev-parse output (absent = not a repo)
@@ -58,18 +60,33 @@ function fake(opts: {
       return h
     }
     ghArgs.push(args)
-    if (opts.ghDelay) await new Promise((r) => setTimeout(r, opts.ghDelay))
-    if (opts.ghMissing) throw Object.assign(new Error("gh missing"), { code: opts.ghMissing })
-    const branch = opts.heads?.[cwd]?.split("\n")[0] ?? ""
-    const pr = opts.prs?.[branch]
-    if (!pr) throw new Error(`no pull requests found for branch "${branch}"`)
-    return JSON.stringify(pr)
+    ghRunning++
+    try {
+      if (opts.ghDelay) await new Promise((r) => setTimeout(r, opts.ghDelay))
+      if (opts.ghMissing) throw Object.assign(new Error("gh missing"), { code: opts.ghMissing })
+      const branch = opts.heads?.[cwd]?.split("\n")[0] ?? ""
+      const pr = opts.prs?.[branch]
+      if (!pr) throw new Error(`no pull requests found for branch "${branch}"`)
+      return JSON.stringify(pr)
+    } finally {
+      ghRunning--
+    }
   }
   return { run, calls, ghArgs, gh: () => calls.filter((c) => c.startsWith("gh")).length }
 }
 
 const PR51 = { number: 51, state: "MERGED", url: "https://x/pull/51", isDraft: false }
-const tick = () => new Promise((r) => setTimeout(r, 15))
+/** Let the background PR lookups finish: until no gh call runs (a few turns for the cache to
+ *  settle), up to 3.5 s — not a guessed delay. */
+const tick = async () => {
+  const turn = () => new Promise((r) => setTimeout(r, 5))
+  const deadline = Date.now() + 3500 // by the clock: a busy machine stretches each turn
+  await turn()
+  while (ghRunning > 0 && Date.now() < deadline) await turn()
+  // Say so, rather than let the test run into its timeout (or assert on a half-done state).
+  if (ghRunning > 0) throw new Error(`tick: ${ghRunning} gh call(s) still running after 3.5 s`)
+  await turn()
+}
 
 describe("PaneGitService", () => {
   it("noPr: branch + root only, no gh call (collapsed sidebar)", async () => {
@@ -125,6 +142,7 @@ describe("PaneGitService", () => {
     const t0 = Date.now()
     expect(await svc.lookup([{ paneId: "a", cwd: "/r" }])).toMatchObject({ a: { branch: "x" } })
     expect(Date.now() - t0).toBeLessThan(500)
+    await tick() // its background gh mustn't run into the next test's wait
   })
 
   it("asks gh for the CHECKED-OUT branch's PR (no name arg — a fork's same-named PR can't match)", async () => {
@@ -204,8 +222,10 @@ describe("PaneGitService", () => {
   it("runs at most 2 gh processes at once", async () => {
     let running = 0
     let peak = 0
+    let ghCalls = 0
     const run: Runner = async (cmd, _args, cwd) => {
       if (cmd === "git") return `b\n${cwd}`
+      ghCalls++
       running++
       peak = Math.max(peak, running)
       await new Promise((r) => setTimeout(r, 5))
@@ -214,7 +234,11 @@ describe("PaneGitService", () => {
     }
     const svc = new PaneGitService(run)
     await svc.lookup(Array.from({ length: 6 }, (_, i) => ({ paneId: `p${i}`, cwd: `/c${i}` })))
-    await new Promise((r) => setTimeout(r, 60))
+    // The PR lookups run in the background: wait until all six have run (not a guessed delay).
+    const deadline = Date.now() + 3500
+    while ((ghCalls < 6 || running > 0) && Date.now() < deadline)
+      await new Promise((r) => setTimeout(r, 10))
+    expect(ghCalls).toBe(6)
     expect(peak).toBe(2)
   })
 })

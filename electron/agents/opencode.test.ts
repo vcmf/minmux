@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, afterAll } from "vitest"
+import { threadId } from "node:worker_threads"
 import { execFileSync, spawnSync } from "node:child_process"
 import fs from "node:fs"
 import os from "node:os"
@@ -43,7 +44,7 @@ const has = (bin: string) => spawnSync("which", [bin]).status === 0
 
 describe("the rc wrapper keeps our plugin in OpenCode's inline config", () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "minmux-oc-rc-"))
-  afterAll(() => fs.rmSync(dir, { recursive: true, force: true }))
+  afterAll(() => fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }))
   const url = pathToFileURL(path.join(dir, "a b", "agents", PLUGIN_FILE)).href
   // A fake `opencode` that prints the config it was started with.
   fs.writeFileSync(path.join(dir, "opencode"), '#!/bin/sh\nprintf %s "$OPENCODE_CONFIG_CONTENT"\n')
@@ -99,9 +100,12 @@ describe("the plugin (loaded from its source, as OpenCode does)", () => {
   }
   type Factory = (ctx: unknown) => Promise<Hooks>
   const LOADED = Symbol.for("minmux.opencode")
-  // Vite only loads modules from the project: the copies go in its cache dir.
-  const mods = path.resolve("node_modules/.cache/minmux-opencode-test")
+  // Vite only loads modules from the project: the copies go in its cache dir — one folder per
+  // test process, so parallel runs (a pre-push hook beside `make test`, worktrees sharing
+  // node_modules) never delete each other's copies.
+  const mods = path.resolve(`node_modules/.cache/minmux-opencode-test/${process.pid}-${threadId}`)
   fs.mkdirSync(mods, { recursive: true })
+  afterAll(() => fs.rmSync(mods, { recursive: true, force: true, maxRetries: 10, retryDelay: 20 }))
   let root = ""
   let load: () => Promise<Factory>
   const saved = ["MINMUX_AGENT_EVENTS", "MINMUX_PANE_ID", "MINMUX_RESUME_SESSION"].map(
@@ -113,7 +117,7 @@ describe("the plugin (loaded from its source, as OpenCode does)", () => {
     let n = 0
     // A fresh file per load: a fresh module (its own state), as each OpenCode process has.
     load = async () => {
-      const file = path.join(mods, `plugin-${process.pid}-${n++}.mjs`)
+      const file = path.join(mods, `plugin-${n++}.mjs`)
       fs.writeFileSync(file, OPENCODE_PLUGIN)
       const mod = (await import(/* @vite-ignore */ file)) as { MinmuxPlugin: Factory }
       return mod.MinmuxPlugin
@@ -122,23 +126,54 @@ describe("the plugin (loaded from its source, as OpenCode does)", () => {
     process.env.MINMUX_PANE_ID = "pane-1"
     delete (globalThis as Record<symbol, unknown>)[LOADED]
   })
-  afterEach(() => {
+  afterEach(async () => {
+    // A test may end with a write still on its way (a load it didn't wait for): let the folder
+    // go quiet first, or the delete races it (ENOTEMPTY).
+    await quiet(() => true, 30, 3000)
     for (const [k, v] of saved) {
       if (v === undefined) delete process.env[k]
       else process.env[k] = v
     }
     delete (globalThis as Record<symbol, unknown>)[LOADED]
-    fs.rmSync(root, { recursive: true, force: true })
-    fs.rmSync(mods, { recursive: true, force: true })
+    // A write still landing can refill a folder mid-delete (ENOTEMPTY): retry (Node's own).
+    fs.rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 20 })
+    fs.rmSync(mods, { recursive: true, force: true, maxRetries: 10, retryDelay: 20 })
     fs.mkdirSync(mods, { recursive: true })
   })
-  const files = () => fs.readdirSync(path.join(root, "opencode")).sort()
-  /** Every drop, in name order, once the fire-and-forget writes have landed. */
-  const drops = async (n: number) => {
-    for (let i = 0; i < 100 && files().filter((f) => f.endsWith(".json")).length < n; i++)
+  const files = () => {
+    try {
+      return fs.readdirSync(path.join(root, "opencode")).sort()
+    } catch {
+      return [] // already gone
+    }
+  }
+  const settled = () => files().filter((f) => f.endsWith(".json"))
+  /** The plugin's writes are fire-and-forget (temp + rename): wait until no temp file is
+   *  mid-write and nothing new has appeared for `ms` (`long` ms until `enough()`), or `cap`
+   *  ms in all. A busy machine only makes this slower, never wrong. */
+  const quiet = async (enough: () => boolean, ms: number, cap: number, long = ms) => {
+    const deadline = Date.now() + cap
+    let last = ""
+    let since = Date.now()
+    while (Date.now() < deadline) {
+      const all = files() // one listing per poll
+      const now = all.join("|")
+      if (now !== last) {
+        last = now
+        since = Date.now()
+      }
+      const busy = all.some((f) => !f.endsWith(".json"))
+      if (!busy && Date.now() - since >= (enough() ? ms : long)) return
       await new Promise((r) => setTimeout(r, 10))
-    await new Promise((r) => setTimeout(r, 20))
-    const names = files().filter((f) => f.endsWith(".json"))
+    }
+  }
+  /** Every drop, in name order, once exactly-expected `n` have landed and the folder is quiet
+   *  (so a stray extra one shows too). Never "whatever came in 500 ms": fewer than `n` waits to
+   *  the cap (under the test's 5 s) and the assertion then says what's missing. */
+  const drops = async (n: number) => {
+    await quiet(() => settled().length >= n, 60, 4000, Infinity)
+    const names = settled()
+    expect(names).toHaveLength(n) // exactly: a missing or stray drop is a failure, not a wait
     names.sort((a, b) => Number(a.split(".")[2]) - Number(b.split(".")[2]))
     return names.map((f) => JSON.parse(fs.readFileSync(path.join(root, "opencode", f), "utf8")))
   }
@@ -323,7 +358,7 @@ describe("the plugin (loaded from its source, as OpenCode does)", () => {
     sess("ses_r", { input: 9847, output: 33, reasoning: 7, cache: { read: 1938, write: 5 } }) // same
     e(ev("session.created", { info: { id: "ses_c", parentID: "ses_r" } }))
     msg("ses_c", "m2", { input: 500, output: 9, reasoning: 0, cache: { read: 0, write: 0 } }, 2)
-    const out = (await drops(9)).filter((d) => d.e === "tokens")
+    const out = (await drops(8)).filter((d) => d.e === "tokens")
     expect(out).toEqual([
       { v: 1, e: "tokens", sessionID: "ses_r", context: 11790, output: 0, directory: "/base" },
       { v: 1, e: "tokens", sessionID: "ses_r", context: 11790, output: 40, directory: "/base" },
@@ -393,7 +428,7 @@ describe("the plugin (loaded from its source, as OpenCode does)", () => {
     e(ev("session.created", { info: { id: "ses_b" } })) // /new: ses_a ends (idle)
     e(ev("session.updated", { info: { id: "ses_a", title: "x" } }))
     status("ses_a", "busy") // picked again
-    const out = await drops(13)
+    const out = await drops(12)
     const a = out.filter(
       (d) => d.sessionID === "ses_a" && (d.e === "tokens" || d.e === "start" || d.e === "end"),
     )
@@ -431,7 +466,7 @@ describe("the plugin (loaded from its source, as OpenCode does)", () => {
     const h = await (await load())({ directory: "/repo", client: { session: { get } } })
     h.event!(ev("session.created", { info: { id: "ses_new" } })) // /new before the answer
     answer({ data: { id: SES, title: "old", directory: "/repo" } })
-    const out = await drops(4)
+    const out = await drops(3)
     expect(out.filter((d) => d.e === "start").map((d) => d.sessionID)).toEqual(["ses_new"])
   })
 
@@ -561,7 +596,7 @@ describe("the plugin (loaded from its source, as OpenCode does)", () => {
     const patchText =
       "*** Begin Patch\n*** Update File: /repo/a.ts\n@@\n-SECRET\n*** Add File: /repo/b.ts\n+x\n*** End Patch"
     before({ tool: "apply_patch", sessionID: "s" }, { args: { patchText } })
-    const out = (await drops(4)).filter((d) => d.e === "tool")
+    const out = (await drops(3)).filter((d) => d.e === "tool")
     expect(out[0]).not.toHaveProperty("paths")
     expect(out[1]!.paths).toEqual(["/repo/a.ts", "/repo/b.ts"])
     expect(JSON.stringify(out)).not.toContain("SECRET")
@@ -578,7 +613,7 @@ describe("the plugin (loaded from its source, as OpenCode does)", () => {
       }),
     )
     h.event!(ev("permission.replied", { requestID: "per_1", sessionID: "s", reply: "once" }))
-    const out = (await drops(4)).filter((d) => d.e === "permission")
+    const out = (await drops(3)).filter((d) => d.e === "permission")
     expect(out[0]).toMatchObject({
       e: "permission",
       phase: "asked",
@@ -646,7 +681,7 @@ describe("the opencode adapter", () => {
       process.env.OPENCODE_CONFIG_CONTENT = "{jsonc /* comment */}"
       expect(a.env()).toEqual({}) // theirs wins: left as it is, and no wrapper either
     } finally {
-      fs.rmSync(cfg, { recursive: true, force: true })
+      fs.rmSync(cfg, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })
     }
   })
 })
@@ -882,7 +917,7 @@ describe("normalizeOpencodeDrop", () => {
 
 describe("the rc wrapper passes a resume's id to that one run", () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "minmux-oc-rs-"))
-  afterAll(() => fs.rmSync(dir, { recursive: true, force: true }))
+  afterAll(() => fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }))
   fs.writeFileSync(
     path.join(dir, "opencode"),
     '#!/bin/sh\nprintf "run=[%s] " "$MINMUX_RESUME_SESSION"\n',

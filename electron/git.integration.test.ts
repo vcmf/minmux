@@ -64,7 +64,8 @@ describe.skipIf(!hasGit)("git module (real repo)", () => {
   })
 
   afterAll(() => {
-    for (const d of [repo, plain]) if (d) fs.rmSync(d, { recursive: true, force: true })
+    for (const d of [repo, plain])
+      if (d) fs.rmSync(d, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })
   })
 
   it("reports branch + changed files with +/- counts", async () => {
@@ -131,7 +132,7 @@ describe.skipIf(!hasGit)(
       fs.writeFileSync(path.join(dir, "docs", ".env"), "SECRET=1\n") // ignored
       fs.writeFileSync(path.join(dir, "sub", "new.txt"), "1\n2\n")
     })
-    afterAll(() => fs.rmSync(dir, { recursive: true, force: true }))
+    afterAll(() => fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }))
 
     it("is reported once as a folder, not file by file; tracked changes still listed", async () => {
       const st = await gitStatus(dir)
@@ -155,7 +156,7 @@ describe.skipIf(!hasGit)(
         ])
         expect(st.files.some((f) => f.path === "docs" && f.isDir)).toBe(true) // 300 files: one row
       } finally {
-        fs.rmSync(feat, { recursive: true, force: true })
+        fs.rmSync(feat, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })
       }
     })
 
@@ -186,7 +187,7 @@ describe.skipIf(!hasGit)("gitDiff in a repo with no commits yet", () => {
       const diff = await gitDiff(d, "d/f")
       expect(diff.filter((l) => l.type === "add").map((l) => l.text)).toEqual(["one", "two"])
     } finally {
-      fs.rmSync(d, { recursive: true, force: true })
+      fs.rmSync(d, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })
     }
   })
 
@@ -199,7 +200,7 @@ describe.skipIf(!hasGit)("gitDiff in a repo with no commits yet", () => {
       const out = await gitDiff(d, "s.txt")
       expect(out.some((l) => l.type === "add" && l.text === "staged")).toBe(true)
     } finally {
-      fs.rmSync(d, { recursive: true, force: true })
+      fs.rmSync(d, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })
     }
   })
 })
@@ -214,7 +215,7 @@ describe.skipIf(!hasGit)("gitDiff is bounded and honest", () => {
     git("add", "t.txt")
     git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "t")
   })
-  afterAll(() => fs.rmSync(d, { recursive: true, force: true }))
+  afterAll(() => fs.rmSync(d, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }))
 
   it("a glob-looking name (app/[id]) diffs only that file", async () => {
     fs.mkdirSync(path.join(d, "app", "[id]"), { recursive: true })

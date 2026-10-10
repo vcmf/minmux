@@ -82,7 +82,7 @@ describe("codexHookArgs", () => {
       expect(out).toBe(`${weird}\ncodex\n`)
       expect(cmd.startsWith("exec node ")).toBe(true) // node's parent is then Codex itself
     } finally {
-      fs.rmSync(dir, { recursive: true, force: true })
+      fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })
     }
   })
 })
@@ -124,7 +124,7 @@ describe("codex() wrapper", () => {
       })
       return { out, args }
     } finally {
-      fs.rmSync(dir, { recursive: true, force: true })
+      fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })
     }
   }
   for (const shell of ["zsh", "bash"] as const)
@@ -168,7 +168,7 @@ describe("agent wrappers vs the user's aliases", () => {
         expect(r.stderr).not.toMatch(/parse error|syntax error/)
         expect(r.stdout).toContain("rc-done") // the rest of the rc still ran
       } finally {
-        fs.rmSync(dir, { recursive: true, force: true })
+        fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })
       }
     })
 })
@@ -295,7 +295,7 @@ describe("Codex tokens (rollout token_count)", () => {
       fs.appendFileSync(f, `${tc(info(2000, 80))}\n`)
       expect(await r.update(f)).toEqual({ context: 2000, output: 80, window: 258400 })
     } finally {
-      fs.rmSync(dir, { recursive: true, force: true })
+      fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })
     }
   })
 })
@@ -403,7 +403,7 @@ describe("the launch marker (approval hint)", () => {
         },
       )
     } finally {
-      fs.rmSync(dir, { recursive: true, force: true })
+      fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })
     }
   }
   it.skipIf(!tty)("is printed onto a terminal for Codex's UI, not for its other commands", () => {
@@ -430,7 +430,8 @@ describe("the codex adapter", () => {
   afterEach(() => {
     if (home === undefined) delete process.env.CODEX_HOME
     else process.env.CODEX_HOME = home
-    for (const d of dirs.splice(0)) fs.rmSync(d, { recursive: true, force: true })
+    for (const d of dirs.splice(0))
+      fs.rmSync(d, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })
   })
 
   it("install writes the drop script and args file; panes get the file's path", () => {

@@ -21,7 +21,7 @@ describe("migrateLegacyDirs", () => {
   beforeEach(() => {
     root = fs.mkdtempSync(path.join(os.tmpdir(), "legacy-migrate-"))
   })
-  afterEach(() => fs.rmSync(root, { recursive: true, force: true }))
+  afterEach(() => fs.rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }))
 
   it("copies the old state (settings, layout, ledger, localStorage) and leaves it in place", () => {
     write(at("smterm", "settings.json"), '{"theme":"x"}')
