@@ -1,4 +1,8 @@
-import { describe, it, expect } from "vitest"
+import { describe, it, expect, vi } from "vitest"
+
+// Several tests chain two waitUntil (4 s each): give them room, so a real failure reports the
+// helper's "condition not met" instead of Vitest's timeout.
+vi.setConfig({ testTimeout: 10_000 })
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"

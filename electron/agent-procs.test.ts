@@ -125,7 +125,8 @@ describe.skipIf(process.platform === "win32")("posixProcs + endProcs (real proce
         return false
       }
     }
-    for (let i = 0; i < 300 && alive(); i++) await sleep(10)
+    const deadline = Date.now() + 3500 // by the clock, under the 5 s test timeout
+    while (alive() && Date.now() < deadline) await sleep(10)
     expect(() => process.kill(-pid, 0)).toThrow()
   })
 

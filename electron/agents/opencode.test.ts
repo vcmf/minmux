@@ -173,6 +173,7 @@ describe("the plugin (loaded from its source, as OpenCode does)", () => {
   const drops = async (n: number) => {
     await quiet(() => settled().length >= n, 60, 4000, Infinity)
     const names = settled()
+    expect(names).toHaveLength(n) // exactly: a missing or stray drop is a failure, not a wait
     names.sort((a, b) => Number(a.split(".")[2]) - Number(b.split(".")[2]))
     return names.map((f) => JSON.parse(fs.readFileSync(path.join(root, "opencode", f), "utf8")))
   }

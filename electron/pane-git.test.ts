@@ -69,6 +69,8 @@ const tick = async () => {
   const deadline = Date.now() + 3500 // by the clock: a busy machine stretches each turn
   await turn()
   while (ghRunning > 0 && Date.now() < deadline) await turn()
+  // Say so, rather than let the test run into its timeout (or assert on a half-done state).
+  if (ghRunning > 0) throw new Error(`tick: ${ghRunning} gh call(s) still running after 3.5 s`)
   await turn()
 }
 
