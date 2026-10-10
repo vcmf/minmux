@@ -14,11 +14,11 @@ const settle = () => new Promise((r) => setTimeout(r, 400)) // chokidar's initia
 /** Write `file` until the watcher reports it: chokidar may still be starting (a busy machine
  *  stretches its scan past `settle`), and one missed write would read as a bug. */
 const writeUntilSeen = async (file: string, seen: () => boolean) => {
-  for (let i = 0; i < 40 && !seen(); i++) {
+  for (let i = 0; i < 28 && !seen(); i++) {
     fs.writeFileSync(file, `Host w${i}\n`)
     await new Promise((r) => setTimeout(r, 100))
   }
-  return until(seen, 1000)
+  return until(seen, 400) // with the tests' settles: under the 5 s test timeout
 }
 
 describe("createPathWatcher (real chokidar)", () => {
@@ -73,8 +73,16 @@ describe("createPathWatcher (real chokidar)", () => {
     await settle()
     w.set([cfg, sub])
     await settle()
-    const extra = path.join(sub, "work.conf")
-    expect(await writeUntilSeen(extra, () => seen.includes(extra))).toBe(true)
+    // A NEW file each try (never a rewrite): only a reported create can pass.
+    let made: string[] = []
+    const createdSeen = () => made.some((f) => seen.includes(f))
+    for (let i = 0; i < 28 && !createdSeen(); i++) {
+      const extra = path.join(sub, `work-${i}.conf`)
+      made = [...made, extra]
+      fs.writeFileSync(extra, "Host w\n")
+      await new Promise((r) => setTimeout(r, 100))
+    }
+    expect(await until(createdSeen, 400)).toBe(true)
   })
 
   it("stops reporting after close", async () => {

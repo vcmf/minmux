@@ -27,6 +27,8 @@ describe("parsePrView", () => {
   })
 })
 
+let ghRunning = 0 // gh calls in flight, across fakes (the PR lookups run in the background)
+
 /** A fake runner: git answers per cwd, gh per checked-out branch (of that cwd); counts calls. */
 function fake(opts: {
   heads?: Record<string, string> // cwd → rev-parse output (absent = not a repo)
@@ -44,18 +46,30 @@ function fake(opts: {
       return h
     }
     ghArgs.push(args)
-    if (opts.ghDelay) await new Promise((r) => setTimeout(r, opts.ghDelay))
-    if (opts.ghMissing) throw Object.assign(new Error("gh missing"), { code: opts.ghMissing })
-    const branch = opts.heads?.[cwd]?.split("\n")[0] ?? ""
-    const pr = opts.prs?.[branch]
-    if (!pr) throw new Error(`no pull requests found for branch "${branch}"`)
-    return JSON.stringify(pr)
+    ghRunning++
+    try {
+      if (opts.ghDelay) await new Promise((r) => setTimeout(r, opts.ghDelay))
+      if (opts.ghMissing) throw Object.assign(new Error("gh missing"), { code: opts.ghMissing })
+      const branch = opts.heads?.[cwd]?.split("\n")[0] ?? ""
+      const pr = opts.prs?.[branch]
+      if (!pr) throw new Error(`no pull requests found for branch "${branch}"`)
+      return JSON.stringify(pr)
+    } finally {
+      ghRunning--
+    }
   }
   return { run, calls, ghArgs, gh: () => calls.filter((c) => c.startsWith("gh")).length }
 }
 
 const PR51 = { number: 51, state: "MERGED", url: "https://x/pull/51", isDraft: false }
-const tick = () => new Promise((r) => setTimeout(r, 15))
+/** Let the background PR lookups finish: until no gh call runs (a few turns for the cache to
+ *  settle), up to 3.5 s — not a guessed delay. */
+const tick = async () => {
+  const turn = () => new Promise((r) => setTimeout(r, 5))
+  await turn()
+  for (let i = 0; i < 700 && ghRunning > 0; i++) await turn()
+  await turn()
+}
 
 describe("PaneGitService", () => {
   it("noPr: branch + root only, no gh call (collapsed sidebar)", async () => {

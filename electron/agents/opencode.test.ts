@@ -129,7 +129,7 @@ describe("the plugin (loaded from its source, as OpenCode does)", () => {
   afterEach(async () => {
     // A test may end with a write still on its way (a load it didn't wait for): let the folder
     // go quiet first, or the delete races it (ENOTEMPTY).
-    await quiet(() => true, 100, 3000)
+    await quiet(() => true, 30, 3000)
     for (const [k, v] of saved) {
       if (v === undefined) delete process.env[k]
       else process.env[k] = v
@@ -156,12 +156,13 @@ describe("the plugin (loaded from its source, as OpenCode does)", () => {
     let last = ""
     let since = Date.now()
     while (Date.now() < deadline) {
-      const now = files().join("|")
+      const all = files() // one listing per poll
+      const now = all.join("|")
       if (now !== last) {
         last = now
         since = Date.now()
       }
-      const busy = files().some((f) => !f.endsWith(".json"))
+      const busy = all.some((f) => !f.endsWith(".json"))
       if (!busy && Date.now() - since >= (enough() ? ms : long)) return
       await new Promise((r) => setTimeout(r, 10))
     }

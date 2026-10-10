@@ -150,19 +150,21 @@ export class AgentMetaTracker {
     clearTimeout(p.timer)
     p.timer = setTimeout(() => {
       p.timer = undefined
-      const read = this.refresh(paneId, p).catch(() => {})
+      const read = this.refresh(paneId, p)
       this.reads.add(read)
+      // A failure still surfaces as before (unhandled → logged); idle() just stops waiting.
       void read.finally(() => this.reads.delete(read))
     }, this.debounceMs)
   }
 
   /** Resolves once no read is scheduled or running — what's emitted then is final (tests wait
-   *  on this instead of guessing a delay). */
+   *  on this instead of guessing a delay). Uses real time: under fake timers, advance past the
+   *  debounce first. */
   async idle(): Promise<void> {
     for (;;) {
       if ([...this.panes.values()].some((p) => p.timer !== undefined))
         await new Promise((r) => setTimeout(r, this.debounceMs + 1))
-      else if (this.reads.size) await Promise.all([...this.reads])
+      else if (this.reads.size) await Promise.allSettled([...this.reads])
       else return
     }
   }

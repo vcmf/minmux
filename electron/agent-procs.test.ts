@@ -63,12 +63,15 @@ describe("parseProcs", () => {
  *  a guessed delay, which a busy machine outruns. */
 const spawnReady = (script: string, detached = false) => {
   const child = spawn("sh", ["-c", script], { detached, stdio: ["ignore", "pipe", "ignore"] })
-  const ready = new Promise<void>((resolve) => {
+  const ready = new Promise<void>((resolve, reject) => {
     let out = ""
     child.stdout!.on("data", (d: Buffer) => {
       out += d.toString()
       if (out.includes("ready")) resolve()
     })
+    // Dead before it got ready: fail now, not as a test timeout.
+    child.on("error", reject)
+    child.on("exit", (code) => reject(new Error(`exited (${code}) before "ready"`)))
   })
   return { child, ready }
 }

@@ -43,7 +43,8 @@ const plan = (
 const rmLater = (d: string) =>
   fs.rmSync(d, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 })
 
-/** Poll `cond` (a read that may throw while the file is mid-write) for up to 5 s. */
+/** Poll `cond` (a read that may throw while the file is mid-write) for up to 3.5 s — under the
+ *  5 s test timeout, so a real failure reports its assertion, not a timeout. */
 const waitFor = async (cond: () => boolean) => {
   const t0 = Date.now()
   for (;;) {
@@ -53,7 +54,7 @@ const waitFor = async (cond: () => boolean) => {
     } catch {
       ok = false
     }
-    if (ok || Date.now() - t0 > 5000) return
+    if (ok || Date.now() - t0 > 3500) return
     await new Promise((r) => setTimeout(r, 25))
   }
 }
@@ -201,10 +202,14 @@ describe("SessionLedger — round-2 rules", () => {
     const file = path.join(dir, "l.json")
     const l = new SessionLedger(file)
     l.apply(start())
-    // debounce + async write: wait for the result, not a guessed delay
-    await waitFor(() => JSON.parse(fs.readFileSync(file, "utf8")).p1?.sessionId === ID)
+    // debounce + async write of every agent's file (renamed in parallel): wait for the result
+    // and for no temp file left, not a guessed delay
+    const tmps = () => fs.readdirSync(dir).filter((f) => f.endsWith(".tmp"))
+    await waitFor(
+      () => JSON.parse(fs.readFileSync(file, "utf8")).p1?.sessionId === ID && tmps().length === 0,
+    )
     expect(JSON.parse(fs.readFileSync(file, "utf8")).p1.sessionId).toBe(ID)
-    expect(fs.readdirSync(dir).filter((f) => f.endsWith(".tmp"))).toEqual([])
+    expect(tmps()).toEqual([])
   })
 })
 

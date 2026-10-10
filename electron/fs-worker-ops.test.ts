@@ -220,13 +220,14 @@ describe("Watches (in the fs worker)", () => {
     const w = new Watches((e) => out.push(e))
     w.add(tmp)
     // macOS FSEvents registers asynchronously: a write right after add() can go unseen, and a
-    // busy machine delays delivery. So keep creating files until one is reported (4 s max).
+    // busy machine delays delivery. So keep creating files until one is reported (~3.5 s max,
+    // under the 5 s test timeout so a failure reports the assertion).
     const seen = () => out.some((e) => e.event === "changed" && e.dirs.includes(tmp))
-    for (let i = 0; i < 40 && !seen(); i++) {
+    for (let i = 0; i < 24 && !seen(); i++) {
       fs.writeFileSync(path.join(tmp, `new-${i}.txt`), "")
       await new Promise((r) => setTimeout(r, WATCH_BATCH_MS / 2))
     }
-    for (let i = 0; i < 20 && !seen(); i++) await new Promise((r) => setTimeout(r, 50))
+    for (let i = 0; i < 10 && !seen(); i++) await new Promise((r) => setTimeout(r, 50))
     w.closeAll()
     expect(out).toContainEqual({ event: "changed", dirs: [tmp] })
   })
