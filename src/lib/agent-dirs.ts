@@ -139,9 +139,9 @@ export function inLine(
     const below = from === "" ? at : at.startsWith(from + "/") ? at.slice(from.length + 1) : ""
     return { elsewhere: false, known, ...(below ? { label: below } : {}) }
   }
-  // Outside git: a folder below the shell's — by real paths when both sides have one (a
-  // resolved path against an unresolved one would never match).
-  if (known.forCwd !== work) return null
+  // Outside git (inGitFor only returns a rootless answer for this very folder): a folder below
+  // the shell's — by real paths when both sides have one (a resolved path against an
+  // unresolved one would never match).
   const both = known.real !== undefined && shellGit?.real !== undefined
   const to = both ? known.real! : work
   const base = both ? shellGit!.real! : shellCwd

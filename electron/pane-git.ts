@@ -16,7 +16,9 @@ const exec = promisify(execFile)
 export function parseHeadInfo(
   out: string,
 ): { branch: string | null; root: string; prefix?: string } | null {
-  const [branch, root, prefix] = out.split(/\r?\n/) // the prefix line is empty at the root
+  // git ends its output with a newline: drop that one, so a missing prefix line stays missing
+  // (at the root the prefix line is there, just empty).
+  const [branch, root, prefix] = out.replace(/\r?\n$/, "").split(/\r?\n/)
   if (!branch || !root) return null
   const head = { branch: branch === "HEAD" ? null : branch, root }
   // No prefix line at all: unknown (never taken for the root).

@@ -3,15 +3,22 @@ import { PaneGitService, parseHeadInfo, parsePrView, type Runner } from "./pane-
 
 describe("parseHeadInfo", () => {
   it("branch + repo root; a detached HEAD has no branch", () => {
-    expect(parseHeadInfo("feat/x\n/repo\n")).toEqual({
+    // git's output at the root: the prefix line is there, empty
+    expect(parseHeadInfo("feat/x\n/repo\n\n")).toEqual({
       branch: "feat/x",
       root: "/repo",
       prefix: "",
     })
-    expect(parseHeadInfo("HEAD\r\n/repo\r\n")).toEqual({ branch: null, root: "/repo", prefix: "" })
+    expect(parseHeadInfo("HEAD\r\n/repo\r\n\r\n")).toEqual({
+      branch: null,
+      root: "/repo",
+      prefix: "",
+    })
     // --show-prefix: the folder's place in the repo (git resolves symlinks), trailing / dropped
     expect(parseHeadInfo("main\n/repo\nout/anim/\n")?.prefix).toBe("out/anim")
-    expect(parseHeadInfo("main\n/repo")).toEqual({ branch: "main", root: "/repo" }) // unknown, not ""
+    // no prefix line at all (with or without git's final newline): unknown, not the root
+    expect(parseHeadInfo("main\n/repo\n")).toEqual({ branch: "main", root: "/repo" })
+    expect(parseHeadInfo("main\n/repo")).toEqual({ branch: "main", root: "/repo" })
     expect(parseHeadInfo("")).toBeNull()
   })
 })
