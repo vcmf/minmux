@@ -38,6 +38,26 @@ const plan = (
   bypass = false,
 ) => l.plan(ids, live, preflight, bypass)
 
+/** Remove a test folder a ledger may still flush into (its write is debounced 500 ms and async,
+ *  so it can land after the test): Node retries the delete on ENOTEMPTY for about a second. */
+const rmLater = (d: string) =>
+  fs.rmSync(d, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 })
+
+/** Poll `cond` (a read that may throw while the file is mid-write) for up to 5 s. */
+const waitFor = async (cond: () => boolean) => {
+  const t0 = Date.now()
+  for (;;) {
+    let ok: boolean
+    try {
+      ok = cond()
+    } catch {
+      ok = false
+    }
+    if (ok || Date.now() - t0 > 5000) return
+    await new Promise((r) => setTimeout(r, 25))
+  }
+}
+
 describe("resumeCommand", () => {
   const e = { sessionId: ID, cwd: "/r", updatedAt: 0 }
   it("resume by id; keeps a non-default permission mode", () => {
@@ -136,7 +156,7 @@ describe("SessionLedger — round-2 rules", () => {
   })
   afterEach(() => {
     vi.useRealTimers()
-    fs.rmSync(dir, { recursive: true, force: true })
+    rmLater(dir)
   })
 
   it("an entry carried over from the previous run is replaced by any new session", () => {
@@ -181,7 +201,8 @@ describe("SessionLedger — round-2 rules", () => {
     const file = path.join(dir, "l.json")
     const l = new SessionLedger(file)
     l.apply(start())
-    await new Promise((r) => setTimeout(r, 700)) // debounce + async write
+    // debounce + async write: wait for the result, not a guessed delay
+    await waitFor(() => JSON.parse(fs.readFileSync(file, "utf8")).p1?.sessionId === ID)
     expect(JSON.parse(fs.readFileSync(file, "utf8")).p1.sessionId).toBe(ID)
     expect(fs.readdirSync(dir).filter((f) => f.endsWith(".tmp"))).toEqual([])
   })
@@ -251,7 +272,7 @@ describe("SessionLedger.plan", () => {
     l.consume("p1", ID)
     l.prune(new Set(["p1"]))
     expect(await plan(l, ["p1", "p2"])).toEqual({})
-    fs.rmSync(dir, { recursive: true, force: true })
+    rmLater(dir)
   })
 
   it("consume keeps an entry Claude re-recorded this run (late success vs the timeout)", () => {
@@ -278,14 +299,14 @@ describe("SessionLedger persistence", () => {
   })
   afterEach(() => {
     vi.useRealTimers()
-    fs.rmSync(dir, { recursive: true, force: true })
+    rmLater(dir)
   })
 
   it("write-through (debounced, async) survives a crash; a new instance reloads it", async () => {
     const file = path.join(dir, "agent-sessions.json")
     const l = new SessionLedger(file)
     l.apply(start())
-    await new Promise((r) => setTimeout(r, 700))
+    await waitFor(() => new SessionLedger(file).get("p1")?.sessionId === ID)
     expect(new SessionLedger(file).get("p1")?.sessionId).toBe(ID)
   })
 
@@ -493,7 +514,7 @@ describe("per-agent rules and files (multi-agent)", () => {
     dir = fs.mkdtempSync(path.join(os.tmpdir(), "minmux-ledger-"))
     file = path.join(dir, "agent-sessions.json")
   })
-  afterEach(() => fs.rmSync(dir, { recursive: true, force: true }))
+  afterEach(() => rmLater(dir))
   const read = (f: string) => JSON.parse(fs.readFileSync(path.join(dir, f), "utf8"))
 
   it("keeps each agent's entries in its own file; Claude's file has no agent field", () => {
@@ -626,9 +647,15 @@ describe("per-agent rules and files (multi-agent)", () => {
     fs.mkdirSync(path.join(dir, "agent-sessions.codex.json")) // a directory: rename onto it fails
     const l = new SessionLedger(file, Date.now, rules)
     l.apply(start({ paneId: "p1" }))
-    await new Promise((r) => setTimeout(r, 900)) // the debounced async flush
+    // The debounced async flush, and the failed file's tmp cleanup (it settles separately):
+    // wait for both, not a guessed delay.
+    const tmps = () => fs.readdirSync(dir).filter((f) => f.endsWith(".tmp"))
+    await waitFor(
+      () =>
+        Object.keys(read("agent-sessions.json")).join() === "p1,__minmux" && tmps().length === 0,
+    )
     expect(Object.keys(read("agent-sessions.json"))).toEqual(["p1", "__minmux"])
-    expect(fs.readdirSync(dir).filter((f) => f.endsWith(".tmp"))).toEqual([]) // tmp cleaned
+    expect(tmps()).toEqual([]) // tmp cleaned
   })
 
   it("plans each entry with its own agent's resume command", async () => {

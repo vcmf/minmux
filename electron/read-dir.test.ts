@@ -10,7 +10,7 @@ let tmp = ""
 beforeAll(() => {
   tmp = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "minmux-readdir-")))
 })
-afterAll(() => fs.rmSync(tmp, { recursive: true, force: true }))
+afterAll(() => fs.rmSync(tmp, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }))
 afterEach(() => vi.restoreAllMocks())
 
 const mk = (name: string) => {

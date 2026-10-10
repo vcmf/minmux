@@ -42,7 +42,7 @@ describe("TranscriptMeta (incremental)", () => {
     dir = fs.mkdtempSync(path.join(os.tmpdir(), "minmux-tm-"))
     file = path.join(dir, "t.jsonl")
   })
-  afterEach(() => fs.rmSync(dir, { recursive: true, force: true }))
+  afterEach(() => fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }))
 
   it("folds appended lines only, across small chunks", async () => {
     const r = new TranscriptMeta(16) // tiny chunks: lines straddle chunk boundaries

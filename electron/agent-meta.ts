@@ -62,6 +62,7 @@ const hasMeta = (m: SessionMeta | undefined) => !!m && (m.color !== undefined ||
 /** Tracks each pane's session meta from its agent's file and emits it on change (null = gone). */
 export class AgentMetaTracker {
   private panes = new Map<string, PaneWatch>()
+  private reads = new Set<Promise<void>>() // refreshes in flight (see idle)
 
   constructor(
     // `sessionId`: whose meta it is (a null for the session a switch left isn't the new one's).
@@ -147,7 +148,23 @@ export class AgentMetaTracker {
     const p = this.panes.get(paneId)
     if (!p) return
     clearTimeout(p.timer)
-    p.timer = setTimeout(() => void this.refresh(paneId, p), this.debounceMs)
+    p.timer = setTimeout(() => {
+      p.timer = undefined
+      const read = this.refresh(paneId, p).catch(() => {})
+      this.reads.add(read)
+      void read.finally(() => this.reads.delete(read))
+    }, this.debounceMs)
+  }
+
+  /** Resolves once no read is scheduled or running — what's emitted then is final (tests wait
+   *  on this instead of guessing a delay). */
+  async idle(): Promise<void> {
+    for (;;) {
+      if ([...this.panes.values()].some((p) => p.timer !== undefined))
+        await new Promise((r) => setTimeout(r, this.debounceMs + 1))
+      else if (this.reads.size) await Promise.all([...this.reads])
+      else return
+    }
   }
 
   private async refresh(paneId: string, p: PaneWatch): Promise<void> {

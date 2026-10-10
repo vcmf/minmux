@@ -29,10 +29,9 @@ describe("AgentMetaTracker", () => {
     file = path.join(dir, "s.jsonl")
     emitted = []
   })
-  afterEach(() => fs.rmSync(dir, { recursive: true, force: true }))
+  afterEach(() => fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }))
 
-  // Debounce 0 + real timers: settle by waiting a tick + the async read.
-  const settle = () => new Promise((r) => setTimeout(r, 30))
+  // Debounce 0 + real timers: each step waits for the tracker's idle() — no guessed delay.
   const make = (w = fakeWatch()) => ({
     w,
     t: new AgentMetaTracker((id, m) => emitted.push([id, m]), w.watch, 0),
@@ -42,17 +41,17 @@ describe("AgentMetaTracker", () => {
     fs.writeFileSync(file, `${title("fix-login")}\n`)
     const { t, w } = make()
     t.track("pane1", file)
-    await settle()
+    await t.idle()
     expect(emitted).toEqual([["pane1", { name: "fix-login" }]])
     // A /color append fires the watcher (no hook) → re-read → emit.
     fs.appendFileSync(file, `${color("orange")}\n`)
     w.fire()
-    await settle()
+    await t.idle()
     expect(emitted.at(-1)).toEqual(["pane1", { name: "fix-login", color: "orange" }])
     // Nothing new → no duplicate emit.
     const n = emitted.length
     w.fire()
-    await settle()
+    await t.idle()
     expect(emitted).toHaveLength(n)
   })
 
@@ -60,7 +59,7 @@ describe("AgentMetaTracker", () => {
     fs.writeFileSync(file, `${JSON.stringify({ type: "user", message: {} })}\n`)
     const { t } = make()
     t.track("pane1", file)
-    await settle()
+    await t.idle()
     expect(emitted).toEqual([])
   })
 
@@ -68,7 +67,7 @@ describe("AgentMetaTracker", () => {
     fs.writeFileSync(file, `${color("blue")}\n`)
     const { t, w } = make()
     t.track("pane1", file)
-    await settle()
+    await t.idle()
     t.untrack("pane1")
     expect(w.stops).toEqual([file])
     expect(emitted.at(-1)).toEqual(["pane1", null])
@@ -80,9 +79,9 @@ describe("AgentMetaTracker", () => {
     fs.writeFileSync(other, `${color("pink")}\n`)
     const { t, w } = make()
     t.track("pane1", file)
-    await settle()
+    await t.idle()
     t.track("pane1", other)
-    await settle()
+    await t.idle()
     expect(w.stops).toEqual([file])
     // The old session's accent is cleared first (it may have died without a SessionEnd)…
     expect(emitted.slice(-2)).toEqual([
@@ -97,9 +96,9 @@ describe("AgentMetaTracker", () => {
     fs.writeFileSync(other, `${JSON.stringify({ type: "user" })}\n`)
     const { t } = make()
     t.track("pane1", file)
-    await settle()
+    await t.idle()
     t.track("pane1", other)
-    await settle()
+    await t.idle()
     expect(emitted.at(-1)).toEqual(["pane1", null])
   })
 
@@ -108,7 +107,7 @@ describe("AgentMetaTracker", () => {
     fs.writeFileSync(other, `${color("cyan")}\n`)
     const { t, w } = make()
     t.track("pane1", other)
-    await settle()
+    await t.idle()
     t.untrack("pane1", true, file) // stale: `file` isn't the tracked transcript
     expect(w.stops).toEqual([])
     expect(t.snapshot()).toEqual([["pane1", { color: "cyan" }]])
@@ -119,7 +118,7 @@ describe("AgentMetaTracker", () => {
     const { t } = make()
     t.track("pane1", file)
     t.track("pane2", path.join(dir, "missing.jsonl")) // no meta → not in the snapshot
-    await settle()
+    await t.idle()
     expect(t.snapshot()).toEqual([["pane1", { name: "x" }]])
   })
 
@@ -165,17 +164,17 @@ describe("AgentMetaTracker", () => {
 
   it("coalesces a burst of events into one read", async () => {
     vi.useFakeTimers()
+    const w = fakeWatch()
+    const t = new AgentMetaTracker((id, m) => emitted.push([id, m]), w.watch, 200)
     try {
       fs.writeFileSync(file, `${color("red")}\n`)
-      const w = fakeWatch()
-      const t = new AgentMetaTracker((id, m) => emitted.push([id, m]), w.watch, 200)
       t.track("pane1", file)
       for (let i = 0; i < 10; i++) w.fire()
       await vi.advanceTimersByTimeAsync(250)
     } finally {
       vi.useRealTimers()
     }
-    await settle()
+    await t.idle()
     expect(emitted).toEqual([["pane1", { color: "red" }]])
   })
 })
@@ -183,8 +182,7 @@ describe("AgentMetaTracker", () => {
 describe("AgentMetaTracker over a shared file (Codex's thread-name index)", () => {
   let dir: string
   beforeEach(() => (dir = fs.mkdtempSync(path.join(os.tmpdir(), "minmux-am2-"))))
-  afterEach(() => fs.rmSync(dir, { recursive: true, force: true }))
-  const settle = () => new Promise((r) => setTimeout(r, 30))
+  afterEach(() => fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }))
   const line = (id: string, name: string) => JSON.stringify({ id, thread_name: name })
 
   it("gives each pane its own session's name from the one file, marked automatic", async () => {
@@ -195,7 +193,7 @@ describe("AgentMetaTracker over a shared file (Codex's thread-name index)", () =
     const t = new AgentMetaTracker((id, m) => emitted.push([id, m]), w.watch, 0, threadNameReader())
     t.track("p1", index, [index], "a")
     t.track("p2", index, [index], "b")
-    await settle()
+    await t.idle()
     expect(Object.fromEntries(emitted)).toEqual({
       p1: { name: "Fix login", auto: true },
       p2: { name: "Write docs", auto: true },
@@ -205,7 +203,7 @@ describe("AgentMetaTracker over a shared file (Codex's thread-name index)", () =
     t.untrack("p2", false)
     fs.appendFileSync(index, `${line("a", "Fix login flow")}\n`)
     w.fire()
-    await settle()
+    await t.idle()
     expect(emitted).toEqual([["p1", { name: "Fix login flow" }]])
   })
 
@@ -220,9 +218,9 @@ describe("AgentMetaTracker over a shared file (Codex's thread-name index)", () =
       threadNameReader(),
     )
     t.track("p1", index, [index], "a")
-    await settle()
+    await t.idle()
     t.track("p1", index, [index], "b") // /new in the same Codex
-    await settle()
+    await t.idle()
     expect(emitted.at(-1)).toEqual(["p1", { name: "Two", auto: true }])
     // a late SessionEnd of the old thread must not end the new one
     t.untrack("p1", true, index, "a")
@@ -267,8 +265,7 @@ describe("planMeta", () => {
 describe("AgentMetaTracker — session switch in a shared file", () => {
   let dir: string
   beforeEach(() => (dir = fs.mkdtempSync(path.join(os.tmpdir(), "minmux-am3-"))))
-  afterEach(() => fs.rmSync(dir, { recursive: true, force: true }))
-  const settle = () => new Promise((r) => setTimeout(r, 30))
+  afterEach(() => fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }))
   it("re-emits for the new session even when its name equals the old one's", async () => {
     const index = path.join(dir, "session_index.jsonl")
     const l = (id: string) => JSON.stringify({ id, thread_name: "Run tests" })
@@ -281,9 +278,9 @@ describe("AgentMetaTracker — session switch in a shared file", () => {
       threadNameReader(),
     )
     t.track("p1", index, [index], "a")
-    await settle()
+    await t.idle()
     t.track("p1", index, [index], "b")
-    await settle()
+    await t.idle()
     expect(emitted).toEqual([
       ["p1", { name: "Run tests", auto: true }],
       ["p1", null], // the old session's name goes at once…

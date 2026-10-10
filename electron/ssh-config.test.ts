@@ -814,7 +814,7 @@ describe("nodeMiniFs", () => {
   beforeEach(() => {
     dir = fs.mkdtempSync(path.join(os.tmpdir(), "minmux-sshcfg-"))
   })
-  afterEach(() => fs.rmSync(dir, { recursive: true, force: true }))
+  afterEach(() => fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }))
 
   it("reads a file and lists a directory", async () => {
     fs.writeFileSync(path.join(dir, "config"), "Host a\n")

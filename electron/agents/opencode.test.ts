@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, afterAll } from "vitest"
+import { threadId } from "node:worker_threads"
 import { execFileSync, spawnSync } from "node:child_process"
 import fs from "node:fs"
 import os from "node:os"
@@ -43,7 +44,7 @@ const has = (bin: string) => spawnSync("which", [bin]).status === 0
 
 describe("the rc wrapper keeps our plugin in OpenCode's inline config", () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "minmux-oc-rc-"))
-  afterAll(() => fs.rmSync(dir, { recursive: true, force: true }))
+  afterAll(() => fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }))
   const url = pathToFileURL(path.join(dir, "a b", "agents", PLUGIN_FILE)).href
   // A fake `opencode` that prints the config it was started with.
   fs.writeFileSync(path.join(dir, "opencode"), '#!/bin/sh\nprintf %s "$OPENCODE_CONFIG_CONTENT"\n')
@@ -99,9 +100,12 @@ describe("the plugin (loaded from its source, as OpenCode does)", () => {
   }
   type Factory = (ctx: unknown) => Promise<Hooks>
   const LOADED = Symbol.for("minmux.opencode")
-  // Vite only loads modules from the project: the copies go in its cache dir.
-  const mods = path.resolve("node_modules/.cache/minmux-opencode-test")
+  // Vite only loads modules from the project: the copies go in its cache dir — one folder per
+  // test process, so parallel runs (a pre-push hook beside `make test`, worktrees sharing
+  // node_modules) never delete each other's copies.
+  const mods = path.resolve(`node_modules/.cache/minmux-opencode-test/${process.pid}-${threadId}`)
   fs.mkdirSync(mods, { recursive: true })
+  afterAll(() => fs.rmSync(mods, { recursive: true, force: true, maxRetries: 10, retryDelay: 20 }))
   let root = ""
   let load: () => Promise<Factory>
   const saved = ["MINMUX_AGENT_EVENTS", "MINMUX_PANE_ID", "MINMUX_RESUME_SESSION"].map(
@@ -113,7 +117,7 @@ describe("the plugin (loaded from its source, as OpenCode does)", () => {
     let n = 0
     // A fresh file per load: a fresh module (its own state), as each OpenCode process has.
     load = async () => {
-      const file = path.join(mods, `plugin-${process.pid}-${n++}.mjs`)
+      const file = path.join(mods, `plugin-${n++}.mjs`)
       fs.writeFileSync(file, OPENCODE_PLUGIN)
       const mod = (await import(/* @vite-ignore */ file)) as { MinmuxPlugin: Factory }
       return mod.MinmuxPlugin
@@ -122,23 +126,51 @@ describe("the plugin (loaded from its source, as OpenCode does)", () => {
     process.env.MINMUX_PANE_ID = "pane-1"
     delete (globalThis as Record<symbol, unknown>)[LOADED]
   })
-  afterEach(() => {
+  afterEach(async () => {
+    // A test may end with a write still on its way (a load it didn't wait for): let the folder
+    // go quiet first, or the delete races it (ENOTEMPTY).
+    await quiet(() => true, 100, 3000)
     for (const [k, v] of saved) {
       if (v === undefined) delete process.env[k]
       else process.env[k] = v
     }
     delete (globalThis as Record<symbol, unknown>)[LOADED]
-    fs.rmSync(root, { recursive: true, force: true })
-    fs.rmSync(mods, { recursive: true, force: true })
+    // A write still landing can refill a folder mid-delete (ENOTEMPTY): retry (Node's own).
+    fs.rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 20 })
+    fs.rmSync(mods, { recursive: true, force: true, maxRetries: 10, retryDelay: 20 })
     fs.mkdirSync(mods, { recursive: true })
   })
-  const files = () => fs.readdirSync(path.join(root, "opencode")).sort()
-  /** Every drop, in name order, once the fire-and-forget writes have landed. */
-  const drops = async (n: number) => {
-    for (let i = 0; i < 100 && files().filter((f) => f.endsWith(".json")).length < n; i++)
+  const files = () => {
+    try {
+      return fs.readdirSync(path.join(root, "opencode")).sort()
+    } catch {
+      return [] // already gone
+    }
+  }
+  const settled = () => files().filter((f) => f.endsWith(".json"))
+  /** The plugin's writes are fire-and-forget (temp + rename): wait until no temp file is
+   *  mid-write and nothing new has appeared for `ms` (`long` ms until `enough()`), or `cap`
+   *  ms in all. A busy machine only makes this slower, never wrong. */
+  const quiet = async (enough: () => boolean, ms: number, cap: number, long = ms) => {
+    const deadline = Date.now() + cap
+    let last = ""
+    let since = Date.now()
+    while (Date.now() < deadline) {
+      const now = files().join("|")
+      if (now !== last) {
+        last = now
+        since = Date.now()
+      }
+      const busy = files().some((f) => !f.endsWith(".json"))
+      if (!busy && Date.now() - since >= (enough() ? ms : long)) return
       await new Promise((r) => setTimeout(r, 10))
-    await new Promise((r) => setTimeout(r, 20))
-    const names = files().filter((f) => f.endsWith(".json"))
+    }
+  }
+  /** Every drop, in name order, once the writes have landed: briefly quiet once `n` are in,
+   *  longer when fewer are (some tests expect fewer than they ask for); under the test's 5 s. */
+  const drops = async (n: number) => {
+    await quiet(() => settled().length >= n, 60, 4000, 500)
+    const names = settled()
     names.sort((a, b) => Number(a.split(".")[2]) - Number(b.split(".")[2]))
     return names.map((f) => JSON.parse(fs.readFileSync(path.join(root, "opencode", f), "utf8")))
   }
@@ -646,7 +678,7 @@ describe("the opencode adapter", () => {
       process.env.OPENCODE_CONFIG_CONTENT = "{jsonc /* comment */}"
       expect(a.env()).toEqual({}) // theirs wins: left as it is, and no wrapper either
     } finally {
-      fs.rmSync(cfg, { recursive: true, force: true })
+      fs.rmSync(cfg, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })
     }
   })
 })
@@ -882,7 +914,7 @@ describe("normalizeOpencodeDrop", () => {
 
 describe("the rc wrapper passes a resume's id to that one run", () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "minmux-oc-rs-"))
-  afterAll(() => fs.rmSync(dir, { recursive: true, force: true }))
+  afterAll(() => fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }))
   fs.writeFileSync(
     path.join(dir, "opencode"),
     '#!/bin/sh\nprintf "run=[%s] " "$MINMUX_RESUME_SESSION"\n',

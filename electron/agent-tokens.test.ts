@@ -30,7 +30,7 @@ describe("tokenEventsForBatch", () => {
     dir = fs.mkdtempSync(path.join(os.tmpdir(), "minmux-tok-"))
   })
   afterEach(() => {
-    fs.rmSync(dir, { recursive: true, force: true })
+    fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })
   })
 
   it("prices a Stop against the session root", async () => {

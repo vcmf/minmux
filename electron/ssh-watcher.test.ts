@@ -11,6 +11,15 @@ const until = async (ok: () => boolean, ms = 4000) => {
   return ok()
 }
 const settle = () => new Promise((r) => setTimeout(r, 400)) // chokidar's initial scan
+/** Write `file` until the watcher reports it: chokidar may still be starting (a busy machine
+ *  stretches its scan past `settle`), and one missed write would read as a bug. */
+const writeUntilSeen = async (file: string, seen: () => boolean) => {
+  for (let i = 0; i < 40 && !seen(); i++) {
+    fs.writeFileSync(file, `Host w${i}\n`)
+    await new Promise((r) => setTimeout(r, 100))
+  }
+  return until(seen, 1000)
+}
 
 describe("createPathWatcher (real chokidar)", () => {
   let dir: string
@@ -22,7 +31,7 @@ describe("createPathWatcher (real chokidar)", () => {
   })
   afterEach(() => {
     w?.close()
-    fs.rmSync(dir, { recursive: true, force: true })
+    fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })
   })
 
   it("reports a change to a watched file", async () => {
@@ -34,8 +43,7 @@ describe("createPathWatcher (real chokidar)", () => {
     )
     w.set([cfg])
     await settle()
-    fs.writeFileSync(cfg, "Host a\nHost b\n")
-    expect(await until(() => seen.includes(cfg))).toBe(true)
+    expect(await writeUntilSeen(cfg, () => seen.includes(cfg))).toBe(true)
   })
 
   it("keeps a file inside a dir that stops being watched (chokidar's unwatch trap)", async () => {
@@ -49,8 +57,7 @@ describe("createPathWatcher (real chokidar)", () => {
     await settle()
     w.set([cfg]) // the Include was removed: the dir leaves the set
     await settle()
-    fs.writeFileSync(cfg, "Host a\nHost c\n")
-    expect(await until(() => seen.includes(cfg))).toBe(true)
+    expect(await writeUntilSeen(cfg, () => seen.includes(cfg))).toBe(true)
   })
 
   it("picks up paths added later, and a file created in a watched dir", async () => {
@@ -67,8 +74,7 @@ describe("createPathWatcher (real chokidar)", () => {
     w.set([cfg, sub])
     await settle()
     const extra = path.join(sub, "work.conf")
-    fs.writeFileSync(extra, "Host w\n")
-    expect(await until(() => seen.includes(extra))).toBe(true)
+    expect(await writeUntilSeen(extra, () => seen.includes(extra))).toBe(true)
   })
 
   it("stops reporting after close", async () => {

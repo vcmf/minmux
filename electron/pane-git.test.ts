@@ -187,8 +187,10 @@ describe("PaneGitService", () => {
   it("runs at most 2 gh processes at once", async () => {
     let running = 0
     let peak = 0
+    let ghCalls = 0
     const run: Runner = async (cmd, _args, cwd) => {
       if (cmd === "git") return `b\n${cwd}`
+      ghCalls++
       running++
       peak = Math.max(peak, running)
       await new Promise((r) => setTimeout(r, 5))
@@ -197,7 +199,10 @@ describe("PaneGitService", () => {
     }
     const svc = new PaneGitService(run)
     await svc.lookup(Array.from({ length: 6 }, (_, i) => ({ paneId: `p${i}`, cwd: `/c${i}` })))
-    await new Promise((r) => setTimeout(r, 60))
+    // The PR lookups run in the background: wait until all six have run (not a guessed delay).
+    for (let i = 0; i < 400 && (ghCalls < 6 || running > 0); i++)
+      await new Promise((r) => setTimeout(r, 10))
+    expect(ghCalls).toBe(6)
     expect(peak).toBe(2)
   })
 })

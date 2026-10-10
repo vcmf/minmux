@@ -39,7 +39,7 @@ describe("TranscriptTokens", () => {
     dir = fs.mkdtempSync(path.join(os.tmpdir(), "minmux-tt-"))
     file = path.join(dir, "t.jsonl")
   })
-  afterEach(() => fs.rmSync(dir, { recursive: true, force: true }))
+  afterEach(() => fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 }))
 
   it("reads a transcript: context = last turn's input, output = total", async () => {
     fs.writeFileSync(file, `${asst({ input_tokens: 10, output_tokens: 4 })}\n`)

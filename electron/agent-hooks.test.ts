@@ -105,7 +105,7 @@ describe("startHookWatcher", () => {
       await waitUntil(() => fs.readdirSync(path.join(dir, "claude")).length === 0)
     } finally {
       await w.close()
-      fs.rmSync(dir, { recursive: true, force: true })
+      fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })
     }
   })
 
@@ -135,7 +135,7 @@ describe("startHookWatcher", () => {
       })
     } finally {
       await w.close()
-      fs.rmSync(dir, { recursive: true, force: true })
+      fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })
     }
   })
 
@@ -156,7 +156,7 @@ describe("startHookWatcher", () => {
       await waitUntil(() => seen.length === 1)
     } finally {
       await w.close()
-      fs.rmSync(dir, { recursive: true, force: true })
+      fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })
     }
   })
 
@@ -186,7 +186,7 @@ describe("startHookWatcher", () => {
       for (const f of stray) expect(fs.existsSync(f)).toBe(true) // not claimed, not deleted
     } finally {
       await w.close()
-      fs.rmSync(dir, { recursive: true, force: true })
+      fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })
     }
   })
 
@@ -198,7 +198,7 @@ describe("startHookWatcher", () => {
     ])
     expect(w).not.toBeNull()
     await w?.close()
-    fs.rmSync(dir, { recursive: true, force: true })
+    fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })
   })
 
   it("tags each event with the folder it came from, whatever the normaliser says", async () => {
@@ -220,7 +220,7 @@ describe("startHookWatcher", () => {
       expect(seen[0]!.pid).toBe(4242) // the agent process, from the drop's name
     } finally {
       await w.close()
-      fs.rmSync(dir, { recursive: true, force: true })
+      fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })
     }
   })
 
@@ -251,7 +251,7 @@ describe("startHookWatcher", () => {
       expect(seen).toEqual([])
     } finally {
       await w.close()
-      fs.rmSync(dir, { recursive: true, force: true })
+      fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })
     }
   })
 
@@ -278,7 +278,7 @@ describe("startHookWatcher", () => {
       expect(seen[0]!.sessionId).toBe("b")
     } finally {
       await w.close()
-      fs.rmSync(dir, { recursive: true, force: true })
+      fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })
     }
   })
 
@@ -305,7 +305,7 @@ describe("startHookWatcher", () => {
       expect(seen).toHaveLength(60) // …and each delivered exactly once (watcher + sweep claim)
     } finally {
       await w.close()
-      fs.rmSync(dir, { recursive: true, force: true })
+      fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })
     }
   })
 
@@ -325,7 +325,7 @@ describe("startHookWatcher", () => {
       expect(batches.flat()).toHaveLength(0)
     } finally {
       await w.close()
-      fs.rmSync(dir, { recursive: true, force: true })
+      fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })
     }
   })
 
