@@ -20,8 +20,12 @@ export interface WorkDir {
 /** Same folder, ignoring a trailing separator. */
 export const samePath = (a: string, b: string): boolean => norm(a) === norm(b)
 
-// normalizeRootPath + one separator ("C:/x" from git ≡ "C:\\x" from a Windows shell).
-const norm = (p: string) => normalizeRootPath(p).replace(/\\/g, "/")
+// normalizeRootPath + one separator ("C:/x" from git ≡ "C:\\x" from a Windows shell) + a
+// lower-case drive letter ("c:\\x" from one shell ≡ "C:\\x" from another).
+const norm = (p: string) =>
+  normalizeRootPath(p)
+    .replace(/\\/g, "/")
+    .replace(/^([A-Za-z]):/, (_, d: string) => `${d.toLowerCase()}:`)
 
 /** `child` is strictly inside `parent` (a root like "/" or "C:\\" included). */
 export function isInside(child: string, parent: string): boolean {
@@ -101,10 +105,47 @@ export function worksElsewhere(
   const known = inGitFor(inGit, work, agent)
   if (!shellCwd || !work || !known || samePath(shellCwd, work)) return false
   if (known.root) return !(shellGit?.root && samePath(shellGit.root, known.root))
-  // Outside git: symlinked spellings and subfolders of the shell's folder are the same place.
-  const from = shellGit?.real ?? shellCwd
-  const to = known.real ?? work
+  // Outside git: symlinked spellings and subfolders of the shell's folder are the same place —
+  // by real paths when both sides have one (a resolved path against an unresolved one would
+  // never match: /tmp → /private/tmp).
+  const both = known.real !== undefined && shellGit?.real !== undefined
+  const from = both ? shellGit!.real! : shellCwd
+  const to = both ? known.real! : work
   return !samePath(from, to) && !isInside(to, from)
+}
+
+/** The sidebar's `in` line: shown for another checkout (`elsewhere`: its own branch / PR), or
+ *  another folder of the same one / below the shell's (`label`: where, relative). */
+export function inLine(
+  shellCwd: string | undefined,
+  work: string | undefined,
+  shellGit: PaneGitInfo | undefined,
+  inGit: PaneGitInfo | undefined,
+  agent: AgentKind | undefined,
+): { elsewhere: boolean; known: PaneGitInfo; label?: string } | null {
+  const known = inGitFor(inGit, work, agent)
+  if (!shellCwd || !work || !known || samePath(shellCwd, work)) return null
+  if (worksElsewhere(shellCwd, work, shellGit, inGit, agent)) return { elsewhere: true, known }
+  if (known.root) {
+    // Moved inside the same checkout, its own answer still on the way: keep the line (no
+    // flicker on each `cd`); the next poll places it.
+    if (known.forCwd !== work) return { elsewhere: false, known }
+    // The same checkout: git's own place of each folder in it — symlinked and WSL spellings
+    // can't fool it. Not known for either (or the shell's answer is for its old folder): no
+    // line — never a guess.
+    const at = known.prefix
+    const from = shellGit?.forCwd === shellCwd ? shellGit.prefix : undefined
+    if (at === undefined || from === undefined || at === from) return null
+    const below = from === "" ? at : at.startsWith(from + "/") ? at.slice(from.length + 1) : ""
+    return { elsewhere: false, known, ...(below ? { label: below } : {}) }
+  }
+  // Outside git (inGitFor only returns a rootless answer for this very folder): a folder below
+  // the shell's — by real paths when both sides have one (a resolved path against an
+  // unresolved one would never match).
+  const both = known.real !== undefined && shellGit?.real !== undefined
+  const to = both ? known.real! : work
+  const base = both ? shellGit!.real! : shellCwd
+  return isInside(to, base) ? { elsewhere: false, known } : null
 }
 
 /** The folder a pane's git views follow: the agent's checkout root while it works elsewhere. */
@@ -129,6 +170,13 @@ export function inLabel(shellCwd: string, work: string, home: string, fromReal?:
     if (isInside(to, from)) return to.slice(from.length).replace(/^[\\/]/, "")
   }
   return shortCwd(to, home)
+}
+
+/** Mark each shell answer with the folder it's for (as `in` answers are), so a stale one —
+ *  from before a `cd` — isn't taken for the current folder. */
+export function tagShellAnswers(res: Record<string, PaneGitInfo>, reqs: PaneGitRequest[]): void {
+  for (const r of reqs)
+    if (!r.paneId.endsWith("@in") && res[r.paneId]) res[r.paneId]!.forCwd = r.cwd
 }
 
 /** paneGit key for a pane's `in` folder (the shell's folder uses the bare pane id). */

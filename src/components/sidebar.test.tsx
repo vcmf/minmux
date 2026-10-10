@@ -3,6 +3,7 @@ import { render, screen, fireEvent, act } from "@testing-library/react"
 import { Sidebar } from "./sidebar"
 import { useStore } from "../store"
 import { allSessionIds } from "../lib/pane-tree"
+import { workCwd } from "../lib/agent-dirs"
 import { resetStore, testHost, testShell } from "../test/helpers"
 import { ipc } from "../lib/ipc"
 import { TerminalManager } from "../terminal/terminal-manager"
@@ -133,17 +134,42 @@ describe("Sidebar — from / in folders", () => {
     return id
   }
 
-  it("one folder line for a `cd` inside the same checkout (same repo root)", () => {
+  it("a subfolder of the same checkout: from + in (relative), no git line of its own", () => {
     const id = setup()
     st().applyAgentEvents([
-      { event: "SessionStart", sessionId: "c1", paneId: id, cwd: "/w/term/src" },
+      {
+        event: "SessionStart",
+        sessionId: "c1",
+        paneId: id,
+        cwd: "/w/term/output/soldier-animation",
+      },
     ])
     st().setPaneGit(
-      { [id]: { root: "/w/term" }, [`${id}@in`]: { root: "/w/term", forCwd: "/w/term/src" } },
+      {
+        [id]: {
+          root: "/w/term",
+          forCwd: "/w/term",
+          prefix: "",
+          branch: "main",
+          pr: { number: 3, state: "open", url: "u" },
+        },
+        [`${id}@in`]: {
+          root: "/w/term",
+          prefix: "output/soldier-animation",
+          branch: "main",
+          forCwd: "/w/term/output/soldier-animation",
+          pr: { number: 3, state: "open", url: "u" },
+        },
+      },
       [],
     )
     render(<Sidebar />)
-    expect(screen.queryByText("from")).toBeNull()
+    expect(screen.getByText("from")).toBeInTheDocument()
+    expect(screen.getByText("in")).toBeInTheDocument()
+    expect(screen.getByText("output/soldier-animation")).toBeInTheDocument() // no "main •"
+    expect(screen.getAllByText("PR #3")).toHaveLength(1) // the repo's PR, once (on from)
+    // The git views keep following the checkout (nothing jumps): the Changes panel's folder.
+    expect(workCwd(st().agents, st().paneGit, id, "/w/term")).toBe("/w/term")
   })
 
   it("one folder line while Claude works where it started", () => {
