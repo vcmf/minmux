@@ -307,7 +307,7 @@ describe("startHookWatcher", () => {
       await w.close()
       fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })
     }
-  })
+  }, 12_000) // its own 8 s wait + sweeps: a timeout must not cut its "condition not met" short
 
   it("skips a corrupt (non-JSON) drop without emitting", async () => {
     const dir = makeRoot("claude")

@@ -152,7 +152,8 @@ export class AgentMetaTracker {
       p.timer = undefined
       const read = this.refresh(paneId, p)
       this.reads.add(read)
-      // A failure still surfaces as before (unhandled → logged); idle() just stops waiting.
+      // A failure still surfaces as an unhandled rejection (now via this .finally's promise),
+      // as before; idle() only stops waiting for it.
       void read.finally(() => this.reads.delete(read))
     }, this.debounceMs)
   }

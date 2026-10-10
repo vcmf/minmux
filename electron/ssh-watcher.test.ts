@@ -13,12 +13,13 @@ const until = async (ok: () => boolean, ms = 4000) => {
 const settle = () => new Promise((r) => setTimeout(r, 400)) // chokidar's initial scan
 /** Write `file` until the watcher reports it: chokidar may still be starting (a busy machine
  *  stretches its scan past `settle`), and one missed write would read as a bug. */
-const writeUntilSeen = async (file: string, seen: () => boolean) => {
-  for (let i = 0; i < 28 && !seen(); i++) {
+const writeUntilSeen = async (file: string, seen: () => boolean, ms = 3000) => {
+  const deadline = Date.now() + ms // by the clock: with the tests' settles, under the 5 s timeout
+  for (let i = 0; !seen() && Date.now() < deadline; i++) {
     fs.writeFileSync(file, `Host w${i}\n`)
     await new Promise((r) => setTimeout(r, 100))
   }
-  return until(seen, 400) // with the tests' settles: under the 5 s test timeout
+  return seen()
 }
 
 describe("createPathWatcher (real chokidar)", () => {
@@ -76,13 +77,14 @@ describe("createPathWatcher (real chokidar)", () => {
     // A NEW file each try (never a rewrite): only a reported create can pass.
     let made: string[] = []
     const createdSeen = () => made.some((f) => seen.includes(f))
-    for (let i = 0; i < 28 && !createdSeen(); i++) {
+    const deadline = Date.now() + 3000
+    for (let i = 0; !createdSeen() && Date.now() < deadline; i++) {
       const extra = path.join(sub, `work-${i}.conf`)
       made = [...made, extra]
       fs.writeFileSync(extra, "Host w\n")
       await new Promise((r) => setTimeout(r, 100))
     }
-    expect(await until(createdSeen, 400)).toBe(true)
+    expect(createdSeen()).toBe(true)
   })
 
   it("stops reporting after close", async () => {
@@ -94,7 +96,10 @@ describe("createPathWatcher (real chokidar)", () => {
     )
     w.set([cfg])
     await settle()
+    // Prove it's live first — else a watcher that never started would "stop" vacuously.
+    expect(await writeUntilSeen(cfg, () => seen.includes(cfg), 2500)).toBe(true)
     w.close()
+    seen = []
     fs.writeFileSync(cfg, "changed")
     expect(await until(() => seen.length > 0, 800)).toBe(false)
   })

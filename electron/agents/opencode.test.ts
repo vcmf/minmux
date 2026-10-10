@@ -167,10 +167,11 @@ describe("the plugin (loaded from its source, as OpenCode does)", () => {
       await new Promise((r) => setTimeout(r, 10))
     }
   }
-  /** Every drop, in name order, once the writes have landed: briefly quiet once `n` are in,
-   *  longer when fewer are (some tests expect fewer than they ask for); under the test's 5 s. */
+  /** Every drop, in name order, once exactly-expected `n` have landed and the folder is quiet
+   *  (so a stray extra one shows too). Never "whatever came in 500 ms": fewer than `n` waits to
+   *  the cap (under the test's 5 s) and the assertion then says what's missing. */
   const drops = async (n: number) => {
-    await quiet(() => settled().length >= n, 60, 4000, 500)
+    await quiet(() => settled().length >= n, 60, 4000, Infinity)
     const names = settled()
     names.sort((a, b) => Number(a.split(".")[2]) - Number(b.split(".")[2]))
     return names.map((f) => JSON.parse(fs.readFileSync(path.join(root, "opencode", f), "utf8")))
@@ -356,7 +357,7 @@ describe("the plugin (loaded from its source, as OpenCode does)", () => {
     sess("ses_r", { input: 9847, output: 33, reasoning: 7, cache: { read: 1938, write: 5 } }) // same
     e(ev("session.created", { info: { id: "ses_c", parentID: "ses_r" } }))
     msg("ses_c", "m2", { input: 500, output: 9, reasoning: 0, cache: { read: 0, write: 0 } }, 2)
-    const out = (await drops(9)).filter((d) => d.e === "tokens")
+    const out = (await drops(8)).filter((d) => d.e === "tokens")
     expect(out).toEqual([
       { v: 1, e: "tokens", sessionID: "ses_r", context: 11790, output: 0, directory: "/base" },
       { v: 1, e: "tokens", sessionID: "ses_r", context: 11790, output: 40, directory: "/base" },
@@ -426,7 +427,7 @@ describe("the plugin (loaded from its source, as OpenCode does)", () => {
     e(ev("session.created", { info: { id: "ses_b" } })) // /new: ses_a ends (idle)
     e(ev("session.updated", { info: { id: "ses_a", title: "x" } }))
     status("ses_a", "busy") // picked again
-    const out = await drops(13)
+    const out = await drops(12)
     const a = out.filter(
       (d) => d.sessionID === "ses_a" && (d.e === "tokens" || d.e === "start" || d.e === "end"),
     )
@@ -464,7 +465,7 @@ describe("the plugin (loaded from its source, as OpenCode does)", () => {
     const h = await (await load())({ directory: "/repo", client: { session: { get } } })
     h.event!(ev("session.created", { info: { id: "ses_new" } })) // /new before the answer
     answer({ data: { id: SES, title: "old", directory: "/repo" } })
-    const out = await drops(4)
+    const out = await drops(3)
     expect(out.filter((d) => d.e === "start").map((d) => d.sessionID)).toEqual(["ses_new"])
   })
 
@@ -594,7 +595,7 @@ describe("the plugin (loaded from its source, as OpenCode does)", () => {
     const patchText =
       "*** Begin Patch\n*** Update File: /repo/a.ts\n@@\n-SECRET\n*** Add File: /repo/b.ts\n+x\n*** End Patch"
     before({ tool: "apply_patch", sessionID: "s" }, { args: { patchText } })
-    const out = (await drops(4)).filter((d) => d.e === "tool")
+    const out = (await drops(3)).filter((d) => d.e === "tool")
     expect(out[0]).not.toHaveProperty("paths")
     expect(out[1]!.paths).toEqual(["/repo/a.ts", "/repo/b.ts"])
     expect(JSON.stringify(out)).not.toContain("SECRET")
@@ -611,7 +612,7 @@ describe("the plugin (loaded from its source, as OpenCode does)", () => {
       }),
     )
     h.event!(ev("permission.replied", { requestID: "per_1", sessionID: "s", reply: "once" }))
-    const out = (await drops(4)).filter((d) => d.e === "permission")
+    const out = (await drops(3)).filter((d) => d.e === "permission")
     expect(out[0]).toMatchObject({
       e: "permission",
       phase: "asked",

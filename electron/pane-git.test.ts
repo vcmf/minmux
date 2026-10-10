@@ -66,8 +66,9 @@ const PR51 = { number: 51, state: "MERGED", url: "https://x/pull/51", isDraft: f
  *  settle), up to 3.5 s — not a guessed delay. */
 const tick = async () => {
   const turn = () => new Promise((r) => setTimeout(r, 5))
+  const deadline = Date.now() + 3500 // by the clock: a busy machine stretches each turn
   await turn()
-  for (let i = 0; i < 700 && ghRunning > 0; i++) await turn()
+  while (ghRunning > 0 && Date.now() < deadline) await turn()
   await turn()
 }
 
@@ -125,6 +126,7 @@ describe("PaneGitService", () => {
     const t0 = Date.now()
     expect(await svc.lookup([{ paneId: "a", cwd: "/r" }])).toMatchObject({ a: { branch: "x" } })
     expect(Date.now() - t0).toBeLessThan(500)
+    await tick() // its background gh mustn't run into the next test's wait
   })
 
   it("asks gh for the CHECKED-OUT branch's PR (no name arg — a fork's same-named PR can't match)", async () => {
@@ -214,7 +216,8 @@ describe("PaneGitService", () => {
     const svc = new PaneGitService(run)
     await svc.lookup(Array.from({ length: 6 }, (_, i) => ({ paneId: `p${i}`, cwd: `/c${i}` })))
     // The PR lookups run in the background: wait until all six have run (not a guessed delay).
-    for (let i = 0; i < 400 && (ghCalls < 6 || running > 0); i++)
+    const deadline = Date.now() + 3500
+    while ((ghCalls < 6 || running > 0) && Date.now() < deadline)
       await new Promise((r) => setTimeout(r, 10))
     expect(ghCalls).toBe(6)
     expect(peak).toBe(2)

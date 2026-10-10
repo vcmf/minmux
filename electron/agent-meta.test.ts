@@ -5,6 +5,7 @@ import path from "node:path"
 import { AgentMetaTracker, planMeta, type WatchFn } from "./agent-meta"
 import type { AgentEvent } from "../src/lib/agent-graph"
 import { threadNameReader } from "./agents/codex"
+import { TranscriptMeta } from "./transcript-meta"
 
 const color = (c: string) => JSON.stringify({ type: "agent-color", agentColor: c })
 const title = (t: string) => JSON.stringify({ type: "custom-title", customTitle: t })
@@ -163,9 +164,16 @@ describe("AgentMetaTracker", () => {
   })
 
   it("coalesces a burst of events into one read", async () => {
+    // Count reads, not emits: identical results are never re-emitted, so emits can't tell.
+    let reads = 0
+    const inner = new TranscriptMeta()
+    const counting = {
+      update: (...a: Parameters<TranscriptMeta["update"]>) => (reads++, inner.update(...a)),
+      forget: (k: string) => inner.forget(k),
+    }
     vi.useFakeTimers()
     const w = fakeWatch()
-    const t = new AgentMetaTracker((id, m) => emitted.push([id, m]), w.watch, 200)
+    const t = new AgentMetaTracker((id, m) => emitted.push([id, m]), w.watch, 200, counting)
     try {
       fs.writeFileSync(file, `${color("red")}\n`)
       t.track("pane1", file)
@@ -175,6 +183,7 @@ describe("AgentMetaTracker", () => {
       vi.useRealTimers()
     }
     await t.idle()
+    expect(reads).toBe(1)
     expect(emitted).toEqual([["pane1", { color: "red" }]])
   })
 })
