@@ -5,6 +5,8 @@ import {
   agentWorkFlat,
   inLabel,
   workCwd,
+  inLine,
+  tagShellAnswers,
   worksElsewhere,
   isInside,
   inGitFor,
@@ -161,6 +163,78 @@ describe("worksElsewhere", () => {
   })
 })
 
+describe("inLine (the sidebar's `in` line)", () => {
+  const repo = { root: "/w/rts", forCwd: "/w/rts", prefix: "" }
+  const at = (cwd: string, prefix: string, extra = {}) => ({
+    root: "/w/rts",
+    forCwd: cwd,
+    prefix,
+    ...extra,
+  })
+
+  it("a subfolder of the same repo: shown with its place in the repo, not 'elsewhere'", () => {
+    const w = "/w/rts/output/soldier-animation"
+    expect(inLine("/w/rts", w, repo, at(w, "output/soldier-animation"), "claude")).toEqual({
+      elsewhere: false,
+      known: at(w, "output/soldier-animation"),
+      label: "output/soldier-animation",
+    })
+  })
+
+  it("waits for git's first answer; a move inside the repo keeps the line until the next one", () => {
+    expect(inLine("/w/rts", "/w/rts/output", repo, undefined, "claude")).toBeNull()
+    const old = at("/w/rts/output/x", "output/x") // the agent then cd'd to /w/rts/output
+    expect(inLine("/w/rts", "/w/rts/output", repo, old, "claude")).toEqual({
+      elsewhere: false,
+      known: old, // no label: the sidebar falls back to the path until git places it
+    })
+  })
+
+  it("a shell answer from before its `cd` doesn't decide", () => {
+    const w = "/w/rts/output/x"
+    const stale = { root: "/w/rts", forCwd: "/w/rts", prefix: "" } // shell is now in /w/rts/output
+    expect(inLine("/w/rts/output", w, stale, at(w, "output/x"), "claude")).toBeNull()
+    const fresh = { root: "/w/rts", forCwd: "/w/rts/output", prefix: "output" }
+    expect(inLine("/w/rts/output", w, fresh, at(w, "output/x"), "claude")).toMatchObject({
+      label: "x",
+    })
+  })
+
+  it("symlinked or WSL spellings of the same place: git's prefixes agree — no line", () => {
+    // WSL: the shell is at /home/u/proj/sub (a symlink to /mnt/d/proj), the agent reports
+    // /mnt/d/proj/sub; no real paths there, but git places both at "sub".
+    const shell = { root: "/mnt/d/proj", forCwd: "/home/u/proj/sub", prefix: "sub" }
+    const inGit = { root: "/mnt/d/proj", forCwd: "/mnt/d/proj/sub", prefix: "sub" }
+    expect(inLine("/home/u/proj/sub", "/mnt/d/proj/sub", shell, inGit, "claude")).toBeNull()
+    // …and a real move from there (cd ..) does show
+    const up = { root: "/mnt/d/proj", forCwd: "/mnt/d/proj", prefix: "" }
+    expect(inLine("/home/u/proj/sub", "/mnt/d/proj", shell, up, "claude")).not.toBeNull()
+  })
+
+  it("no prefix known for the shell: no line (never a guess)", () => {
+    const w = "/w/rts/output"
+    expect(inLine("/w/rts", w, { root: "/w/rts" }, at(w, "output"), "claude")).toBeNull()
+  })
+
+  it("outside git: a folder below the shell's shows; the same one (real path) doesn't", () => {
+    const shell = { real: "/n/notes" }
+    expect(
+      inLine("/n/notes", "/n/notes/drafts", shell, { forCwd: "/n/notes/drafts" }, "claude"),
+    ).toMatchObject({ elsewhere: false })
+    // only one side resolved (/tmp → /private/tmp on macOS): compare the reported paths
+    const half = { forCwd: "/tmp/n/d", real: "/private/tmp/n/d" }
+    expect(inLine("/tmp/n", "/tmp/n/d", {}, half, "claude")).toMatchObject({ elsewhere: false })
+    expect(
+      inLine("/link/notes", "/n/notes", shell, { forCwd: "/n/notes", real: "/n/notes" }, "claude"),
+    ).toBeNull()
+  })
+
+  it("another repo: elsewhere (its own branch / PR)", () => {
+    const api = { root: "/w/api", forCwd: "/w/api", branch: "dev", prefix: "" }
+    expect(inLine("/w/rts", "/w/api", repo, api, "claude")).toMatchObject({ elsewhere: true })
+  })
+})
+
 describe("inLabel", () => {
   const home = "/Users/me"
   it("relative inside `from`; ~-shortened elsewhere (another repo)", () => {
@@ -306,5 +380,16 @@ describe("a stray SessionStart main rejected doesn't move the lead", () => {
       { event: "SessionStart", sessionId: "lead", paneId: "p", source: "resume", nested: false },
     ])
     expect(agentWorkDirs(g).p?.cwd).toBe("/dimo")
+  })
+})
+
+describe("tagShellAnswers", () => {
+  it("marks shell answers with the folder asked about; `in` answers are left to settleInAnswers", () => {
+    const res = { a: { root: "/r" }, "a@in": { root: "/r" } }
+    tagShellAnswers(res, [
+      { paneId: "a", cwd: "/r/x" },
+      { paneId: "a@in", cwd: "/r/y" },
+    ])
+    expect(res).toEqual({ a: { root: "/r", forCwd: "/r/x" }, "a@in": { root: "/r" } })
   })
 })

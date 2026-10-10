@@ -22,7 +22,7 @@ import {
 import { activeTheme, useStore } from "../store"
 import { sessionColor } from "../lib/session-color"
 import { agentPanes, paneAgents, type AgentKind } from "../lib/agent-graph"
-import { agentWorkFlat, inGitFor, inGitKey, inLabel, worksElsewhere } from "../lib/agent-dirs"
+import { agentWorkFlat, inGitKey, inLabel, inLine } from "../lib/agent-dirs"
 import { agentIcon } from "./agent-icon"
 import { ContextMenu } from "./context-menu"
 import { integrationOn } from "../lib/ssh-integration"
@@ -499,7 +499,10 @@ function DirLines({
       +{extra}
     </span>
   )
-  if (!shellCwd || !work || !worksElsewhere(shellCwd, work.cwd, shellGit, inGit, work.agent)) {
+  // Another checkout (its own branch / PR), or another folder of the same one (a sub-project:
+  // no git line of its own — it's from's).
+  const line = work ? inLine(shellCwd, work.cwd, shellGit, inGit, work.agent) : null
+  if (!shellCwd || !work || !line) {
     return (
       <>
         <span className="tree-sub tree-dir" title={shellCwd} onContextMenu={menuFor(shellCwd)}>
@@ -532,13 +535,13 @@ function DirLines({
         <span className="tree-dir-label">in</span>
         <span className="tree-dir-path">
           {branchLine(
-            inGitFor(inGit, work.cwd, work.agent)?.branch,
-            inLabel(shellCwd, work.cwd, home, shellGit?.real),
+            line.elsewhere ? line.known.branch : undefined,
+            line.label ?? inLabel(shellCwd, work.cwd, home, shellGit?.real),
           )}
         </span>
         {more}
       </span>
-      {inGitFor(inGit, work.cwd, work.agent)?.pr && <PrLine pr={inGit!.pr!} />}
+      {line.elsewhere && line.known.pr && <PrLine pr={line.known.pr} />}
     </>
   )
 }

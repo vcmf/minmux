@@ -16,7 +16,13 @@ import { FilePreview } from "./components/file-preview"
 import { CloseConfirmDialog } from "./components/close-confirm-dialog"
 import { RightPanelResizer } from "./components/right-panel-resizer"
 import { useActiveWorkCwd, getActiveWsl } from "./lib/use-active-cwd"
-import { agentWorkDirs, keepPrs, planGitPoll, settleInAnswers } from "./lib/agent-dirs"
+import {
+  agentWorkDirs,
+  keepPrs,
+  planGitPoll,
+  settleInAnswers,
+  tagShellAnswers,
+} from "./lib/agent-dirs"
 import { TerminalManager } from "./terminal/terminal-manager"
 import { activeTheme, useStore } from "./store"
 import { ensureNotificationPermission } from "./lib/notify"
@@ -387,6 +393,7 @@ function App() {
       for (const i of Object.values(res)) delete i.prPending // transport flag, not state
       const known = useStore.getState().paneGit
       settleInAnswers(res, inCwd, known)
+      tagShellAnswers(res, reqs)
       if (s.sidebarCollapsed) keepPrs(res, known) // no-PR lookups: don't blank the PR lines
       useStore.getState().setPaneGit(res, polled)
       if (pending) pollSoon(1500) // a PR is being fetched in main — pick it up shortly

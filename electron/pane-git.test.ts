@@ -3,8 +3,22 @@ import { PaneGitService, parseHeadInfo, parsePrView, type Runner } from "./pane-
 
 describe("parseHeadInfo", () => {
   it("branch + repo root; a detached HEAD has no branch", () => {
-    expect(parseHeadInfo("feat/x\n/repo\n")).toEqual({ branch: "feat/x", root: "/repo" })
-    expect(parseHeadInfo("HEAD\r\n/repo\r\n")).toEqual({ branch: null, root: "/repo" })
+    // git's output at the root: the prefix line is there, empty
+    expect(parseHeadInfo("feat/x\n/repo\n\n")).toEqual({
+      branch: "feat/x",
+      root: "/repo",
+      prefix: "",
+    })
+    expect(parseHeadInfo("HEAD\r\n/repo\r\n\r\n")).toEqual({
+      branch: null,
+      root: "/repo",
+      prefix: "",
+    })
+    // --show-prefix: the folder's place in the repo (git resolves symlinks), trailing / dropped
+    expect(parseHeadInfo("main\n/repo\nout/anim/\n")?.prefix).toBe("out/anim")
+    // no prefix line at all (with or without git's final newline): unknown, not the root
+    expect(parseHeadInfo("main\n/repo\n")).toEqual({ branch: "main", root: "/repo" })
+    expect(parseHeadInfo("main\n/repo")).toEqual({ branch: "main", root: "/repo" })
     expect(parseHeadInfo("")).toBeNull()
   })
 })
@@ -79,7 +93,7 @@ describe("PaneGitService", () => {
     const f = fake({ heads: { "/r": "main\n/r" }, prs: { main: PR51 } })
     const svc = new PaneGitService(f.run, Date.now, async (p) => p)
     expect(await svc.lookup([{ paneId: "a", cwd: "/r", noPr: true }])).toEqual({
-      a: { branch: "main", root: "/r", real: "/r" },
+      a: { branch: "main", root: "/r", real: "/r" }, // the fake prints no prefix line
     })
     await tick()
     expect(f.gh()).toBe(0)
@@ -147,7 +161,10 @@ describe("PaneGitService", () => {
     ]
     await svc.lookup(req)
     await tick()
-    expect(await svc.lookup(req)).toEqual({ a: { branch: "main", root: "/r" }, b: { root: "/d" } })
+    expect(await svc.lookup(req)).toEqual({
+      a: { branch: "main", root: "/r" },
+      b: { root: "/d" },
+    })
     expect(f.gh()).toBe(1) // only for "main"
   })
 
