@@ -64,6 +64,7 @@ const sameInfo = (a: PaneGitInfo | undefined, b: PaneGitInfo | undefined): boole
   a?.branch === b?.branch &&
   a?.root === b?.root &&
   a?.real === b?.real &&
+  a?.prefix === b?.prefix &&
   a?.forCwd === b?.forCwd &&
   a?.kept === b?.kept &&
   a?.pr?.number === b?.pr?.number &&

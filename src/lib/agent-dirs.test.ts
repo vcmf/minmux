@@ -6,6 +6,7 @@ import {
   inLabel,
   workCwd,
   inLine,
+  tagShellAnswers,
   worksElsewhere,
   isInside,
   inGitFor,
@@ -180,10 +181,23 @@ describe("inLine (the sidebar's `in` line)", () => {
     })
   })
 
-  it("waits for git's answer for THIS folder (no flicker, no stale answer)", () => {
+  it("waits for git's first answer; a move inside the repo keeps the line until the next one", () => {
     expect(inLine("/w/rts", "/w/rts/output", repo, undefined, "claude")).toBeNull()
-    const old = at("/w/rts/output/x", "output/x")
-    expect(inLine("/w/rts", "/w/rts/output", repo, old, "claude")).toBeNull()
+    const old = at("/w/rts/output/x", "output/x") // the agent then cd'd to /w/rts/output
+    expect(inLine("/w/rts", "/w/rts/output", repo, old, "claude")).toEqual({
+      elsewhere: false,
+      known: old, // no label: the sidebar falls back to the path until git places it
+    })
+  })
+
+  it("a shell answer from before its `cd` doesn't decide", () => {
+    const w = "/w/rts/output/x"
+    const stale = { root: "/w/rts", forCwd: "/w/rts", prefix: "" } // shell is now in /w/rts/output
+    expect(inLine("/w/rts/output", w, stale, at(w, "output/x"), "claude")).toBeNull()
+    const fresh = { root: "/w/rts", forCwd: "/w/rts/output", prefix: "output" }
+    expect(inLine("/w/rts/output", w, fresh, at(w, "output/x"), "claude")).toMatchObject({
+      label: "x",
+    })
   })
 
   it("symlinked or WSL spellings of the same place: git's prefixes agree — no line", () => {
@@ -207,6 +221,9 @@ describe("inLine (the sidebar's `in` line)", () => {
     expect(
       inLine("/n/notes", "/n/notes/drafts", shell, { forCwd: "/n/notes/drafts" }, "claude"),
     ).toMatchObject({ elsewhere: false })
+    // only one side resolved (/tmp → /private/tmp on macOS): compare the reported paths
+    const half = { forCwd: "/tmp/n/d", real: "/private/tmp/n/d" }
+    expect(inLine("/tmp/n", "/tmp/n/d", {}, half, "claude")).toMatchObject({ elsewhere: false })
     expect(
       inLine("/link/notes", "/n/notes", shell, { forCwd: "/n/notes", real: "/n/notes" }, "claude"),
     ).toBeNull()
@@ -363,5 +380,16 @@ describe("a stray SessionStart main rejected doesn't move the lead", () => {
       { event: "SessionStart", sessionId: "lead", paneId: "p", source: "resume", nested: false },
     ])
     expect(agentWorkDirs(g).p?.cwd).toBe("/dimo")
+  })
+})
+
+describe("tagShellAnswers", () => {
+  it("marks shell answers with the folder asked about; `in` answers are left to settleInAnswers", () => {
+    const res = { a: { root: "/r" }, "a@in": { root: "/r" } }
+    tagShellAnswers(res, [
+      { paneId: "a", cwd: "/r/x" },
+      { paneId: "a@in", cwd: "/r/y" },
+    ])
+    expect(res).toEqual({ a: { root: "/r", forCwd: "/r/x" }, "a@in": { root: "/r" } })
   })
 })

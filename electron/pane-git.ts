@@ -15,10 +15,12 @@ const exec = promisify(execFile)
  *  detached) + repo root + the folder's place in it ("" = the root; git resolves symlinks). */
 export function parseHeadInfo(
   out: string,
-): { branch: string | null; root: string; prefix: string } | null {
-  const [branch, root, prefix = ""] = out.split(/\r?\n/) // the prefix line is empty at the root
+): { branch: string | null; root: string; prefix?: string } | null {
+  const [branch, root, prefix] = out.split(/\r?\n/) // the prefix line is empty at the root
   if (!branch || !root) return null
-  return { branch: branch === "HEAD" ? null : branch, root, prefix: prefix.replace(/\/+$/, "") }
+  const head = { branch: branch === "HEAD" ? null : branch, root }
+  // No prefix line at all: unknown (never taken for the root).
+  return prefix === undefined ? head : { ...head, prefix: prefix.replace(/\/+$/, "") }
 }
 
 /** `gh pr view --json number,state,url,isDraft` → PrInfo (null if unparseable). */
@@ -107,7 +109,7 @@ export class PaneGitService {
         if (!head) return // not a repo: just the real path
         if (head.branch) info.branch = head.branch
         info.root = head.root
-        info.prefix = head.prefix
+        if (head.prefix !== undefined) info.prefix = head.prefix
         if (head.branch && !r.noPr) {
           const hit = this.prs.get(this.prKey(r, head.root, head.branch))
           if (hit?.value) info.pr = hit.value // (a stale value beats a blank while refreshing)

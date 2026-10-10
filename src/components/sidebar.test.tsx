@@ -148,6 +148,7 @@ describe("Sidebar — from / in folders", () => {
       {
         [id]: {
           root: "/w/term",
+          forCwd: "/w/term",
           prefix: "",
           branch: "main",
           pr: { number: 3, state: "open", url: "u" },

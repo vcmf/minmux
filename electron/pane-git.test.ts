@@ -11,6 +11,7 @@ describe("parseHeadInfo", () => {
     expect(parseHeadInfo("HEAD\r\n/repo\r\n")).toEqual({ branch: null, root: "/repo", prefix: "" })
     // --show-prefix: the folder's place in the repo (git resolves symlinks), trailing / dropped
     expect(parseHeadInfo("main\n/repo\nout/anim/\n")?.prefix).toBe("out/anim")
+    expect(parseHeadInfo("main\n/repo")).toEqual({ branch: "main", root: "/repo" }) // unknown, not ""
     expect(parseHeadInfo("")).toBeNull()
   })
 })
@@ -68,7 +69,7 @@ describe("PaneGitService", () => {
     const f = fake({ heads: { "/r": "main\n/r" }, prs: { main: PR51 } })
     const svc = new PaneGitService(f.run, Date.now, async (p) => p)
     expect(await svc.lookup([{ paneId: "a", cwd: "/r", noPr: true }])).toEqual({
-      a: { branch: "main", root: "/r", prefix: "", real: "/r" },
+      a: { branch: "main", root: "/r", real: "/r" }, // the fake prints no prefix line
     })
     await tick()
     expect(f.gh()).toBe(0)
@@ -96,7 +97,7 @@ describe("PaneGitService", () => {
       { paneId: "b", cwd: "/tmp" }, // not a repo → only its real path
     ]
     expect(await svc.lookup(req)).toEqual({
-      a: { branch: "feat/x", root: "/repo", prefix: "", real: "/repo", prPending: true },
+      a: { branch: "feat/x", root: "/repo", real: "/repo", prPending: true },
       b: { real: "/tmp" },
     })
     await tick()
@@ -105,7 +106,6 @@ describe("PaneGitService", () => {
       a: {
         branch: "feat/x",
         root: "/repo",
-        prefix: "",
         real: "/repo",
         pr: { number: 51, state: "merged", url: "https://x/pull/51" },
       },
@@ -137,8 +137,8 @@ describe("PaneGitService", () => {
     await svc.lookup(req)
     await tick()
     expect(await svc.lookup(req)).toEqual({
-      a: { branch: "main", root: "/r", prefix: "" },
-      b: { root: "/d", prefix: "" },
+      a: { branch: "main", root: "/r" },
+      b: { root: "/d" },
     })
     expect(f.gh()).toBe(1) // only for "main"
   })

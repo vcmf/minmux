@@ -35,3 +35,12 @@ describe("mergePaneGit", () => {
     expect(next.a?.pr?.state).toBe("merged")
   })
 })
+
+describe("mergePaneGit — prefix", () => {
+  it("an answer that differs only in its place in the repo is news (a `cd` within it)", () => {
+    const cur = { a: { root: "/r", prefix: "" } }
+    const next = mergePaneGit(cur, { a: { root: "/r", prefix: "sub" } })
+    expect(next).not.toBe(cur)
+    expect(next.a?.prefix).toBe("sub")
+  })
+})
