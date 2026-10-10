@@ -391,12 +391,14 @@ describe("PaneGitService — gh states", () => {
     expect((await svc.lookup([{ paneId: "a", cwd: "/r" }])).a?.gh).toBe("unauthenticated")
   })
 
-  it("after logging in, a branch without a PR (exit 1) clears the 'log in' hint", async () => {
+  it("after logging in, 'no pull requests found' clears the 'log in' hint", async () => {
     let code: number = 4
     let t = 0
     const run: Runner = async (cmd, _args, cwd) => {
       if (cmd === "git") return `main\n${cwd}`
-      throw Object.assign(new Error("gh"), { code })
+      // A logged-in "no PR" says so on stderr (a revoked token's exit 1 wouldn't clear it).
+      const stderr = code === 1 ? 'no pull requests found for branch "main"' : ""
+      throw Object.assign(new Error("gh"), { code, stderr })
     }
     const svc = new PaneGitService(
       run,

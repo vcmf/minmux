@@ -66,7 +66,9 @@ export const defaultRunner: Runner = async (cmd, args, cwd, wsl) => {
     // A Linux cwd is only valid inside WSL — run there (same mechanism as the git panel).
     return (await exec("wsl.exe", wslArgs(wsl.distro, cwd, cmd, args), opts)).stdout
   }
-  return (await exec(cmd, args, { ...opts, cwd })).stdout
+  // git's messages in English whatever the user's locale: "not a git repository" is matched.
+  const env = cmd === "git" ? { ...process.env, LC_ALL: "C" } : process.env
+  return (await exec(cmd, args, { ...opts, cwd, env })).stdout
 }
 
 // How long a cached answer is trusted. An open PR can change any time; a merged/closed one
@@ -78,6 +80,7 @@ export const defaultRunner: Runner = async (cmd, args, cwd, wsl) => {
 const HEAD_TTL = 8_000
 const RENEW_MAX = 60_000
 const NO_REPO_TTL = 30_000
+const READ_TIMEOUT = 2_000 // reading a HEAD file: past this, treated as unreadable (relaunch)
 const REAL_TTL = 20_000 // a folder's resolved path (symlinks): rarely changes
 const PR_TTL: Record<PrState | "none", number> = {
   open: 60_000,
@@ -187,9 +190,17 @@ export class PaneGitService {
     // can't be read from Windows; relaunch.)
     const st = this.stamps.get(key)
     const gitDir = hit?.value?.gitDir
-    if (hit && gitDir && st && !r.wsl && this.now() - st.since < RENEW_MAX) {
-      const now = await this.once(`stamp|${key}`, () => this.files.read(headFile(gitDir)))
-      if (now !== null && now === st.stamp) {
+    let read: string | null | undefined // a renewal's read of HEAD, reused below as `before`
+    // Renew only while the renewed answer still ends within RENEW_MAX of git's last run.
+    if (hit && gitDir && st && !r.wsl && this.now() - st.since + HEAD_TTL <= RENEW_MAX) {
+      read = await this.once(`stamp|${key}`, () => this.readHead(gitDir))
+      // Unchanged — and nothing newer landed while we read (a parallel git answer wins).
+      if (
+        read !== null &&
+        read === st.stamp &&
+        this.heads.get(key) === hit &&
+        this.stamps.get(key) === st
+      ) {
         hit.at = this.now()
         this.heads.delete(key) // re-insert: a renewed entry is a recently used one
         this.heads.set(key, hit)
@@ -200,7 +211,8 @@ export class PaneGitService {
     return this.cached(this.heads, key, ttl, async () => {
       // HEAD's contents BEFORE git runs: a checkout landing after this read makes them differ
       // next time (read after, it could pair the new HEAD with the old branch).
-      const before = gitDir && !r.wsl ? await this.files.read(headFile(gitDir)) : null
+      const before =
+        read !== undefined ? read : gitDir && !r.wsl ? await this.readHead(gitDir) : null
       let out: HeadInfo | null = null
       try {
         out = parseHeadInfo(
@@ -224,8 +236,8 @@ export class PaneGitService {
       } catch (e) {
         // Not a repo: re-asked less often. Anything else (no commit yet, a timeout): soon.
         const msg = String((e as { stderr?: string }).stderr ?? e)
+        this.noRepo.delete(key)
         if (/not a git repository/i.test(msg)) this.noRepo.add(key)
-        else this.noRepo.delete(key)
       }
       // The stamp: what HEAD said when git answered. First answer for this folder (no git dir
       // known before): read now — a checkout in that tiny window is caught by RENEW_MAX.
@@ -234,15 +246,24 @@ export class PaneGitService {
           ? null
           : out.gitDir === gitDir
             ? before
-            : await this.files.read(headFile(out.gitDir))
+            : await this.readHead(out.gitDir)
       // Reftable repos keep a fixed stub in HEAD (the real HEAD lives in reftable/): no shortcut.
+      this.stamps.delete(key) // (re-)insert at the end: eviction drops the least recently used
       if (stamp !== null && !stamp.includes("refs/heads/.invalid"))
         this.stamps.set(key, { stamp, since: this.now() })
-      else this.stamps.delete(key)
       if (this.stamps.size > CACHE_MAX) this.stamps.delete(this.stamps.keys().next().value!)
       if (this.noRepo.size > CACHE_MAX) this.noRepo.delete(this.noRepo.values().next().value!)
       return out
     })
+  }
+
+  /** A checkout's HEAD file, or null — given up after READ_TIMEOUT (a dead mount mustn't hang
+   *  the lookup; the read itself may stay stuck, but nothing waits on it). */
+  private readHead(gitDir: string): Promise<string | null> {
+    return Promise.race([
+      this.files.read(headFile(gitDir)),
+      new Promise<null>((r) => setTimeout(() => r(null), READ_TIMEOUT).unref?.()),
+    ])
   }
 
   /** One in-flight run per key (a read of the same file is shared, never stacked). */
@@ -276,8 +297,10 @@ export class PaneGitService {
           const code = (e as { code?: string | number }).code
           if (code === 4) {
             this.ghLoggedOut.add(env) // gh's "not logged in" exit code
-          } else if (code === 1) {
-            this.ghLoggedOut.delete(env) // gh ran logged in (e.g. "no pull requests found")
+          } else if (
+            /no pull requests found/i.test(String((e as { stderr?: string }).stderr ?? e))
+          ) {
+            this.ghLoggedOut.delete(env) // gh ran logged in, this branch just has no PR
           } else if (
             // gh not installed (host: ENOENT; inside WSL: exit 127) → stop spawning it in this
             // environment for a while (no PR line; no noise). But a spawn whose cwd is gone
@@ -302,17 +325,14 @@ export class PaneGitService {
   ): Promise<T> {
     const hit = map.get(key)
     if (hit && this.now() - hit.at < hit.ttl) return hit.value
-    const running = this.inflight.get(key) as Promise<T> | undefined
-    if (running) return running
-    const p = load().then((value) => {
-      map.delete(key) // re-insert at the end: Map order = oldest first
-      map.set(key, { value, at: this.now(), ttl: typeof ttl === "function" ? ttl(value) : ttl })
-      if (map.size > CACHE_MAX) map.delete(map.keys().next().value!)
-      this.inflight.delete(key)
-      return value
-    })
-    this.inflight.set(key, p)
-    return p
+    return this.once(key, () =>
+      load().then((value) => {
+        map.delete(key) // re-insert at the end: Map order = oldest first
+        map.set(key, { value, at: this.now(), ttl: typeof ttl === "function" ? ttl(value) : ttl })
+        if (map.size > CACHE_MAX) map.delete(map.keys().next().value!)
+        return value
+      }),
+    )
   }
 }
 
