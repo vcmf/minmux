@@ -49,11 +49,14 @@ The agents panel header gets two tabs: **Live** (today's board, unchanged) and *
   session minmux can't resume safely (an id that fails the agent's id check) "can't resume" with
   the reason.
 
-## Data: one reader per agent, all in main
+## Data: one reader per agent, in a sessions worker
 
-Rows come from main over one channel, `agents:sessions` (list) and `agents:sessions-search`
-(search, below). Each agent gets a reader in `electron/agents/*` (agent specifics stay there), and
-a shared module `electron/agent-sessions-index.ts` merges, sorts and caches.
+Rows come from main over `agents:sessions` (list) and `agents:sessions-search` (search, below).
+Main reads nothing itself: a `minmux sessions` utility process (`sessions-worker.ts`, driven by
+`sessions-worker-client.ts`) holds each agent's reader (`electron/agents/*-history.ts`, registered
+in `agents/history-index.ts`) and its per-file cache. Main merges the rows (`past-sessions.ts`),
+keeps the last listing for resumes, and checks folders in a separate fs worker (`minmux session
+folders`), so a dead mount ties up neither main nor the readers.
 
 ```ts
 interface PastSession {
@@ -138,16 +141,22 @@ terminal: main says so at click time and a second click resumes it anyway.
 
 ## Search
 
-`agents:sessions-search({ query, agents, here })` streams results back on
-`agents:sessions-hit` with a request id; a new query cancels the previous one.
+`agents:sessions-search(query, agents, under)` returns an id; the worker's hits stream back on
+`agents:sessions-hits` with it, then how the search ended (found the most it shows, ran out of
+time, failed). A new query cancels the previous one. With "this folder" on, `under` limits the
+search to sessions in that folder or below (before the 50-session cap).
 
 - **Matching:** case-insensitive, exact substring, at least 2 characters. Only what the user and
   the agent wrote counts (user prompts, assistant text), never tool output, file contents or JSON
   keys: a candidate line is parsed and the words must be in its text fields.
-- **Claude and Codex:** `rg --json -i -F` over the transcript files, newest first, when `rg` is on
-  the PATH; otherwise a `worker_thread` streams the files line by line. The query is searched in
-  its JSON-escaped form (`JSON.stringify(q).slice(1, -1)`), so quotes and backslashes match what's
-  on disk, and each hit is verified on the parsed line.
+- **Claude and Codex:** the worker checks the listed transcripts newest first and stops at 50
+  sessions, so the ones shown are always the newest that match. Each file is read in 4 MB chunks
+  as bytes, decoded as latin1 (one char per byte) and matched with a case-insensitive pattern (a
+  letter beyond ASCII matches either case's UTF-8 bytes); only a candidate's line is decoded as
+  UTF-8 and verified. Lowercasing decoded text was ~10× slower. When `rg` is on the PATH (found
+  once) it narrows the files first (`rg -l -i -F`); if it fails, every file is checked. The query
+  is searched in its JSON-escaped form (`JSON.stringify(q).slice(1, -1)`), so quotes and
+  backslashes match what's on disk. Measured over ~5.5 GB of real transcripts: with `rg` 1.4–4.6 s (it narrows on the longest word), without 4.5–8.7 s; a common word stops at 50 sessions in under 0.4 s.
 - **OpenCode:** the same worker runs
   `select session_id, data from part where instr(lower(data), lower(?)) > 0` and verifies text
   parts the same way.
@@ -158,8 +167,10 @@ terminal: main says so at click time and a second click resumes it anyway.
 
 - Nothing runs until the Sessions tab is shown. No polling: the list refreshes when the tab opens
   and when a refresh button is pressed. Running state comes from the store.
-- Every read is async in main (`fs.promises`, a child `rg`, a worker); main never blocks on a
-  transcript or the database. Lists over 500 rows are cut (newest first).
+- Transcripts and the database are read in the sessions worker (its own `rg` child); main only
+  forwards. A worker that doesn't answer in time (2 min for a listing, plus 20 s for a search) is killed and replaced; it shuts down after 10
+  idle minutes (the next list re-reads, in the worker). Lists over 500 rows are cut (newest
+  first), and only listed sessions are searched.
 - A file that fails to parse, a locked database, a missing `rg`: that source is skipped and the
   tab says so in a footer line; the other agents still list.
 - Measured with the `MINMUX_PERF=1` harness before each step lands: list on a cold cache, list on
@@ -177,8 +188,7 @@ session in another group, search across agents.
 
 1. **Sessions tab for Claude and Codex** (#140): the tab, the readers, running rows jump, others resume
    in a split; agent chips and "here".
-2. **Search** for Claude and Codex (#141): `rg` with the worker fallback, snippets, cancellation.
-   Step 1 reads the list in main (measured: a cold list over ~5 GB stalls main at most 3.7 ms;
-   folder checks already run in a `minmux sessions` utility process). This step moves the
-   readers into that process too, so the listing and the search both run off main.
+2. **Search** for Claude and Codex (#141): `rg` with the byte-scan fallback, snippets,
+   cancellation. Step 1 read the list in main (a cold list over ~5 GB stalled it at most
+   3.7 ms); this step moves the readers into the sessions worker with the search.
 3. **OpenCode** (#142): the database reader in a worker, for both the list and the search.

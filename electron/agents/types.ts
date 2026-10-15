@@ -84,6 +84,5 @@ export interface AgentSpec {
   windows?: false // not integrated on Windows (nor so its WSL panes) yet; mirrors agent-kinds
   shell: AgentShell
   rules: SessionRules
-  history?: SessionHistory // its past sessions (none: the Sessions tab doesn't list this agent)
   create(ctx?: AdapterContext): AgentAdapter
 }

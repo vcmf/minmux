@@ -153,6 +153,12 @@ describe("PastSessions", () => {
     expect(result.sessions[0]!.cwdGone).toBeUndefined()
   })
 
+  it("remembers a session a search found, for a resume", () => {
+    const past = new PastSessions(async () => true)
+    past.remember(s({ sessionId: "old", cwd: "/w", transcriptPath: "/t/old.jsonl" }))
+    expect(past.find("claude", "old")).toMatchObject({ transcriptPath: "/t/old.jsonl" })
+  })
+
   it("a list asked for while one runs shares it", async () => {
     let reads = 0
     const history = {

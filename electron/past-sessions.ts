@@ -26,6 +26,11 @@ export class PastSessions {
     return this.running
   }
 
+  /** A session a search found (maybe beyond the listing's first 500): resumable like a listed one. */
+  remember(s: ListedSession): void {
+    this.listed.set(key(s.agent, s.sessionId), s)
+  }
+
   /** A session from the last listing (its folder and transcript, as main read them). */
   find(agent: AgentKind, sessionId: string): ListedSession | undefined {
     return this.listed.get(key(agent, sessionId))

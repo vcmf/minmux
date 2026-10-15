@@ -1,11 +1,11 @@
 import { describe, it, expect, beforeEach, vi } from "vitest"
-import { render, screen, fireEvent, waitFor } from "@testing-library/react"
+import { render, screen, fireEvent, waitFor, act } from "@testing-library/react"
 import { AgentSessionsTab } from "./agent-sessions-tab"
 import { AgentsPanel } from "./agents-panel"
 import { useStore } from "../store"
 import { ipc } from "../lib/ipc"
 import { reduceAgentEvents } from "../lib/agent-graph"
-import type { PastSession } from "../lib/past-sessions"
+import type { PastSession, SearchEnd, SessionHit } from "../lib/past-sessions"
 import type { ResumePlan } from "../lib/resume"
 import { resetStore, testShell } from "../test/helpers"
 
@@ -165,6 +165,145 @@ describe("AgentSessionsTab", () => {
     vi.mocked(ipc.pastSessions).mockResolvedValue({ sessions: [], failed: ["codex"] })
     render(<AgentSessionsTab />)
     expect(await screen.findByText("Couldn't read Codex sessions.")).toBeInTheDocument()
+  })
+})
+
+describe("AgentSessionsTab search", () => {
+  let deliver: (id: number, hits: SessionHit[], end: SearchEnd | null) => void
+  beforeEach(() => {
+    resetStore()
+    localStorage.clear()
+    vi.clearAllMocks()
+    useStore.getState().newTab(testShell)
+    useStore.setState({ platform: "darwin" })
+    vi.mocked(ipc.pastSessions).mockResolvedValue({ sessions: rows, failed: [] })
+    vi.mocked(ipc.searchSessions).mockResolvedValue(7)
+    vi.mocked(ipc.onSessionHits).mockImplementation((cb) => {
+      deliver = cb
+      return () => {}
+    })
+  })
+  const hit: SessionHit = {
+    agent: "codex",
+    sessionId: PAST,
+    snippet: "…we fixed the quit drain today",
+    match: 14,
+    length: 10,
+  }
+
+  it("shows only the sessions found, with the words marked in context", async () => {
+    render(<AgentSessionsTab />)
+    await screen.findByText("running one")
+    fireEvent.change(screen.getByLabelText("Search conversations"), {
+      target: { value: "quit drain" },
+    })
+    await waitFor(() =>
+      expect(ipc.searchSessions).toHaveBeenCalledWith("quit drain", ["claude", "codex"], undefined),
+    )
+    expect(await screen.findByText("Searching…")).toBeInTheDocument()
+    act(() => deliver(7, [hit], null))
+    expect(screen.getByText("quit drain", { selector: "mark" })).toBeInTheDocument()
+    expect(screen.queryByText("running one")).toBeNull() // not a hit: not shown
+    act(() => deliver(7, [], { capped: false }))
+    expect(screen.getByText("1 session")).toBeInTheDocument()
+  })
+
+  it("ignores another search's hits, says when nothing matched, Esc clears it", async () => {
+    render(<AgentSessionsTab />)
+    await screen.findByText("running one")
+    const box = screen.getByLabelText("Search conversations")
+    fireEvent.change(box, { target: { value: "nothing here" } })
+    await waitFor(() => expect(ipc.searchSessions).toHaveBeenCalled())
+    await waitFor(() => act(() => deliver(6, [hit], { capped: false }))) // an older search's
+    act(() => deliver(7, [], { capped: false }))
+    expect(await screen.findByText("No conversation has those words.")).toBeInTheDocument()
+    fireEvent.keyDown(box, { key: "Escape" })
+    expect(await screen.findByText("running one")).toBeInTheDocument()
+    expect(ipc.cancelSessionSearch).toHaveBeenCalledWith(7)
+  })
+
+  it("says when the search stopped early, or failed", async () => {
+    render(<AgentSessionsTab />)
+    await screen.findByText("running one")
+    fireEvent.change(screen.getByLabelText("Search conversations"), { target: { value: "quit" } })
+    await waitFor(() => expect(ipc.searchSessions).toHaveBeenCalled())
+    await waitFor(() => act(() => deliver(7, [hit], { capped: false, timedOut: true })))
+    expect(
+      screen.getByText("1 session in the time allowed: the search stopped early."),
+    ).toBeInTheDocument()
+    act(() => deliver(7, [], { capped: false, failed: true }))
+    expect(screen.getByText("The search failed. Try again.")).toBeInTheDocument()
+  })
+
+  it("a search that answers after the query changed is cancelled, never shown", async () => {
+    let answer!: (id: number) => void
+    vi.mocked(ipc.searchSessions).mockImplementationOnce(() => new Promise((r) => (answer = r)))
+    render(<AgentSessionsTab />)
+    await screen.findByText("running one")
+    const box = screen.getByLabelText("Search conversations")
+    fireEvent.change(box, { target: { value: "quit" } })
+    await waitFor(() => expect(ipc.searchSessions).toHaveBeenCalledTimes(1))
+    fireEvent.change(box, { target: { value: "" } }) // cleared before it answered
+    await act(async () => answer(5))
+    expect(ipc.cancelSessionSearch).toHaveBeenCalledWith(5)
+    act(() => deliver(5, [hit], null))
+    expect(screen.queryByText("quit drain", { selector: "mark" })).toBeNull()
+  })
+
+  it("shows a hit the list doesn't have yet, from its own row", async () => {
+    render(<AgentSessionsTab />)
+    await screen.findByText("running one")
+    fireEvent.change(screen.getByLabelText("Search conversations"), { target: { value: "brand" } })
+    await waitFor(() => expect(ipc.searchSessions).toHaveBeenCalled())
+    const NEW = "55555555-aaaa-bbbb-cccc-dddddddddddd"
+    const fresh: SessionHit = {
+      agent: "claude",
+      sessionId: NEW,
+      snippet: "a brand new one",
+      match: 2,
+      length: 5,
+      session: {
+        agent: "claude",
+        sessionId: NEW,
+        name: "started after the list",
+        cwd: "/w/n",
+        updatedAt: Date.now(),
+      },
+    }
+    await waitFor(() => act(() => deliver(7, [fresh], { capped: false })))
+    expect(await screen.findByText("started after the list")).toBeInTheDocument()
+  })
+
+  it("searches the trimmed words, within the folder when 'This folder' is on", async () => {
+    useStore.setState((st) => ({
+      sessions: Object.fromEntries(
+        Object.entries(st.sessions).map(([k, v]) => [k, { ...v, cwd: "/w/other" }]),
+      ),
+    }))
+    localStorage.setItem("minmux.sessions.here", "1")
+    render(<AgentSessionsTab />)
+    fireEvent.change(screen.getByLabelText("Search conversations"), {
+      target: { value: "  quit  " },
+    })
+    await waitFor(() =>
+      expect(ipc.searchSessions).toHaveBeenCalledWith("quit", ["claude", "codex"], "/w/other"),
+    )
+  })
+
+  it("a search that fails to start says so", async () => {
+    vi.mocked(ipc.searchSessions).mockRejectedValueOnce(new Error("no worker"))
+    render(<AgentSessionsTab />)
+    await screen.findByText("running one")
+    fireEvent.change(screen.getByLabelText("Search conversations"), { target: { value: "quit" } })
+    expect(await screen.findByText("The search failed. Try again.")).toBeInTheDocument()
+  })
+
+  it("one character doesn't search", async () => {
+    render(<AgentSessionsTab />)
+    await screen.findByText("running one")
+    fireEvent.change(screen.getByLabelText("Search conversations"), { target: { value: "q" } })
+    await new Promise((r) => setTimeout(r, 400))
+    expect(ipc.searchSessions).not.toHaveBeenCalled()
   })
 })
 

@@ -3,7 +3,7 @@ import type { WslContext } from "./wsl"
 import type { AgentEvent, AgentKind } from "./agent-graph"
 import type { SessionMeta } from "./session-color"
 import type { ResumePlan } from "./resume"
-import type { PastSession, PastSessionsResult } from "./past-sessions"
+import type { PastSession, PastSessionsResult, SearchEnd, SessionHit } from "./past-sessions"
 import type { GitRootRequest, PaneGitInfo, PaneGitRequest } from "./pane-git"
 import type { DirListing } from "./dir-listing"
 import type { GhAccount, PrListsRequest, PrListsResult } from "./pr-dashboard"
@@ -62,6 +62,11 @@ export interface Ipc {
   agentHintDismiss: (kind: AgentKind, never: boolean) => Promise<number>
   // Claude sessions to resume in restored terminals; consume = attempted/dismissed (one shot).
   resumePlan: (paneIds: string[], allowBypass: boolean) => Promise<Record<string, ResumePlan>>
+  /** Search past conversations (a new search cancels the last): its id, 0 = none started. */
+  searchSessions: (query: string, agents: AgentKind[], under?: string) => Promise<number>
+  cancelSessionSearch: (id: number) => void
+  /** A search's hits as they're found; `end` once it's over. */
+  onSessionHits: (cb: (id: number, hits: SessionHit[], end: SearchEnd | null) => void) => () => void
   /** Every enabled agent's past sessions, newest first (the Sessions tab). */
   pastSessions: () => Promise<PastSessionsResult>
   /** One past session's resume plan (null: not resumable from here). */

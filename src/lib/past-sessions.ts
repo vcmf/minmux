@@ -16,6 +16,23 @@ export interface PastSession {
   cwdGone?: boolean // that folder no longer exists
 }
 
+/** A session whose conversation has the searched words: where, with some words around. */
+export interface SessionHit {
+  agent: AgentKind
+  sessionId: string
+  session?: PastSession // its row (the tab's own list may not have it yet)
+  snippet: string // one line, "…" where cut
+  match: number // where the words start in it
+  length: number
+}
+
+/** How a search ended: stopped at the most sessions shown, out of time, or failed. */
+export interface SearchEnd {
+  capped: boolean
+  timedOut?: boolean
+  failed?: boolean
+}
+
 /** The list main answers with; `failed` names the agents whose sessions couldn't be read. */
 export interface PastSessionsResult {
   sessions: PastSession[]
@@ -23,6 +40,8 @@ export interface PastSessionsResult {
 }
 
 export const PROMPT_MAX = 200
+export const MIN_QUERY = 2 // a search needs this many characters
+export const MAX_QUERY = 200
 export const LIST_MAX = 500 // newest first; older ones are cut
 
 /** Text on one line, trimmed and capped (undefined when nothing is left). */
@@ -56,11 +75,11 @@ export function mergePast(lists: PastSession[][], max = LIST_MAX): PastSession[]
 }
 
 /** The rows to show: these agents only, and with `here`, only sessions in that folder or below. */
-export function filterPast(
-  list: PastSession[],
+export function filterPast<T extends PastSession>(
+  list: T[],
   agents: ReadonlySet<AgentKind>,
   here?: string,
-): PastSession[] {
+): T[] {
   return list.filter(
     (s) =>
       agents.has(s.agent) &&

@@ -30,6 +30,25 @@ function userText(o: Record<string, unknown>): string | undefined {
   return texts.length ? texts.join(" ") : undefined
 }
 
+/** Could this raw line be a typed prompt or a reply? (a tool's result or call never is) */
+export const claudeQuick = (raw: string): boolean =>
+  (raw.includes('"type":"user"') && !raw.includes('"tool_result"')) ||
+  (raw.includes('"type":"assistant"') && raw.includes('"type":"text"'))
+
+/** What the user and Claude wrote on this line (typed prompts, replies), for search. */
+export function claudeTexts(o: Record<string, unknown>): string[] {
+  const user = userText(o)
+  if (user !== undefined) return isTypedPrompt(user, INJECTED) ? [user] : []
+  if (o.type !== "assistant" || o.isSidechain === true) return []
+  const content = (o.message as { content?: unknown } | undefined)?.content
+  if (!Array.isArray(content)) return []
+  return content
+    .filter(
+      (b): b is { type: "text"; text: string } => b?.type === "text" && typeof b.text === "string",
+    )
+    .map((b) => b.text)
+}
+
 // With the transcript's path, the folder is the first one Claude files the session under: a
 // nested or background claude may log another `cwd` first, and `--resume` only finds it there.
 /** From a transcript's start: where it ran and the first prompt the user typed. */

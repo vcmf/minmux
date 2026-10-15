@@ -59,6 +59,16 @@ import { AgentMetaTracker, planMeta } from "./agent-meta"
 import { AgentHints } from "./agent-hints"
 import { SessionLedger, planEntry, type LedgerEntry } from "./agent-sessions"
 import { PastSessions, STAT_MS } from "./past-sessions"
+import type { ListedSession } from "./agents/types"
+import { SessionsWorkerClient, type SessionsProc } from "./sessions-worker-client"
+import { AGENT_KINDS, agentsOn } from "../src/lib/agent-kinds"
+import {
+  MAX_QUERY,
+  MIN_QUERY,
+  type PastSession,
+  type SearchEnd,
+  type SessionHit,
+} from "../src/lib/past-sessions"
 import { BUSY_MS, ago } from "../src/lib/past-sessions"
 import { within } from "./history-read"
 import {
@@ -159,6 +169,11 @@ const sessions = new Map<string, PtySession>()
 // Every node-pty that hasn't reported its exit yet — including closed panes still winding
 // down (gone from `sessions`). None may outlive Node: quitting drains this (pty-drain.ts).
 const livePtys = new Set<Drainable>()
+let sessionSearch: { id: number; cancel: () => void } | null = null
+let sessionSearchSeq = 0
+/** The agents whose past sessions are listed (have a reader, on this platform, switched on). */
+const historyKinds = (off: Set<AgentKind>): AgentKind[] =>
+  agentsOn(process.platform).filter((k) => AGENT_KINDS[k].history && !off.has(k))
 const pastSessions = new PastSessions((d) => sessionDirExists(d)) // the Sessions tab's listing
 const closingPanes = new Set<Promise<void>>() // closed panes whose agent may still be ending
 const agentProcs = new AgentProcs(posixProcs.alive) // per pane: the agents running in it
@@ -299,10 +314,20 @@ const gitRootsWorker = new FsWorkerClient(
 const sessionsWorker = new FsWorkerClient(
   () =>
     utilityProcess.fork(path.join(dir, "fs-worker.js"), [], {
-      serviceName: "minmux sessions",
+      serviceName: "minmux session folders",
       stdio: "ignore",
     }) as unknown as WorkerProc,
 )
+// Past sessions are read and searched in their own utility process: gigabytes of transcripts
+// never touch main (docs/design/AGENT_SESSIONS.md).
+const historyWorker = new SessionsWorkerClient(
+  () =>
+    utilityProcess.fork(path.join(dir, "sessions-worker.js"), [], {
+      serviceName: "minmux sessions",
+      stdio: "ignore",
+    }) as unknown as SessionsProc,
+)
+let rgPath: { at: number; found: string | null } | null = null // looked up on the first search
 /** Is `d` a folder? undefined = couldn't tell in time (a hung mount: resumable, checked again). */
 const sessionDirExists = (d: string): Promise<boolean | undefined> =>
   within(
@@ -1055,10 +1080,60 @@ function registerIpc() {
     if (process.platform === "win32") return { sessions: [], failed: [] }
     const off = disabledAgents()
     return pastSessions.list(
-      AGENTS.flatMap((a) =>
-        a.history && !off.has(a.kind) ? [{ agent: a.kind, history: a.history }] : [],
-      ),
+      historyKinds(off).map((agent) => ({
+        agent,
+        history: { list: () => historyWorker.list(agent) },
+      })),
     )
+  })
+  // Search the conversations (in the sessions worker); hits stream back on agents:sessions-hits
+  // with the search's id. A new search cancels the one before.
+  ipcMain.handle(
+    "agents:sessions-search",
+    async (e, raw: unknown, agents: unknown, under: unknown) => {
+      sessionSearch?.cancel()
+      sessionSearch = null
+      const query = typeof raw === "string" ? raw.trim() : ""
+      if (process.platform === "win32" || query.length < MIN_QUERY || query.length > MAX_QUERY)
+        return 0
+      const wanted = historyKinds(disabledAgents()).filter(
+        (k) => Array.isArray(agents) && agents.includes(k),
+      )
+      const id = ++sessionSearchSeq
+      // Looked up once; a miss again after a minute (rg installed meanwhile).
+      if (!rgPath || (rgPath.found === null && Date.now() - rgPath.at > 60_000))
+        rgPath = { at: Date.now(), found: await findOnPathAsync("rg") }
+      const rg = rgPath.found
+      if (id !== sessionSearchSeq) return id // a newer one started while looking for rg
+      const send = (hits: SessionHit[], end: SearchEnd | null) => {
+        if (!e.sender.isDestroyed()) e.sender.send("agents:sessions-hits", id, hits, end)
+      }
+      const folder = typeof under === "string" && path.isAbsolute(under) ? under : undefined
+      // A hit's row: main keeps it (a resume needs its transcript), the tab gets it without the
+      // path, with its folder checked like a listed one's.
+      const s = historyWorker.search(query, wanted, rg, folder, (hit) => {
+        const row = hit.session as ListedSession | undefined
+        if (!row) return send([hit], null)
+        pastSessions.remember(row)
+        const session: PastSession = { ...row }
+        delete (session as ListedSession).transcriptPath
+        void (row.cwd ? sessionDirExists(row.cwd) : Promise.resolve(undefined)).then((there) =>
+          send(
+            [{ ...hit, session: there === false ? { ...session, cwdGone: true } : session }],
+            null,
+          ),
+        )
+      })
+      sessionSearch = { id, cancel: s.cancel }
+      void s.done.then(
+        (r) => send([], r),
+        () => send([], { capped: false, failed: true }),
+      )
+      return id
+    },
+  )
+  ipcMain.on("agents:sessions-search-cancel", (_e, id: unknown) => {
+    if (sessionSearch && sessionSearch.id === id) sessionSearch.cancel()
   })
   // One past session → its resume plan, from main's own listing (its folder and transcript as
   // main read them, never renderer strings) and the agent's own rules; the renderer opens a
@@ -1067,8 +1142,9 @@ function registerIpc() {
     const r = (req ?? {}) as { agent?: unknown; sessionId?: unknown }
     const agent = AGENTS.find((a) => a.kind === r.agent)
     if (!agent || disabledAgents().has(agent.kind) || typeof r.sessionId !== "string") return null
-    const listed = pastSessions.find(agent.kind, r.sessionId)
-    if (!listed?.cwd || process.platform === "win32") return null
+    if (process.platform === "win32") return null
+    const listed = pastSessions.find(agent.kind, r.sessionId) // listed, or found by a search
+    if (!listed?.cwd) return null
     const entry: LedgerEntry = {
       agent: agent.kind,
       sessionId: listed.sessionId,
@@ -1639,6 +1715,8 @@ app.on("will-quit", () => {
   if (reaper) clearInterval(reaper)
   fsWorker.dispose() // stop the fs worker process
   gitRootsWorker.dispose()
+  sessionsWorker.dispose()
+  historyWorker.dispose() // stops a search (and its rg) too
 })
 app.on("quit", () => diag("quit"))
 

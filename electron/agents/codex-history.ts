@@ -62,6 +62,24 @@ function userText(o: Record<string, unknown>): string | undefined {
   return texts.length ? typedText(texts.join(" ")) : undefined
 }
 
+/** Could this raw line be a typed prompt or a reply? */
+export const codexQuick = (raw: string): boolean =>
+  raw.includes('"role":"user"') ||
+  raw.includes('"role":"assistant"') ||
+  raw.includes('"user_message"')
+
+/** What the user and Codex wrote on this line (typed prompts, replies), for search. */
+export function codexTexts(o: Record<string, unknown>): string[] {
+  const user = userText(o)
+  if (user !== undefined) return isTypedPrompt(user, INJECTED) ? [user] : []
+  const p = o.payload as Record<string, unknown> | undefined
+  if (o.type !== "response_item" || p?.type !== "message" || p.role !== "assistant") return []
+  if (!Array.isArray(p.content)) return []
+  return (p.content as { type?: unknown; text?: unknown }[])
+    .filter((b) => b?.type === "output_text" && typeof b.text === "string")
+    .map((b) => b.text as string)
+}
+
 /** From a rollout's start: where it ran and the first prompt the user typed. */
 export function codexHead(text: string): { cwd?: string; firstPrompt?: string } {
   let cwd: string | undefined

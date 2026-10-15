@@ -15,7 +15,6 @@ import { TranscriptMeta } from "../transcript-meta"
 import { TranscriptTokens } from "../transcript-tokens"
 import type { AgentAdapter, AgentShell, AgentSpec, SessionRules } from "./types"
 import { cdPrefix, workedFolders } from "./worked"
-import { claudeHistory } from "./claude-history"
 
 // Events of interest (unchanged from the HTTP transport). Tool events take a matcher.
 const EVENTS = [
@@ -199,6 +198,5 @@ export const claudeSpec: AgentSpec = {
   kind: "claude",
   shell: claudeShell,
   rules: claudeSessionRules,
-  history: claudeHistory(),
   create: createClaudeAdapter,
 }

@@ -12,7 +12,7 @@ export interface AgentKindInfo {
   windows?: false // not integrated on Windows (nor its WSL panes) yet
   confirmsOnPrompt?: true // its session starts (and so a resume confirms) with the first message
   hookApproval?: true // minmux's hooks need the user's approval in the agent (Codex)
-  history?: true // the Sessions tab lists its past sessions (main reads them: AgentSpec.history)
+  history?: true // the Sessions tab lists its sessions (a reader in electron/agents/history-index)
 }
 
 export const AGENT_KINDS: Record<AgentKind, AgentKindInfo> = {

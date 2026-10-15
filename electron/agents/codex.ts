@@ -19,7 +19,7 @@ import { normalizeHookEvent, SAFE_ID } from "./claude"
 import type { MetaReader } from "../agent-meta"
 import type { AgentAdapter, AgentShell, AgentSpec, SessionRules } from "./types"
 import { cdPrefix, workedFolders } from "./worked"
-import { codexHistory, codexHome } from "./codex-history"
+import { codexHome } from "./codex-history"
 
 // The events we consume; tool events take a matcher (S1-d).
 const EVENTS = [
@@ -394,6 +394,5 @@ export const codexSpec: AgentSpec = {
   windows: false, // its hook shell's quoting there is unverified (MULTI_AGENT.md S1-e)
   shell: codexShell,
   rules: codexSessionRules,
-  history: codexHistory(),
   create: createCodexAdapter,
 }

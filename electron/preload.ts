@@ -2,7 +2,12 @@ import { contextBridge, ipcRenderer } from "electron"
 import type { AgentEvent, AgentKind } from "../src/lib/agent-graph"
 import type { SessionMeta } from "../src/lib/session-color"
 import type { ResumePlan } from "../src/lib/resume"
-import type { PastSession, PastSessionsResult } from "../src/lib/past-sessions"
+import type {
+  PastSession,
+  PastSessionsResult,
+  SearchEnd,
+  SessionHit,
+} from "../src/lib/past-sessions"
 import type { GitRootRequest, PaneGitInfo, PaneGitRequest } from "../src/lib/pane-git"
 import type { WslContext } from "../src/lib/wsl"
 import type { PrListsRequest } from "../src/lib/pr-dashboard"
@@ -87,6 +92,15 @@ const api = {
     ipcRenderer.invoke("agents:resume-plan", paneIds, allowBypass) as Promise<
       Record<string, ResumePlan>
     >,
+  searchSessions: (query: string, agents: AgentKind[], under?: string) =>
+    ipcRenderer.invoke("agents:sessions-search", query, agents, under) as Promise<number>,
+  cancelSessionSearch: (id: number) => ipcRenderer.send("agents:sessions-search-cancel", id),
+  onSessionHits: (cb: (id: number, hits: SessionHit[], end: SearchEnd | null) => void) => {
+    const listener = (_e: unknown, id: number, hits: SessionHit[], end: SearchEnd | null) =>
+      cb(id, hits, end)
+    ipcRenderer.on("agents:sessions-hits", listener)
+    return () => ipcRenderer.removeListener("agents:sessions-hits", listener)
+  },
   pastSessions: () => ipcRenderer.invoke("agents:sessions") as Promise<PastSessionsResult>,
   resumeOne: (s: Pick<PastSession, "agent" | "sessionId">, confirmed?: boolean) =>
     ipcRenderer.invoke("agents:resume-one", s, confirmed === true) as Promise<ResumePlan | null>,
