@@ -15,6 +15,7 @@ export interface ResumePlan {
   env?: Record<string, string> // for the command, in POSIX shells (OpenCode's resume id)
   reason?: string // why it's skipped
   cwdUnverified?: boolean // its stat timed out (hung mount): don't use it as a spawn cwd
+  busy?: true // skipped: written just now, may be running elsewhere (resume again to confirm)
 }
 
 /** A terminal's resume banner. */

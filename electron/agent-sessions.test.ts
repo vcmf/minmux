@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest"
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
-import { SessionLedger } from "./agent-sessions"
+import { SessionLedger, planEntry } from "./agent-sessions"
 import { claudeSessionRules, resumeCommand } from "./agents/claude"
 import { codexSessionRules } from "./agents/codex"
 import { opencodeSessionRules } from "./agents/opencode"
@@ -704,5 +704,50 @@ describe("OpenCode's lead rules", () => {
       env: { MINMUX_RESUME_SESSION: SES }, // typed as a prefix in POSIX shells only
     })
     expect(out.p2).toMatchObject({ status: "skip", reason: "unrecognised session id" })
+  })
+})
+
+describe("planEntry (one past session, from the Sessions tab)", () => {
+  const ok = async () => ({})
+  const e = (o: object) => ({
+    agent: "codex" as const,
+    sessionId: "01a102c8-7c2a-7aa3-a1b6-3f2e8bae8705",
+    cwd: "/w/term",
+    updatedAt: 1,
+    ...o,
+  })
+
+  it("resumes with the agent's own command", async () => {
+    expect(await planEntry(e({}), codexSessionRules, false, ok)).toMatchObject({
+      status: "resume",
+      agent: "codex",
+      command: "codex resume 01a102c8-7c2a-7aa3-a1b6-3f2e8bae8705",
+      cwd: "/w/term",
+    })
+  })
+
+  it("skips an id the agent's rules don't trust, a folder that can't be typed, a failed check", async () => {
+    expect(
+      await planEntry(e({ sessionId: "x; rm -rf ~" }), codexSessionRules, false, ok),
+    ).toMatchObject({
+      status: "skip",
+      reason: "unrecognised session id",
+    })
+    expect(await planEntry(e({ cwd: "/w/\u0003x" }), codexSessionRules, false, ok)).toMatchObject({
+      status: "skip",
+      reason: "its folder name can't be typed safely",
+    })
+    expect(
+      await planEntry(e({}), codexSessionRules, false, async () => ({
+        skip: "its folder is gone",
+      })),
+    ).toMatchObject({ status: "skip", reason: "its folder is gone" })
+    expect(await planEntry(e({}), undefined, false, ok)).toMatchObject({ status: "skip" })
+  })
+
+  it("an unverified folder still resumes, marked so the renderer won't spawn in it", async () => {
+    expect(
+      await planEntry(e({}), codexSessionRules, false, async () => ({ unverified: true })),
+    ).toMatchObject({ status: "resume", cwdUnverified: true })
   })
 })

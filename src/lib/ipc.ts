@@ -3,6 +3,7 @@ import type { WslContext } from "./wsl"
 import type { AgentEvent, AgentKind } from "./agent-graph"
 import type { SessionMeta } from "./session-color"
 import type { ResumePlan } from "./resume"
+import type { PastSession, PastSessionsResult } from "./past-sessions"
 import type { GitRootRequest, PaneGitInfo, PaneGitRequest } from "./pane-git"
 import type { DirListing } from "./dir-listing"
 import type { GhAccount, PrListsRequest, PrListsResult } from "./pr-dashboard"
@@ -61,6 +62,13 @@ export interface Ipc {
   agentHintDismiss: (kind: AgentKind, never: boolean) => Promise<number>
   // Claude sessions to resume in restored terminals; consume = attempted/dismissed (one shot).
   resumePlan: (paneIds: string[], allowBypass: boolean) => Promise<Record<string, ResumePlan>>
+  /** Every enabled agent's past sessions, newest first (the Sessions tab). */
+  pastSessions: () => Promise<PastSessionsResult>
+  /** One past session's resume plan (null: not resumable from here). */
+  resumeOne: (
+    s: Pick<PastSession, "agent" | "sessionId">,
+    confirmed?: boolean,
+  ) => Promise<ResumePlan | null>
   resumeConsume: (paneId: string, sessionId: string) => void
   shellIdle: (paneId: string) => void // shell prompt returned after a command (resume ledger)
   openExternal: (url: string) => void

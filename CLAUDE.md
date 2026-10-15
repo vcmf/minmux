@@ -26,6 +26,8 @@ electron/                 main process (Node) — see electron/CLAUDE.md
   agent-sessions.ts       resume ledger: which session leads each pane (per-agent files)
   agent-liveness.ts       ends sessions whose process exited without a word (OpenCode, fish)
   agent-procs.ts          per pane, the agents' own pids: SIGKILLed on close/quit if they hang on
+  past-sessions.ts        Sessions tab: every agent's past sessions (agents/*-history.ts readers,
+                          head/tail reads cached per file: history-read.ts)
   agent-meta.ts           per-pane session name/colour, from each agent's source (agents:meta)
   transcript-fold.ts      chunked incremental JSONL reader, shared by:
     transcript-tokens.ts  · token badge      transcript-meta.ts · /color + /rename

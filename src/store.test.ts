@@ -48,6 +48,40 @@ describe("store — tabs & panes", () => {
     expect(st().sessions[tab.activeSessionId]!.cwd).toBe("/some/worktree")
   })
 
+  it("resumeInSplit opens a split in the session's folder and queues its resume there", () => {
+    st().newTab(shell)
+    const plan = {
+      status: "resume" as const,
+      sessionId: "s1",
+      cwd: "/w/term",
+      command: "claude --resume s1",
+    }
+    const id = st().resumeInSplit(plan)
+    expect(id).toBe(firstTab().activeSessionId)
+    expect(st().sessions[id!]!.cwd).toBe("/w/term")
+    expect(st().resume[id!]).toEqual({ phase: "pending", plan })
+  })
+
+  it("resumeInSplit: a folder it couldn't check opens at home, and only a POSIX shell takes it", () => {
+    st().newTab(shell)
+    useStore.setState({ home: "/home/me" })
+    const plan = {
+      status: "resume" as const,
+      sessionId: "s1",
+      cwd: "/net/slow",
+      command: "x",
+      cwdUnverified: true,
+    }
+    const id = st().resumeInSplit(plan)
+    expect(st().sessions[id!]!.cwd).toBe("/home/me") // the typed `cd` reaches it
+    const fish: ShellOption = { id: "fish", label: "fish", command: "/usr/bin/fish", args: [] }
+    resetStore()
+    useStore.setState({ shells: [fish] })
+    st().newTab(fish)
+    expect(st().resumeInSplit(plan)).toBeUndefined() // no typed cd in fish: never in the wrong folder
+    expect(allSessionIds(firstTab().root)).toHaveLength(1)
+  })
+
   it("closeSurface on a single-terminal pane collapses the split back to a leaf", () => {
     st().newTab(shell)
     st().splitActive("row", shell)

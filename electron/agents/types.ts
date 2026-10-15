@@ -7,6 +7,7 @@ import type { LedgerEntry } from "../agent-sessions"
 import type { ResolvePath } from "../agent-tokens"
 import type { MetaReader } from "../agent-meta"
 import type { SessionMeta } from "../transcript-meta"
+import type { PastSession } from "../../src/lib/past-sessions"
 
 export type { ResolvePath }
 
@@ -60,6 +61,15 @@ export interface AgentAdapter {
   approved?(): Promise<boolean | null>
 }
 
+/** The sessions an agent keeps on disk, for the Sessions tab (docs/design/AGENT_SESSIONS.md). */
+export interface SessionHistory {
+  /** Newest first, read off the hot path (cached per file); rejects if none can be read. */
+  list(): Promise<ListedSession[]>
+}
+
+/** A past session as main lists it: the row, plus the file it's in (kept in main). */
+export type ListedSession = PastSession & { transcriptPath?: string }
+
 /** What an adapter may ask main. */
 export interface AdapterContext {
   /** Was this session's name the user's, as recorded before (a resumed session)? */
@@ -74,5 +84,6 @@ export interface AgentSpec {
   windows?: false // not integrated on Windows (nor so its WSL panes) yet; mirrors agent-kinds
   shell: AgentShell
   rules: SessionRules
+  history?: SessionHistory // its past sessions (none: the Sessions tab doesn't list this agent)
   create(ctx?: AdapterContext): AgentAdapter
 }

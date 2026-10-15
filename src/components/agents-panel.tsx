@@ -9,6 +9,18 @@ import { subAgents, type AgentNode } from "../lib/agent-graph"
 import { agentInfo, agentsOn } from "../lib/agent-kinds"
 import { agentIcon } from "./agent-icon"
 import { AGENT_STATUS_UI as DOT } from "../lib/agent-status-ui"
+import { useState } from "react"
+import { AgentSessionsTab } from "./agent-sessions-tab"
+
+const TAB_KEY = "minmux.agents.tab"
+type AgentsTab = "live" | "sessions"
+const readTab = (): AgentsTab => {
+  try {
+    return localStorage.getItem(TAB_KEY) === "sessions" ? "sessions" : "live"
+  } catch {
+    return "live"
+  }
+}
 
 /** The session's agent as a small icon (titled with its name) on the pane label. */
 function AgentKindIcon({ node }: { node: AgentNode }) {
@@ -115,6 +127,15 @@ export function AgentsPanel() {
   // The pane the user is currently in — used to box the matching session's agents.
   const activePaneId = useStore((s) => s.tabs.find((t) => t.id === s.activeTabId)?.activeSessionId)
   const close = () => useStore.getState().setRightView(null)
+  const [tab, setTabState] = useState(readTab)
+  const setTab = (t: AgentsTab) => {
+    setTabState(t)
+    try {
+      localStorage.setItem(TAB_KEY, t)
+    } catch {
+      // a per-window convenience: fine to lose
+    }
+  }
 
   // Bring the pane that owns this session to the front (switch tab + focus terminal).
   const focusPane = (paneId?: string) => {
@@ -134,117 +155,137 @@ export function AgentsPanel() {
     <div className="diffpanel">
       <div className="diffpanel-header">
         <span className="section-label">Agents</span>
-        <span className="diff-summary status-faint">
-          {agents.rootIds.length} session{agents.rootIds.length === 1 ? "" : "s"} · {working}{" "}
-          working
-        </span>
+        <div className="agents-tabs" role="tablist">
+          {(["live", "sessions"] as const).map((t) => (
+            <button
+              key={t}
+              role="tab"
+              aria-selected={tab === t}
+              className={`pr-tab${tab === t ? " on" : ""}`}
+              title={
+                t === "live"
+                  ? `${agents.rootIds.length} running · ${working} working`
+                  : "Past sessions: resume one, or go to its pane"
+              }
+              onClick={() => setTab(t)}
+            >
+              {t === "live"
+                ? `Live${agents.rootIds.length ? ` ${agents.rootIds.length}` : ""}`
+                : "Sessions"}
+            </button>
+          ))}
+        </div>
         <button className="iconbtn" style={{ width: 22, height: 22 }} title="Close" onClick={close}>
           <X size={13} />
         </button>
       </div>
 
-      <div className="diff-files agents-files">
-        {agents.rootIds.length === 0 && (
-          <div className="diff-empty status-faint">
-            <AgentsIcon size={16} />
-            {enabledAgents.length === 0 ? (
-              " Agents are switched off in Settings."
-            ) : (
-              <>
-                {" "}
-                No agents yet — run{" "}
-                {enabledAgents.map((k, i) => (
-                  <span key={k}>
-                    {i > 0 && (i === enabledAgents.length - 1 ? " or " : ", ")}
-                    <code>{agentInfo(k).command}</code>
-                  </span>
-                ))}{" "}
-                in a new terminal.
-              </>
-            )}
-          </div>
-        )}
-        {agents.rootIds.map((rid) => {
-          const root = agents.nodes[rid]
-          if (!root) return null
-          // Header line naming the pane this session runs in (click → jump there).
-          const paneSession = root.paneId ? sessions[root.paneId] : undefined
-          const paneLabel = paneSession ? displaySessionTitle(paneSession, home) : "external"
-          const go = paneSession ? () => focusPane(root.paneId) : undefined
-          // Every folder opened from this session uses the session's own pane shell context.
-          const openForSession = (cwd: string) => openHere(cwd, root.paneId)
-          // Tree connectors: children then worktrees hang off the root. Only the very last
-          // row ends the spine (rounded elbow, no through-line).
-          const childNodes = subAgents(agents, root)
-          const wts = root.worktrees ?? []
-          // The worktree the agent is in: the deepest containing its cwd (worktrees can nest).
-          const inWt = wts
-            .filter((w) => root.cwd && (samePath(root.cwd, w.path) || isInside(root.cwd, w.path)))
-            .sort((a, b) => b.path.length - a.path.length)[0]?.path
-          const hasKids = childNodes.length > 0 || wts.length > 0
-          // The root's spine runs on past a row while a direct child or a worktree follows.
-          const lastDirect = wts.length
-            ? childNodes.length
-            : childNodes.reduce((at, k, n) => (k.depth === 1 ? n : at), -1)
-          const active = !!root.paneId && root.paneId === activePaneId
-          return (
-            <div
-              key={rid}
-              className={`agent-session${active ? " active" : ""}`}
-              title={active ? "The pane you're in" : undefined}
-            >
+      {tab === "sessions" ? (
+        <AgentSessionsTab />
+      ) : (
+        <div className="diff-files agents-files">
+          {agents.rootIds.length === 0 && (
+            <div className="diff-empty status-faint">
+              <AgentsIcon size={16} />
+              {enabledAgents.length === 0 ? (
+                " Agents are switched off in Settings."
+              ) : (
+                <>
+                  {" "}
+                  No agents yet — run{" "}
+                  {enabledAgents.map((k, i) => (
+                    <span key={k}>
+                      {i > 0 && (i === enabledAgents.length - 1 ? " or " : ", ")}
+                      <code>{agentInfo(k).command}</code>
+                    </span>
+                  ))}{" "}
+                  in a new terminal.
+                </>
+              )}
+            </div>
+          )}
+          {agents.rootIds.map((rid) => {
+            const root = agents.nodes[rid]
+            if (!root) return null
+            // Header line naming the pane this session runs in (click → jump there).
+            const paneSession = root.paneId ? sessions[root.paneId] : undefined
+            const paneLabel = paneSession ? displaySessionTitle(paneSession, home) : "external"
+            const go = paneSession ? () => focusPane(root.paneId) : undefined
+            // Every folder opened from this session uses the session's own pane shell context.
+            const openForSession = (cwd: string) => openHere(cwd, root.paneId)
+            // Tree connectors: children then worktrees hang off the root. Only the very last
+            // row ends the spine (rounded elbow, no through-line).
+            const childNodes = subAgents(agents, root)
+            const wts = root.worktrees ?? []
+            // The worktree the agent is in: the deepest containing its cwd (worktrees can nest).
+            const inWt = wts
+              .filter((w) => root.cwd && (samePath(root.cwd, w.path) || isInside(root.cwd, w.path)))
+              .sort((a, b) => b.path.length - a.path.length)[0]?.path
+            const hasKids = childNodes.length > 0 || wts.length > 0
+            // The root's spine runs on past a row while a direct child or a worktree follows.
+            const lastDirect = wts.length
+              ? childNodes.length
+              : childNodes.reduce((at, k, n) => (k.depth === 1 ? n : at), -1)
+            const active = !!root.paneId && root.paneId === activePaneId
+            return (
               <div
-                className="agents-pane-label status-faint"
-                onMouseDown={go}
-                style={{ cursor: go ? "pointer" : undefined }}
+                key={rid}
+                className={`agent-session${active ? " active" : ""}`}
+                title={active ? "The pane you're in" : undefined}
               >
-                <AgentKindIcon node={root} /> {paneLabel}
-              </div>
-              <AgentRow
-                node={root}
-                depth={0}
-                onFocusPane={go}
-                onOpen={openForSession}
-                spine={hasKids}
-              />
-              {childNodes.map(({ node: child, depth }, i) => (
+                <div
+                  className="agents-pane-label status-faint"
+                  onMouseDown={go}
+                  style={{ cursor: go ? "pointer" : undefined }}
+                >
+                  <AgentKindIcon node={root} /> {paneLabel}
+                </div>
                 <AgentRow
-                  key={child.id}
-                  node={child}
-                  depth={depth}
-                  rootCwd={root.cwd}
+                  node={root}
+                  depth={0}
                   onFocusPane={go}
                   onOpen={openForSession}
-                  connect={i >= lastDirect ? "end" : "through"}
+                  spine={hasKids}
                 />
-              ))}
-              {wts.map((w, j) => (
-                <div
-                  key={w.path}
-                  className={`diff-file agent-worktree ${treeChildClass(j === wts.length - 1)}`}
-                  style={{ paddingLeft: 26 }}
-                >
-                  <GitBranch size={12} color="var(--blue)" />
-                  <div className="tree-labels">
-                    <span className="tree-primary">
-                      {w.branch ?? base(w.path)}
-                      {/* The agent works in this one now — the sidebar's `in` line. */}
-                      {w.path === inWt && <span className="status-faint"> · in</span>}
-                    </span>
-                    <button
-                      className="tree-sub folder-link"
-                      title={`Open a terminal here — ${w.path}`}
-                      onClick={() => openForSession(w.path)}
-                    >
-                      {base(w.path)}
-                    </button>
+                {childNodes.map(({ node: child, depth }, i) => (
+                  <AgentRow
+                    key={child.id}
+                    node={child}
+                    depth={depth}
+                    rootCwd={root.cwd}
+                    onFocusPane={go}
+                    onOpen={openForSession}
+                    connect={i >= lastDirect ? "end" : "through"}
+                  />
+                ))}
+                {wts.map((w, j) => (
+                  <div
+                    key={w.path}
+                    className={`diff-file agent-worktree ${treeChildClass(j === wts.length - 1)}`}
+                    style={{ paddingLeft: 26 }}
+                  >
+                    <GitBranch size={12} color="var(--blue)" />
+                    <div className="tree-labels">
+                      <span className="tree-primary">
+                        {w.branch ?? base(w.path)}
+                        {/* The agent works in this one now — the sidebar's `in` line. */}
+                        {w.path === inWt && <span className="status-faint"> · in</span>}
+                      </span>
+                      <button
+                        className="tree-sub folder-link"
+                        title={`Open a terminal here — ${w.path}`}
+                        onClick={() => openForSession(w.path)}
+                      >
+                        {base(w.path)}
+                      </button>
+                    </div>
                   </div>
-                </div>
-              ))}
-            </div>
-          )
-        })}
-      </div>
+                ))}
+              </div>
+            )
+          })}
+        </div>
+      )}
     </div>
   )
 }

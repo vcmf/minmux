@@ -6,7 +6,6 @@
 
 import { createHash } from "node:crypto"
 import fs from "node:fs"
-import os from "node:os"
 import path from "node:path"
 import type { AgentEvent, TokenUsage } from "../../src/lib/agent-graph"
 import type { LedgerEntry } from "../agent-sessions"
@@ -20,6 +19,7 @@ import { normalizeHookEvent, SAFE_ID } from "./claude"
 import type { MetaReader } from "../agent-meta"
 import type { AgentAdapter, AgentShell, AgentSpec, SessionRules } from "./types"
 import { cdPrefix, workedFolders } from "./worked"
+import { codexHistory, codexHome } from "./codex-history"
 
 // The events we consume; tool events take a matcher (S1-d).
 const EVENTS = [
@@ -376,7 +376,7 @@ export function createCodexAdapter(): AgentAdapter {
     // Codex records each trusted hook in its config.toml; read it (async, read-only) and compare.
     approved: async () => {
       if (!trust) return null
-      const home = process.env.CODEX_HOME || path.join(os.homedir(), ".codex")
+      const home = codexHome()
       try {
         return codexApproved(
           await fs.promises.readFile(path.join(home, "config.toml"), "utf8"),
@@ -394,5 +394,6 @@ export const codexSpec: AgentSpec = {
   windows: false, // its hook shell's quoting there is unverified (MULTI_AGENT.md S1-e)
   shell: codexShell,
   rules: codexSessionRules,
+  history: codexHistory(),
   create: createCodexAdapter,
 }

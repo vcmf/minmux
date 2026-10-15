@@ -65,7 +65,7 @@ import type { WorkspaceState } from "./lib/workspace"
 import type { MoveTarget } from "./lib/pane-tree"
 import type { SessionMeta } from "./lib/session-color"
 import { mergePaneGit, type PaneGitInfo } from "./lib/pane-git"
-import type { ResumeState } from "./lib/resume"
+import { isPosixShell, type ResumePlan, type ResumeState } from "./lib/resume"
 import { clampPanelWidth, RIGHT_PANEL_DEFAULT } from "./lib/right-panel"
 
 const newId = () => crypto.randomUUID()
@@ -223,6 +223,7 @@ interface AppState {
     searched?: boolean,
   ) => void
   setResume: (sessionId: string, state: ResumeState | null) => void
+  resumeInSplit: (plan: ResumePlan) => string | undefined // split beside the focused pane, resume there
   setAgentHint: (sessionId: string, hint: { kind: AgentKind; dismissals: number } | null) => void
   moveSurface: (tabId: string, sessionId: string, target: MoveTarget) => void // drag & drop
   // Drag a terminal to another group, into one of its panes, or out into a new group.
@@ -961,6 +962,24 @@ export const useStore = create<AppState>((set, get) => ({
       else delete agentHint[sessionId]
       return { agentHint }
     }),
+
+  // A past session (Sessions tab): a split in its folder, and the relaunch resume flow types its
+  // command at the first prompt. An unverified folder (hung mount) isn't a spawn cwd: the typed
+  // `cd` reaches it instead.
+  resumeInSplit: (plan) => {
+    const state = get()
+    const before = state.tabs.find((t) => t.id === state.activeTabId)?.activeSessionId
+    if (plan.cwdUnverified) {
+      // Only a typed `cd` reaches it then, and only a POSIX shell gets one.
+      const shell = localShellFor(state, before ? state.sessions[before] : undefined)
+      if (!shell || !isPosixShell(shell.command)) return undefined
+    }
+    get().openFolderInSplit(plan.cwdUnverified ? state.home : plan.cwd)
+    const id = get().tabs.find((t) => t.id === get().activeTabId)?.activeSessionId
+    if (!id || id === before) return undefined
+    get().setResume(id, { phase: "pending", plan })
+    return id
+  },
 
   setResume: (sessionId, st) =>
     set((state) => {

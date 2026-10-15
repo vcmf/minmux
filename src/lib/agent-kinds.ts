@@ -12,6 +12,7 @@ export interface AgentKindInfo {
   windows?: false // not integrated on Windows (nor its WSL panes) yet
   confirmsOnPrompt?: true // its session starts (and so a resume confirms) with the first message
   hookApproval?: true // minmux's hooks need the user's approval in the agent (Codex)
+  history?: true // the Sessions tab lists its past sessions (main reads them: AgentSpec.history)
 }
 
 export const AGENT_KINDS: Record<AgentKind, AgentKindInfo> = {
@@ -20,6 +21,7 @@ export const AGENT_KINDS: Record<AgentKind, AgentKindInfo> = {
     command: "claude",
     resumePicker: "claude --resume",
     worktreeMarkers: ["/.claude/worktrees/"],
+    history: true,
   },
   codex: {
     label: "Codex",
@@ -29,6 +31,7 @@ export const AGENT_KINDS: Record<AgentKind, AgentKindInfo> = {
     windows: false, // hook quoting there is unverified (MULTI_AGENT.md S1-e)
     confirmsOnPrompt: true, // SessionStart fires with the first prompt (S1-f)
     hookApproval: true, // its hooks run once the user trusts them (/hooks)
+    history: true,
   },
   opencode: {
     label: "OpenCode",

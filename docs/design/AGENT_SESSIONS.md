@@ -130,6 +130,12 @@ The resume flow minmux uses on relaunch already does everything a click needs:
 
 A double click while the first resume is still pending goes to the pane that is resuming it.
 
+Main resumes only sessions from its own last listing (their folder and transcript as main read
+them; the renderer sends the agent and id). For Claude the folder is the first logged `cwd` that
+fits the transcript's project folder, so `planEntry`'s folder and transcript checks apply. A
+session written in the last 2 minutes that minmux doesn't see running may be running in another
+terminal: main says so at click time and a second click resumes it anyway.
+
 ## Search
 
 `agents:sessions-search({ query, agents, here })` streams results back on
@@ -172,4 +178,7 @@ session in another group, search across agents.
 1. **Sessions tab for Claude and Codex** (#140): the tab, the readers, running rows jump, others resume
    in a split; agent chips and "here".
 2. **Search** for Claude and Codex (#141): `rg` with the worker fallback, snippets, cancellation.
+   Step 1 reads the list in main (measured: a cold list over ~5 GB stalls main at most 3.7 ms;
+   folder checks already run in a `minmux sessions` utility process). This step moves the
+   readers into that process too, so the listing and the search both run off main.
 3. **OpenCode** (#142): the database reader in a worker, for both the list and the search.

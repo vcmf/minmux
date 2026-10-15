@@ -261,41 +261,7 @@ export class SessionLedger {
       paneIds.map(async (id) => {
         const e = this.entries.get(id)
         if (!e || isLive(id)) return
-        const rules = this.rules[agentOf(e)]
-        const command = rules?.resumeCommand(e, allowBypass) ?? null
-        const env = rules?.resumeEnv?.(e)
-        const base = {
-          agent: agentOf(e),
-          cwd: e.cwd,
-          name: e.name,
-          sessionId: e.sessionId,
-          ...(env ? { env } : {}),
-        }
-        if (!rules || !command) {
-          out[id] = { ...base, status: "skip", reason: "unrecognised session id" }
-          return
-        }
-        // The cwd may be TYPED into a line editor (`cd -- '…'`): control characters there act
-        // as editing keys (^C aborts, CR submits) and could break out of the quoting.
-        if (hasControlChar(e.cwd)) {
-          out[id] = { ...base, status: "skip", reason: "its folder name can't be typed safely" }
-          return
-        }
-        // A folder that isn't where the agent filed the session (Claude: `claude --resume`
-        // can't find it there; older entries recorded before this check).
-        if (rules.cwdFits(e.cwd, e.transcriptPath) === false) {
-          out[id] = { ...base, status: "skip", reason: "its folder doesn't match the session" }
-          return
-        }
-        const pf = await preflight(e)
-        out[id] = pf.skip
-          ? { ...base, status: "skip", reason: pf.skip, command }
-          : {
-              ...base,
-              status: "resume",
-              command,
-              ...(pf.unverified ? { cwdUnverified: true } : {}),
-            }
+        out[id] = await planEntry(e, this.rules[agentOf(e)], allowBypass, preflight)
       }),
     )
     return out
@@ -396,4 +362,35 @@ export class SessionLedger {
       }
     }
   }
+}
+
+/** What to do for one session: resume it with its agent's own command, or skip it and why. */
+export async function planEntry(
+  e: LedgerEntry,
+  rules: SessionRules | undefined,
+  allowBypass: boolean,
+  preflight: (e: LedgerEntry) => Promise<{ skip?: string; unverified?: boolean }>,
+): Promise<ResumePlan> {
+  const command = rules?.resumeCommand(e, allowBypass) ?? null
+  const env = rules?.resumeEnv?.(e)
+  const base = {
+    agent: agentOf(e),
+    cwd: e.cwd,
+    name: e.name,
+    sessionId: e.sessionId,
+    ...(env ? { env } : {}),
+  }
+  if (!rules || !command) return { ...base, status: "skip", reason: "unrecognised session id" }
+  // The cwd may be TYPED into a line editor (`cd -- '…'`): control characters there act
+  // as editing keys (^C aborts, CR submits) and could break out of the quoting.
+  if (hasControlChar(e.cwd))
+    return { ...base, status: "skip", reason: "its folder name can't be typed safely" }
+  // A folder that isn't where the agent filed the session (Claude: `claude --resume`
+  // can't find it there; older entries recorded before this check).
+  if (rules.cwdFits(e.cwd, e.transcriptPath) === false)
+    return { ...base, status: "skip", reason: "its folder doesn't match the session" }
+  const pf = await preflight(e)
+  return pf.skip
+    ? { ...base, status: "skip", reason: pf.skip, command }
+    : { ...base, status: "resume", command, ...(pf.unverified ? { cwdUnverified: true } : {}) }
 }

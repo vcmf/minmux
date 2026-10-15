@@ -44,7 +44,7 @@ import { buildEditorCommand, winQuote } from "./editor-command"
 import { orderMacEditors, planEditor, type EditorPlan, type EditorInfo } from "./editor-detect"
 import { checkForUpdate } from "./update-check"
 import { startHookWatcher, type DropNormalizer } from "./agent-hooks"
-import { AGENT_RULES, createAdapters, type AgentAdapter } from "./agents"
+import { AGENTS, AGENT_RULES, createAdapters, type AgentAdapter } from "./agents"
 import { AgentLiveness, foldLiveness } from "./agent-liveness"
 import { UserNames } from "./agent-names"
 import { agentOf, type AgentEvent, type AgentKind } from "../src/lib/agent-graph"
@@ -57,7 +57,10 @@ import { wslUncCandidates, uncToWslPath } from "./wsl-paths"
 import { colorfgbg } from "./color"
 import { AgentMetaTracker, planMeta } from "./agent-meta"
 import { AgentHints } from "./agent-hints"
-import { SessionLedger } from "./agent-sessions"
+import { SessionLedger, planEntry, type LedgerEntry } from "./agent-sessions"
+import { PastSessions, STAT_MS } from "./past-sessions"
+import { BUSY_MS, ago } from "../src/lib/past-sessions"
+import { within } from "./history-read"
 import {
   displayName,
   LEGACY_APP_NAME,
@@ -156,6 +159,7 @@ const sessions = new Map<string, PtySession>()
 // Every node-pty that hasn't reported its exit yet — including closed panes still winding
 // down (gone from `sessions`). None may outlive Node: quitting drains this (pty-drain.ts).
 const livePtys = new Set<Drainable>()
+const pastSessions = new PastSessions((d) => sessionDirExists(d)) // the Sessions tab's listing
 const closingPanes = new Set<Promise<void>>() // closed panes whose agent may still be ending
 const agentProcs = new AgentProcs(posixProcs.alive) // per pane: the agents running in it
 let mainWindow: BrowserWindow | null = null
@@ -290,6 +294,24 @@ const gitRootsWorker = new FsWorkerClient(
       stdio: "ignore",
     }) as unknown as WorkerProc,
 )
+// The Sessions tab's folder checks get a worker too: a session filed in a dead mount ties up
+// that worker's threads, never main's (nor the files browser's budget of stuck workers).
+const sessionsWorker = new FsWorkerClient(
+  () =>
+    utilityProcess.fork(path.join(dir, "fs-worker.js"), [], {
+      serviceName: "minmux sessions",
+      stdio: "ignore",
+    }) as unknown as WorkerProc,
+)
+/** Is `d` a folder? undefined = couldn't tell in time (a hung mount: resumable, checked again). */
+const sessionDirExists = (d: string): Promise<boolean | undefined> =>
+  within(
+    sessionsWorker.call({ op: "stat", path: d }).then(
+      (r) => (r as { isDir?: boolean }).isDir === true,
+      (e: { code?: string }) => (e.code === "EHUNG" || e.code === "EBUSY" ? undefined : false),
+    ),
+    STAT_MS,
+  )
 // A watched folder changed: the renderer re-reads it (through its read queue).
 fsWorker.onChanged = (dirs) => mainWindow?.webContents.send("fs:changed", dirs)
 
@@ -1024,29 +1046,57 @@ function registerIpc() {
     // would update it meanwhile, so re-enabling later must not resume a stale session).
     const { resume, drop } = resumablePanes(paneIds, (id) => l.get(id), disabledAgents())
     for (const id of drop) l.drop(id)
-    return l.plan(
-      resume,
-      (id) => sessions.has(id),
-      // Async + host paths only; bounded. A WSL path isn't checked (a cold share could block
-      // or wrongly say "gone") and a stat that times out (a hung network mount) means "can't
-      // check" — claude itself reports a missing session, the banner handles that, and the
-      // renderer won't use an unverified path as a spawn cwd (spawn's own check would hang).
-      async (e) => {
-        if (e.wslDistro || (process.platform === "win32" && e.cwd.startsWith("/"))) {
-          return { unverified: true }
-        }
-        const within = <T>(p: Promise<T>) =>
-          Promise.race([p, new Promise<undefined>((r) => setTimeout(() => r(undefined), 1500))])
-        const cwdOk = await within(pathExists("/", e.cwd))
-        if (cwdOk === false) return { skip: "its folder is gone" }
-        if (cwdOk === undefined) return { unverified: true }
-        if (e.transcriptPath && (await within(pathExists("/", e.transcriptPath))) === false) {
-          return { skip: "its transcript is gone" }
-        }
-        return {}
-      },
-      allowBypass === true,
+    return l.plan(resume, (id) => sessions.has(id), resumePreflight, allowBypass === true)
+  })
+
+  // Sessions tab (docs/design/AGENT_SESSIONS.md): every enabled agent's past sessions, read
+  // only when the tab asks. Not on Windows yet (the transcripts live inside WSL).
+  ipcMain.handle("agents:sessions", async () => {
+    if (process.platform === "win32") return { sessions: [], failed: [] }
+    const off = disabledAgents()
+    return pastSessions.list(
+      AGENTS.flatMap((a) =>
+        a.history && !off.has(a.kind) ? [{ agent: a.kind, history: a.history }] : [],
+      ),
     )
+  })
+  // One past session → its resume plan, from main's own listing (its folder and transcript as
+  // main read them, never renderer strings) and the agent's own rules; the renderer opens a
+  // split there and types it at the first prompt.
+  ipcMain.handle("agents:resume-one", async (_e, req: unknown, confirmed: unknown) => {
+    const r = (req ?? {}) as { agent?: unknown; sessionId?: unknown }
+    const agent = AGENTS.find((a) => a.kind === r.agent)
+    if (!agent || disabledAgents().has(agent.kind) || typeof r.sessionId !== "string") return null
+    const listed = pastSessions.find(agent.kind, r.sessionId)
+    if (!listed?.cwd || process.platform === "win32") return null
+    const entry: LedgerEntry = {
+      agent: agent.kind,
+      sessionId: listed.sessionId,
+      cwd: listed.cwd,
+      transcriptPath: listed.transcriptPath,
+      name: listed.name,
+      updatedAt: Date.now(),
+    }
+    const plan = await planEntry(entry, agent.rules, false, resumePreflight)
+    if (plan.status !== "resume" || confirmed === true || !listed.transcriptPath) return plan
+    // Written just now and minmux doesn't see it running (the renderer would have gone to its
+    // pane): it may run in another terminal. Two copies would write one session: ask first.
+    const at = await within(
+      fs.promises.stat(listed.transcriptPath).then(
+        (st) => st.mtimeMs,
+        () => 0,
+      ),
+      STAT_MS,
+    )
+    const age = at ? Date.now() - at : Infinity
+    if (age >= BUSY_MS) return plan
+    const when = ago(at!)
+    return {
+      ...plan,
+      status: "skip",
+      busy: true,
+      reason: `written ${when === "now" ? "just now" : `${when} ago`}, may be running elsewhere`,
+    }
   })
   // The pane's shell prompt came back after a command → its foreground program (Claude or
   // not) has exited: nothing to resume there even if Claude died without a SessionEnd.
@@ -1673,6 +1723,23 @@ function disabledAgents(): Set<AgentKind> {
     // unreadable → defaults
   }
   return (switchesOff = disabledAgentsIn(mergeAgentSwitches(raw.agents)))
+}
+
+// A WSL path isn't checked (a cold share could block or wrongly say "gone"), and a stat that
+// times out (a hung mount) means "can't check": the agent reports a missing session itself,
+// and the renderer won't spawn in an unverified folder.
+/** Can this session resume where it was? (async, host paths only, bounded) */
+async function resumePreflight(e: LedgerEntry): Promise<{ skip?: string; unverified?: boolean }> {
+  if (e.wslDistro || (process.platform === "win32" && e.cwd.startsWith("/"))) {
+    return { unverified: true }
+  }
+  const cwdOk = await within(pathExists("/", e.cwd), STAT_MS)
+  if (cwdOk === false) return { skip: "its folder is gone" }
+  if (cwdOk === undefined) return { unverified: true }
+  if (e.transcriptPath && (await within(pathExists("/", e.transcriptPath), STAT_MS)) === false) {
+    return { skip: "its transcript is gone" }
+  }
+  return {}
 }
 
 // Persist "don't warn again" back into settings.json (merge, best-effort).

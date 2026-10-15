@@ -32,6 +32,8 @@ const minmuxStub = {
   agentHintWanted: vi.fn(async () => ({ wanted: false, dismissals: 0 })),
   agentHintDismiss: vi.fn(async () => 1),
   resumePlan: vi.fn(async () => ({})),
+  pastSessions: vi.fn(async () => ({ sessions: [], failed: [] })),
+  resumeOne: vi.fn(async () => null),
   resumeConsume: vi.fn(),
   shellIdle: vi.fn(),
   clipboardWrite: vi.fn(),

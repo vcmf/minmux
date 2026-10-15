@@ -1305,6 +1305,60 @@ body.resizing-col {
   max-height: none;
   border-bottom: none;
 }
+/* Agents panel: Live (running) and Sessions (past) tabs in its header. */
+.agents-tabs {
+  display: flex;
+  gap: 2px;
+  margin-right: auto;
+}
+.agents-tabs .pr-tab {
+  padding: 2px 8px;
+  font-size: 11.5px;
+}
+/* Sessions tab: agent chips, "this folder", refresh. */
+.sessions-filters {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+}
+.sessions-filters .pr-tab {
+  padding: 2px 8px;
+  font-size: 11.5px;
+}
+.past-session {
+  cursor: pointer;
+  border-radius: 6px;
+  margin: 1px 4px;
+}
+.past-session .tree-labels {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+.past-session .tree-primary,
+.past-session .tree-sub {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.past-session.blocked {
+  cursor: default;
+  opacity: 0.6;
+}
+.past-session:focus-visible {
+  outline: 1px solid var(--accent);
+}
+.past-session-id {
+  width: auto;
+  height: 18px;
+  gap: 3px;
+  padding: 0 4px;
+  font-size: 10.5px;
+  color: var(--faint);
+}
+
 /* Agents board: the pane-name header above each session's agents. */
 .agents-pane-label {
   display: flex;
