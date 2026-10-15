@@ -102,8 +102,10 @@ const minmuxStub = {
   })),
 }
 
+// A main-process test that runs under Node (`@vitest-environment node`, e.g. node:sqlite) has
+// no window.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-;(window as any).minmux = minmuxStub
+if (typeof window !== "undefined") (window as any).minmux = minmuxStub
 
 // jsdom lacks ResizeObserver (used by TerminalPane).
 if (!("ResizeObserver" in globalThis)) {

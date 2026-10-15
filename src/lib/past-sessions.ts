@@ -31,6 +31,7 @@ export interface SearchEnd {
   capped: boolean
   timedOut?: boolean
   failed?: boolean
+  couldNot?: AgentKind[] // agents whose sessions couldn't be searched
 }
 
 /** The list main answers with; `failed` names the agents whose sessions couldn't be read. */

@@ -10,10 +10,11 @@ import type { AgentKind } from "../src/lib/agent-graph"
 import { MIN_QUERY, type SessionHit } from "../src/lib/past-sessions"
 import { parseLine } from "./history-read"
 
+/** A session to search: its transcript file, or (no file) its agent's own store. */
 export interface SearchFile {
   agent: AgentKind
   sessionId: string
-  file: string
+  file?: string
 }
 
 export interface SearchOptions {
@@ -24,9 +25,13 @@ export interface SearchOptions {
   signal: AbortSignal
   rg?: string | null // its path; none: stream the files
   max?: number // stop after this many sessions
+  /** A session with no file, checked in its agent's store (synchronous: a store query). */
+  own?: (f: SearchFile) => SessionHit | undefined
 }
 
-const MAX_HITS = 50
+const yieldNow = () => new Promise((r) => setImmediate(r))
+
+export const MAX_HITS = 50
 const RG_BATCH = 200 // transcript paths per rg run
 const AROUND = 60 // characters of context each side of the match
 
@@ -35,6 +40,12 @@ const esc = (t: string) => t.replace(/[.*+?^${}()|[\]\\/-]/g, "\\$&")
 const escU = (t: string) => t.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&")
 /** A query's words (any whitespace between them matches any whitespace in the text). */
 export const words = (query: string): string[] => query.trim().split(/\s+/).filter(Boolean)
+
+/** A query's longest word (of those `only` allows; "" if none): what a prefilter narrows on. */
+export const longestWord = (query: string, only?: RegExp): string =>
+  words(query)
+    .filter((w) => !only || only.test(w))
+    .reduce((a, b) => (b.length > a.length ? b : a), "")
 
 /** The query as it appears inside a JSON string on disk (quotes and backslashes escaped). */
 export const onDisk = (query: string): string => JSON.stringify(query).slice(1, -1)
@@ -94,19 +105,26 @@ export async function searchFiles(
 ): Promise<{ capped: boolean }> {
   const max = o.max ?? MAX_HITS
   const q = query.trim()
+  if (max <= 0) return { capped: true }
   if (q.length < MIN_QUERY || files.length === 0 || o.signal.aborted) return { capped: false }
   // `rg` only narrows the files (those with the words anywhere); each is then checked here,
   // newest first, so the sessions shown are always the newest that match. If rg fails, every
   // file is checked.
-  const longest = words(q).reduce((a, b) => (b.length > a.length ? b : a), "")
-  const candidates = o.rg ? await withWords(o.rg, files, longest, o.signal) : null
+  const longest = longestWord(q)
+  const onDiskFiles = files.filter((f): f is SearchFile & { file: string } => !!f.file)
+  const candidates = o.rg ? await withWords(o.rg, onDiskFiles, longest, o.signal) : null
   const pattern = bytePattern(q)
   const re = matcher(q) // compiled once, not per line
   let found = 0
-  for (const f of candidates ? files.filter((f) => candidates.has(f.file)) : files) {
+  for (const f of files) {
     if (o.signal.aborted || found >= max) break
+    if (f.file && candidates && !candidates.has(f.file)) continue
     try {
-      const h = await scanFile(f, pattern, re, o)
+      // A store's session: one indexed query, then a turn of the event loop (cancel, a stop).
+      const h = f.file
+        ? await scanFile(f as SearchFile & { file: string }, pattern, re, o)
+        : o.own?.(f)
+      if (!f.file) await yieldNow()
       if (h) {
         found++
         o.onHit(h)
@@ -124,7 +142,7 @@ export const running = new Set<ReturnType<typeof spawn>>()
 /** The files with the words anywhere (`rg -l`), or null if rg couldn't say. */
 async function withWords(
   rg: string,
-  files: SearchFile[],
+  files: (SearchFile & { file: string })[],
   word: string,
   signal: AbortSignal,
 ): Promise<Set<string> | null> {
@@ -141,7 +159,7 @@ async function withWords(
 /** One `rg -l` over these files into `found`; false if rg couldn't say. */
 function rgBatch(
   rg: string,
-  files: SearchFile[],
+  files: (SearchFile & { file: string })[],
   word: string,
   signal: AbortSignal,
   found: Set<string>,
@@ -205,7 +223,7 @@ const CHUNK = 4 << 20
 
 /** A file's first hit: big chunks searched as a whole, only a candidate's own line parsed. */
 async function scanFile(
-  f: SearchFile,
+  f: SearchFile & { file: string },
   pattern: RegExp,
   query: RegExp,
   o: SearchOptions,

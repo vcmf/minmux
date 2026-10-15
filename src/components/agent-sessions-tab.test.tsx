@@ -133,7 +133,7 @@ describe("AgentSessionsTab", () => {
   })
 
   it("every agent hidden: says so, not that there are none", async () => {
-    localStorage.setItem("minmux.sessions.hidden", JSON.stringify(["claude", "codex"]))
+    localStorage.setItem("minmux.sessions.hidden", JSON.stringify(["claude", "codex", "opencode"]))
     render(<AgentSessionsTab />)
     expect(await screen.findByText("Every agent is hidden: turn one on above.")).toBeInTheDocument()
   })
@@ -198,7 +198,11 @@ describe("AgentSessionsTab search", () => {
       target: { value: "quit drain" },
     })
     await waitFor(() =>
-      expect(ipc.searchSessions).toHaveBeenCalledWith("quit drain", ["claude", "codex"], undefined),
+      expect(ipc.searchSessions).toHaveBeenCalledWith(
+        "quit drain",
+        ["claude", "codex", "opencode"],
+        undefined,
+      ),
     )
     expect(await screen.findByText("Searching…")).toBeInTheDocument()
     act(() => deliver(7, [hit], null))
@@ -230,6 +234,12 @@ describe("AgentSessionsTab search", () => {
     await waitFor(() => act(() => deliver(7, [hit], { capped: false, timedOut: true })))
     expect(
       screen.getByText("1 session in the time allowed: the search stopped early."),
+    ).toBeInTheDocument()
+    act(() => deliver(7, [], { capped: false, couldNot: ["opencode"] }))
+    expect(screen.getByText("1 session. Couldn't search OpenCode sessions.")).toBeInTheDocument()
+    act(() => deliver(7, [], { capped: false, couldNot: ["codex", "opencode"] }))
+    expect(
+      screen.getByText("1 session. Couldn't search Codex and OpenCode sessions."),
     ).toBeInTheDocument()
     act(() => deliver(7, [], { capped: false, failed: true }))
     expect(screen.getByText("The search failed. Try again.")).toBeInTheDocument()
@@ -286,7 +296,11 @@ describe("AgentSessionsTab search", () => {
       target: { value: "  quit  " },
     })
     await waitFor(() =>
-      expect(ipc.searchSessions).toHaveBeenCalledWith("quit", ["claude", "codex"], "/w/other"),
+      expect(ipc.searchSessions).toHaveBeenCalledWith(
+        "quit",
+        ["claude", "codex", "opencode"],
+        "/w/other",
+      ),
     )
   })
 

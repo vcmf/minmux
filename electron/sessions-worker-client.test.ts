@@ -89,6 +89,101 @@ describe("SessionsOps", () => {
     expect(reads).toBe(1) // reused
   })
 
+  it("a store's sessions are searched in the same newest-first pass; touched asks it", async () => {
+    const f = path.join(dir, "a.jsonl")
+    fs.writeFileSync(f, JSON.stringify({ text: "quit" }) + "\n")
+    const replies: SessionsReply[] = []
+    const checked: string[] = []
+    const closed = vi.fn()
+    const own = {
+      searcher: vi.fn(() => ({
+        check: (id: string): SessionHit => {
+          checked.push(id)
+          return { agent: "opencode", sessionId: id, snippet: "quit", match: 0, length: 4 }
+        },
+        close: closed,
+      })),
+      touched: vi.fn(async () => 99),
+    }
+    const o = new SessionsOps(
+      {
+        claude: {
+          history: { list: async () => [listed({ transcriptPath: f, updatedAt: 3 })] },
+          texts: (line) => (typeof line.text === "string" ? [line.text] : []),
+          quick: () => true,
+        },
+        opencode: {
+          history: {
+            list: async () => [
+              listed({ agent: "opencode", sessionId: "ses_new", updatedAt: 5 }),
+              listed({ agent: "opencode", sessionId: "ses_old", updatedAt: 1 }),
+            ],
+          },
+          own,
+        },
+      },
+      (r) => replies.push(r),
+    )
+    o.handle({ id: 5, op: "search", query: "quit", agents: ["claude", "opencode"], rg: null })
+    await vi.waitFor(() => expect(replies.some((r) => r.id === 5 && "ok" in r)).toBe(true))
+    expect(replies.flatMap((r) => ("hit" in r ? [r.hit.sessionId] : []))).toEqual([
+      "ses_new",
+      "a",
+      "ses_old",
+    ])
+    expect(closed).toHaveBeenCalled()
+    o.handle({ id: 6, op: "touched", agent: "opencode", sessionId: "ses_new" })
+    o.handle({ id: 7, op: "touched", agent: "claude", sessionId: "a" })
+    await vi.waitFor(() =>
+      expect(replies.filter((r) => (r.id === 6 || r.id === 7) && "ok" in r)).toHaveLength(2),
+    )
+    expect(replies.find((r) => r.id === 6)).toEqual({ id: 6, ok: true, value: 99 })
+    expect(replies.find((r) => r.id === 7)).toEqual({ id: 7, ok: true, value: null })
+  })
+
+  it("a store whose listing fails during a search is named too", async () => {
+    const replies: SessionsReply[] = []
+    const o = new SessionsOps(
+      {
+        opencode: {
+          history: { list: () => Promise.reject(new Error("database is locked")) },
+          own: { searcher: () => null, touched: async () => undefined },
+        },
+      },
+      (r) => replies.push(r),
+    )
+    o.handle({ id: 9, op: "search", query: "quit", agents: ["opencode"], rg: null })
+    await vi.waitFor(() => expect(replies.some((r) => r.id === 9 && "ok" in r)).toBe(true))
+    expect(replies.find((r) => r.id === 9 && "ok" in r)).toMatchObject({
+      value: { couldNot: ["opencode"] },
+    })
+  })
+
+  it("a store that can't be searched is named, not read as no matches", async () => {
+    const replies: SessionsReply[] = []
+    const o = new SessionsOps(
+      {
+        opencode: {
+          history: { list: async () => [listed({ agent: "opencode", sessionId: "ses_x" })] },
+          own: {
+            searcher: () => {
+              throw new Error("no such table: part")
+            },
+            touched: async () => undefined,
+          },
+        },
+      },
+      (r) => replies.push(r),
+    )
+    o.handle({ id: 8, op: "search", query: "quit", agents: ["opencode"], rg: null })
+    await vi.waitFor(() => expect(replies.some((r) => r.id === 8 && "ok" in r)).toBe(true))
+    expect(replies.find((r) => r.id === 8 && "ok" in r)).toEqual({
+      id: 8,
+      ok: true,
+      value: { capped: false, couldNot: ["opencode"] },
+    })
+  })
+
   it("searches the listed transcripts, posting each hit, then done", async () => {
     const f = path.join(dir, "a.jsonl")
     fs.writeFileSync(f, JSON.stringify({ text: "the quit drain" }) + "\n")
@@ -183,6 +278,21 @@ describe("SessionsWorkerClient", () => {
     await expect(b).rejects.toMatchObject({ code: "EACCES" })
     w.exit()
     await expect(a).rejects.toMatchObject({ code: "EGONE" })
+  })
+
+  it("a late touched fails only itself: a worker busy listing isn't stopped", async () => {
+    vi.useFakeTimers()
+    const w = fakeProc()
+    const c = new SessionsWorkerClient(() => w.proc)
+    const list = c.list("claude")
+    const t = c.touched("opencode", "ses_x")
+    const late = expect(t).rejects.toMatchObject({ code: "ELATE" })
+    await vi.advanceTimersByTimeAsync(6000)
+    await late
+    expect(w.proc.killed).toBe(false)
+    w.reply({ id: 1, ok: true, value: [] })
+    expect(await list).toEqual([])
+    c.dispose()
   })
 
   it("a worker that doesn't exit when stopped is force-killed", async () => {

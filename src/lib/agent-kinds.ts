@@ -42,6 +42,7 @@ export const AGENT_KINDS: Record<AgentKind, AgentKindInfo> = {
     confirmsOnPrompt: true,
     worktreeMarkers: [],
     windows: false, // its plugin's file: URL and WSL forwarding are unverified there
+    history: true,
   },
 }
 

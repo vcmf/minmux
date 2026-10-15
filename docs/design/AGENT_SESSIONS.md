@@ -103,10 +103,17 @@ where parent_id is null and time_archived is null
 order by time_updated desc limit 500
 ```
 
-`DatabaseSync` is synchronous, and main also carries terminal data, so every query runs in a
-`worker_thread`. A missing table or column (OpenCode changed its schema) makes OpenCode's part of
-the tab say so; it never throws. OpenCode's placeholder titles (`New session - …`, the existing
-`isDefaultTitle`) fall back to the first prompt.
+Reading a WAL database needs its `-wal`/`-shm` files, so a read recreates them if OpenCode removed
+them on exit (OpenCode does the same on its next start; `immutable` mode would miss recent writes).
+`DatabaseSync` is synchronous, so it runs only in the sessions worker
+(`agents/opencode-history.ts`), opened for each read and closed (OpenCode keeps writing it). The
+listing is cached until the database or its WAL changes. A missing table or column (OpenCode
+changed its schema) makes OpenCode's part of the tab say so; it never throws. OpenCode's
+placeholder titles (`New session - …`, the existing `isDefaultTitle`) fall back to the first
+prompt the user typed (a text part that isn't `synthetic`). With no transcript file to stat, the
+"may be running elsewhere" check reads the session's newest activity (its newest part; the
+session row lags during a turn). When that check can't answer in time, it asks for the second
+click too.
 
 ## Running or not
 
@@ -157,9 +164,12 @@ search to sessions in that folder or below (before the 50-session cap).
   once) it narrows the files first (`rg -l -i -F`); if it fails, every file is checked. The query
   is searched in its JSON-escaped form (`JSON.stringify(q).slice(1, -1)`), so quotes and
   backslashes match what's on disk. Measured over ~5.5 GB of real transcripts: with `rg` 1.4–4.6 s (it narrows on the longest word), without 4.5–8.7 s; a common word stops at 50 sessions in under 0.4 s.
-- **OpenCode:** the same worker runs
-  `select session_id, data from part where instr(lower(data), lower(?)) > 0` and verifies text
-  parts the same way.
+- **OpenCode:** its sessions are candidates in the same newest-first pass as the transcript files,
+  so the 50 shown are the newest across agents. For each, one indexed query (`part_session_idx`)
+  reads its text parts that aren't `synthetic`, narrowed with `like` on the query's longest word
+  when it's ASCII (SQLite folds ASCII case only), each checked with the same matcher; the worker
+  yields between sessions, so a cancel or the time limit stops it. A database that can't be
+  searched is named in the status line, never read as "no matches".
 - **Bounds:** 300 ms debounce, stops at 50 sessions, at most one hit snippet per session (±60
   characters around the match), killed on a new query, on closing the tab, and after 20 s.
 
@@ -191,4 +201,5 @@ session in another group, search across agents.
 2. **Search** for Claude and Codex (#141): `rg` with the byte-scan fallback, snippets,
    cancellation. Step 1 read the list in main (a cold list over ~5 GB stalled it at most
    3.7 ms); this step moves the readers into the sessions worker with the search.
-3. **OpenCode** (#142): the database reader in a worker, for both the list and the search.
+3. **OpenCode** (#142): the database reader in the sessions worker, for the list, the search and
+   the busy check.

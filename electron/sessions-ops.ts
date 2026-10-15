@@ -3,7 +3,7 @@
 
 import type { AgentKind } from "../src/lib/agent-graph"
 import { filterPast, type SessionHit } from "../src/lib/past-sessions"
-import type { ListedSession } from "./agents/types"
+import type { ListedSession, SessionChecker } from "./agents/types"
 import type { AgentHistory } from "./agents/history-index"
 import { searchFiles, type SearchFile } from "./session-search"
 
@@ -18,14 +18,16 @@ export type SessionsRequest =
       under?: string // only sessions in this folder or below
     }
   | { id: number; op: "cancel" }
+  | { id: number; op: "touched"; agent: AgentKind; sessionId: string }
 
 export interface SearchDone {
   capped: boolean // stopped at the most sessions it shows
   timedOut?: boolean
+  couldNot?: AgentKind[] // agents whose store couldn't be searched
 }
 
 export type SessionsReply =
-  | { id: number; ok: true; value: ListedSession[] | SearchDone }
+  | { id: number; ok: true; value: ListedSession[] | SearchDone | number | null }
   | { id: number; ok: false; code: string }
   | { id: number; hit: SessionHit }
 
@@ -42,7 +44,12 @@ export class SessionsOps {
 
   handle(req: SessionsRequest): void {
     if (req.op === "cancel") return this.searches.get(req.id)?.abort()
-    const run = req.op === "list" ? this.list(req.agent) : this.search(req)
+    const run =
+      req.op === "list"
+        ? this.list(req.agent)
+        : req.op === "touched"
+          ? this.touched(req.agent, req.sessionId)
+          : this.search(req)
     void run.then(
       (value) => this.post({ id: req.id, ok: true, value }),
       (e: unknown) =>
@@ -72,25 +79,57 @@ export class SessionsOps {
     return entry.rows
   }
 
+  /** When a session was last written, from its agent's own store (null: it can't say). */
+  private async touched(agent: AgentKind, sessionId: string): Promise<number | null> {
+    return (await this.agents[agent]?.own?.touched(sessionId)) ?? null
+  }
+
   private async search(req: Extract<SessionsRequest, { op: "search" }>): Promise<SearchDone> {
     const ctl = new AbortController()
     this.searches.set(req.id, ctl)
     let timer: ReturnType<typeof setTimeout> | undefined
+    const checkers = new Map<AgentKind, SessionChecker>()
     let timedOut = false
     try {
       // The listed sessions (cached reads), newest first across agents.
+      // An agent whose store can't even be listed can't be searched: named, never "no matches".
+      const failed = new Set<AgentKind>()
       const lists = await Promise.all(
-        req.agents.map((a) => this.list(a, REUSE_MS).catch(() => [] as ListedSession[])),
+        req.agents.map((a) =>
+          this.list(a, REUSE_MS).catch(() => {
+            if (this.agents[a]?.own) failed.add(a)
+            return [] as ListedSession[]
+          }),
+        ),
       )
       const rows = filterPast(lists.flat(), new Set(req.agents), req.under).sort(
         (a, b) => b.updatedAt - a.updatedAt,
       )
       const byKey = new Map(rows.map((s) => [`${s.agent}:${s.sessionId}`, s]))
+      // Newest first across agents: a transcript file, or (no file) the agent's own store.
       const files: SearchFile[] = rows.flatMap((s) =>
         s.transcriptPath
           ? [{ agent: s.agent, sessionId: s.sessionId, file: s.transcriptPath }]
-          : [],
+          : this.agents[s.agent]?.own
+            ? [{ agent: s.agent, sessionId: s.sessionId }]
+            : [],
       )
+      // Each hit carries its row: main records it for a resume, the tab shows it even if its
+      // own list is older (main strips the file path on the way).
+      const post = (hit: SessionHit) => {
+        const session = byKey.get(`${hit.agent}:${hit.sessionId}`)
+        if (session) this.post({ id: req.id, hit: { ...hit, session } })
+      }
+      // One checker a store for this search (an open database), closed at the end. A store
+      // that can't be searched is named, never read as "no matches".
+      for (const a of new Set(files.filter((f) => !f.file).map((f) => f.agent))) {
+        try {
+          const c = this.agents[a]?.own?.searcher(req.query)
+          if (c) checkers.set(a, c)
+        } catch {
+          failed.add(a)
+        }
+      }
       // The time allowed runs from here: a slow first listing isn't counted against the search.
       timer = setTimeout(() => {
         timedOut = true
@@ -99,18 +138,28 @@ export class SessionsOps {
       const { capped } = await searchFiles(files, req.query, {
         rg: req.rg,
         signal: ctl.signal,
-        texts: (agent, line) => this.agents[agent]?.texts(line) ?? [],
-        quick: (agent, raw) => this.agents[agent]?.quick(raw) ?? false,
-        // Each hit carries its row: main records it for a resume, the tab shows it even if its
-        // own list is older (main strips the file path on the way).
-        onHit: (hit) => {
-          const session = byKey.get(`${hit.agent}:${hit.sessionId}`)
-          if (session) this.post({ id: req.id, hit: { ...hit, session } })
+        texts: (agent, line) => this.agents[agent]?.texts?.(line) ?? [],
+        quick: (agent, raw) => this.agents[agent]?.quick?.(raw) ?? false,
+        own: (f) => {
+          const c = checkers.get(f.agent)
+          if (!c || failed.has(f.agent)) return undefined
+          try {
+            return c.check(f.sessionId)
+          } catch {
+            failed.add(f.agent) // the store went wrong mid-search: say so, stop asking it
+            return undefined
+          }
         },
+        onHit: post,
       })
-      return { capped, ...(timedOut ? { timedOut } : {}) }
+      return {
+        capped,
+        ...(timedOut ? { timedOut } : {}),
+        ...(failed.size ? { couldNot: [...failed] } : {}),
+      }
     } finally {
       clearTimeout(timer)
+      for (const c of checkers.values()) c.close()
       this.searches.delete(req.id)
     }
   }

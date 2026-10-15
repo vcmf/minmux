@@ -34,6 +34,7 @@ type WithoutId<T> = T extends unknown ? Omit<T, "id"> : never
 // A cold listing of thousands of transcripts on a slow disk can take a while: it isn't stuck.
 const LIST_MS = 120_000
 const KILL_GRACE_MS = 2000
+const TOUCHED_MS = 5000
 
 const fail = (code: string) => Object.assign(new Error(code), { code })
 
@@ -53,6 +54,14 @@ export class SessionsWorkerClient {
   list(agent: AgentKind): Promise<ListedSession[]> {
     return this.call({ op: "list", agent }, undefined, this.opts.listMs ?? LIST_MS) as Promise<
       ListedSession[]
+    >
+  }
+
+  /** When a session was last written, from its agent's own store (null: it can't say). */
+  touched(agent: AgentKind, sessionId: string): Promise<number | null> {
+    // Short, and only this call fails when late: a worker busy listing isn't stuck.
+    return this.call({ op: "touched", agent, sessionId }, undefined, TOUCHED_MS, true) as Promise<
+      number | null
     >
   }
 
@@ -78,13 +87,26 @@ export class SessionsWorkerClient {
     this.stop(fail("EGONE"))
   }
 
-  private call(req: WithoutId<SessionsRequest>, onHit?: (hit: SessionHit) => void, ms?: number) {
+  private call(
+    req: WithoutId<SessionsRequest>,
+    onHit?: (hit: SessionHit) => void,
+    ms?: number,
+    soft = false, // late: reject this call only, keep the worker
+  ) {
     const id = this.nextId++
     const proc = this.start()
     if (this.idleTimer) clearTimeout(this.idleTimer)
     this.idleTimer = null // re-armed when the worker goes idle again
     return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => this.stop(fail("EHUNG")), ms ?? this.opts.callMs ?? 30_000)
+      const timer = setTimeout(
+        () => {
+          if (!soft) return this.stop(fail("EHUNG"))
+          this.pending.delete(id)
+          reject(fail("ELATE"))
+          this.idleSoon()
+        },
+        ms ?? this.opts.callMs ?? 30_000,
+      )
       this.pending.set(id, { resolve, reject, onHit, timer })
       proc.postMessage({ ...req, id } as SessionsRequest)
     })

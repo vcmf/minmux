@@ -50,5 +50,7 @@ ownership, native modules. No DOM, no React here. (Renderer rules: root `CLAUDE.
   the types. Change both when you add/adjust a channel.
 - **`node-pty` native module**: after install / Electron upgrade, `npx electron-rebuild -o node-pty`.
 - Handlers are best-effort and must never throw into Electron: wrap fs / native calls.
+- **`node:sqlite` (OpenCode's database) only in the sessions worker** (it's synchronous). Its
+  tests run under Node: `// @vitest-environment node` (jsdom can't load it).
 - Diagnostics logging is **temporary** (session-survival investigation) — gate or remove once
   the reattach fix is confirmed on-device.

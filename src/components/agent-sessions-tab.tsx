@@ -36,10 +36,24 @@ interface Search {
 function searchStatus(s: Search, found: number): string {
   if (!s.end) return found ? `Searching… ${found} so far` : "Searching…"
   if (s.end.failed) return "The search failed. Try again."
+  const not = s.end.couldNot?.map((k) => agentInfo(k).label)
   const n =
-    found === 0 ? "No conversation has those words" : `${found} session${found === 1 ? "" : "s"}`
-  if (s.end.timedOut) return `${n} in the time allowed: the search stopped early.`
-  return s.end.capped ? `${n} (the first found).` : found === 0 ? `${n}.` : n
+    found > 0
+      ? `${found} session${found === 1 ? "" : "s"}`
+      : not?.length
+        ? "No match in the sessions searched"
+        : "No conversation has those words"
+  const base = s.end.timedOut
+    ? `${n} in the time allowed: the search stopped early.`
+    : s.end.capped
+      ? `${n} (the first found).`
+      : found === 0
+        ? `${n}.`
+        : n
+  if (!not?.length) return base
+  const names =
+    not.length > 1 ? `${not.slice(0, -1).join(", ")} and ${not[not.length - 1]}` : not[0]
+  return `${base}${base.endsWith(".") ? "" : "."} Couldn't search ${names} sessions.`
 }
 
 /** The matched words in a snippet, marked. */

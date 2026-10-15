@@ -327,6 +327,7 @@ const historyWorker = new SessionsWorkerClient(
       stdio: "ignore",
     }) as unknown as SessionsProc,
 )
+const TOUCHED_MS = 5000 // the worker may be starting or mid-search
 let rgPath: { at: number; found: string | null } | null = null // looked up on the first search
 /** Is `d` a folder? undefined = couldn't tell in time (a hung mount: resumable, checked again). */
 const sessionDirExists = (d: string): Promise<boolean | undefined> =>
@@ -1154,19 +1155,34 @@ function registerIpc() {
       updatedAt: Date.now(),
     }
     const plan = await planEntry(entry, agent.rules, false, resumePreflight)
-    if (plan.status !== "resume" || confirmed === true || !listed.transcriptPath) return plan
+    if (plan.status !== "resume" || confirmed === true) return plan
     // Written just now and minmux doesn't see it running (the renderer would have gone to its
-    // pane): it may run in another terminal. Two copies would write one session: ask first.
+    // pane): it may run in another terminal. Two copies would write one session: ask first. The
+    // time is the transcript's, or (OpenCode) its database row's, read now.
+    const transcript = listed.transcriptPath
     const at = await within(
-      fs.promises.stat(listed.transcriptPath).then(
-        (st) => st.mtimeMs,
-        () => 0,
-      ),
-      STAT_MS,
+      transcript
+        ? fs.promises.stat(transcript).then(
+            (st) => st.mtimeMs,
+            () => 0,
+          )
+        : historyWorker.touched(agent.kind, listed.sessionId).then(
+            (t) => t ?? 0,
+            () => undefined, // the worker failed: can't rule it out
+          ),
+      transcript ? STAT_MS : TOUCHED_MS,
     )
+    // No answer in time (a hung mount, a busy worker): it can't be ruled out, so ask too.
+    if (at === undefined)
+      return {
+        ...plan,
+        status: "skip",
+        busy: true,
+        reason: "couldn't check whether it's running elsewhere",
+      }
     const age = at ? Date.now() - at : Infinity
     if (age >= BUSY_MS) return plan
-    const when = ago(at!)
+    const when = ago(at)
     return {
       ...plan,
       status: "skip",
