@@ -15,6 +15,12 @@ directories:
   output: release
   buildResources: build
 
+# What goes into app.asar: everything electron-builder picks by default, minus the website
+# (site/, with its own deps and build output; it ships to minmux.dev, not in the app).
+files:
+  - "**/*"
+  - "!site{,/**}"
+
 # Ad-hoc sign the macOS bundle after packing (identity:null only linker-signs the
 # inner binary, leaving the bundle unsealed). See build/after-pack.cjs.
 afterPack: ./build/after-pack.cjs

@@ -10,3 +10,9 @@ src-tauri/Cargo.lock
 *.icns
 *.svg
 CHANGELOG.md
+# the website (site/): its build output and generated font files
+site/.next
+site/out
+site/next-env.d.ts
+site/public/fonts
+site/app/_fonts.css
