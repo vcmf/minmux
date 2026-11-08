@@ -3,6 +3,12 @@
 What changed in each minmux release, newest first. Generated from the pull request titles by
 [git-cliff](https://git-cliff.org): edit `cliff.toml`, not this file.
 
+## [0.1.61](https://github.com/vcmf/minmux/releases/tag/v0.1.61) - 2026-11-08
+
+### Fixed
+
+- Keep the remote section from shrinking under a long session list ([#179](https://github.com/vcmf/minmux/pull/179))
+
 ## [0.1.60](https://github.com/vcmf/minmux/releases/tag/v0.1.60) - 2026-10-21
 
 ### Added
