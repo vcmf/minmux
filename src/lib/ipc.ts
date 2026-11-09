@@ -1,4 +1,4 @@
-import type { ShellOption, SpawnOpts, SshHost } from "../types"
+import type { OpenRequest, ShellOption, SpawnOpts, SshHost } from "../types"
 import type { WslContext } from "./wsl"
 import type { AgentEvent, AgentKind } from "./agent-graph"
 import type { SessionMeta } from "./session-color"
@@ -134,6 +134,10 @@ export interface Ipc {
   prReviewers: (req: PrReviewersRequest) => Promise<PrReviewersResult> // request / un-request
   gitDiff: (cwd: string, file: string, wsl?: WslContext) => Promise<DiffLine[]>
   readWorkspace: () => Promise<string>
+  // `minmux open` (electron/cli.ts): the requests main holds, taken once the workspace is restored
+  takeOpens: () => Promise<OpenRequest[]>
+  onWorkspaceOpen: (cb: () => void) => () => void // a new one is waiting
+  openResult: (req: OpenRequest, result: { opened: string } | { dropped: string }) => void // diag
   writeWorkspace: (contents: string) => void
   appMetrics: () => Promise<ProcMetric[]>
   perfMode: () => Promise<boolean>

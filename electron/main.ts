@@ -105,9 +105,10 @@ import { createPathWatcher } from "./ssh-watcher"
 import { nodeMiniFs, wslMiniFs } from "./ssh-config"
 import type { GitRootRequest, PaneGitRequest } from "../src/lib/pane-git"
 import { findGitRoots } from "./git-roots"
+import { isArgv, isStale, parseCli, receivedOpen, USAGE } from "./cli"
 import type { GitRootsResult } from "./fs-worker-ops"
 import type { WslContext } from "../src/lib/wsl"
-import type { SpawnOpts as SpawnRequest } from "../src/types"
+import type { OpenRequest, SpawnOpts as SpawnRequest } from "../src/types"
 import {
   classifyPreview,
   PREVIEW_READ_CAP,
@@ -983,6 +984,30 @@ function registerIpc() {
       )
     }
 
+    // Arm every agent in this pane (Claude: the injected `claude` wrapper routes through our
+    // scoped hook settings), and tag the pane so the agents board knows which pane each
+    // session runs in (M6). The hooks find the drop root in MINMUX_AGENT_EVENTS. WSL:
+    // wslInjection forwards the paths over WSLENV with /p, so their Windows form is
+    // translated for an agent inside WSL.
+    const paneEnv = (injEnv?: Record<string, string>) => {
+      const env = baseSpawnEnv(opts, injEnv)
+      if (agentEventsDir && armed.length)
+        Object.assign(env, agentPaneEnv(armed, disabledAgents(), agentEventsDir, opts.id))
+      return env
+    }
+    const localCwd = () => (opts.cwd && fs.existsSync(opts.cwd) ? opts.cwd : os.homedir())
+    // `minmux open -- <argv>`: that program as is, in place of the shell — no integration.
+    if (isArgv(opts.run)) {
+      const [file, ...args] = opts.run
+      return startPty(event.sender, opts, {
+        file: file!,
+        args,
+        cwd: localCwd(),
+        env: paneEnv(),
+        integrated: false,
+      })
+    }
+
     const shellCmd = opts.shell || defaultShell()
     // WSL: the Linux shell runs inside wsl.exe. Drive the Linux start dir via wsl's
     // own --cd (home unless we have a tracked Linux path); inject our integration
@@ -991,20 +1016,11 @@ function registerIpc() {
     const wsl = isWslShell(shellCmd)
     const inj = wsl ? buildWslInjection(opts.args ?? []) : buildInjection(shellCmd)
     const wslArgs = wsl ? wslCdArgs(opts.cwd) : []
-    const startCwd = !wsl && opts.cwd && fs.existsSync(opts.cwd) ? opts.cwd : os.homedir()
-    const env = baseSpawnEnv(opts, inj?.env)
-    // Arm every agent in this pane (Claude: the injected `claude` wrapper routes through our
-    // scoped hook settings), and tag the pane so the agents board knows which pane each
-    // session runs in (M6). The hooks find the drop root in MINMUX_AGENT_EVENTS. WSL:
-    // wslInjection forwards the paths over WSLENV with /p, so their Windows form is
-    // translated for an agent inside WSL.
-    if (agentEventsDir && armed.length)
-      Object.assign(env, agentPaneEnv(armed, disabledAgents(), agentEventsDir, opts.id))
     return startPty(event.sender, opts, {
       file: shellCmd,
       args: [...(opts.args ?? []), ...wslArgs, ...(inj?.args ?? [])],
-      cwd: startCwd,
-      env,
+      cwd: wsl ? os.homedir() : localCwd(),
+      env: paneEnv(inj?.env),
       // Remember a WSL pane's distro so a hook event tagged with this pane resolves its
       // Linux transcript path against the right distro's UNC share (not just the default).
       wslDistro: wsl ? (parseWslDistroArg(opts.args ?? []) ?? defaultWslDistro()) : undefined,
@@ -1255,6 +1271,20 @@ function registerIpc() {
   ipcMain.handle("agents:meta-snapshot", async () =>
     [...metaTrackers.values()].flatMap((t) => t.snapshot()),
   )
+  // `minmux open` requests, taken by the renderer once its workspace is restored (and on each
+  // workspace:open nudge after that); until then they wait here — across a reload too.
+  ipcMain.handle("workspace:take-opens", async () => {
+    const taken = pendingOpens.splice(0)
+    if (taken.length) diag("cli-open-taken", { count: taken.length })
+    return taken
+  })
+  // What became of each one (store.openFromCli): diagnostics only.
+  ipcMain.on("workspace:open-result", (_e, req: unknown, result: unknown) => {
+    const r = (result ?? {}) as { opened?: unknown; dropped?: unknown }
+    const fields = { ...openFields(req), ...(typeof r.opened === "string" ? { id: r.opened } : {}) }
+    if (typeof r.opened === "string") diag("cli-open-opened", fields)
+    else diag("cli-open-dropped", { ...fields, reason: String(r.dropped ?? "unknown") })
+  })
   ipcMain.handle("window:is-maximized", async () => mainWindow?.isMaximized() ?? false)
 
   // Git — working-tree status + per-file diff for the changes panel.
@@ -1754,13 +1784,141 @@ function migrateFromSmterm(): void {
 // survivor's Claude sessions keep POSTing to the now-dead port → `connect ECONNREFUSED`
 // on every hook, spamming the agent's output. Hold a lock: the second instance just focuses
 // the running window and quits, so there's always exactly one receiver / one config writer.
+// `minmux open …` / `minmux --help` (cli.ts) is parsed before taking the lock: a second
+// instance can't hear back from the lock holder, so it prints usage / errors itself and exits.
+// A valid request goes to the lock holder as a file in CLI_SPOOL, written before asking for the
+// lock — never as the lock's additionalData: Chromium's parser of that binary payload fails on
+// some contents (a two-byte string such as an emoji or a "·", a number): "additional_data_size
+// exceeds payload length", no answer, and the second instance SIGKILLs this app as hung and
+// starts over in its place. With it goes the time it was sent (a late one is dropped: cli.ts
+// STALE_MS).
+const CLI_SPOOL = path.join(configDir(), "cli-open")
+const CLI = cliRequest()
+const spooled = CLI && spoolOpen({ open: CLI, at: Date.now() })
 const gotSingleInstanceLock = app.requestSingleInstanceLock()
-if (!gotSingleInstanceLock) app.quit()
+// The lock holder has the request (spooled): leave now — not app.quit(), which waits for this
+// process to finish starting first (seconds, for a packaged app).
+if (!gotSingleInstanceLock) app.exit(0)
+// This launch is the app: its own request is CLI itself, not a spooled one.
+if (spooled) fs.rmSync(spooled, { force: true })
+// `minmux open` requests the renderer hasn't taken yet (workspace:take-opens).
+const pendingOpens: OpenRequest[] = CLI ? [CLI] : []
+if (CLI && gotSingleInstanceLock) diag("cli-open-received", { ...openFields(CLI), via: "launch" })
+// Left by second instances of an app that died meanwhile: stale by now (dropped, logged).
+if (gotSingleInstanceLock) takeSpool().forEach(acceptOpen)
 app.on("second-instance", () => {
-  if (!mainWindow || draining()) return // quitting: don't resurface a window whose shells are ending
+  const queued = takeSpool().map(acceptOpen).some(Boolean)
+  if (draining()) return // quitting: don't resurface a window whose shells are ending
+  if (!mainWindow) {
+    // macOS: the window was closed, the app kept running → a new one restores and takes them.
+    if (queued && app.isReady()) {
+      diag("cli-open-waiting", { reason: "no window: opening one" })
+      createWindow()
+    }
+    return
+  }
+  if (queued) mainWindow.webContents.send("workspace:open") // a nudge: the renderer takes them
   if (mainWindow.isMinimized()) mainWindow.restore()
   mainWindow.focus()
 })
+
+/** Spool a second instance's `minmux open` for the lock holder (atomically: a temp file renamed
+ *  into place) → its path, or undefined if it can't (logged by neither: it never arrives). */
+function spoolOpen(entry: object): string | undefined {
+  try {
+    fs.mkdirSync(CLI_SPOOL, { recursive: true })
+    const file = path.join(CLI_SPOOL, `${Date.now()}-${randomUUID()}`)
+    fs.writeFileSync(`${file}.tmp`, JSON.stringify(entry))
+    fs.renameSync(`${file}.tmp`, `${file}.json`)
+    return `${file}.json`
+  } catch {
+    return undefined
+  }
+}
+
+/** The spooled requests (each removed as it's read), oldest first; unreadable ones are logged. */
+function takeSpool(): unknown[] {
+  let names: string[]
+  try {
+    names = fs.readdirSync(CLI_SPOOL).filter((n) => n.endsWith(".json"))
+  } catch {
+    return [] // none spooled yet
+  }
+  const entries: unknown[] = []
+  for (const name of names.sort()) {
+    const file = path.join(CLI_SPOOL, name)
+    try {
+      const text = fs.readFileSync(file, "utf8")
+      fs.rmSync(file, { force: true })
+      entries.push(JSON.parse(text))
+    } catch {
+      fs.rmSync(file, { force: true })
+      diag("cli-open-invalid", { request: `unreadable ${name}` })
+    }
+  }
+  return entries
+}
+
+/** One handed-over request: queued for the renderer (true), or not — and why, in
+ *  diagnostics.log. */
+function acceptOpen(entry: unknown): boolean {
+  const req = receivedOpen(entry, (request) => diag("cli-open-invalid", { request }))
+  if (!req) return false
+  diag("cli-open-received", { ...openFields(req), via: "second-instance" })
+  if (isStale(entry, Date.now())) {
+    // This app didn't answer in time (frozen, busy): the caller was told it failed.
+    diag("cli-open-dropped", { ...openFields(req), reason: "stale" })
+    return false
+  }
+  if (draining()) {
+    diag("cli-open-dropped", { ...openFields(req), reason: "quitting" })
+    return false
+  }
+  pendingOpens.push(req) // the renderer opens it (a drop there is in diagnostics.log)
+  return true
+}
+
+/** This launch's `minmux open` request, if any; usage, errors and a missing dir exit here. */
+function cliRequest(): OpenRequest | undefined {
+  const cli = parseCli(process.argv, process.cwd())
+  if (!cli) return undefined
+  if ("help" in cli) {
+    print(1, USAGE)
+    process.exit(0)
+  }
+  const error =
+    "error" in cli ? cli.error : isDir(cli.open.cwd) ? "" : `no such directory: ${cli.open.cwd}`
+  if (!error && "open" in cli) return cli.open
+  print(2, `minmux: ${error}\n${USAGE}`)
+  process.exit(2)
+}
+
+/** A `minmux open` request, for a diagnostics line. */
+function openFields(req: unknown): Record<string, string> {
+  const r = (req ?? {}) as Partial<OpenRequest>
+  return {
+    tab: JSON.stringify(r.tab ?? null),
+    cwd: String(r.cwd),
+    run: r.command ? path.basename(String(r.command[0])) : "shell",
+  }
+}
+
+/** A line to this launch's own stdout (1) / stderr (2) — synchronous: it exits right after. */
+function print(fd: number, text: string): void {
+  try {
+    fs.writeSync(fd, `${text}\n`)
+  } catch {
+    // no terminal to print to
+  }
+}
+
+function isDir(p: string): boolean {
+  try {
+    return fs.statSync(p).isDirectory()
+  } catch {
+    return false
+  }
+}
 
 app.whenReady().then(async () => {
   if (!gotSingleInstanceLock) return // second instance — it's quitting; start nothing

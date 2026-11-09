@@ -45,3 +45,41 @@ their defaults.
 Defaults are in [`src/settings/schema.ts`](../src/settings/schema.ts); the SSH ones in
 [`src/lib/ssh-validate.ts`](../src/lib/ssh-validate.ts), the agent switches in
 [`src/settings/agent-switches.ts`](../src/settings/agent-switches.ts).
+
+## Command line
+
+`open` opens a pane in the running app (and starts it if it isn't running). For now the command
+is the app's own executable — on macOS `/Applications/minmux.app/Contents/MacOS/minmux`, written
+`minmux` below:
+
+```
+minmux open [--tab <title>] [--cwd <dir>] [--split right|down] [-- <command> [args…]]
+minmux --help
+```
+
+- `--tab <title>`: the tab with that exact title, created (and titled) if there's none; without
+  it, the active tab. The tab comes to the front.
+- `--cwd <dir>`: where the pane starts; default the current directory.
+- `--split right|down`: which side of the tab's focused pane the new pane opens on (default
+  `right`). A new tab just gets the one pane.
+- `-- <command> [args…]`: runs that program (no shell in between) instead of your default shell.
+  When it exits the pane stays with its output; closing it always asks first (minmux can't tell
+  whether it still runs). A relaunch reopens the pane as a shell in that folder: the command
+  isn't run again. With no shell, nothing wraps `claude` with minmux's hooks (status,
+  notifications, resume): a script that starts Claude passes them itself —
+  `MINMUX_AGENT=claude claude ${MINMUX_CLAUDE_SETTINGS:+--settings "$MINMUX_CLAUDE_SETTINGS"} …`.
+
+Each call adds one pane, so a script can lay out a whole tab, e.g. one tab per wave of work and
+one pane per worktree:
+
+```sh
+for wt in ~/src/app-wt/*/; do
+  minmux open --tab "wave 3" --cwd "$wt" -- ~/bin/start-session.sh "$(basename "$wt")"
+done
+```
+
+Errors (an unknown option, a missing directory) are printed and exit with status 2; the app
+isn't touched. Every request and what became of it is logged in `diagnostics.log`
+(`cli-open-*` lines). The first `open` with no app running starts it and stays in the
+foreground as the app, attached to that terminal. Linux and Windows are untested (on Windows a
+command runs natively, not in WSL).
