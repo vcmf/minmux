@@ -1,0 +1,5 @@
+.next
+out
+node_modules
+public/fonts
+app/_fonts.css

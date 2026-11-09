@@ -1,0 +1,44 @@
+# minmux
+
+> minmux is a free, open-source (MIT) terminal for people who run coding agents — Claude Code, Codex and OpenCode — all day. It is a normal terminal first — tabs, resizable split panes, real shells — plus panels that show what the agents actually did. It runs on macOS, Linux, Windows and WSL.
+
+"You run the agents. You still read the code." An open-source alternative if you have been looking for Warp without the lock-in, or tmux that understands agents.
+
+## Features
+
+- Tabs and resizable split panes with your own shell, prompt and directory; a split opens in the same directory.
+- Per-session status (running, needs input, done/idle) as a dot on the tab and a line in the sidebar; a background pane that asks a question sends a native OS notification.
+- Changes panel: a git diff for the focused pane's directory, with per-file counts and the full unified diff; branch and ahead/behind in the status bar.
+- Files panel: the focused pane's directory as a tree with a breadcrumb; click a file to preview it with line numbers and syntax colour, or open it in your editor.
+- Agents board: every Claude Code, Codex and OpenCode session launched in minmux, with its sub-agents, what each is doing, its directory, the files it touched and its token use. Click an agent to jump to its pane. Quit minmux with an agent running and its session comes back in the same pane when you reopen it.
+- Agent setup: no global config to edit; minmux wires only the panes it launches. Claude Code and OpenCode need no setup. Codex asks you to approve minmux's hooks once (type /hooks in Codex and press t). Codex and OpenCode are not wired on Windows or in WSL panes yet.
+- Past sessions: the Agents panel lists closed sessions too; search their conversations, filter by agent or by the current folder, and resume one in a split. Each open session also shows the processes it runs (a dev server, a test watcher).
+- Pull requests: a dialog with your PRs, the ones waiting for your review, and the focused pane's repo, with approvals, CI state and stacked PRs. Read the description and review threads, follow checks and commits live, request reviewers, comment, approve, update the branch, mark it ready or merge. It runs your own gh.
+- No telemetry, no account: the one request minmux makes on its own is a check for a newer release on GitHub.
+- SSH: hosts from ~/.ssh/config in one picker, recent first; open one in a tab or a split, and splits stay on the host. It runs your own ssh, so keys, agents and 2FA prompts work as usual.
+- Themes: four families (Minimal, Tokyo Night, Catppuccin, Gruvbox), each in light and dark. Settings live in one JSON file, re-applied as you save.
+
+## Install
+
+- macOS and Linux: `curl -fsSL https://raw.githubusercontent.com/vcmf/minmux/main/install.sh | sh`
+- Windows (PowerShell): `irm https://raw.githubusercontent.com/vcmf/minmux/main/install.ps1 | iex`
+- From source: `git clone https://github.com/vcmf/minmux && cd minmux`, then `make install` and `make build`.
+
+## FAQ
+
+- How is minmux different from tmux or a normal terminal? minmux is a normal terminal first: tabs, resizable splits, your own shell, your own directory. What it adds is a small set of panels that answer what happened while an agent was working: Changes, Files, and the Agents board. Nothing replaces the shell you already use.
+- Which coding agents does minmux support? Claude Code, Codex and OpenCode. Run claude, codex or opencode in any pane and the Agents board lights up. Any other agent CLI still runs fine in a pane; it just will not show up on the board.
+- Does minmux work on Windows? Yes, on Windows and inside WSL, alongside macOS and Linux. Windows and WSL are the newest targets, so they have seen less real-world use so far, and Codex and OpenCode are not wired there yet (Claude Code is).
+- Do I have to configure hooks or edit a global config? No global config: minmux wires only the panes it launches. Claude Code and OpenCode need no setup; Codex asks you to approve minmux's hooks once (/hooks, then t).
+- Where do settings live? ~/.config/minmux/settings.json on macOS and Linux, %APPDATA%\minmux\settings.json on Windows. A watcher re-applies changes as you save.
+- Can I get an agent session back after closing minmux? Yes: it comes back in the same pane when you reopen minmux, and past sessions are searchable in the Agents panel.
+- Does minmux send telemetry or need an account? No. It only checks GitHub for a newer release; pull requests go through your own gh.
+- Is minmux free and open source? Yes, MIT licensed.
+
+## Links
+
+- [Website](https://minmux.dev/)
+- [Source code on GitHub](https://github.com/vcmf/minmux)
+- [Documentation](https://github.com/vcmf/minmux/tree/main/docs)
+- [Issues](https://github.com/vcmf/minmux/issues)
+- Made by [quanglee.dev](https://quanglee.dev), built in the open with the [dim0 team](https://dim0.net)

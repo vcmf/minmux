@@ -1,0 +1,130 @@
+/*
+  Design tokens, in two layers (shadcn-style):
+
+  1. Palettes: the app's own theme values (minmux src/settings/themes.ts, same key names).
+     One block per theme × appearance, selected with `data-palette` on <html> (or on one
+     section, e.g. the themes turn on phones). No attribute = Minimal Light, the default.
+  2. Semantic tokens: what components use. They are re-derived wherever a palette applies,
+     so a section with its own palette gets matching semantic values.
+
+  Components must only reference semantic tokens, never palette keys or literal colours.
+*/
+
+/* ── 1. Palettes ── */
+:root,
+[data-palette="minimal-light"] {
+  color-scheme: light;
+  --bg: #fafafa;
+  --panel: #f3f3f5;
+  --elev: #e8e8ec;
+  --border: rgba(0, 0, 0, 0.08);
+  --border2: rgba(0, 0, 0, 0.14);
+  --text: #1d1d21;
+  --dim: #5c5c66;
+  --faint: #8a8a94;
+  --accent: #1f9d55;
+  --amber: #b7791f;
+  --red: #d33a47;
+  --blue: #2f6fdb;
+  --magenta: #9a3fc0;
+  --scrim: rgba(20, 22, 30, 0.18);
+  --shadow: rgba(20, 24, 40, 0.22);
+}
+[data-palette="minimal-dark"] {
+  color-scheme: dark;
+  --bg: #0b0b0d;
+  --panel: #0f0f12;
+  --elev: #17171b;
+  --border: rgba(255, 255, 255, 0.07);
+  --border2: rgba(255, 255, 255, 0.12);
+  --text: #e8e8ea;
+  --dim: #9a9aa2;
+  --faint: #6a6a72;
+  --accent: #4ec97a;
+  --amber: #e0a94a;
+  --red: #f0625f;
+  --blue: #6aa0f0;
+  --magenta: #c678dd;
+  --scrim: rgba(4, 4, 6, 0.45);
+  --shadow: rgba(0, 0, 0, 0.75);
+}
+/* Claude Code /color swatches, per scheme (src/lib/session-color.ts SWATCHES), and the
+   agents' identity colours: Claude's clay (deeper on light schemes, for contrast) */
+:root,
+[data-palette="minimal-light"] {
+  --agent-claude: #c96442;
+  --cc-red: #d33a47;
+  --cc-blue: #2f6fdb;
+  --cc-green: #1f9d55;
+  --cc-yellow: #b58a00;
+  --cc-purple: #8a4fd6;
+  --cc-orange: #d9661a;
+  --cc-pink: #d4468f;
+  --cc-cyan: #138a9a;
+}
+[data-palette="minimal-dark"] {
+  --agent-claude: #d97757;
+  --cc-red: #f0625f;
+  --cc-blue: #5b9cf5;
+  --cc-green: #4ec97a;
+  --cc-yellow: #e8c547;
+  --cc-purple: #b180f0;
+  --cc-orange: #f0913d;
+  --cc-pink: #f07ab8;
+  --cc-cyan: #4cc9d8;
+}
+
+/* ── 2. Semantic tokens ── */
+:root,
+[data-palette] {
+  /* surfaces + text */
+  --background: var(--bg);
+  --foreground: var(--text);
+  --muted-foreground: var(--dim);
+  --subtle-foreground: var(--faint);
+  --surface: var(--panel); /* bars, sidebar, side panels, cards, dialogs */
+  --surface-hover: color-mix(in srgb, var(--elev) 55%, transparent);
+  --surface-active: var(--elev); /* selected row, active tab, pressed button */
+  --border-strong: var(--border2);
+
+  /* actions */
+  --brand: var(--accent); /* links, focus ring, highlighted icons, wordmark */
+  --primary: var(--text); /* solid button */
+  --primary-foreground: var(--bg);
+  --ring: var(--accent);
+
+  /* session / agent status (the app's status dots) */
+  --status-running: var(--accent);
+  --status-waiting: var(--amber);
+  --status-waiting-foreground: var(--bg);
+  --status-done: var(--dim);
+  --status-idle: var(--faint);
+  --status-info: var(--blue);
+  --danger: var(--red);
+
+  /* git + files */
+  --git-added: var(--accent);
+  --git-modified: var(--amber);
+  --git-removed: var(--red);
+  --folder: var(--blue);
+  --diff-add: color-mix(in srgb, var(--accent) 11%, transparent);
+  --diff-del: color-mix(in srgb, var(--red) 10%, transparent);
+  --diff-hunk: var(--blue);
+
+  /* code + terminal output */
+  --code-keyword: var(--magenta);
+  --code-string: var(--accent);
+  --code-number: var(--amber);
+  --code-comment: var(--faint);
+  --code-key: var(--blue);
+  --term-cwd: var(--accent);
+  --term-branch: var(--blue);
+
+  /* agents' identity colours (Claude's clay is set per scheme above) */
+  --agent-codex: var(--cc-blue);
+  --agent-opencode: var(--cc-purple);
+
+  /* typography */
+  --mono: "JetBrains Mono", ui-monospace, Menlo, monospace;
+  --chrome: "Geist Mono", ui-monospace, Menlo, monospace;
+}
