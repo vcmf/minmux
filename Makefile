@@ -83,6 +83,17 @@ audit: ## Security audit of dependencies
 hooks: ## Install/refresh git hooks (lefthook)
 	npx lefthook install
 
+.PHONY: check-cli
+check-cli: ## End-to-end `minmux open` against a built app (MINMUX_E2E_APP=…, else release/ or out/)
+	MINMUX_E2E=1 npx vitest run electron/cli-e2e.test.ts
+
+.PHONY: install-cli
+install-cli: ## Put the `minmux` command on PATH (macOS: a symlink in /usr/local/bin, else ~/.local/bin)
+	@bin=/usr/local/bin; [ -d $$bin ] && [ -w $$bin ] || bin=$$HOME/.local/bin; \
+	mkdir -p $$bin && ln -sf "$(CURDIR)/scripts/minmux" $$bin/minmux && \
+	echo "linked $$bin/minmux -> $(CURDIR)/scripts/minmux"; \
+	case ":$$PATH:" in *":$$bin:"*) ;; *) echo "note: $$bin is not on your PATH" ;; esac
+
 .PHONY: clean
 clean: ## Remove build artifacts
 	rm -rf out dist coverage

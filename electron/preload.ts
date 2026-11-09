@@ -32,6 +32,7 @@ const api = {
     remote?: unknown
     attachOnly?: boolean
     reopen?: unknown
+    run?: string[]
   }) => ipcRenderer.invoke("pty:spawn", opts),
 
   onPtyExit: (id: string, cb: (e: { code: number; signal: number }) => void) => {
@@ -191,6 +192,14 @@ const api = {
     ipcRenderer.invoke("git:diff", cwd, file, wsl),
 
   readWorkspace: () => ipcRenderer.invoke("workspace:read") as Promise<string>,
+  takeOpens: () => ipcRenderer.invoke("workspace:take-opens"),
+  openResult: (req: unknown, result: unknown) =>
+    ipcRenderer.send("workspace:open-result", req, result),
+  onWorkspaceOpen: (cb: () => void) => {
+    const listener = () => cb()
+    ipcRenderer.on("workspace:open", listener)
+    return () => ipcRenderer.removeListener("workspace:open", listener)
+  },
   writeWorkspace: (contents: string) => ipcRenderer.invoke("workspace:write", contents),
 
   appMetrics: () => ipcRenderer.invoke("app:metrics"),

@@ -73,6 +73,18 @@ Playwright driver): isolated `HOME` / user-data dir (never the user's real layou
 settings), DOM renderer for text assertions, screenshots for visuals, simulated Claude hook
 events. Look at the screenshots — a blank or garbled frame is a failure even if selectors matched.
 
+`minmux open` is process-level (a second launch handing its request to the running app), so it
+has its own end-to-end check: `make check-cli` (`electron/cli-e2e.test.ts`, skipped by
+`make check`) runs `scripts/minmux` against a built app — `MINMUX_E2E_APP=<…/minmux.app>`, else
+`release/mac-arm64/minmux.app`, else the dev Electron on `out/` — on a throwaway HOME and
+user-data dir: a cold launch from a caller whose process group is then killed, then three warm
+calls (from nothing saved, and over a restored workspace), asserting one app pid and one `boot`
+line throughout, each call back within 2 s (`MINMUX_E2E_WARM_MS` on a loaded machine), every
+request received and opened (`cli-open-*` in `diagnostics.log`), and the tabs and panes in
+`workspace.json`; and an app that doesn't answer (SIGSTOP): the call fails within 12 s, before
+Chromium would kill the app to take its place, and the app survives. Test a packaged build, not only the dev one: the two differ
+in startup cost and in how a second instance exits.
+
 ## 5. Coverage
 
 `make coverage` (v8 → `coverage/lcov.info`, uploaded to Codecov from CI). It measures `src/**` and the
