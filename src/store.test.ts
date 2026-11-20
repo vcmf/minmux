@@ -1715,4 +1715,48 @@ describe("store — folder entries", () => {
     expect(s.remote).toBeUndefined()
     expect(s.command).toBe(shell.command)
   })
+
+  it("a peek replaces the pane's peek; a kept file stays; one already open is focused", () => {
+    st().newTab(shell)
+    st().openFile("/w/a.ts", { peek: true })
+    const a = tab().activeEntryId
+    st().openFile("/w/b.ts", { peek: true })
+    const b = tab().activeEntryId
+    expect(st().objects[a]).toBeUndefined() // replaced
+    expect(leaf().entryIds).toEqual([tab().activeSessionId, b])
+    st().keepEntry(b)
+    expect(st().objects[b]).toEqual({ kind: "file", path: "/w/b.ts" })
+    st().openFile("/w/c.ts", { peek: true })
+    expect(leaf().entryIds).toHaveLength(3) // b was kept: c is a new peek beside it
+    st().openFile("/w/b.ts", { peek: true, line: 40 })
+    expect(tab().activeEntryId).toBe(b) // already open here: focused, at the line
+    expect((st().objects[b] as { line?: number }).line).toBe(40)
+  })
+
+  it("a peek that was all its pane held is replaced in place, the pane kept", () => {
+    st().newTab(shell)
+    st().openFile("/w/a.ts", { peek: true })
+    const a = tab().activeEntryId
+    st().closeSurface(tab().id, tab().activeSessionId) // the terminal goes: the peek is alone
+    st().openFile("/w/b.ts", { peek: true })
+    expect(st().objects[a]).toBeUndefined()
+    expect(leaf().entryIds).toEqual([tab().activeEntryId])
+  })
+
+  it("dragging a peek keeps it", () => {
+    st().newTab(shell)
+    st().splitActive("row", shell)
+    st().openFile("/w/a.ts", { peek: true })
+    const a = tab().activeEntryId
+    const other = allSessionIds(tab().root)[0]!
+    st().moveSurface(tab().id, a, { paneId: findPane(tab().root, other)!.id, zone: "center" })
+    expect((st().objects[a] as { peek?: true }).peek).toBeUndefined()
+  })
+
+  it("a terminal from a focused file opens in its folder", () => {
+    st().newTab(shell)
+    st().openFile("/w/rts/src/a.ts")
+    st().newSurface()
+    expect(st().sessions[tab().activeSessionId]!.cwd).toBe("/w/rts/src")
+  })
 })

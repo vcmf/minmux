@@ -13,6 +13,25 @@ export interface FolderEntry {
   wsl?: WslContext // a WSL pane's folder: a Linux path, read through the distro's share
 }
 
+/** A file shown in a pane (step 3a). A peek is replaced by the next peek in its pane. */
+export interface FileEntry {
+  kind: "file"
+  path: string
+  wsl?: WslContext
+  line?: number // where to scroll when it opens (a path click's `:line`)
+  peek?: true
+}
+
+/** A pane entry that isn't a terminal. */
+export type ObjectEntry = FolderEntry | FileEntry
+
+/** The folder an entry stands in: a folder's own path, a file's parent. */
+export function placeOf(o: ObjectEntry): { path: string; wsl?: WslContext } {
+  if (o.kind === "folder") return { path: o.path, ...(o.wsl ? { wsl: o.wsl } : {}) }
+  const parent = o.path.replace(/[\\/][^\\/]*$/, "") || (o.path.startsWith("/") ? "/" : o.path)
+  return { path: parent, ...(o.wsl ? { wsl: o.wsl } : {}) }
+}
+
 /** What a folder view has open (folders it expanded, big folders shown in full). */
 export interface FolderView {
   expanded: string[]

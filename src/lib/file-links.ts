@@ -56,3 +56,17 @@ export function findFilePaths(text: string): FileLinkMatch[] {
   }
   return out
 }
+
+/** A clicked path as an absolute one: `~/` from `home`, a relative one from the terminal's `cwd`,
+ *  `.` and `..` resolved. (Forward slashes, as the paths found here.) */
+export function resolveLinkPath(cwd: string, p: string, home: string): string {
+  const raw =
+    p.startsWith("~/") && home ? `${home}${p.slice(1)}` : p.startsWith("/") ? p : `${cwd}/${p}`
+  const out: string[] = []
+  for (const part of raw.split("/")) {
+    if (part === "" || part === ".") continue
+    if (part === "..") out.pop()
+    else out.push(part)
+  }
+  return `/${out.join("/")}`
+}

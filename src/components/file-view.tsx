@@ -1,0 +1,192 @@
+import { useEffect, useMemo, useRef, useState } from "react"
+import { ArrowSquareOut, FolderOpen, FolderSimple } from "@phosphor-icons/react"
+import { useStore } from "../store"
+import { ipc } from "../lib/ipc"
+import { watches } from "../lib/fs-reads"
+import { formatSize, languageForPath } from "../lib/file-preview"
+import { highlightLines, plainLines } from "../lib/highlight-client"
+import { placeOf, type FileEntry } from "../lib/folder-entries"
+import type { FileData } from "../lib/file-tab"
+import { isAbsoluteHostPath, revealLabel } from "../lib/file-actions"
+import { findPane } from "../lib/pane-tree"
+import { rowWindow } from "../lib/virtual-rows"
+import { shortCwd } from "../lib/session-label"
+
+const LINE_H = 18 // every line of a file tab (App.css .file-view-line): the window needs it
+const RELOAD_MS = 200 // a live file (an agent writing it) re-reads at most this often
+
+// Read through the fs worker; highlighted in a worker (lib/highlight-client); only the lines in
+// view are rendered; its folder is watched while it shows, so an agent's edits appear.
+/** A file entry's view in its pane: the file, highlighted, with line numbers. */
+export function FileView({ entryId, tabId }: { entryId: string; tabId: string }) {
+  const file = useStore((s) => s.objects[entryId]) as FileEntry | undefined
+  const home = useStore((s) => s.home)
+  const platform = useStore((s) => s.platform)
+  const path = file?.path ?? ""
+  const wsl = file?.wsl
+  const [data, setData] = useState<FileData | null>(null)
+  const [lines, setLines] = useState<string[]>([])
+
+  // Read it now, and again (throttled) when its folder's watcher says something changed.
+  const [version, setVersion] = useState(0)
+  useEffect(() => {
+    if (!path) return
+    let live = true
+    void ipc.readFile(path, wsl).then((d) => {
+      if (!live) return
+      setData(d)
+      if (d.kind !== "text") return setLines([])
+      setLines((prev) => (prev.length ? prev : plainLines(d.text))) // no flash on a re-read
+      void highlightLines(d.text, languageForPath(path)).then((l) => live && setLines(l))
+    })
+    return () => {
+      live = false
+    }
+  }, [path, wsl, version])
+
+  const dir = file ? placeOf(file).path : ""
+  useEffect(() => {
+    if (!dir || wsl || !isAbsoluteHostPath(dir, platform)) return
+    const owner = `file:${entryId}`
+    watches.set(owner, [dir])
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const off = ipc.onFsChanged((dirs) => {
+      if (!dirs.includes(dir) || timer) return
+      timer = setTimeout(() => {
+        timer = undefined
+        setVersion((v) => v + 1)
+      }, RELOAD_MS)
+    })
+    return () => {
+      off()
+      clearTimeout(timer)
+      watches.set(owner, [])
+    }
+  }, [dir, wsl, platform, entryId])
+
+  // The lines in view (and a margin), from the scroll position, read once a frame at most.
+  const scrollRef = useRef<HTMLDivElement>(null)
+  const [port, setPort] = useState({ top: 0, h: 0 })
+  useEffect(() => {
+    const el = scrollRef.current
+    if (!el) return
+    let raf = 0
+    const read = () => {
+      raf = 0
+      setPort((p) =>
+        p.top === el.scrollTop && p.h === el.clientHeight
+          ? p
+          : { top: el.scrollTop, h: el.clientHeight },
+      )
+    }
+    const onChange = () => {
+      if (!raf) raf = requestAnimationFrame(read)
+    }
+    el.addEventListener("scroll", onChange, { passive: true })
+    const ro = new ResizeObserver(onChange)
+    ro.observe(el)
+    read()
+    return () => {
+      el.removeEventListener("scroll", onChange)
+      ro.disconnect()
+      cancelAnimationFrame(raf)
+    }
+  }, [data?.kind])
+  const { start, end } = rowWindow(lines.length, LINE_H, port.top, port.h, 0)
+
+  // Opened at a line (a path click's `:12`): scrolled there once the text is in.
+  const line = file?.line
+  const scrolledTo = useRef<number | undefined>(undefined)
+  useEffect(() => {
+    const el = scrollRef.current
+    if (!el || !line || !lines.length || scrolledTo.current === line) return
+    scrolledTo.current = line
+    el.scrollTop = Math.max(0, (line - 1) * LINE_H - el.clientHeight / 3)
+  }, [line, lines.length])
+
+  const gutter = useMemo(() => String(lines.length).length, [lines.length])
+  const openInEditor = () => ipc.openFile("", path, line)
+  const openFolder = () => {
+    const s = useStore.getState()
+    const tab = s.tabs.find((t) => t.id === tabId)
+    const pane = tab && findPane(tab.root, entryId)
+    if (pane) s.openFolder(dir, { tabId, paneId: pane.id, wsl })
+  }
+  const canReveal = !wsl && isAbsoluteHostPath(path, platform)
+
+  if (!file) return null
+  return (
+    <div className="file-view" data-entry={entryId} tabIndex={-1}>
+      <div className="rootbar">
+        <span className="file-view-path" title={path}>
+          {shortCwd(path, home)}
+        </span>
+        <div className="rootbar-actions">
+          <button className="iconbtn" style={btn} title="Open its folder" onClick={openFolder}>
+            <FolderSimple size={13} />
+          </button>
+          {canReveal && (
+            <button
+              className="iconbtn"
+              style={btn}
+              title={revealLabel(platform)}
+              onClick={() => ipc.revealPath(path)}
+            >
+              <FolderOpen size={13} />
+            </button>
+          )}
+          {!wsl && (
+            <button className="iconbtn" style={btn} title="Open in editor" onClick={openInEditor}>
+              <ArrowSquareOut size={13} />
+            </button>
+          )}
+        </div>
+      </div>
+      {data?.kind === "text" && (
+        <div className="file-view-lines" ref={scrollRef}>
+          <div style={{ height: lines.length * LINE_H, position: "relative" }}>
+            {lines.slice(start, end).map((html, k) => {
+              const n = start + k + 1
+              return (
+                <div
+                  key={n}
+                  className={`file-view-line${n === line ? " target" : ""}`}
+                  style={{ top: (n - 1) * LINE_H }}
+                >
+                  <span className="file-view-no" style={{ width: `${gutter}ch` }}>
+                    {n}
+                  </span>
+                  {/* highlight.js output: escaped text in spans (or plain escaped text) */}
+                  <span className="file-view-code" dangerouslySetInnerHTML={{ __html: html }} />
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      )}
+      {data?.kind === "image" && (
+        <div className="file-view-image">
+          <img src={data.dataUrl} alt={path} />
+        </div>
+      )}
+      {data && data.kind !== "text" && data.kind !== "image" && (
+        <div className="file-view-note">
+          <span>
+            {data.kind === "binary"
+              ? `A binary file (${formatSize(data.size)}): minmux doesn't show it.`
+              : data.kind === "too-large"
+                ? `Too large to show here (${formatSize(data.size)}).`
+                : data.message}
+          </span>
+          {data.kind !== "error" && !wsl && (
+            <button className="link-btn" onClick={openInEditor}>
+              Open it outside minmux
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+const btn = { width: 22, height: 22 }

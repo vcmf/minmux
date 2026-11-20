@@ -114,6 +114,8 @@ import {
   PREVIEW_MAX_SIZE,
   type PreviewData,
 } from "../src/lib/file-preview"
+import type { FileData } from "../src/lib/file-tab"
+import { osMayOpen, type Os } from "./open-policy"
 
 // This process's profile (a dev build is `dev`): picked before anything reads a path. An
 // invalid MINMUX_PROFILE stops here, synchronously — before any name, path or lock is set —
@@ -644,6 +646,23 @@ function readWindowBg(): string {
 
 function workspacePath(): string {
   return path.join(configDir(), "workspace.json")
+}
+
+// Never a file it would run (open-policy); anything else, or a failed open, is revealed in the
+// file manager instead. Every `shell.openPath` goes through here.
+/** Open a file in the OS default app. */
+async function safeOpenPath(p: string): Promise<void> {
+  try {
+    const real = await fs.promises.realpath(p) // a symlink is judged by what it points at
+    const st = await fs.promises.stat(real)
+    const os = process.platform as Os
+    if (osMayOpen(real, { isFile: st.isFile(), mode: st.mode }, os)) {
+      if (!(await shell.openPath(real))) return // "" = opened
+    }
+  } catch {
+    // gone or unreadable: reveal what's there
+  }
+  shell.showItemInFolder(p)
 }
 
 function layoutPath(): string {
@@ -1533,6 +1552,21 @@ function registerIpc() {
     },
   )
 
+  // A file tab's read, in the fs worker (a dead mount hangs it, not main): text up to the cap,
+  // an image as a data URL, else what it is. A WSL path is read through the distro's share.
+  ipcMain.handle("fs:read-file", async (_e, p: string, wsl?: WslContext): Promise<FileData> => {
+    let last: FileData = { kind: "error", message: "not found" }
+    for (const target of wslTargets(p, wsl)) {
+      try {
+        last = (await fsWorker.call({ op: "readfile", path: target })) as FileData
+        if (last.kind !== "error") return last
+      } catch (err) {
+        last = { kind: "error", message: String(err) } // hung or failed: the next share form
+      }
+    }
+    return last
+  })
+
   // Native folder picker for the Files-panel root; returns null if cancelled.
   ipcMain.handle("dialog:pick-directory", async (_e, defaultPath?: string, wsl?: WslContext) => {
     try {
@@ -1589,7 +1623,7 @@ function registerIpc() {
       .catch(() => {}) // (the window gone meanwhile, no browser for it: nothing to do)
       .finally(() => (confirming = false))
   })
-  ipcMain.on("open-path", (_e, p: string) => void shell.openPath(p))
+  ipcMain.on("open-path", (_e, p: string) => void safeOpenPath(p))
   ipcMain.on("notify", (_e, title: string, body: string) => {
     if (Notification.isSupported()) new Notification({ title, body }).show()
   })
@@ -1683,7 +1717,7 @@ function openFile(cwd: string, file: string, line?: number, col?: number): void 
   const plan = resolveEditor()
   try {
     if (plan.kind === "osDefault") {
-      void shell.openPath(abs)
+      void safeOpenPath(abs)
       return
     }
     if (plan.kind === "none") {

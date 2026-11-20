@@ -147,6 +147,7 @@ const api = {
     ipcRenderer.on("fs:changed", listener)
     return () => ipcRenderer.removeListener("fs:changed", listener)
   },
+  readFile: (path: string, wsl?: WslContext) => ipcRenderer.invoke("fs:read-file", path, wsl),
   readFilePreview: (path: string, wsl?: WslContext) =>
     ipcRenderer.invoke("fs:read-preview", path, wsl),
   pickDirectory: (defaultPath?: string, wsl?: WslContext) =>

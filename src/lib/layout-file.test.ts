@@ -176,10 +176,19 @@ describe("layout.json", () => {
     const { ws, layout } = save(s)
     const file = JSON.parse(layout)
     file.objects[G] = { kind: "folder", path: "/home/u/q", wsl: { distro: 5 } }
-    file.objects[H] = { kind: "file", path: "/x" }
+    file.objects[H] = { kind: "file", path: "/x", line: 3.7, peek: true, junk: 1 }
     const r = restoreLayout(deserializeWorkspace(JSON.parse(ws)), ws, JSON.stringify(file)).state!
     expect(r.objects![F]).toEqual({ kind: "folder", path: "/home/u/p", wsl: { distro: "Ubuntu" } })
     expect(r.objects![G]).toEqual({ kind: "folder", path: "/home/u/q", wsl: {} })
+    expect(r.objects![H]).toEqual({ kind: "file", path: "/x", line: 3, peek: true }) // only these
+  })
+
+  it("an entry of an unknown kind is dropped (a newer build's)", () => {
+    const s = state()
+    const { ws, layout } = save(s)
+    const file = JSON.parse(layout)
+    file.objects[H] = { kind: "terminal-ish", path: "/x" }
+    const r = restoreLayout(deserializeWorkspace(JSON.parse(ws)), ws, JSON.stringify(file)).state!
     expect(r.objects![H]).toBeUndefined()
   })
 

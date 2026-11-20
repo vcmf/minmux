@@ -1,3 +1,4 @@
+import type { FileData } from "./file-tab"
 import type { ShellOption, SpawnOpts, SshHost } from "../types"
 import type { WslContext } from "./wsl"
 import type { AgentEvent, AgentKind } from "./agent-graph"
@@ -106,6 +107,7 @@ export interface Ipc {
 
   // Read a file for the preview popup; `wsl` reads a WSL pane's Linux path via its UNC share.
   readFilePreview: (path: string, wsl?: WslContext) => Promise<PreviewData>
+  readFile: (path: string, wsl?: WslContext) => Promise<FileData> // a file tab's read (fs worker)
   // Native folder picker (Files root); `wsl` opens it at the distro's UNC share and returns
   // a distro-native Linux path.
   pickDirectory: (defaultPath?: string, wsl?: WslContext) => Promise<string | null>
