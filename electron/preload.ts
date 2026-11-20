@@ -127,7 +127,7 @@ const api = {
   openExternalConfirm: (url: string) => ipcRenderer.send("open-external-confirm", url),
   appVersion: () => ipcRenderer.invoke("app:version") as Promise<string>,
   checkUpdate: () => ipcRenderer.invoke("app:check-update"),
-  openPath: (p: string) => ipcRenderer.send("open-path", p),
+  openPath: (p: string, wsl?: WslContext) => ipcRenderer.send("open-path", p, wsl),
   pathExists: (cwd: string, path: string) =>
     ipcRenderer.invoke("fs:path-exists", cwd, path) as Promise<boolean>,
   openFile: (cwd: string, file: string, line?: number, col?: number) =>
@@ -147,7 +147,8 @@ const api = {
     ipcRenderer.on("fs:changed", listener)
     return () => ipcRenderer.removeListener("fs:changed", listener)
   },
-  readFile: (path: string, wsl?: WslContext) => ipcRenderer.invoke("fs:read-file", path, wsl),
+  readFile: (path: string, wsl?: WslContext, since?: unknown) =>
+    ipcRenderer.invoke("fs:read-file", path, wsl, since),
   readFilePreview: (path: string, wsl?: WslContext) =>
     ipcRenderer.invoke("fs:read-preview", path, wsl),
   pickDirectory: (defaultPath?: string, wsl?: WslContext) =>

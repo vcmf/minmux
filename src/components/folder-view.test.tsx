@@ -145,7 +145,7 @@ describe("FolderView", () => {
     const { tabId, entryId } = open("/fv13")
     render(<FolderView entryId={entryId} tabId={tabId} />)
     fireEvent.click(await screen.findByText("r.pdf"), { button: 0 })
-    expect(ipc.openFile).toHaveBeenCalledWith("", "/fv13/r.pdf")
+    expect(ipc.openPath).toHaveBeenCalledWith("/fv13/r.pdf", undefined)
     expect(st().tabs[0]!.activeEntryId).toBe(entryId)
   })
 

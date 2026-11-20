@@ -20,7 +20,9 @@ import {
 } from "./pane-tree"
 import { withFocus } from "./tab-focus"
 
-const VERSION = 1
+// 2: file entries (step 3a). An older build that knows only folders sees a newer file and
+// leaves it alone (it would drop the file tabs it can't read and save over them).
+const VERSION = 2
 
 export interface LayoutState {
   tabs: Tab[]

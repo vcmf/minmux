@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest"
 import { osMayOpen } from "./open-policy"
 
-const file = { isFile: true, mode: 0o644 }
+const file = { isFile: true }
 
 describe("osMayOpen", () => {
   it("documents, images and media open in their app", () => {
@@ -11,20 +11,20 @@ describe("osMayOpen", () => {
 
   it("never what a platform runs on a double-click", () => {
     expect(osMayOpen("/a/x.command", file, "darwin")).toBe(false)
-    expect(osMayOpen("C:\\\\a\\\\x.vbs", file, "win32")).toBe(false)
-    expect(osMayOpen("C:\\\\a\\\\x.js", file, "win32")).toBe(false)
+    expect(osMayOpen("C:\\a\\x.vbs", file, "win32")).toBe(false)
+    expect(osMayOpen("C:\\a\\x.js", file, "win32")).toBe(false)
     expect(osMayOpen("/a/x.desktop", file, "linux")).toBe(false)
     expect(osMayOpen("/a/x.AppImage", file, "linux")).toBe(false)
   })
 
-  it("an unknown type, a file with no extension, a folder (bundle) or the exec bit: no", () => {
+  it("an unknown type, a file with no extension or a folder (bundle): no", () => {
     expect(osMayOpen("/a/x.weird", file, "darwin")).toBe(false)
     expect(osMayOpen("/a/run-me", file, "darwin")).toBe(false)
-    expect(osMayOpen("/a/Foo.app", { isFile: false, mode: 0o755 }, "darwin")).toBe(false)
-    expect(osMayOpen("/a/notes.txt", { isFile: true, mode: 0o755 }, "linux")).toBe(false)
+    expect(osMayOpen("/a/Foo.app", { isFile: false }, "darwin")).toBe(false)
   })
 
-  it("Windows has no exec bit; its list decides", () => {
-    expect(osMayOpen("C:\\\\a\\\\r.pdf", { isFile: true, mode: 0o777 }, "win32")).toBe(true)
+  it("an allowlisted type opens by its type, whatever its mode (USB drives mark files +x)", () => {
+    expect(osMayOpen("/Volumes/usb/report.pdf", file, "darwin")).toBe(true)
+    expect(osMayOpen("C:\\a\\r.pdf", file, "win32")).toBe(true)
   })
 })

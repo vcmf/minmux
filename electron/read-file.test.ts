@@ -17,7 +17,7 @@ const put = (name: string, data: string | Buffer) => {
 
 describe("readFileForTab", () => {
   it("text, whole", async () => {
-    expect(await readFileForTab(put("a.ts", "const x = 1\n"))).toEqual({
+    expect(await readFileForTab(put("a.ts", "const x = 1\n"))).toMatchObject({
       kind: "text",
       text: "const x = 1\n",
       truncated: false,
@@ -48,5 +48,14 @@ describe("readFileForTab", () => {
       kind: "error",
       message: "This file is gone",
     })
+  })
+
+  it("a re-read with the file's own stamp is skipped (it didn't change)", async () => {
+    const p = put("s.txt", "same")
+    const first = await readFileForTab(p)
+    if (first.kind !== "text") throw new Error("expected text")
+    expect(await readFileForTab(p, undefined, first.stamp)).toEqual({ kind: "same" })
+    fs.writeFileSync(p, "changed!")
+    expect((await readFileForTab(p, undefined, first.stamp)).kind).toBe("text")
   })
 })

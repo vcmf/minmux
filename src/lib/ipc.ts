@@ -1,4 +1,4 @@
-import type { FileData } from "./file-tab"
+import type { FileData, FileStamp } from "./file-tab"
 import type { ShellOption, SpawnOpts, SshHost } from "../types"
 import type { WslContext } from "./wsl"
 import type { AgentEvent, AgentKind } from "./agent-graph"
@@ -85,7 +85,7 @@ export interface Ipc {
   shellIdle: (paneId: string) => void // shell prompt returned after a command (resume ledger)
   openExternal: (url: string) => void
   openExternalConfirm: (url: string) => void // asks first, naming the target (main's dialog)
-  openPath: (p: string) => void
+  openPath: (p: string, wsl?: WslContext) => void // OS default app, never one that runs it
   // Does `path` (relative to `cwd`, or absolute) exist? Validates a detected file link.
   pathExists: (cwd: string, path: string) => Promise<boolean>
   // Open a clicked file link in the configured editor (falls back to the OS default).
@@ -107,7 +107,8 @@ export interface Ipc {
 
   // Read a file for the preview popup; `wsl` reads a WSL pane's Linux path via its UNC share.
   readFilePreview: (path: string, wsl?: WslContext) => Promise<PreviewData>
-  readFile: (path: string, wsl?: WslContext) => Promise<FileData> // a file tab's read (fs worker)
+  // A file tab's read (fs worker); `since`: skip it when the file still matches (`same`).
+  readFile: (path: string, wsl?: WslContext, since?: FileStamp) => Promise<FileData>
   // Native folder picker (Files root); `wsl` opens it at the distro's UNC share and returns
   // a distro-native Linux path.
   pickDirectory: (defaultPath?: string, wsl?: WslContext) => Promise<string | null>

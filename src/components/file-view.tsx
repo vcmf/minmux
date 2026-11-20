@@ -6,7 +6,7 @@ import { watches } from "../lib/fs-reads"
 import { formatSize, languageForPath } from "../lib/file-preview"
 import { highlightLines, plainLines } from "../lib/highlight-client"
 import { placeOf, type FileEntry } from "../lib/folder-entries"
-import type { FileData } from "../lib/file-tab"
+import type { FileData, FileStamp } from "../lib/file-tab"
 import { isAbsoluteHostPath, revealLabel } from "../lib/file-actions"
 import { findPane } from "../lib/pane-tree"
 import { rowWindow } from "../lib/virtual-rows"
@@ -24,7 +24,9 @@ export function FileView({ entryId, tabId }: { entryId: string; tabId: string })
   const platform = useStore((s) => s.platform)
   const path = file?.path ?? ""
   const wsl = file?.wsl
-  const [data, setData] = useState<FileData | null>(null)
+  // What was read last (never `same`: that keeps this as it is).
+  const [data, setData] = useState<Exclude<FileData, { kind: "same" }> | null>(null)
+  const stampRef = useRef<FileStamp | undefined>(undefined)
   const [lines, setLines] = useState<string[]>([])
 
   // Read it now, and again (throttled) when its folder's watcher says something changed.
@@ -32,8 +34,11 @@ export function FileView({ entryId, tabId }: { entryId: string; tabId: string })
   useEffect(() => {
     if (!path) return
     let live = true
-    void ipc.readFile(path, wsl).then((d) => {
-      if (!live) return
+    // A re-read with the last stamp: the worker skips it when the file didn't change (a change
+    // elsewhere in its folder wakes this too).
+    void ipc.readFile(path, wsl, version ? stampRef.current : undefined).then((d) => {
+      if (!live || d.kind === "same") return
+      stampRef.current = d.stamp
       setData(d)
       if (d.kind !== "text") return setLines([])
       setLines((prev) => (prev.length ? prev : plainLines(d.text))) // no flash on a re-read
@@ -95,14 +100,16 @@ export function FileView({ entryId, tabId }: { entryId: string; tabId: string })
   const { start, end } = rowWindow(lines.length, LINE_H, port.top, port.h, 0)
 
   // Opened at a line (a path click's `:12`): scrolled there once the text is in.
+  // Asked again (the same link clicked after scrolling away): its `seq` changed, so it goes.
   const line = file?.line
-  const scrolledTo = useRef<number | undefined>(undefined)
+  const goKey = `${line}:${file?.seq ?? 0}`
+  const scrolledTo = useRef("")
   useEffect(() => {
     const el = scrollRef.current
-    if (!el || !line || !lines.length || scrolledTo.current === line) return
-    scrolledTo.current = line
+    if (!el || !line || !lines.length || scrolledTo.current === goKey) return
+    scrolledTo.current = goKey
     el.scrollTop = Math.max(0, (line - 1) * LINE_H - el.clientHeight / 3)
-  }, [line, lines.length])
+  }, [line, goKey, lines.length])
 
   const gutter = useMemo(() => String(lines.length).length, [lines.length])
   const openInEditor = () => ipc.openFile("", path, line)

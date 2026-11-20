@@ -35,11 +35,13 @@ const extOf = (p: string) => {
   return i > 0 ? name.slice(i + 1).toLowerCase() : ""
 }
 
-/** May the OS default app open this file? `real` is the path after resolving symlinks; a
- *  folder (an .app bundle), an executable file or an unknown type: no. */
-export function osMayOpen(real: string, st: { isFile: boolean; mode: number }, os: Os): boolean {
+// `real` is the path after resolving symlinks. A folder (an .app bundle) or a type not on the
+// list (a file with no extension, which may be a script with the exec bit) is never opened. An
+// allowlisted type opens by its type, as the OS does, whatever its mode: USB drives and shares
+// mark every file executable.
+/** May the OS default app open this file? */
+export function osMayOpen(real: string, st: { isFile: boolean }, os: Os): boolean {
   if (!st.isFile) return false
-  if (os !== "win32" && (st.mode & 0o111) !== 0) return false // the exec bit: it runs
   const ext = extOf(real)
   return DATA.has(ext) && !RUNS[os].has(ext)
 }

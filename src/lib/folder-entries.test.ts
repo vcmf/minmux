@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest"
-import { EMPTY_VIEW, folderChoices, objectId, toggleExpanded } from "./folder-entries"
+import { EMPTY_VIEW, folderChoices, objectId, placeOf, toggleExpanded } from "./folder-entries"
 import { isTerminalEntry } from "./entries"
 
 describe("folder entries", () => {
@@ -33,5 +33,12 @@ describe("folder entries", () => {
     expect(toggleExpanded(v, "/a", true)).toBe(v)
     expect(toggleExpanded(v, "/a", false).expanded).toEqual([])
     expect(toggleExpanded(EMPTY_VIEW, "/a", false)).toBe(EMPTY_VIEW)
+  })
+
+  it("placeOf: a file's folder, a drive root kept as C:\\", () => {
+    expect(placeOf({ kind: "file", path: "/w/a/b.ts" }).path).toBe("/w/a")
+    expect(placeOf({ kind: "file", path: "/b.ts" }).path).toBe("/")
+    expect(placeOf({ kind: "file", path: "C:\\notes.txt" }).path).toBe("C:\\")
+    expect(placeOf({ kind: "folder", path: "/w" }).path).toBe("/w")
   })
 })

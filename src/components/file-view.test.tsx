@@ -31,7 +31,7 @@ describe("FileView", () => {
     await waitFor(() => expect(container.querySelector(".hljs-keyword")).not.toBeNull())
     expect(container.querySelectorAll(".file-view-line").length).toBeGreaterThan(0)
     expect(container.querySelector(".file-view-no")!.textContent).toBe("1")
-    expect(ipc.readFile).toHaveBeenCalledWith("/w/x.ts", undefined)
+    expect(ipc.readFile).toHaveBeenCalledWith("/w/x.ts", undefined, undefined) // no stamp: a first read
   })
 
   it("marks the line it was opened at", async () => {

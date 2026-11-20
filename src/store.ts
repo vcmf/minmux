@@ -630,10 +630,10 @@ export const useStore = create<AppState>((set, get) => ({
       })
       if (open) {
         const cur = state.objects[open] as FileEntry
-        const objects =
-          opts.line && opts.line !== cur.line
-            ? { ...state.objects, [open]: { ...cur, line: opts.line } }
-            : state.objects
+        // At its line again, even the same one (scrolled away since): a new `seq` says "go".
+        const objects = opts.line
+          ? { ...state.objects, [open]: { ...cur, line: opts.line, seq: (cur.seq ?? 0) + 1 } }
+          : state.objects
         return {
           objects,
           tabs: replaceTab(state.tabs, tab.id, (t) => withFocus(t, open)),
@@ -683,6 +683,17 @@ export const useStore = create<AppState>((set, get) => ({
         ? findPaneById(tab.root, opts.paneId)
         : findPane(tab.root, tab.activeEntryId)
       if (!pane) return {}
+      // Already open in this pane: show that one.
+      const norm = normalizeRootPath(path)
+      const open = pane.entryIds.find((e) => {
+        const o = state.objects[e]
+        return o?.kind === "folder" && o.path === norm && !o.wsl === !opts.wsl
+      })
+      if (open)
+        return {
+          tabs: replaceTab(state.tabs, tab.id, (t) => withFocus(t, open)),
+          activeTabId: tab.id,
+        }
       const id = objectId(newId())
       const folder: FolderEntry = {
         kind: "folder",

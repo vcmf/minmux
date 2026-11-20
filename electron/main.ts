@@ -114,7 +114,7 @@ import {
   PREVIEW_MAX_SIZE,
   type PreviewData,
 } from "../src/lib/file-preview"
-import type { FileData } from "../src/lib/file-tab"
+import type { FileData, FileStamp } from "../src/lib/file-tab"
 import { osMayOpen, type Os } from "./open-policy"
 
 // This process's profile (a dev build is `dev`): picked before anything reads a path. An
@@ -656,7 +656,7 @@ async function safeOpenPath(p: string): Promise<void> {
     const real = await fs.promises.realpath(p) // a symlink is judged by what it points at
     const st = await fs.promises.stat(real)
     const os = process.platform as Os
-    if (osMayOpen(real, { isFile: st.isFile(), mode: st.mode }, os)) {
+    if (osMayOpen(real, { isFile: st.isFile() }, os)) {
       if (!(await shell.openPath(real))) return // "" = opened
     }
   } catch {
@@ -1554,18 +1554,25 @@ function registerIpc() {
 
   // A file tab's read, in the fs worker (a dead mount hangs it, not main): text up to the cap,
   // an image as a data URL, else what it is. A WSL path is read through the distro's share.
-  ipcMain.handle("fs:read-file", async (_e, p: string, wsl?: WslContext): Promise<FileData> => {
-    let last: FileData = { kind: "error", message: "not found" }
-    for (const target of wslTargets(p, wsl)) {
-      try {
-        last = (await fsWorker.call({ op: "readfile", path: target })) as FileData
-        if (last.kind !== "error") return last
-      } catch (err) {
-        last = { kind: "error", message: String(err) } // hung or failed: the next share form
+  ipcMain.handle(
+    "fs:read-file",
+    async (_e, p: string, wsl?: WslContext, since?: FileStamp): Promise<FileData> => {
+      let last: FileData = { kind: "error", message: "not found" }
+      const ok =
+        since && typeof since.size === "number" && typeof since.mtimeMs === "number"
+          ? { size: since.size, mtimeMs: since.mtimeMs }
+          : undefined
+      for (const target of wslTargets(p, wsl)) {
+        try {
+          last = (await fsWorker.call({ op: "readfile", path: target, since: ok })) as FileData
+          if (last.kind !== "error") return last
+        } catch (err) {
+          last = { kind: "error", message: String(err) } // hung or failed: the next share form
+        }
       }
-    }
-    return last
-  })
+      return last
+    },
+  )
 
   // Native folder picker for the Files-panel root; returns null if cancelled.
   ipcMain.handle("dialog:pick-directory", async (_e, defaultPath?: string, wsl?: WslContext) => {
@@ -1623,7 +1630,18 @@ function registerIpc() {
       .catch(() => {}) // (the window gone meanwhile, no browser for it: nothing to do)
       .finally(() => (confirming = false))
   })
-  ipcMain.on("open-path", (_e, p: string) => void safeOpenPath(p))
+  // A WSL path opens through its distro's share (the first form that exists).
+  ipcMain.on("open-path", (_e, p: string, wsl?: WslContext) => {
+    void (async () => {
+      for (const target of wslTargets(p, wsl)) {
+        const there = await fs.promises.stat(target).then(
+          () => true,
+          () => false,
+        )
+        if (there || !wsl) return safeOpenPath(target)
+      }
+    })()
+  })
   ipcMain.on("notify", (_e, title: string, body: string) => {
     if (Notification.isSupported()) new Notification({ title, body }).show()
   })

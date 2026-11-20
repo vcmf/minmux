@@ -1759,4 +1759,22 @@ describe("store — folder entries", () => {
     st().newSurface()
     expect(st().sessions[tab().activeSessionId]!.cwd).toBe("/w/rts/src")
   })
+
+  it("opening a folder already open in the pane shows that tab, not a second", () => {
+    st().newTab(shell)
+    st().openFolder("/w/src")
+    const first = tab().activeEntryId
+    st().setActivePane(tab().id, tab().activeSessionId)
+    st().openFolder("/w/src/")
+    expect(tab().activeEntryId).toBe(first)
+    expect(leaf().entryIds).toHaveLength(2)
+  })
+
+  it("asking for the same file at the same line again says go again (seq)", () => {
+    st().newTab(shell)
+    st().openFile("/w/a.ts", { line: 9 })
+    const id = tab().activeEntryId
+    st().openFile("/w/a.ts", { line: 9 })
+    expect((st().objects[id] as { seq?: number }).seq).toBe(1)
+  })
 })

@@ -233,7 +233,7 @@ export function FolderView({ entryId, tabId }: { entryId: string; tabId: string 
   const openFile = (abs: string, keep: boolean) => {
     if (!isAbsoluteHostPath(abs, platform) && !wsl) return
     const s = useStore.getState()
-    if (!opensInTab(abs)) return void (wsl ? undefined : ipc.openFile("", abs))
+    if (!opensInTab(abs)) return ipc.openPath(abs, wsl) // its own app (main: never one that runs it)
     const tab = s.tabs.find((t) => t.id === tabId)
     const pane = tab && findPane(tab.root, entryId)
     if (!pane) return

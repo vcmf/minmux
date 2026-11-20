@@ -19,6 +19,7 @@ export interface FileEntry {
   path: string
   wsl?: WslContext
   line?: number // where to scroll when it opens (a path click's `:line`)
+  seq?: number // bumped when it's asked to go to `line` again (runtime: not saved)
   peek?: true
 }
 
@@ -28,7 +29,8 @@ export type ObjectEntry = FolderEntry | FileEntry
 /** The folder an entry stands in: a folder's own path, a file's parent. */
 export function placeOf(o: ObjectEntry): { path: string; wsl?: WslContext } {
   if (o.kind === "folder") return { path: o.path, ...(o.wsl ? { wsl: o.wsl } : {}) }
-  const parent = o.path.replace(/[\\/][^\\/]*$/, "") || (o.path.startsWith("/") ? "/" : o.path)
+  let parent = o.path.replace(/[\\/][^\\/]*$/, "") || (o.path.startsWith("/") ? "/" : o.path)
+  if (/^[A-Za-z]:$/.test(parent)) parent += "\\" // a drive's root is C:\, not C: (that's a cwd)
   return { path: parent, ...(o.wsl ? { wsl: o.wsl } : {}) }
 }
 

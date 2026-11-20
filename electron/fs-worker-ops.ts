@@ -5,12 +5,12 @@ import path from "node:path"
 import { readDirListing } from "./read-dir"
 import type { DirListing } from "../src/lib/dir-listing"
 import { readFileForTab } from "./read-file"
-import type { FileData } from "../src/lib/file-tab"
+import type { FileData, FileStamp } from "../src/lib/file-tab"
 
 export type FsCall =
   | { op: "readdir" | "stat" | "watch" | "unwatch"; path: string }
   | { op: "gitroots"; paths: string[]; real: boolean } // `real`: resolve symlinks first
-  | { op: "readfile"; path: string } // a file tab's read (electron/read-file)
+  | { op: "readfile"; path: string; since?: FileStamp } // a file tab's read (electron/read-file)
 export type FsRequest = FsCall & { id: number }
 
 /** Each folder's checkout root (null: in none); a folder whose search failed is left out. */
@@ -279,7 +279,7 @@ export async function handleFsRequest(req: FsRequest, watches?: Watches): Promis
     if (req.op === "readdir") value = await readDirListing(req.path)
     else if (req.op === "stat") value = { isDir: (await fs.promises.stat(req.path)).isDirectory() }
     else if (req.op === "gitroots") value = { roots: await gitRoots(req.paths, req.real) }
-    else if (req.op === "readfile") value = await readFileForTab(req.path)
+    else if (req.op === "readfile") value = await readFileForTab(req.path, undefined, req.since)
     else if (req.op === "watch") {
       watches?.add(req.path) // sync: if it hangs (a dead mount), main sees this request hang
       value = { watching: true }

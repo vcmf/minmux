@@ -167,7 +167,8 @@ async function openClickedPath(sessionId: string, cwd: string, m: FileLinkMatch)
   const wsl = sess ? wslContext(sess.command, sess.args) : undefined
   const outside = () => ipc.openFile(cwd, m.path, m.line, m.col)
   if (!tab || !pane || (st.platform === "win32" && !wsl)) return outside()
-  // A WSL shell's `~` is the distro's, not this machine's home.
+  // A WSL shell's `~` is the distro's home, not known here: the editor resolves it.
+  if (wsl && m.path.startsWith("~")) return outside()
   const abs = resolveLinkPath(cwd, m.path, wsl ? "" : st.home)
   if (await ipc.pathIsDir(abs, wsl).catch(() => false)) {
     useStore.getState().openFolder(abs, { tabId: tab.id, paneId: pane.id, wsl })
@@ -176,7 +177,7 @@ async function openClickedPath(sessionId: string, cwd: string, m: FileLinkMatch)
       .getState()
       .openFile(abs, { tabId: tab.id, paneId: pane.id, wsl, line: m.line, peek: true })
   } else {
-    return outside()
+    return ipc.openPath(abs, wsl) // a PDF, a video: its own app (main never lets one run)
   }
   requestAnimationFrame(() => {
     const id = useStore.getState().tabs.find((t) => t.id === tab.id)?.activeEntryId

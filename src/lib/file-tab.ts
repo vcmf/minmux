@@ -5,8 +5,16 @@ import type { PreviewData } from "./file-preview"
 export const FILE_READ_CAP = 2 * 1024 * 1024 // text read and shown; past it, "open in editor"
 export const IMAGE_MAX = 5 * 1024 * 1024 // an image past this isn't read
 
-/** What reading a file for its tab gives. */
-export type FileData = PreviewData | { kind: "image"; dataUrl: string; size: number }
+/** A read's stamp: a re-read with the same one is skipped (the file didn't change). */
+export interface FileStamp {
+  size: number
+  mtimeMs: number
+}
+
+/** What reading a file for its tab gives; `same` when it matches the stamp it was asked with. */
+export type FileData =
+  | ((PreviewData | { kind: "image"; dataUrl: string; size: number }) & { stamp?: FileStamp })
+  | { kind: "same" }
 
 const IMAGES: Record<string, string> = {
   png: "image/png",
