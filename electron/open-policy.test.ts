@@ -13,6 +13,9 @@ describe("osMayOpen", () => {
     expect(osMayOpen("/a/x.command", file, "darwin")).toBe(false)
     expect(osMayOpen("C:\\a\\x.vbs", file, "win32")).toBe(false)
     expect(osMayOpen("C:\\a\\x.js", file, "win32")).toBe(false)
+    for (const ext of ["rb", "lua", "php", "pl"])
+      expect(osMayOpen(`C:\\a\\x.${ext}`, file, "win32")).toBe(false)
+    expect(osMayOpen("/a/x.rb", file, "darwin")).toBe(true) // an editor opens it there
     expect(osMayOpen("/a/x.desktop", file, "linux")).toBe(false)
     expect(osMayOpen("/a/x.AppImage", file, "linux")).toBe(false)
   })

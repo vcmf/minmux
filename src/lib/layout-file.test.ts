@@ -223,4 +223,11 @@ describe("layout.json", () => {
     const { layout } = save(s)
     expect(JSON.parse(layout).objects[F]).toEqual({ kind: "file", path: "/w/a.ts", line: 3 })
   })
+
+  it("version 2 only with file tabs in it: folders alone stay readable by older builds", () => {
+    const s = state()
+    expect(JSON.parse(save(s).layout).version).toBe(1)
+    s.objects[F] = { kind: "file", path: "/w/a.ts" }
+    expect(JSON.parse(save(s).layout).version).toBe(2)
+  })
 })

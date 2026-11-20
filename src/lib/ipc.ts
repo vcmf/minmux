@@ -103,7 +103,8 @@ export interface Ipc {
   // Watch these folders (the whole set; [] stops); fs:changed names folders that changed.
   fsWatch: (dirs: string[]) => Promise<void>
   fsWatching: () => Promise<string[]> // what main actually watches (failed / capped ones aren't)
-  onFsChanged: (cb: (dirs: string[]) => void) => () => void
+  // `content`: folders where only a file's content changed (Linux): listings are as they were.
+  onFsChanged: (cb: (dirs: string[], content: string[]) => void) => () => void
 
   // Read a file for the preview popup; `wsl` reads a WSL pane's Linux path via its UNC share.
   readFilePreview: (path: string, wsl?: WslContext) => Promise<PreviewData>

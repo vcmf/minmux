@@ -1,0 +1,165 @@
+// What each file tab shows, kept outside React (docs/design/WORKDIR_OBJECTS.md, step 3a): its
+// last read, its highlighted lines, where it was scrolled and the line it last went to. A tab
+// switch unmounts the view; coming back shows this at once, then re-reads with the stamp (a file
+// that didn't change costs a stat in the fs worker). The store runs the reads: one in flight per
+// file, and at most one more after it when a change arrived meanwhile, so a busy folder can't
+// cancel every read before it lands. Highlighting runs per text (lib/highlight-client).
+import { ipc } from "./ipc"
+import { languageForPath } from "./file-preview"
+import { highlightLines, plainLines } from "./highlight-client"
+import type { FileData, FileStamp } from "./file-tab"
+import type { WslContext } from "./wsl"
+
+export const FILES_KEPT = 16 // files remembered after their tab hides (least recent go first)
+
+/** One file tab's state. */
+export interface FileShown {
+  data: Exclude<FileData, { kind: "same" }> | null
+  lines: string[] // highlighted (or plain while it's highlighted) HTML, one per line
+  scrollTop: number
+  went: string // the `line:seq` it last scrolled to (a remount doesn't jump again)
+}
+
+interface Entry extends FileShown {
+  path: string
+  wsl?: WslContext
+  stamp?: FileStamp
+  reading: boolean
+  again: boolean // a change arrived while reading: read once more after
+  highlighted: string | null // the text `lines` were highlighted from
+}
+
+type Read = (path: string, wsl?: WslContext, since?: FileStamp) => Promise<FileData>
+type Highlight = (text: string, lang: string | null) => Promise<string[]>
+
+/** File tabs' state, by entry id, with a change signal for React (useSyncExternalStore). */
+export class FileStore {
+  private files = new Map<string, Entry>() // insertion order = least → most recently shown
+  private snapshots = new Map<string, FileShown>()
+  private listeners = new Set<() => void>()
+
+  constructor(
+    private readonly read: Read = (p, w, s) => ipc.readFile(p, w, s),
+    private readonly highlight: Highlight = highlightLines,
+    private readonly cap = FILES_KEPT,
+  ) {}
+
+  /** What entry `id` shows now (the same object until it changes). */
+  get(id: string): FileShown | undefined {
+    return this.snapshots.get(id)
+  }
+
+  subscribe(fn: () => void): () => void {
+    this.listeners.add(fn)
+    return () => this.listeners.delete(fn)
+  }
+
+  /** Its tab is showing `path`: keep it, and read it (only what changed since the last read). */
+  show(id: string, path: string, wsl?: WslContext): void {
+    let e = this.files.get(id)
+    if (e && (e.path !== path || e.wsl?.distro !== wsl?.distro || !e.wsl !== !wsl)) {
+      this.forget(id) // another file now: start over
+      e = undefined
+    }
+    if (!e) {
+      e = {
+        path,
+        ...(wsl ? { wsl } : {}),
+        data: null,
+        lines: [],
+        scrollTop: 0,
+        went: "",
+        reading: false,
+        again: false,
+        highlighted: null,
+      }
+    }
+    this.files.delete(id)
+    this.files.set(id, e) // most recent
+    while (this.files.size > this.cap) this.forget(this.files.keys().next().value!)
+    this.publish(id)
+    this.refresh(id)
+  }
+
+  /** Something in its folder changed: read it again (skipped in the worker if it didn't). */
+  refresh(id: string): void {
+    const e = this.files.get(id)
+    if (!e) return
+    if (e.reading) e.again = true
+    else void this.readNow(id, e)
+  }
+
+  /** Where its view is scrolled (kept for when it shows again; nothing re-renders). */
+  setScroll(id: string, top: number): void {
+    const e = this.files.get(id)
+    if (e) e.scrollTop = top
+  }
+
+  /** Where its view was last scrolled (live: not the snapshot, which only changes on a read). */
+  scrollOf(id: string): number {
+    return this.files.get(id)?.scrollTop ?? 0
+  }
+
+  /** The `line:seq` it last scrolled to. */
+  wentOf(id: string): string {
+    return this.files.get(id)?.went ?? ""
+  }
+
+  /** It scrolled to `went` (`line:seq`): a remount won't jump there again. */
+  setWent(id: string, went: string): void {
+    const e = this.files.get(id)
+    if (e) e.went = went
+  }
+
+  forget(id: string): void {
+    this.files.delete(id)
+    this.snapshots.delete(id)
+  }
+
+  private async readNow(id: string, e: Entry): Promise<void> {
+    e.reading = true
+    try {
+      const d = await this.read(e.path, e.wsl, e.data ? e.stamp : undefined).catch(
+        (err): FileData => ({ kind: "error", message: String(err) }),
+      )
+      if (this.files.get(id) !== e) return // closed or reused meanwhile
+      if (d.kind !== "same") {
+        e.stamp = d.stamp
+        e.data = d
+        if (d.kind !== "text") {
+          e.lines = []
+          e.highlighted = null
+        } else if (d.text !== e.highlighted) {
+          if (!e.lines.length) e.lines = plainLines(d.text) // no flash on a re-read
+          void this.highlightNow(id, e, d.text)
+        }
+        this.publish(id)
+      }
+    } finally {
+      e.reading = false
+      if (e.again && this.files.get(id) === e) {
+        e.again = false
+        void this.readNow(id, e)
+      }
+    }
+  }
+
+  private async highlightNow(id: string, e: Entry, text: string): Promise<void> {
+    const lines = await this.highlight(text, languageForPath(e.path))
+    // Still that file, and that text (a newer read's highlight lands after this one's).
+    if (this.files.get(id) !== e || e.data?.kind !== "text" || e.data.text !== text) return
+    e.lines = lines
+    e.highlighted = text
+    this.publish(id)
+  }
+
+  private publish(id: string): void {
+    const e = this.files.get(id)
+    if (!e) return
+    this.snapshots.set(id, { data: e.data, lines: e.lines, scrollTop: e.scrollTop, went: e.went })
+    this.listeners.forEach((fn) => fn())
+  }
+}
+
+/** The app's file tabs (one per renderer). */
+export const files = new FileStore()

@@ -1,12 +1,11 @@
-import { useEffect, useMemo, useRef, useState } from "react"
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react"
 import { ArrowSquareOut, FolderOpen, FolderSimple } from "@phosphor-icons/react"
 import { useStore } from "../store"
 import { ipc } from "../lib/ipc"
 import { watches } from "../lib/fs-reads"
-import { formatSize, languageForPath } from "../lib/file-preview"
-import { highlightLines, plainLines } from "../lib/highlight-client"
+import { formatSize } from "../lib/file-preview"
+import { files, type FileShown } from "../lib/file-store"
 import { placeOf, type FileEntry } from "../lib/folder-entries"
-import type { FileData, FileStamp } from "../lib/file-tab"
 import { isAbsoluteHostPath, revealLabel } from "../lib/file-actions"
 import { findPane } from "../lib/pane-tree"
 import { rowWindow } from "../lib/virtual-rows"
@@ -14,6 +13,8 @@ import { shortCwd } from "../lib/session-label"
 
 const LINE_H = 18 // every line of a file tab (App.css .file-view-line): the window needs it
 const RELOAD_MS = 200 // a live file (an agent writing it) re-reads at most this often
+const EMPTY: FileShown = { data: null, lines: [], scrollTop: 0, went: "" }
+const subscribeFiles = (fn: () => void) => files.subscribe(fn) // stable: no re-subscribe
 
 // Read through the fs worker; highlighted in a worker (lib/highlight-client); only the lines in
 // view are rendered; its folder is watched while it shows, so an agent's edits appear.
@@ -24,52 +25,27 @@ export function FileView({ entryId, tabId }: { entryId: string; tabId: string })
   const platform = useStore((s) => s.platform)
   const path = file?.path ?? ""
   const wsl = file?.wsl
-  // What was read last (never `same`: that keeps this as it is).
-  const [data, setData] = useState<Exclude<FileData, { kind: "same" }> | null>(null)
-  const stampRef = useRef<FileStamp | undefined>(undefined)
-  const [lines, setLines] = useState<string[]>([])
-
-  // Read it now, and again (throttled) when its folder's watcher says something changed.
-  const [version, setVersion] = useState(0)
+  // Its state lives in the file store (lib/file-store): a tab switch keeps it, scroll included.
+  const shown = useSyncExternalStore(subscribeFiles, () => files.get(entryId) ?? EMPTY)
+  const data = shown.data
+  const lines = shown.lines
   useEffect(() => {
-    if (!path) return
-    let live = true
-    // A re-read with the last stamp: the worker skips it when the file didn't change (a change
-    // elsewhere in its folder wakes this too).
-    void ipc.readFile(path, wsl, version ? stampRef.current : undefined).then((d) => {
-      if (!live || d.kind === "same") return
-      stampRef.current = d.stamp
-      setData(d)
-    })
-    return () => {
-      live = false
-    }
-  }, [path, wsl, version])
+    if (path) files.show(entryId, path, wsl)
+  }, [entryId, path, wsl])
 
-  // Highlighted per text, not per read: a re-read that finds the file unchanged leaves this
-  // running, and a new text always gets its own (the old lines stay up meanwhile, no flash).
-  const text = data?.kind === "text" ? data.text : null
-  useEffect(() => {
-    if (text === null) return setLines([])
-    let live = true
-    setLines((prev) => (prev.length ? prev : plainLines(text)))
-    void highlightLines(text, languageForPath(path)).then((l) => live && setLines(l))
-    return () => {
-      live = false
-    }
-  }, [text, path])
-
+  // Watched while it shows; any change in its folder (a content-only one too, on Linux) asks
+  // the store to re-read, at most every RELOAD_MS.
   const dir = file ? placeOf(file).path : ""
   useEffect(() => {
     if (!dir || wsl || !isAbsoluteHostPath(dir, platform)) return
     const owner = `file:${entryId}`
     watches.set(owner, [dir])
     let timer: ReturnType<typeof setTimeout> | undefined
-    const off = ipc.onFsChanged((dirs) => {
-      if (!dirs.includes(dir) || timer) return
+    const off = ipc.onFsChanged((dirs, content) => {
+      if ((!dirs.includes(dir) && !content.includes(dir)) || timer) return
       timer = setTimeout(() => {
         timer = undefined
-        setVersion((v) => v + 1)
+        files.refresh(entryId)
       }, RELOAD_MS)
     })
     return () => {
@@ -97,29 +73,41 @@ export function FileView({ entryId, tabId }: { entryId: string; tabId: string })
     const onChange = () => {
       if (!raf) raf = requestAnimationFrame(read)
     }
-    el.addEventListener("scroll", onChange, { passive: true })
+    const onScroll = () => {
+      files.setScroll(entryId, el.scrollTop)
+      onChange()
+    }
+    el.addEventListener("scroll", onScroll, { passive: true })
     const ro = new ResizeObserver(onChange)
     ro.observe(el)
     read()
     return () => {
-      el.removeEventListener("scroll", onChange)
+      el.removeEventListener("scroll", onScroll)
       ro.disconnect()
       cancelAnimationFrame(raf)
     }
-  }, [data?.kind])
+  }, [data?.kind, entryId])
   const { start, end } = rowWindow(lines.length, LINE_H, port.top, port.h, 0)
+
+  // Shown again (a tab switch): back where it was scrolled, once its lines are in.
+  const restored = useRef(false)
+  useLayoutEffect(() => {
+    const el = scrollRef.current
+    if (restored.current || !el || !lines.length) return
+    restored.current = true
+    el.scrollTop = files.scrollOf(entryId)
+  }, [lines.length, entryId])
 
   // Opened at a line (a path click's `:12`): scrolled there once the text is in.
   // Asked again (the same link clicked after scrolling away): its `seq` changed, so it goes.
   const line = file?.line
   const goKey = `${line}:${file?.seq ?? 0}`
-  const scrolledTo = useRef("")
   useEffect(() => {
     const el = scrollRef.current
-    if (!el || !line || !lines.length || scrolledTo.current === goKey) return
-    scrolledTo.current = goKey
+    if (!el || !line || !lines.length || files.wentOf(entryId) === goKey) return
+    files.setWent(entryId, goKey) // the store remembers: a tab switch doesn't jump back
     el.scrollTop = Math.max(0, (line - 1) * LINE_H - el.clientHeight / 3)
-  }, [line, goKey, lines.length])
+  }, [line, goKey, lines.length, entryId])
 
   const gutter = useMemo(() => String(lines.length).length, [lines.length])
   const openInEditor = () => ipc.openFile("", path, line)

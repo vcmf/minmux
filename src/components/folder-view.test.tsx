@@ -54,9 +54,9 @@ describe("FolderView", () => {
   })
 
   it("re-reads a folder the watcher says changed", async () => {
-    let onChanged: (dirs: string[]) => void = () => {}
+    let onChanged: (dirs: string[], content?: string[]) => void = () => {}
     vi.mocked(ipc.onFsChanged).mockImplementation((cb) => {
-      onChanged = cb
+      onChanged = (d, c = []) => cb(d, c)
       return () => {}
     })
     vi.mocked(ipc.readdir).mockResolvedValue(ls(["old.txt", false]))

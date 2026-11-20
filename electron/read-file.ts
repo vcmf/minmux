@@ -1,11 +1,11 @@
 // Read a file for its tab (src/lib/file-tab): text up to FILE_READ_CAP (binary sniffed), or an
 // image as a data URL. Runs in the fs worker, so a slow or dead mount never stalls main.
 import fs from "node:fs"
-import { StringDecoder } from "node:string_decoder"
 import {
   FILE_READ_CAP,
   IMAGE_MAX,
   imageMime,
+  sameStamp,
   type FileData,
   type FileStamp,
 } from "../src/lib/file-tab"
@@ -20,8 +20,8 @@ export async function readFileForTab(
     const st = await fs.promises.stat(file)
     if (!st.isFile()) return { kind: "error", message: "Not a file" }
     const size = st.size
-    const stamp = { size, mtimeMs: st.mtimeMs }
-    if (since && since.size === size && since.mtimeMs === st.mtimeMs) return { kind: "same" }
+    const stamp: FileStamp = { size, mtimeMs: st.mtimeMs, ctimeMs: st.ctimeMs, ino: st.ino }
+    if (since && sameStamp(since, stamp, Date.now())) return { kind: "same" }
     const mime = imageMime(file)
     if (mime) {
       if (size > IMAGE_MAX) return { kind: "too-large", size, stamp }
@@ -44,7 +44,8 @@ export async function readFileForTab(
     // What was read (a file truncated since the stat, being rewritten, is shown as it is now).
     const chunk = buf.subarray(0, bytesRead)
     if (chunk.includes(0)) return { kind: "binary", size, stamp }
-    const text = new StringDecoder("utf8").write(chunk)
+    // A last character cut short (being written) shows as �, never silently dropped.
+    const text = chunk.toString("utf8")
     return { kind: "text", text, truncated: false, size, stamp }
   } catch (e) {
     const code = (e as { code?: string }).code

@@ -142,8 +142,8 @@ const api = {
   gitRoots: (reqs: GitRootRequest[]) => ipcRenderer.invoke("fs:git-roots", reqs),
   fsWatch: (dirs: string[]) => ipcRenderer.invoke("fs:watch", dirs),
   fsWatching: () => ipcRenderer.invoke("fs:watching") as Promise<string[]>,
-  onFsChanged: (cb: (dirs: string[]) => void) => {
-    const listener = (_e: unknown, dirs: string[]) => cb(dirs)
+  onFsChanged: (cb: (dirs: string[], content: string[]) => void) => {
+    const listener = (_e: unknown, dirs: string[], content?: string[]) => cb(dirs, content ?? [])
     ipcRenderer.on("fs:changed", listener)
     return () => ipcRenderer.removeListener("fs:changed", listener)
   },

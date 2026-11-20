@@ -364,7 +364,8 @@ const sessionDirExists = (d: string): Promise<boolean | undefined> =>
     STAT_MS,
   )
 // A watched folder changed: the renderer re-reads it (through its read queue).
-fsWorker.onChanged = (dirs) => mainWindow?.webContents.send("fs:changed", dirs)
+fsWorker.onChanged = (dirs, content) =>
+  mainWindow?.webContents.send("fs:changed", dirs, content ?? [])
 
 /** Does the folder holding `p` still exist? Then a missing `p` was deleted — not an
  *  unmounted share (/Volumes/NAS gone) or a stopped WSL distro, whose parents are gone too.
@@ -1560,7 +1561,12 @@ function registerIpc() {
       let last: FileData = { kind: "error", message: "not found" }
       const ok =
         since && typeof since.size === "number" && typeof since.mtimeMs === "number"
-          ? { size: since.size, mtimeMs: since.mtimeMs }
+          ? {
+              size: since.size,
+              mtimeMs: since.mtimeMs,
+              ...(typeof since.ctimeMs === "number" ? { ctimeMs: since.ctimeMs } : {}),
+              ...(typeof since.ino === "number" ? { ino: since.ino } : {}),
+            }
           : undefined
       for (const target of wslTargets(p, wsl)) {
         try {

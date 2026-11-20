@@ -23,7 +23,10 @@ export type FsReply =
   { id: number; ok: true; value: FsResult } | { id: number; ok: false; code: string }
 
 /** Sent without a request: folders whose listing may have changed, or whose watcher is gone. */
-export type FsEvent = { event: "changed"; dirs: string[] } | { event: "lost"; dir: string }
+// `content`: folders where only a file's content changed (Linux, inotify tells them apart): a
+// listing doesn't change, a file tab's file may have.
+export type FsEvent =
+  { event: "changed"; dirs: string[]; content?: string[] } | { event: "lost"; dir: string }
 
 export const WATCH_BATCH_MS = 250
 
@@ -77,6 +80,7 @@ export class Watches {
   private watches = new Map<string, Watch>()
   private ids = new Map<string, string | null>() // folder → identity when watched
   private dirty = new Set<string>()
+  private dirtyContent = new Set<string>() // Linux: only a file's content changed there
   private timer: ReturnType<typeof setTimeout> | null = null
   private readonly watchFn: WatchFn
   private readonly linux: boolean
@@ -126,7 +130,7 @@ export class Watches {
     const w = this.watchFn(
       dir,
       (type) => {
-        if (type === "change" && this.linux) return
+        if (type === "change" && this.linux) return this.mark(dir, true)
         if (type === "rename" && this.linux) check() // maybe the folder itself
         this.mark(dir)
       },
@@ -152,14 +156,18 @@ export class Watches {
     if (this.timer) clearTimeout(this.timer)
   }
 
-  private mark(dir: string): void {
-    this.dirty.add(dir)
+  private mark(dir: string, contentOnly = false): void {
+    if (contentOnly) this.dirtyContent.add(dir)
+    else this.dirty.add(dir)
     if (this.timer) return
     this.timer = setTimeout(() => {
       this.timer = null
       const dirs = [...this.dirty]
+      const content = [...this.dirtyContent].filter((d) => !this.dirty.has(d))
       this.dirty.clear()
-      if (dirs.length) this.emit({ event: "changed", dirs })
+      this.dirtyContent.clear()
+      if (dirs.length || content.length)
+        this.emit({ event: "changed", dirs, ...(content.length ? { content } : {}) })
     }, WATCH_BATCH_MS)
   }
 }

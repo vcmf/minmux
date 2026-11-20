@@ -9,6 +9,20 @@ export const IMAGE_MAX = 5 * 1024 * 1024 // an image past this isn't read
 export interface FileStamp {
   size: number
   mtimeMs: number
+  ctimeMs?: number
+  ino?: number
+}
+
+// FAT / exFAT keep modified times to 2 s, HFS+ and many shares to 1 s: an edit that keeps the size
+// within that tick looks unchanged. Such a stamp is trusted only once the file's this old.
+const COARSE_MS = 2500
+
+/** A stamp that still describes the file now: the read can be skipped. */
+export function sameStamp(a: FileStamp, b: FileStamp, now: number): boolean {
+  if (a.size !== b.size || a.mtimeMs !== b.mtimeMs) return false
+  if (a.ctimeMs !== b.ctimeMs || a.ino !== b.ino) return false
+  const coarse = b.mtimeMs % 1000 === 0
+  return !coarse || now - b.mtimeMs > COARSE_MS
 }
 
 /** What reading a file for its tab gives; `same` when it matches the stamp it was asked with. */

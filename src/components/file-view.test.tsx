@@ -66,9 +66,9 @@ describe("FileView", () => {
   })
 
   it("re-reads when its folder's watcher says something changed (an agent writing it)", async () => {
-    let onChanged: (dirs: string[]) => void = () => {}
+    let onChanged: (dirs: string[], content?: string[]) => void = () => {}
     vi.mocked(ipc.onFsChanged).mockImplementation((cb) => {
-      onChanged = cb
+      onChanged = (d, c = []) => cb(d, c)
       return () => {}
     })
     vi.mocked(ipc.readFile).mockResolvedValue({
@@ -102,9 +102,9 @@ describe("FileView", () => {
   })
 
   it("a re-read that finds the file unchanged keeps it highlighted", async () => {
-    let onChanged: (dirs: string[]) => void = () => {}
+    let onChanged: (dirs: string[], content?: string[]) => void = () => {}
     vi.mocked(ipc.onFsChanged).mockImplementation((cb) => {
-      onChanged = cb
+      onChanged = (d, c = []) => cb(d, c)
       return () => {}
     })
     useStore.setState({ platform: "darwin" })

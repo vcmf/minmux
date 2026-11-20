@@ -697,7 +697,9 @@ export const useStore = create<AppState>((set, get) => ({
         const o = state.objects[e]
         return (
           o?.kind === "folder" &&
-          o.path === norm &&
+          (state.platform === "win32" && !opts.wsl
+            ? o.path.toLowerCase() === norm.toLowerCase()
+            : o.path === norm) &&
           !o.wsl === !opts.wsl &&
           o.wsl?.distro === opts.wsl?.distro
         )

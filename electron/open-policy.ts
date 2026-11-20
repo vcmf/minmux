@@ -22,9 +22,11 @@ const DATA = new Set(
 const RUNS: Record<Os, Set<string>> = {
   darwin: new Set(["command", "tool", "app", "pkg", "mpkg", "workflow", "terminal", "scpt"]),
   win32: new Set(
-    "js jse vbs vbe wsf wsh hta py pyw ps1 bat cmd com scr pif reg lnk url msi exe jar cpl msc inf".split(
-      " ",
-    ),
+    // …and script languages an installer may register to run (Ruby, Lua, PHP, Perl, Tcl, R).
+    (
+      "js jse vbs vbe wsf wsh hta py pyw ps1 bat cmd com scr pif reg lnk url msi exe jar cpl msc inf " +
+      "rb rbw lua php pl pm tcl r"
+    ).split(" "),
   ),
   linux: new Set(["desktop", "appimage", "sh", "run", "bin", "jar"]),
 }
