@@ -1,7 +1,7 @@
-// The folders main watches (fs worker), merged from every owner that wants some: the Files
-// panel and each visible folder view. Main takes the whole set at once, so one owner must not
-// replace another's: each owner sets its own list, and the union (first owners first, capped)
-// is sent once per tick when it changed.
+// The folders main watches (fs worker), merged from every owner that wants some: each visible
+// folder or file tab. Main takes the whole set at once, so one owner must not replace another's:
+// each owner sets its own list, and the union (in the order owners joined, capped) is sent once
+// per tick when it changed.
 import { WATCH_CAP } from "./dir-listing"
 
 export class WatchSet {
@@ -11,9 +11,6 @@ export class WatchSet {
   private pending = false
   constructor(
     private readonly send: (dirs: string[], content: string[]) => void,
-    // Owners whose folders come first in the capped union, whenever they joined (the Files
-    // panel, which had the whole cap to itself before folder views shared it).
-    private readonly first: string[] = [],
     private readonly cap = WATCH_CAP,
     // Wrapped: a bare `queueMicrotask` called as this object's method throws in Chromium.
     private readonly schedule: (fn: () => void) => void = (fn) => queueMicrotask(fn),
@@ -36,11 +33,7 @@ export class WatchSet {
   /** The folders sent now (the union, capped). */
   current(): string[] {
     const out = new Set<string>()
-    const order = [
-      ...this.first.filter((o) => this.owners.has(o)),
-      ...[...this.owners.keys()].filter((o) => !this.first.includes(o)),
-    ]
-    for (const o of order) for (const d of this.owners.get(o)!) out.add(d)
+    for (const dirs of this.owners.values()) for (const d of dirs) out.add(d)
     return [...out].slice(0, this.cap)
   }
 

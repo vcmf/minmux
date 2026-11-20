@@ -65,4 +65,4 @@ defaults, it doesn't replace them. Hiding is by alias, so it applies in every en
 
 - **WSL.** On Windows, the hosts in each running WSL distro's `~/.ssh/config` are listed too and
   connect with that distro's own `ssh`.
-- The Changes and Files panels show local folders only, so for an SSH pane they say it's remote.
+- Folder and file tabs show local folders only, so an SSH pane offers none.

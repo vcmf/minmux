@@ -84,12 +84,8 @@ like. The agents themselves are not included: install `claude`, `codex` or `open
     <td><b>SSH sessions.</b> Your <code>~/.ssh/config</code> hosts in one picker, recent first. Enter opens a tab, ⌥Enter splits right, ⇧Enter splits down. It runs your own <code>ssh</code>, so keys, agents and 2FA prompts work as usual, and splits stay on the host. <a href="docs/SSH.md">More on SSH.</a></td>
   </tr>
   <tr>
-    <td width="42%"><img src="docs/media/feat-changes.jpg" width="100%" alt="Changes panel showing a git diff" /></td>
-    <td><b>Changes panel.</b> A live git diff for the focused pane's working directory, with per-file counts and the full unified diff.</td>
-  </tr>
-  <tr>
-    <td width="42%"><img src="docs/media/feat-files.jpg" width="100%" alt="Files browser with git decorations on changed files" /></td>
-    <td><b>Files browser.</b> A lazy per-folder listing rooted at the pane's cwd, with git decorations on changed files.</td>
+    <td width="42%"><img src="docs/media/feat-files.jpg" width="100%" alt="A folder tab beside its terminal, with git marks on changed files" /></td>
+    <td><b>Folders and files as tabs.</b> Open a terminal's folder as a tab beside it, or click a path in the output. Changed files carry git marks; a folder's +/− lists only what changed, and a changed file shows its highlighted diff. Files minmux can't show open in their own app, and nothing is ever run.</td>
   </tr>
   <tr>
     <td width="42%"><img src="docs/media/feat-file-preview.jpg" width="100%" alt="Inline file preview open over the terminal" /></td>
@@ -132,8 +128,8 @@ I love the terminal, and the easiest way to put an agent like Claude Code to wor
 it from a CLI. But I also like reading the code an agent writes and making the edits myself, and
 a plain terminal makes that hard: you lose track of which session needs you, and you never
 really see what changed. minmux keeps the shell I already like and adds just enough to stay in
-the loop: the Changes, Files, and Agents panels show what happened, not just that something
-did. It also behaves the same on macOS, Linux and WSL, which helps since my work moves between
+the loop: folder and file tabs (with their git changes) and the Agents panel show what
+happened, not just that something did. It also behaves the same on macOS, Linux and WSL, which helps since my work moves between
 all three.
 
 ## More

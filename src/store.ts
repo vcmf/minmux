@@ -225,9 +225,7 @@ interface AppState {
   platform: string // process.platform ("darwin"|"win32"|"linux"); "" until fetched
   profile: string // a non-default profile's name ("dev"), shown by the brand; "" otherwise
   editor: EditorInfo | null // configured editor availability (file context menu)
-  // file open in the preview popup (null = closed); wsl = the pane's distro so a WSL path
-  // is read via its UNC share (captured at open time — the active pane may change after).
-  preview: { abs: string; name: string; wsl?: WslContext } | null
+  preview: { abs: string; name: string } | null // the file in the preview popup (null = closed)
   objects: Record<string, ObjectEntry> // pane entries that aren't terminals, by `obj-` id
   folderViews: Record<string, FolderView> // per folder entry: what its view has open
   closeConfirm: CloseConfirm | null // a close awaiting the "are you sure?" dialog (lib/close-confirm)
@@ -244,7 +242,7 @@ interface AppState {
   setPlatform: (platform: string) => void
   setProfile: (profile: string) => void
   setEditor: (editor: EditorInfo) => void
-  setPreview: (preview: { abs: string; name: string; wsl?: WslContext } | null) => void
+  setPreview: (preview: { abs: string; name: string } | null) => void
   /** Open a folder as a new tab of a pane (default: the active tab's focused pane), focused. */
   openFolder: (path: string, opts?: { tabId?: string; paneId?: string; wsl?: WslContext }) => void
   // Default: the active tab's focused pane. A peek replaces the pane's peek; a file already open

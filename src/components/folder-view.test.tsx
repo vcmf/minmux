@@ -255,6 +255,29 @@ describe("FolderView", () => {
     view.unmount()
   })
 
+  it("a repo with more changes than its status lists says how many aren't shown", async () => {
+    vi.mocked(ipc.readdir).mockResolvedValue(ls(["a.ts", false]))
+    vi.mocked(ipc.gitStatus).mockResolvedValue({
+      isRepo: true,
+      root: "/fvt",
+      branch: "main",
+      ahead: 0,
+      behind: 0,
+      files: [{ path: "a.ts", dir: "", status: "M", add: 1, del: 0 }],
+      add: 1,
+      del: 0,
+      total: 5001,
+    } as never)
+    vi.mocked(ipc.gitRoots).mockResolvedValue({ "/fvt": "/fvt" })
+    const { tabId, entryId } = open("/fvt")
+    st().setFolderView(entryId, { expanded: [], showAll: [], changesOnly: true })
+    render(<FolderView entryId={entryId} tabId={tabId} />)
+    expect(
+      await screen.findByText(/5000 more changes in this repo, not listed/),
+    ).toBeInTheDocument()
+    expect(screen.getByTitle("Show the folder")).toBeInTheDocument()
+  })
+
   it("a folder in no repo has no repo bar and stays a tree", async () => {
     vi.mocked(ipc.readdir).mockResolvedValue(ls(["x.ts", false]))
     vi.mocked(ipc.gitRoots).mockResolvedValue({})

@@ -1,12 +1,11 @@
 import { describe, it, expect } from "vitest"
 import { WatchSet } from "./watch-set"
 
-const make = (cap = 32, first: string[] = []) => {
+const make = (cap = 32) => {
   const sent: string[][] = []
   const jobs: (() => void)[] = []
   const w = new WatchSet(
     (d) => sent.push(d),
-    first,
     cap,
     (fn) => jobs.push(fn),
   )
@@ -42,7 +41,7 @@ describe("WatchSet", () => {
     expect(sent).toHaveLength(1)
   })
 
-  it("caps the union, first owners first", () => {
+  it("caps the union, in the order owners joined", () => {
     const { w, sent, tick } = make(2)
     w.set("v1", ["/a", "/b"])
     w.set("v2", ["/c"])
@@ -50,24 +49,11 @@ describe("WatchSet", () => {
     expect(sent).toEqual([["/a", "/b"]])
   })
 
-  it("a `first` owner keeps its place under the cap, even when it rejoins later", () => {
-    const { w, sent, tick } = make(2, ["panel"])
-    w.set("panel", ["/p"])
-    w.set("view", ["/v1", "/v2"])
-    tick()
-    w.set("panel", []) // e.g. a WSL pane
-    tick()
-    w.set("panel", ["/p"])
-    tick()
-    expect(sent[sent.length - 1]).toEqual(["/p", "/v1"])
-  })
-
   it("content-only changes are asked for just the folders a file tab watches", () => {
     const got: [string[], string[]][] = []
     const jobs: (() => void)[] = []
     const w = new WatchSet(
       (d, c) => got.push([d, c]),
-      [],
       32,
       (fn) => jobs.push(fn),
     )

@@ -1,7 +1,7 @@
 // Pure sizing for the resizable right panel (the agents list).
 // The drag handle + persistence live elsewhere; the clamp is here so it's unit-tested.
 
-export const RIGHT_PANEL_MIN = 280 // keep tree rows + breadcrumb readable
+export const RIGHT_PANEL_MIN = 280 // keep the agents list readable
 export const RIGHT_PANEL_MAX = 760 // absolute cap regardless of window size
 export const RIGHT_PANEL_DEFAULT = 388
 

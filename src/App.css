@@ -2610,7 +2610,7 @@ body.resizing-col {
   font-weight: 600;
 }
 
-/* ── Files panel: root navigation breadcrumb ─────────────
+/* ── Folder tabs: root navigation breadcrumb ────────────
    Collapsible clickable path + "…" ancestor dropdown + browse/edit + amber reset. */
 .rootbar {
   display: flex;
@@ -2904,7 +2904,7 @@ body.resizing-col {
   opacity: 0.45;
 }
 
-/* A big folder's "N more · Show all · Open in Finder" row (Files + Changes panels). */
+/* A big folder's "N more · Show all · Open in Finder" row (folder tabs). */
 .more-row {
   display: flex;
   align-items: center;

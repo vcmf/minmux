@@ -19,7 +19,7 @@ electron/                 main process (Node) — see electron/CLAUDE.md
   main.ts                 BrowserWindow + every ipcMain handler + PTY registry + quit guard
   preload.ts              contextBridge → window.minmux (mirrors src/lib/ipc.ts)
   shell-integration.ts    inlined zsh/bash OSC-133/OSC-7 scripts, listShells (WSL), injection
-  git.ts · pane-git.ts    changes panel (status/diff) · per-terminal branch + gh PR (sidebar)
+  git.ts · pane-git.ts    git status/diff (folder + file tabs) · per-terminal branch + gh PR (sidebar)
   agents/                 one adapter per coding agent (claude, codex, opencode + its plugin):
                           arming, normaliser, tokens, names, resume rules (types.ts)
   agent-hooks.ts          per-agent file drops → AgentEvents (hook-writer builds the hooks')
