@@ -865,6 +865,52 @@ describe("splitPaneAt", () => {
   })
 })
 
+describe("openFromCli", () => {
+  beforeEach(resetStore)
+  const wave = { tab: "wave 1", cwd: "/w/a", command: ["sh", "-c", "echo hi"] }
+
+  it("creates the named tab, then splits its focused pane on each later call", () => {
+    st().newTab(shell)
+    st().openFromCli(wave)
+    expect(st().tabs).toHaveLength(2)
+    const tab = st().tabs[1]!
+    expect(st().activeTabId).toBe(tab.id)
+    expect(tab.title).toBe("wave 1")
+    const first = st().sessions[tab.activeSessionId]!
+    expect(first).toMatchObject({ cwd: "/w/a", run: ["sh", "-c", "echo hi"], title: "sh" })
+    expect(first.command).toBe(shell.command) // the shell stays for splits and a relaunch
+    st().openFromCli({ ...wave, cwd: "/w/b" })
+    st().openFromCli({ ...wave, cwd: "/w/c", split: "down" })
+    const after = st().tabs[1]!
+    expect(st().tabs).toHaveLength(2)
+    expect(allSessionIds(after.root)).toHaveLength(3)
+    expect(st().sessions[after.activeSessionId]?.cwd).toBe("/w/c")
+    expect(after.root.type === "split" && after.root.direction).toBe("row")
+  })
+
+  it("brings a named background tab to the front; no tab → the active one", () => {
+    st().openFromCli(wave)
+    st().newTab(shell)
+    st().openFromCli({ cwd: "/x" }) // the active (unnamed) tab
+    expect(allSessionIds(st().tabs[1]!.root)).toHaveLength(2)
+    expect(st().sessions[st().tabs[1]!.activeSessionId]?.run).toBeUndefined()
+    st().openFromCli({ ...wave, split: "down" })
+    expect(st().activeTabId).toBe(st().tabs[0]!.id)
+    const root = st().tabs[0]!.root
+    expect(root.type === "split" && root.direction).toBe("column")
+  })
+
+  it("closing a command pane asks first: no shell marks say whether it still runs", () => {
+    st().openFromCli(wave)
+    st().openFromCli({ cwd: "/x" }) // a shell beside it
+    const tab = st().tabs[0]!
+    st().requestCloseTerminal(tab.id, tab.activeSessionId) // the idle shell: closes at once
+    expect(st().closeConfirm).toBeNull()
+    st().requestCloseTerminal(tab.id, st().tabs[0]!.activeSessionId) // the command: asks
+    expect(st().closeConfirm).not.toBeNull()
+  })
+})
+
 describe("store — ssh remote sessions", () => {
   beforeEach(resetStore)
 

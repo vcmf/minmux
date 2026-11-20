@@ -1,0 +1,67 @@
+#!/bin/sh
+# minmux CLI (macOS): hands its arguments to the minmux app — `minmux open …`, `minmux --help`.
+# A running minmux takes the request and this returns at once; with none running, the app
+# starts here (detached) and opens the pane once its workspace is restored.
+# MINMUX_APP: the app to use (its .app bundle or its executable), else /Applications.
+app=${MINMUX_APP:-}
+if [ -z "$app" ]; then
+  for c in /Applications/minmux.app "$HOME/Applications/minmux.app"; do
+    if [ -d "$c" ]; then app=$c; break; fi
+  done
+fi
+case $app in *.app | *.app/) app=${app%/}/Contents/MacOS/minmux ;; esac
+if [ ! -x "$app" ]; then
+  echo "minmux: app not found${app:+ at $app} (set MINMUX_APP to minmux.app)" >&2
+  exit 127
+fi
+
+# A second instance exits within a second (usage / errors on its own stdout / stderr); the
+# first one IS the app, so it must outlive this shell: in a session of its own (setsid via perl,
+# which macOS ships; else nohup alone) — the caller's process group can end, or be killed (a
+# sandboxed or scripted shell), without taking the app along — with its output in files that are
+# relayed if it exits (else they stay, as its log, in $TMPDIR/minmux-cli.*).
+#   - $MINMUX_CLI_READY appears: it holds the lock, it's the app → 0, left running.
+#   - it exits: a second instance. An `open` wrote "pending" in $MINMUX_CLI_ACK before handing
+#     its request over, and the app answers there ("ok", or why not): anything but "ok" is an
+#     error, never a silent 0.
+#   - neither within MINMUX_CLI_TIMEOUT seconds (12): the running app doesn't answer, and
+#     Chromium would soon kill it (20s after this launch began) and start over in its place,
+#     losing its panes. So this launch is killed instead, and it's an error (and the app drops
+#     the request if it gets to it later: cli.ts STALE_MS).
+dir=$(mktemp -d "${TMPDIR:-/tmp}/minmux-cli.XXXXXX") || exit 1
+detach=
+if command -v perl >/dev/null 2>&1; then
+  detach='perl -MPOSIX -e POSIX::setsid();exec(@ARGV)||die("minmux:$!\n")'
+fi
+# shellcheck disable=SC2086 # $detach is a command line on purpose
+MINMUX_CLI_READY=$dir/ready MINMUX_CLI_ACK=$dir/ack nohup $detach "$app" "$@" \
+  >"$dir/out" 2>"$dir/err" </dev/null &
+pid=$!
+deadline=$(($(date +%s) + ${MINMUX_CLI_TIMEOUT:-12}))
+while kill -0 "$pid" 2>/dev/null; do
+  if [ -e "$dir/ready" ]; then # it's the app: leave it running
+    rm -f "$dir/ready" "$dir/ack" # its output stays in $dir (visible, deletable once it quits)
+    exit 0
+  fi
+  if [ "$(date +%s)" -ge "$deadline" ]; then
+    kill -9 "$pid" 2>/dev/null
+    echo "minmux: the running minmux didn't answer; nothing was opened (it was left running)" >&2
+    rm -rf "$dir"
+    exit 1
+  fi
+  sleep 0.05
+done
+wait "$pid"
+code=$?
+cat "$dir/out"
+cat "$dir/err" >&2
+if [ "$code" -eq 0 ] && [ -e "$dir/ack" ]; then
+  answer=$(cat "$dir/ack")
+  if [ "$answer" != ok ]; then
+    [ "$answer" = pending ] && answer="it never answered"
+    echo "minmux: the running minmux didn't take the request: $answer" >&2
+    code=1
+  fi
+fi
+rm -rf "$dir"
+exit "$code"

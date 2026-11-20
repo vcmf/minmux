@@ -1,7 +1,8 @@
 import { create } from "zustand"
 import { moveTo } from "./lib/tab-order"
 import { moveTerminal as moveTerminalPure, type GroupDrop } from "./lib/group-move"
-import type { Session, ShellOption, SshHost, Tab } from "./types"
+import type { OpenRequest, Session, ShellOption, SshHost, Tab } from "./types"
+import { openTarget } from "./lib/cli-open"
 import type { PrRef } from "./lib/pr-detail"
 import {
   addSurface,
@@ -51,7 +52,7 @@ import {
   type TerminalState,
   confirmStillValid,
 } from "./lib/close-confirm"
-import { tabTitle, displaySessionTitle } from "./lib/session-label"
+import { tabTitle, displaySessionTitle, shellType } from "./lib/session-label"
 import type { AgentEvent, AgentGraph } from "./lib/agent-graph"
 import { defaultSettings, mergeSettings } from "./settings/schema"
 import { saveSettings } from "./settings/io"
@@ -207,6 +208,8 @@ interface AppState {
   splitActive: (direction: "row" | "column", fallback?: ShellOption) => void
   openFolderInSplit: (cwd: string, paneId?: string) => void // split active pane at cwd; shell from paneId
   splitPaneAt: (paneId: string, cwd: string) => void // split beside that pane (its shell); not "seen"
+  // `minmux open`: a pane in the tab it names (or a new one) → its session id, or why not
+  openFromCli: (req: OpenRequest) => { opened: string } | { dropped: string }
   newSurface: (fallback?: ShellOption) => void // new terminal tab in the focused pane
   closeSurface: (tabId: string, sessionId: string) => void // one terminal; last one closes the pane
   closePane: (tabId: string, paneId: string) => void // the pane with all its terminals
@@ -252,7 +255,9 @@ const closing =
 /** What closing needs to know about terminals: running a command, or a live agent. */
 function terminalStates(state: AppState, ids: string[]): TerminalState[] {
   const agentIn = agentByPane(state.agents)
-  return ids.map((id) => ({ id, running: !!state.sessions[id]?.running, agent: agentIn[id] }))
+  // A `minmux open --` pane has no shell marks: its program counts as running (it may well be).
+  const running = (s: Session | undefined) => !!s?.running || !!s?.run
+  return ids.map((id) => ({ id, running: running(state.sessions[id]), agent: agentIn[id] }))
 }
 
 /** Whether the user is actively looking at this exact session: window focused +
@@ -288,11 +293,17 @@ export const isSessionVisible = (sessionId: string): boolean =>
 // each caller resolves its own shell/cwd, this owns the pane-tree mechanics.
 function splitActivePane(
   state: AppState,
-  opts: { shell: ShellOption; cwd?: string; direction: "row" | "column"; reopen?: ReopenCwd },
+  opts: {
+    shell: ShellOption
+    cwd?: string
+    direction: "row" | "column"
+    reopen?: ReopenCwd
+    session?: Session // built already (`minmux open`): shell/cwd/reopen aren't read
+  },
 ): Partial<AppState> {
   const tab = state.tabs.find((t) => t.id === state.activeTabId)
   if (!tab) return {}
-  const session = makeSession(opts.shell, opts.cwd, opts.reopen)
+  const session = opts.session ?? makeSession(opts.shell, opts.cwd, opts.reopen)
   const root = splitNode(
     tab.root,
     tab.activeSessionId,
@@ -306,6 +317,21 @@ function splitActivePane(
     tabs: state.tabs.map((t) =>
       t.id === tab.id ? { ...t, root, activeSessionId: session.id } : t,
     ),
+  }
+}
+
+/** A new tab holding `session` alone, made the active one. `title` "" = unpinned. */
+function withNewTab(state: AppState, session: Session, title = ""): Partial<AppState> {
+  const tab: Tab = {
+    id: newId(),
+    title,
+    root: makeLeaf(newId(), session.id),
+    activeSessionId: session.id,
+  }
+  return {
+    sessions: { ...state.sessions, [session.id]: session },
+    tabs: [...state.tabs, tab],
+    activeTabId: tab.id,
   }
 }
 
@@ -715,21 +741,8 @@ export const useStore = create<AppState>((set, get) => ({
     }),
   setRightPanelWidth: (px, maxAvail) => set({ rightPanelWidth: clampPanelWidth(px, maxAvail) }),
 
-  newTab: (shell) =>
-    set((state) => {
-      const session = makeSession(shell, focusedCwd(state))
-      const tab: Tab = {
-        id: newId(),
-        title: "", // unpinned — display derives from the focused pane's live title
-        root: makeLeaf(newId(), session.id),
-        activeSessionId: session.id,
-      }
-      return {
-        sessions: { ...state.sessions, [session.id]: session },
-        tabs: [...state.tabs, tab],
-        activeTabId: tab.id,
-      }
-    }),
+  // Unpinned title — display derives from the focused pane's live title.
+  newTab: (shell) => set((state) => withNewTab(state, makeSession(shell, focusedCwd(state)))),
 
   closeTab: (tabId) =>
     set(
@@ -817,6 +830,39 @@ export const useStore = create<AppState>((set, get) => ({
     // Switched tabs: what's now on screen counts as seen (as setActiveTab does).
     const now = get().activeTabId
     if (now && now !== before) get().revealTab(now)
+  },
+
+  // `minmux open`: the default shell (or the request's command) at its cwd, split beside the
+  // focused pane of the tab it names, or as a new tab — which comes to the front either way.
+  openFromCli: (req) => {
+    const before = get().activeTabId
+    let opened: string | undefined
+    let dropped = "no default shell"
+    set((state) => {
+      const shell = resolveDefaultShell(state.shells, state.settings.defaultShell)
+      if (!shell) return {}
+      const base = makeSession(shell, req.cwd)
+      const session: Session = req.command
+        ? { ...base, run: req.command, title: shellType(req.command[0]!) }
+        : base
+      const target = openTarget(state.tabs, state.activeTabId, req)
+      // A --tab title is pinned: the next `open --tab` finds it.
+      if ("newTab" in target) {
+        opened = session.id
+        return withNewTab(state, session, target.newTab)
+      }
+      const at = { ...state, activeTabId: target.tabId }
+      const split = splitActivePane(at, { shell, direction: target.direction, session })
+      if (!split.tabs) {
+        dropped = "its tab is gone"
+        return {}
+      }
+      opened = session.id
+      return { activeTabId: target.tabId, ...split }
+    })
+    const now = get().activeTabId
+    if (now && now !== before) get().revealTab(now)
+    return opened ? { opened } : { dropped }
   },
 
   // New terminal as a tab (surface) of the focused pane, inheriting its shell + cwd.

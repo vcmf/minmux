@@ -46,6 +46,18 @@ import "./App.css"
 // overwrite it either (a downgrade would otherwise wipe the saved layout).
 let persistBlocked = false
 
+// The workspace is restored: a `minmux open` request lands in it now, not under the restore.
+let opensReady = false
+/** Open the `minmux open` requests main holds (electron/cli.ts); whether there were any. */
+const openWaiting = async (): Promise<boolean> => {
+  const reqs = await ipc.takeOpens().catch(() => [])
+  for (const r of reqs) ipc.openResult(r, useStore.getState().openFromCli(r)) // → diagnostics.log
+  return reqs.length > 0
+}
+const takeOpens = () => {
+  if (opensReady) void openWaiting()
+}
+
 /** How long after mount the host list is first fetched (the first tab spawns before). */
 const SSH_HOSTS_DELAY_MS = 800
 
@@ -148,9 +160,17 @@ function App() {
           void ipc.agentMetaSnapshot().then((all) => {
             for (const [paneId, meta] of all) useStore.getState().setAgentMeta(paneId, meta)
           })
-        } else if (shells[0]) store.newTab(shells[0])
+        } else if (shells[0]) {
+          // A cold `minmux open` with nothing to restore: its pane is the first one.
+          if (!(await openWaiting())) store.newTab(shells[0])
+        }
       }
-    })()
+    })().finally(() => {
+      // Even after a failed restore: `minmux open` must not wait for one forever.
+      if (cancelled) return
+      opensReady = true
+      takeOpens()
+    })
     return () => {
       cancelled = true
     }
@@ -233,6 +253,9 @@ function App() {
     })
     return () => unlisten()
   }, [])
+
+  // `minmux open`: main nudges; the requests are taken once the workspace is restored.
+  useEffect(() => ipc.onWorkspaceOpen(takeOpens), [])
 
   // Claude session /color + /rename per pane → the pane accent (border + tab icon).
   useEffect(
