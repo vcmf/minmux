@@ -1302,6 +1302,69 @@ body.resizing-col {
   font-weight: 600;
   flex: 0 0 auto;
 }
+/* A folder's count of changed files inside it, beside its name. */
+.file-row .folder-count {
+  color: var(--dim);
+  font-weight: 500;
+}
+/* A folder tab's repo state in its breadcrumb bar: branch, ahead / behind, and the +/− pill that
+   switches it to Changes only. */
+.folder-repo {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-right: 4px;
+  font-size: 11px;
+  color: var(--dim);
+  min-width: 0;
+}
+.folder-repo-branch {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  min-width: 0;
+}
+.folder-repo-name {
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.folder-repo-pill {
+  display: inline-flex;
+  gap: 4px;
+  background: none;
+  border: 1px solid var(--border2);
+  border-radius: 6px;
+  font: inherit;
+  font-size: 11px;
+  padding: 0 6px;
+  cursor: pointer;
+}
+.folder-repo-pill.on {
+  background: var(--elev);
+}
+.folder-repo .add,
+.folder-change-stat .add {
+  color: var(--accent);
+}
+.folder-repo .del,
+.folder-change-stat .del {
+  color: var(--red);
+}
+.folder-change-stat {
+  display: inline-flex;
+  gap: 6px;
+}
+/* The folder part of a changed file's path, after its name (Changes only). */
+.file-row .folder-change-dir {
+  color: var(--faint);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
 /* A folder entry in a pane (a tab beside its terminals): a lazy tree on a fixed path. Plain
    DOM, never over a WebGL canvas (showing it parks the pane's terminals). */
 /* A file entry in a pane: the file, highlighted, one fixed-height line each (file-view.tsx
@@ -1374,6 +1437,46 @@ body.resizing-col {
   align-items: flex-start;
   color: var(--dim);
 }
+/* A changed file's Source / Diff switch, in its tab's header. */
+.seg {
+  display: inline-flex;
+  border: 1px solid var(--border2);
+  border-radius: 6px;
+  overflow: hidden;
+  margin-right: 4px;
+}
+.seg-btn {
+  background: none;
+  border: 0;
+  color: var(--dim);
+  font: inherit;
+  font-size: 11px;
+  padding: 1px 8px;
+  cursor: pointer;
+}
+.seg-btn.on {
+  background: var(--elev);
+  color: var(--text);
+}
+/* The Source view's change bars (from the file's diff): added, modified, deleted above. */
+.file-view-bar {
+  flex: 0 0 3px;
+  margin-right: 4px;
+}
+.file-view-bar.add {
+  background: var(--accent);
+}
+.file-view-bar.mod {
+  background: var(--amber);
+}
+.file-view-bar.del {
+  background: linear-gradient(var(--red), var(--red)) top / 100% 3px no-repeat;
+}
+.file-view-line .diff-sign {
+  flex: 0 0 14px;
+  text-align: center;
+}
+
 /* A peek: the next file opened as one replaces it (double-click keeps it). */
 .surface-tab.peek .pane-title {
   font-style: italic;

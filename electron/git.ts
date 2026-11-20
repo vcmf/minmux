@@ -97,7 +97,9 @@ export function parseDiff(out: string): DiffLine[] {
   const lines: DiffLine[] = []
   let oldNo = 0
   let newNo = 0
+  let inHunk = false // before a file's first @@ come headers (modes, renames, "Binary files …")
   for (const raw of out.split("\n")) {
+    if (raw.startsWith("diff ")) inHunk = false
     if (raw.startsWith("diff ") || raw.startsWith("index ")) continue
     if (raw.startsWith("--- ") || raw.startsWith("+++ ")) continue
     if (raw.startsWith("@@")) {
@@ -106,13 +108,16 @@ export function parseDiff(out: string): DiffLine[] {
         oldNo = Number(m[1])
         newNo = Number(m[2])
       }
+      inHunk = true
       lines.push({ type: "hunk", text: raw })
       continue
     }
-    if (raw.startsWith("\\")) continue // "\ No newline at end of file"
+    if (!inHunk && raw.startsWith("Binary files ")) lines.push({ type: "hunk", text: raw })
+    if (raw.startsWith("\\") || !inHunk) continue // "\ No newline at end of file", headers
     if (raw.startsWith("+")) lines.push({ type: "add", text: raw.slice(1), newNo: newNo++ })
     else if (raw.startsWith("-")) lines.push({ type: "del", text: raw.slice(1), oldNo: oldNo++ })
-    else if (raw.length || lines.length)
+    else if (raw.startsWith(" "))
+      // (the last line of git's output is empty: not a line of the file)
       lines.push({ type: "context", text: raw.slice(1), oldNo: oldNo++, newNo: newNo++ })
   }
   return lines

@@ -83,7 +83,14 @@ function parseObject(v: unknown): ObjectEntry | undefined {
   if (o.kind === "folder") return { kind: "folder", path: o.path, ...wsl }
   const f = o as Partial<FileEntry>
   const line = typeof f.line === "number" && f.line > 0 ? { line: Math.floor(f.line) } : {}
-  return { kind: "file", path: o.path, ...wsl, ...line, ...(f.peek === true ? { peek: true } : {}) }
+  return {
+    kind: "file",
+    path: o.path,
+    ...wsl,
+    ...line,
+    ...(f.peek === true ? { peek: true } : {}),
+    ...(f.view === "diff" ? { view: "diff" } : {}),
+  }
 }
 
 /** A saved tree with only the entries `keep` accepts (each placed once); undefined if none. */
@@ -208,7 +215,12 @@ export function restoreLayout(
     if (!objects[id]) continue
     kept[id] = objects[id]!
     const v = (file.folderViews as Record<string, Partial<FolderView>> | undefined)?.[id]
-    if (v) folderViews[id] = { expanded: strings(v.expanded), showAll: strings(v.showAll) }
+    if (v)
+      folderViews[id] = {
+        expanded: strings(v.expanded),
+        showAll: strings(v.showAll),
+        ...(v.changesOnly === true ? { changesOnly: true } : {}),
+      }
   }
   return {
     state: {
