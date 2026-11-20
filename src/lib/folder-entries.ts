@@ -30,8 +30,8 @@ export interface FolderChoice {
   path: string
 }
 
-/** The folders ▤+ / "Open folder in…" offer for a terminal, distinct and in sidebar order:
- *  the shell's folder, the agent's, then the checkouts it edits in. */
+// Distinct, in sidebar order: the shell's folder, the agent's, then the checkouts it edits in.
+/** The folders ▤+ / "Open folder in…" offer for a terminal. */
 export function folderChoices(
   shellCwd: string | undefined,
   agentCwd: string | undefined,

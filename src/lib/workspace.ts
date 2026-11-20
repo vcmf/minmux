@@ -80,9 +80,9 @@ export interface WorkspaceState {
   folderViews?: Record<string, FolderView>
 }
 
-/** The tree as written to disk: each leaf's terminals, plus the legacy `sessionId` mirror. A
- *  pane with no terminal is left out (older builds would drop it, and maybe the whole file):
- *  it lives in layout.json only. Null when no pane has a terminal. */
+// A pane with no terminal is left out (older builds would drop it, maybe the whole file): it
+// lives in layout.json only. Null when no pane has a terminal.
+/** The tree as written to disk: each leaf's terminals, plus the legacy `sessionId` mirror. */
 function persistTree(node: PaneNode): PersistedNode | null {
   if (node.type === "leaf") {
     const sessionIds = paneSessionIds(node)

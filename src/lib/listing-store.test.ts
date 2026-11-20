@@ -42,4 +42,13 @@ describe("ListingStore", () => {
     s.set("", "/c", L("1"))
     expect(Object.keys(s.get("")).sort()).toEqual(["/a", "/c"])
   })
+
+  it("an unchanged re-read still counts as a use (a folder on screen never ages out)", () => {
+    const s = new ListingStore(2)
+    s.set("", "/shown", L("1"))
+    s.set("", "/b", L("1"))
+    s.set("", "/shown", L("1")) // re-read, unchanged
+    s.set("", "/c", L("1"))
+    expect(Object.keys(s.get("")).sort()).toEqual(["/c", "/shown"])
+  })
 })

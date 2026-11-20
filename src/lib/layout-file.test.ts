@@ -123,4 +123,27 @@ describe("layout.json", () => {
     expect(r.tabs.map((t) => t.id)).toEqual(["t2"])
     expect(r.tabs[0]!.activeSessionId).toBe("")
   })
+
+  it("…and a pane that gets several folders back keeps showing workspace.json's terminal", () => {
+    const K = objectId("k")
+    // p1 [a, F, K] showing a | p2 [b], focused: p1 isn't the focus, so nothing re-selects it.
+    const p1 = addSurface(addSurface(makeLeaf("p1", "a"), "p1", F), "p1", K)
+    const root = splitNode(p1, "a", "row", "b", "s", "p2")
+    const s: ReturnType<typeof state> = {
+      sessions: { a: session("a"), b: session("b") },
+      tabs: [
+        withFocus(makeTab("t1", "", withFocus(makeTab("x", "", root, "a"), "a").root, "b"), "b"),
+      ],
+      activeTabId: "t1",
+      objects: { [F]: folder("/w/f"), [K]: folder("/w/k") },
+      folderViews: {},
+    }
+    const { ws, layout } = save(s)
+    const other = JSON.parse(ws)
+    other.tabs[0].title = "renamed elsewhere" // another build saved: the stamps differ
+    const r = restoreLayout(deserializeWorkspace(other), JSON.stringify(other), layout).state!
+    const [left] = allPanes(r.tabs[0]!.root)
+    expect(left!.entryIds).toEqual(["a", F, K])
+    expect(left!.activeEntryId).toBe("a")
+  })
 })

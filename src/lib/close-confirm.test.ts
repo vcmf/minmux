@@ -128,3 +128,17 @@ describe("confirmStillValid", () => {
     ).toBe(false)
   })
 })
+
+describe("closeConfirmText: a pane's only terminal beside folders", () => {
+  it("says the folder tabs go too, and the button closes the pane", () => {
+    const t = closeConfirmText({
+      kind: "terminal",
+      tabId: "t",
+      sessionId: "a",
+      title: "x",
+      paneId: "p",
+    })
+    expect(t.body).toMatch(/folder tabs close with it/)
+    expect(t.action).toBe("Close pane")
+  })
+})

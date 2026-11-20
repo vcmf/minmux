@@ -97,17 +97,17 @@ export function FolderView({ entryId, tabId }: { entryId: string; tabId: string 
 
   // Shown (mount, re-root, a folder opened): read what has no listing now; refresh the rest
   // in the background (not on WSL: each read is a slow 9p trip; Refresh re-reads there).
+  // A shown folder with no listing at all (never read, or evicted from the shared cache) is read
+  // whenever it's found missing; the queue keeps it to one read in flight.
   const seen = useRef(new Set<string>())
   useEffect(() => {
-    const cur = listings.get(scope)
     for (const dir of shownRef.current) {
-      if (seen.current.has(dir)) continue
+      const l = all[dir]
+      if (!l) load(dir, true, true)
+      else if (!seen.current.has(dir) && !l.error && !wsl) load(dir, false, false, 1000)
       seen.current.add(dir)
-      const listed = !!cur[dir] && !cur[dir]!.error
-      if (!listed) load(dir, true, true)
-      else if (!wsl) load(dir, false, false, 1000)
     }
-  }, [shownKey, scope, wsl, load])
+  }, [shownKey, all, scope, wsl, load])
   useEffect(() => () => seen.current.clear(), [root])
   useEffect(() => {
     release(entryId, new Set(shownRef.current.map((d) => readKey(scope, d))))
@@ -177,7 +177,11 @@ export function FolderView({ entryId, tabId }: { entryId: string; tabId: string 
   }
   const refresh = () => shownRef.current.forEach((d) => load(d, true))
   const setRoot = (p: string) => useStore.getState().setFolderRoot(entryId, p)
-  const parent = root.replace(/[\\/][^\\/]+[\\/]?$/, "") || (root.startsWith("/") ? "/" : "")
+  // None at a share's root (\\\\server\\share): \\\\server alone isn't a folder.
+  const uncRoot = /^\\\\[^\\]+\\[^\\]+\\?$/.test(root)
+  const parent = uncRoot
+    ? ""
+    : root.replace(/[\\/][^\\/]+[\\/]?$/, "") || (root.startsWith("/") ? "/" : "")
   const terminalHere = () => {
     const s = useStore.getState()
     s.setActivePane(tabId, entryId)

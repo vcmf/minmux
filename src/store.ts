@@ -99,9 +99,9 @@ function localShellFor(state: AppState, src: Session | undefined): ShellOption |
   return resolveDefaultShell(state.shells, state.settings.defaultShell)
 }
 
-/** A shell that runs on this machine's own filesystem (not ssh, not WSL) for a host folder:
- *  the inherited one, else the default, else the first such shell. A WSL shell would start in
- *  `~`, as main can't hand a host path to `wsl --cd`. */
+// The inherited shell, else the default, else the first such one. A WSL shell would start in
+// `~`: main can't hand a host path to `wsl --cd`.
+/** A shell on this machine's own filesystem (not ssh, not WSL), for a host folder. */
 function hostShellFor(state: AppState, src: Session | undefined): ShellOption | undefined {
   const ok = (s: ShellOption | undefined) => !!s && !s.remote && !wslContext(s.command, s.args)
   const inherited = inheritShell(state.shells, src)
@@ -120,8 +120,9 @@ function focusedCwd(state: AppState): string | undefined {
   return sid ? state.sessions[sid]?.cwd : undefined
 }
 
-/** The focused folder entry of `tab`, if its focus is one on this machine (a WSL folder's
- *  terminals still come from the tab's WSL terminal). */
+// A WSL folder's new terminals still come from the tab's terminal (a known limit: they don't
+// open in the folder yet).
+/** The focused folder entry of `tab`, when its focus is one on this machine. */
 const focusedFolder = (state: AppState, tab: Tab): FolderEntry | undefined => {
   const f = state.objects[tab.activeEntryId]
   return f && !f.wsl ? f : undefined

@@ -103,10 +103,12 @@ export function closeConfirmText(c: CloseConfirm): { title: string; body: string
     case "terminal":
       return {
         title: `Close "${c.title}"?`,
-        body: c.agent
-          ? agentRunning(c.agent, "this terminal")
-          : "A command is still running in this terminal. Closing it stops it.",
-        action: "Close terminal",
+        body:
+          (c.agent
+            ? agentRunning(c.agent, "this terminal")
+            : "A command is still running in this terminal. Closing it stops it.") +
+          (c.paneId ? " The pane's folder tabs close with it." : ""),
+        action: c.paneId ? "Close pane" : "Close terminal",
       }
   }
 }

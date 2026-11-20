@@ -179,7 +179,8 @@ export function restoreLayout(
         for (const id of saved.entryIds) {
           if (isTerminalEntry(id) || !objects[id] || placed.has(id)) continue
           placed.add(id)
-          const was = findPaneById(root, saved.id)!.activeEntryId
+          // What the pane showed in workspace.json (read from its tree, before any add).
+          const was = findPaneById(tab.root, saved.id)!.activeEntryId
           if (!shown.includes(was)) shown.push(was)
           root = addSurface(root, saved.id, id)
         }

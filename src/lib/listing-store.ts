@@ -26,9 +26,15 @@ export class ListingStore {
   set(scope: string, dir: string, listing: DirListing): boolean {
     const cur = this.get(scope)
     const had = cur[dir]
+    const key = `${scope}\0${dir}`
+    // Every read counts as a use, changed or not: a folder on screen (re-read on each
+    // change and focus) never ages out under ones read once.
+    if (had) {
+      this.lru.delete(key)
+      this.lru.set(key, [scope, dir])
+    }
     if (sameListing(had, listing) || (listing.error && had)) return false
     this.scopes.set(scope, { ...cur, [dir]: listing })
-    const key = `${scope}\0${dir}`
     this.lru.delete(key)
     this.lru.set(key, [scope, dir])
     while (this.lru.size > this.cap) {
