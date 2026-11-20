@@ -47,13 +47,15 @@ export class UserNames {
     }
   }
 
-  // Best-effort (worst case a name shows uncoloured).
+  // Best-effort (worst case a name shows uncoloured). Never before the file is read: a write
+  // landing first would replace the names recorded on earlier runs with this run's alone.
   private save(): void {
-    this.out?.write(JSON.stringify({ v: 1, sessions: [...this.ids] }))
+    void this.loaded.then(() => this.out?.write(JSON.stringify({ v: 1, sessions: [...this.ids] })))
   }
 
   /** Done when every pending write has landed (tests). */
-  flushed(): Promise<void> {
-    return this.out?.flushed() ?? Promise.resolve()
+  async flushed(): Promise<void> {
+    await this.loaded // saves wait for it: theirs are queued by now
+    await this.out?.flushed()
   }
 }

@@ -43,6 +43,9 @@ describe("UserNames", () => {
       await n.loaded
       expect(n.has("ses_old")).toBe(true)
       expect(n.has("ses_new")).toBe(true)
+      await n.flushed()
+      // …and the file keeps both: the save waited for the read.
+      expect(JSON.parse(fs.readFileSync(f, "utf8")).sessions).toEqual(["ses_old", "ses_new"])
     } finally {
       fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 })
     }
