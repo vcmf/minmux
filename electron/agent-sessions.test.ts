@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from "vitest"
+import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from "vitest"
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
@@ -37,6 +37,25 @@ const plan = (
   preflight: Preflight = yes,
   bypass = false,
 ) => l.plan(ids, live, preflight, bypass)
+
+// Every folder a test makes, removed again once the file's tests are done: a ledger's save is
+// debounced (500 ms) and recreates its folder, so one removed mid-file can come back.
+const made: string[] = []
+const tmpDir = (prefix: string) => {
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), prefix))
+  made.push(d)
+  return d
+}
+afterAll(async () => {
+  // Twice: once now, once past the ledger's 500 ms save, which may have recreated one.
+  const rm = () =>
+    made.forEach((d) =>
+      fs.rmSync(d, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 }),
+    )
+  rm()
+  await new Promise((r) => setTimeout(r, 1500))
+  rm()
+})
 
 /** Remove a test folder a ledger may still flush into (its write is debounced 500 ms and async,
  *  so it can land after the test): Node retries the delete on ENOTEMPTY for about a second. */
@@ -153,7 +172,7 @@ describe("SessionLedger rules", () => {
 describe("SessionLedger — round-2 rules", () => {
   let dir: string
   beforeEach(() => {
-    dir = fs.mkdtempSync(path.join(os.tmpdir(), "minmux-ledger2-"))
+    dir = tmpDir("minmux-ledger2-")
   })
   afterEach(() => {
     vi.useRealTimers()
@@ -267,7 +286,7 @@ describe("SessionLedger.plan", () => {
   })
 
   it("consume is one-shot (the carried entry); prune drops panes no longer in the workspace", async () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "minmux-ledger-c-"))
+    const dir = tmpDir("minmux-ledger-c-")
     const file = path.join(dir, "l.json")
     const a = new SessionLedger(file)
     a.apply(start())
@@ -300,7 +319,7 @@ describe("SessionLedger.plan", () => {
 describe("SessionLedger persistence", () => {
   let dir: string
   beforeEach(() => {
-    dir = fs.mkdtempSync(path.join(os.tmpdir(), "minmux-ledger-"))
+    dir = tmpDir("minmux-ledger-")
   })
   afterEach(() => {
     vi.useRealTimers()
@@ -478,7 +497,7 @@ describe("SessionLedger — the folder must be where Claude filed the session", 
   })
 
   it("an entry recorded with a mismatching folder (before this check) is skipped, never cd'd into", async () => {
-    const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "minmux-ledger-m-")), "l.json")
+    const file = path.join(tmpDir("minmux-ledger-m-"), "l.json")
     fs.writeFileSync(
       file,
       JSON.stringify({ p1: { sessionId: ID, cwd: PAD, transcriptPath: T_DIMO } }),
@@ -516,7 +535,7 @@ describe("per-agent rules and files (multi-agent)", () => {
   let dir = ""
   let file = ""
   beforeEach(() => {
-    dir = fs.mkdtempSync(path.join(os.tmpdir(), "minmux-ledger-"))
+    dir = tmpDir("minmux-ledger-")
     file = path.join(dir, "agent-sessions.json")
   })
   afterEach(() => rmLater(dir))
