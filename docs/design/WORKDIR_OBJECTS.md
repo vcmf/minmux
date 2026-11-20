@@ -1,9 +1,11 @@
 # Folders and files as entries in panes and the sidebar
 
-Status: **proposal, revised after review** · Epic branch `epic/workdir-objects` · Scope:
+Status: **steps 1 and 2 shipped** (#186, #188, #189); **step 3 revised**: file tabs take over the
+Changes panel too (see "Git in folder and file tabs") · Epic branch `epic/workdir-objects` · Scope:
 `src/types.ts` (pane leaves), `src/lib/pane-tree.ts`, `src/lib/workspace.ts`, `src/store.ts`,
 `src/terminal/terminal-manager.ts`, `src/components/terminal-pane.tsx`, `sidebar.tsx`,
-`files-panel.tsx` (retired), `electron/main.ts` (open handlers), the fs worker
+`files-panel.tsx` and `diff-panel.tsx` (retired), `electron/main.ts` (open handlers), the fs
+worker
 
 Markdown rendering (files, PR bodies, comments) is a separate design and PR. Until it lands, a
 markdown file previews as source.
@@ -53,9 +55,10 @@ explorer panel: a folder is something you open.
 
 One rule wherever a file is opened (path click, a folder, the sidebar):
 
-1. **minmux can show it** (a text file, sniffed, up to about 2 MB, or an image): a preview entry
-   opens, scrolled to the line when the path had one. The preview has an **Open in editor**
-   button, as the popup has today.
+1. **minmux can show it** (a text file, sniffed, up to about 2 MB, or an image): a file tab
+   opens, scrolled to the line when the path had one, with an **Open in editor** button as the
+   popup has today. A file git marks as changed also gets **Source | Diff** (see "Git in folder
+   and file tabs").
 2. **A text or code file minmux won't show** (too large) and **Open in editor**: the configured
    editor when one is set, else the OS default app. This is today's `openFile` path.
 3. **Anything else**: the OS default app, `shell.openPath` (LaunchServices, `xdg-open`, a WSL path
@@ -88,9 +91,47 @@ Folder and file entries show in the sidebar under their group, next to the group
 with their own icon and name. Clicking one shows it, as for a terminal. Today's groups, their
 order and drag and drop are unchanged.
 
-### What happens to the Files panel
+### Git in folder and file tabs
 
-Folder entries replace it. The right rail keeps Changes and Agents.
+The Changes panel shows one repo, the focused terminal's, as a list and a diff off to the side.
+Folder tabs already know their own repo and mark changed files (step 2b), so the panel's job moves
+into them: what changed shows where it lives, in any repo a tab is open on. Read-only, as the panel
+is today (no staging, no commits).
+
+- **Marks** (shipped): M / A / D / ? on files, a tint on folders that hold changes. Folders also
+  show **how many** changed files they hold.
+- **The breadcrumb bar** shows the tab's repo state: branch, ahead / behind and the total +/−,
+  from the status the folder already gets (the focused terminal's poll, or the folder tabs' own).
+  A worktree tab shows its own branch.
+- **Changes only**: the +/− in the bar toggles the tab into a flat list of the changed files under
+  its folder, with their +/− counts. On a repo's root folder that's today's Changes panel list.
+- **A changed file opens on Diff** from that list, and on Source from the tree:
+
+  | File                       | Opens on                                    | Toggle        |
+  | -------------------------- | ------------------------------------------- | ------------- |
+  | Unchanged                  | Source                                      | none          |
+  | Modified (M)               | Source with change bars (tree), Diff (list) | Source / Diff |
+  | New: untracked (?) / added | Source (the whole file is the change)       | none          |
+  | Deleted (D)                | Diff (no file to show)                      | none          |
+  | Too large, not supported   | the editor or the OS app (see above)        | n/a           |
+
+- **Diff** is today's bounded `git diff` of one file (too large or too slow says so), read only
+  when the Diff view shows, and cached until that repo's status changes. It's **syntax
+  highlighted**: each hunk's old and new text is highlighted whole (a multi-line comment or string
+  stays right) and split back into lines, so the +/− backgrounds sit under the code's colours.
+- **Source change bars**: the same diff's line ranges mark added and modified lines in the
+  gutter, so you read the file whole and still see what changed.
+- **A live file** (an agent still writing it) refreshes both views, under the same throttle as
+  Source.
+
+Later, on the same data: **who changed it** (an agent's icon and "2m ago" on files its hook events
+say it edited) and **diff peeks in the tree** (a changed row unfolds its hunks).
+
+### What happens to the Files and Changes panels
+
+Folder and file tabs replace both. Step 4 removes the two panels and their top-bar icons (no
+replacement button: folders open from the pane header, the sidebar and path clicks). The right
+rail keeps Agents. The status bar keeps the focused terminal's branch.
 
 SSH panes have no local path: no folder or file entries there, as in today's Files panel.
 
@@ -150,9 +191,12 @@ visible**:
   a live file is throttled and runs off the renderer's main thread.
 - **Caches are shared by path**: the folder cache is split into listings (shared by path) and
   each entry's expanded folders.
-- **Git marks** need a new, capped poll: today's git poll covers only the focused terminal's
-  folder. One poll per distinct repo among visible folder entries, with its own budget, and repo
-  lookups batched under the existing request cap.
+- **Git marks** (shipped): a folder's repo comes from the fs worker's `.git` search up from the
+  folder, in its own spelling; `git status` runs only for marks, one repo per tick, in turn over
+  every repo shown, at most every 3 s.
+- **Diffs and highlighting** run off the renderer's main thread: `git diff` in main as today
+  (bounded), highlighting in a worker, under today's 100 KB highlight cap (past it, plain).
+  Long files and diffs render only the lines in view, as long folder trees do.
 - A folder or file view never joins the WebGL set: showing one parks the pane's terminal through
   the existing park path.
 
@@ -167,14 +211,19 @@ keystroke latency equal to the baseline.
    audit, a keystroke-latency baseline. Terminals only; nothing visible changes.
 2. **Folder entries.** The folder view on today's file tree and read queue, the watch aggregator,
    the three states, the separate layout file, sidebar rows. ▤+ and "Open folder in…".
-3. **File entries.** The preview entry, file reads in the fs worker, peeks, path clicks, "Open in
-   editor", the main-side open check on every `shell.openPath`.
-4. **Retire the Files panel.** Once folder entries cover it.
+3. **File entries** (#185), in two PRs:
+   - **3a. File tabs.** The Source view (highlighted, line view), file reads in the fs worker,
+     peeks, path clicks, "Open in editor", the main-side open check on every `shell.openPath`.
+   - **3b. Git in folder and file tabs.** Folder change counts, the repo state in the breadcrumb
+     bar, Changes only, the Diff view (highlighted in a worker), Source change bars.
+4. **Retire the Files and Changes panels** (#183). Once folder and file tabs cover them, with
+   their top-bar icons.
 
 ## Not in scope
 
 - Markdown rendering (its own design and PR).
-- Editing files.
+- Editing files; staging or committing.
+- Who-changed-it marks and diff peeks in the tree (follow-ups on the same data).
 - Grouping or a view by checkout.
 - A workdir jumper / fuzzy file finder.
 - SSH panes (no local path).
