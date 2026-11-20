@@ -48,6 +48,8 @@ src/
   components/             top-bar, sidebar, terminal-pane (surface tabs, drag & drop),
                           pane-layout, theme-picker, close-pane-dialog, palettes/panels, …
 .claude/skills/run-minmux drive the BUILT app with Playwright (real-app verification)
+site/                     minmux.dev (Next.js static export, own package.json; Vercel root dir):
+                          landing page + /changelog (reads ../CHANGELOG.md) — see site/README.md
 ```
 
 ## Commands
