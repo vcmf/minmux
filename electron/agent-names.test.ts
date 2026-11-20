@@ -60,4 +60,65 @@ describe("UserNames", () => {
     expect(n.has("ses_main")).toBe(true)
     expect(n.has("ses_0")).toBeUndefined()
   })
+
+  it("a name un-set before the file is read stays un-set, in memory and on disk", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "minmux-names-"))
+    const f = path.join(dir, "agent-names.json")
+    try {
+      fs.writeFileSync(f, JSON.stringify({ v: 1, sessions: ["ses_x", "ses_y"] }))
+      const n = new UserNames(f)
+      n.set("ses_x", false) // the agent renamed it, before the load lands
+      await n.flushed()
+      expect(n.has("ses_x")).toBeUndefined()
+      expect(n.has("ses_y")).toBe(true)
+      expect(JSON.parse(fs.readFileSync(f, "utf8")).sessions).toEqual(["ses_y"])
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it("a read that fails for another reason than 'no file' never overwrites it", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "minmux-names-"))
+    const f = path.join(dir, "agent-names.json")
+    try {
+      fs.mkdirSync(f) // reading it fails (EISDIR): what's there must not be replaced
+      const n = new UserNames(f)
+      n.set("ses_new", true)
+      await n.flushed()
+      expect(fs.statSync(f).isDirectory()).toBe(true)
+      expect(n.has("ses_new")).toBe(true) // still known for this run
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it("flushed() also waits for a save asked for while it waits", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "minmux-names-"))
+    const f = path.join(dir, "agent-names.json")
+    try {
+      const n = new UserNames(f)
+      const done = n.flushed()
+      n.set("ses_late", true)
+      await done
+      await n.flushed()
+      expect(JSON.parse(fs.readFileSync(f, "utf8")).sessions).toEqual(["ses_late"])
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it("saveSync writes what's unsaved at once (quit)", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "minmux-names-"))
+    const f = path.join(dir, "agent-names.json")
+    try {
+      const n = new UserNames(f)
+      await n.loaded
+      n.set("ses_q", true)
+      n.saveSync()
+      expect(JSON.parse(fs.readFileSync(f, "utf8")).sessions).toEqual(["ses_q"])
+      await n.flushed()
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  })
 })

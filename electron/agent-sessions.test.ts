@@ -47,9 +47,14 @@ const tmpDir = (prefix: string) => {
   return d
 }
 afterAll(async () => {
-  await new Promise((r) => setTimeout(r, 800)) // past the last debounced save
-  for (const d of made)
-    fs.rmSync(d, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 })
+  // Twice: once now, once past the ledger's 500 ms save, which may have recreated one.
+  const rm = () =>
+    made.forEach((d) =>
+      fs.rmSync(d, { recursive: true, force: true, maxRetries: 20, retryDelay: 50 }),
+    )
+  rm()
+  await new Promise((r) => setTimeout(r, 1500))
+  rm()
 })
 
 /** Remove a test folder a ledger may still flush into (its write is debounced 500 ms and async,
