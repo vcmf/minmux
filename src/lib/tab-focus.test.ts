@@ -44,3 +44,10 @@ describe("tab focus", () => {
     expect(f.activeEntryId).toBe("a")
   })
 })
+
+describe("tab focus: stale ids", () => {
+  it("focusing an entry that isn't in the tab changes nothing", () => {
+    const t = makeTab("t", "", makeLeaf("p", "a"), "a")
+    expect(withFocus(t, "gone")).toBe(t)
+  })
+})

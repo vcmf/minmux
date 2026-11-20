@@ -3,7 +3,7 @@
 // last focused one). Every focus change goes through here so the two can't drift apart.
 import type { PaneNode, Tab } from "../types"
 import { isTerminalEntry } from "./entries"
-import { allSessionIds, firstSessionId, selectSurface } from "./pane-tree"
+import { allSessionIds, findPane, firstSessionId, selectSurface } from "./pane-tree"
 
 /** A tab over `root`, focused on `entryId` (a terminal: tabs open on one). */
 export const makeTab = (id: string, title: string, root: PaneNode, entryId: string): Tab => ({
@@ -24,6 +24,7 @@ export function withFocus(
   root: PaneNode = tab.root,
   select = true,
 ): Tab {
+  if (!findPane(root, entryId)) return tab // a stale id (it closed or moved): focus stays put
   const shown = select ? selectSurface(root, entryId) : root
   const activeSessionId = isTerminalEntry(entryId)
     ? entryId

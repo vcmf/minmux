@@ -6,7 +6,7 @@ import { WebLinksAddon } from "@xterm/addon-web-links"
 import { WebglAddon } from "@xterm/addon-webgl"
 import { SearchAddon, type ISearchOptions } from "@xterm/addon-search"
 import type { PaneLeaf, Session } from "../types"
-import { activeTheme, useStore } from "../store"
+import { activeTheme, focusedTerminal, useStore } from "../store"
 import { openLink } from "../lib/open-link"
 import { notify } from "../lib/notify"
 import { ipc } from "../lib/ipc"
@@ -1417,7 +1417,8 @@ export const TerminalManager = {
       if (hostId) byHost.set(hostId, [...(byHost.get(hostId) ?? []), id])
     }
     // Size a not-yet-shown pane like the one on screen, not xterm's default 80x24.
-    const likeId = st.tabs.find((t) => t.id === st.activeTabId)?.activeSessionId
+    const likeId =
+      focusedTerminal(st) ?? st.tabs.find((t) => t.id === st.activeTabId)?.activeSessionId
     const connectOne = (id: string) => {
       const entry = entries.get(id)
       if (entry?.spawned) return connectRemote(id, entry)

@@ -2,7 +2,13 @@ import type { PaneNode, RemoteRef, Session, Tab } from "../types"
 import { parseRemoteRef, sshLabel } from "./ssh-validate"
 import { parseReopen, reopenFor, type ReopenCwd } from "./remote-reports"
 import { clampPanelWidth } from "./right-panel"
-import { findPane, firstEntryId, paneSessionIds, visibleTerminal } from "./pane-tree"
+import {
+  findPane,
+  firstEntryId,
+  firstSessionId,
+  paneSessionIds,
+  visibleTerminal,
+} from "./pane-tree"
 import { makeTab, withFocus } from "./tab-focus"
 
 // Persisted workspace (VS Code-style layout restore). We save the layout +
@@ -220,7 +226,9 @@ export function deserializeWorkspace(input: unknown): WorkspaceState | null {
     if (root === null) return null
     if (!root) continue // no usable pane left in this tab — drop it
     // The focused session must live in this tab; else fall back to its first pane.
-    const focus = findPane(root, t.activeSessionId) ? t.activeSessionId : firstEntryId(root)
+    const focus = findPane(root, t.activeSessionId)
+      ? t.activeSessionId
+      : (firstSessionId(root) ?? firstEntryId(root))
     const title = typeof t.title === "string" ? t.title : "shell"
     tabs.push(withFocus(makeTab(t.id, title, root, focus), focus))
   }
