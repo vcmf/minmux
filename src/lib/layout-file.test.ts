@@ -216,4 +216,11 @@ describe("layout.json", () => {
     const { layout } = save(state())
     expect(restoreLayout(null, "different", layout).state).toBeNull()
   })
+
+  it("a file's runtime seq isn't saved", () => {
+    const s = state()
+    s.objects[F] = { kind: "file", path: "/w/a.ts", line: 3, seq: 4 }
+    const { layout } = save(s)
+    expect(JSON.parse(layout).objects[F]).toEqual({ kind: "file", path: "/w/a.ts", line: 3 })
+  })
 })

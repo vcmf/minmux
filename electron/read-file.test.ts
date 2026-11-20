@@ -26,7 +26,7 @@ describe("readFileForTab", () => {
   })
 
   it("text past the cap goes to the editor (too large), not cut off", async () => {
-    expect(await readFileForTab(put("big.txt", "x".repeat(100)), 10)).toEqual({
+    expect(await readFileForTab(put("big.txt", "x".repeat(100)), 10)).toMatchObject({
       kind: "too-large",
       size: 100,
     })
@@ -57,5 +57,18 @@ describe("readFileForTab", () => {
     expect(await readFileForTab(p, undefined, first.stamp)).toEqual({ kind: "same" })
     fs.writeFileSync(p, "changed!")
     expect((await readFileForTab(p, undefined, first.stamp)).kind).toBe("text")
+  })
+
+  it("too large by its size, stamped: a re-read of it is skipped while it doesn't change", async () => {
+    const p = put("huge.log", "x".repeat(100))
+    const r = await readFileForTab(p, 10)
+    expect(r).toMatchObject({ kind: "too-large", size: 100 })
+    if (r.kind !== "too-large") throw new Error("expected too-large")
+    expect(await readFileForTab(p, 10, r.stamp)).toEqual({ kind: "same" })
+  })
+
+  it("a binary is stamped too", async () => {
+    const r = await readFileForTab(put("b2.bin", Buffer.from([0, 1])))
+    expect(r).toMatchObject({ kind: "binary", stamp: { size: 2 } })
   })
 })

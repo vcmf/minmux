@@ -2,7 +2,6 @@
 // image as a data URL. Runs in the fs worker, so a slow or dead mount never stalls main.
 import fs from "node:fs"
 import { StringDecoder } from "node:string_decoder"
-import { classifyPreview } from "../src/lib/file-preview"
 import {
   FILE_READ_CAP,
   IMAGE_MAX,
@@ -25,12 +24,15 @@ export async function readFileForTab(
     if (since && since.size === size && since.mtimeMs === st.mtimeMs) return { kind: "same" }
     const mime = imageMime(file)
     if (mime) {
-      if (size > IMAGE_MAX) return { kind: "too-large", size }
+      if (size > IMAGE_MAX) return { kind: "too-large", size, stamp }
       const buf = await fs.promises.readFile(file)
       const dataUrl = `data:${mime};base64,${buf.toString("base64")}`
       return { kind: "image", dataUrl, size, stamp }
     }
-    const len = Math.min(size, cap)
+    // Too large by its size, before any read: an editor shows it whole (and a re-read of it,
+    // stamped, is skipped while it doesn't change).
+    if (size > cap) return { kind: "too-large", size, stamp }
+    const len = size
     const buf = Buffer.alloc(len)
     let bytesRead = 0
     const fh = await fs.promises.open(file, "r")
@@ -39,11 +41,9 @@ export async function readFileForTab(
     } finally {
       await fh.close()
     }
+    // What was read (a file truncated since the stat, being rewritten, is shown as it is now).
     const chunk = buf.subarray(0, bytesRead)
-    const meta = classifyPreview(size, bytesRead, chunk.includes(0))
-    if (meta.kind === "binary") return { kind: "binary", size }
-    // A text file past the cap: the editor shows it whole.
-    if (meta.truncated) return { kind: "too-large", size }
+    if (chunk.includes(0)) return { kind: "binary", size, stamp }
     const text = new StringDecoder("utf8").write(chunk)
     return { kind: "text", text, truncated: false, size, stamp }
   } catch (e) {

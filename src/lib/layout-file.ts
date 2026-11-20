@@ -52,7 +52,12 @@ export function serializeLayout(state: LayoutState, workspaceJson: string): stri
   const objects: Record<string, ObjectEntry> = {}
   const folderViews: Record<string, FolderView> = {}
   for (const id of used) {
-    if (state.objects[id]) objects[id] = state.objects[id]!
+    const o = state.objects[id]
+    if (o?.kind === "file" && o.seq !== undefined) {
+      const saved: ObjectEntry = { ...o }
+      delete (saved as { seq?: number }).seq // runtime only ("go to the line again")
+      objects[id] = saved
+    } else if (o) objects[id] = o
     if (state.folderViews[id]) folderViews[id] = state.folderViews[id]!
   }
   const file: LayoutFile = {

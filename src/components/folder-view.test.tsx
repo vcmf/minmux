@@ -130,6 +130,7 @@ describe("FolderView", () => {
 
   it("clicking a file opens it as a peek tab of this pane; ⌘-click keeps it", async () => {
     vi.mocked(ipc.readdir).mockResolvedValue(ls(["notes.md", false], ["b.ts", false]))
+    useStore.setState({ platform: "darwin" }) // ⌘ keeps on a Mac (Ctrl elsewhere)
     const { tabId, entryId } = open("/fv9")
     render(<FolderView entryId={entryId} tabId={tabId} />)
     fireEvent.click(await screen.findByText("notes.md"), { button: 0 })
@@ -199,5 +200,14 @@ describe("FolderView", () => {
     await screen.findByText("n000")
     expect(container.querySelectorAll(".file-row").length).toBeLessThan(60)
     expect(screen.queryByText("n479")).toBeNull() // far below: a spacer stands for it
+  })
+
+  it("on a Mac, Ctrl-click (a right-click) opens no tab", async () => {
+    vi.mocked(ipc.readdir).mockResolvedValue(ls(["c.ts", false]))
+    useStore.setState({ platform: "darwin" })
+    const { tabId, entryId } = open("/fv14")
+    render(<FolderView entryId={entryId} tabId={tabId} />)
+    fireEvent.click(await screen.findByText("c.ts"), { button: 0, ctrlKey: true })
+    expect(st().tabs[0]!.activeEntryId).toBe(entryId)
   })
 })

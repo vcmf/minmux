@@ -339,8 +339,13 @@ export function FolderView({ entryId, tabId }: { entryId: string; tabId: string 
               key={r.path}
               className="diff-file file-row"
               style={pad}
-              title="Click to preview · ⌘/Ctrl-click to keep it open"
-              onClick={(e) => e.button === 0 && openFile(r.path, e.metaKey || e.ctrlKey)}
+              title={`Click to preview · ${platform === "darwin" ? "⌘" : "Ctrl"}-click to keep it open`}
+              onClick={(e) => {
+                if (e.button !== 0) return
+                // On a Mac, Ctrl-click is a right-click: its menu, not a kept tab.
+                if (platform === "darwin" && e.ctrlKey) return
+                openFile(r.path, platform === "darwin" ? e.metaKey : e.ctrlKey)
+              }}
               onContextMenu={(e) =>
                 openFileMenu(e, { abs: r.path, rel: relTo(r.path), isDir: false })
               }

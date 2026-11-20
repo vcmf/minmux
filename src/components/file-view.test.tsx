@@ -100,4 +100,28 @@ describe("FileView", () => {
     const tab = st().tabs[0]!
     expect(st().objects[tab.activeEntryId]).toEqual({ kind: "folder", path: "/w/rts" })
   })
+
+  it("a re-read that finds the file unchanged keeps it highlighted", async () => {
+    let onChanged: (dirs: string[]) => void = () => {}
+    vi.mocked(ipc.onFsChanged).mockImplementation((cb) => {
+      onChanged = cb
+      return () => {}
+    })
+    useStore.setState({ platform: "darwin" })
+    vi.mocked(ipc.readFile).mockResolvedValueOnce({
+      kind: "text",
+      text: "const v = 2",
+      truncated: false,
+      size: 11,
+      stamp: { size: 11, mtimeMs: 1 },
+    })
+    vi.mocked(ipc.readFile).mockResolvedValue({ kind: "same" })
+    const { tabId, entryId } = open("/w/s.ts")
+    const { container } = render(<FileView entryId={entryId} tabId={tabId} />)
+    await waitFor(() => expect(container.querySelector(".hljs-keyword")).not.toBeNull())
+    onChanged(["/w"]) // something else in its folder changed
+    await waitFor(() => expect(ipc.readFile).toHaveBeenCalledTimes(2))
+    expect(vi.mocked(ipc.readFile).mock.calls[1]![2]).toEqual({ size: 11, mtimeMs: 1 })
+    expect(container.querySelector(".hljs-keyword")).not.toBeNull()
+  })
 })

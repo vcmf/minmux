@@ -1777,4 +1777,26 @@ describe("store — folder entries", () => {
     st().openFile("/w/a.ts", { line: 9 })
     expect((st().objects[id] as { seq?: number }).seq).toBe(1)
   })
+
+  it("a peek dropped back where it was stays a peek", () => {
+    st().newTab(shell)
+    st().openFile("/w/a.ts", { peek: true })
+    const a = tab().activeEntryId
+    const pane = findPane(tab().root, a)!
+    st().moveSurface(tab().id, a, { paneId: pane.id, index: pane.entryIds.indexOf(a) })
+    expect((st().objects[a] as { peek?: true }).peek).toBe(true)
+  })
+
+  it("on Windows the same file in another case is the same tab; a WSL one with that path isn't", () => {
+    useStore.setState({ platform: "win32" })
+    st().newTab(shell)
+    st().openFile("C:\\x\\A.ts")
+    const a = tab().activeEntryId
+    st().openFile("c:\\x\\a.ts")
+    expect(tab().activeEntryId).toBe(a)
+    st().openFile("/home/u/a.ts", { wsl: { distro: "U" } })
+    const b = tab().activeEntryId
+    st().openFile("/home/u/a.ts")
+    expect(tab().activeEntryId).not.toBe(b)
+  })
 })

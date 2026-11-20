@@ -40,14 +40,24 @@ export function FileView({ entryId, tabId }: { entryId: string; tabId: string })
       if (!live || d.kind === "same") return
       stampRef.current = d.stamp
       setData(d)
-      if (d.kind !== "text") return setLines([])
-      setLines((prev) => (prev.length ? prev : plainLines(d.text))) // no flash on a re-read
-      void highlightLines(d.text, languageForPath(path)).then((l) => live && setLines(l))
     })
     return () => {
       live = false
     }
   }, [path, wsl, version])
+
+  // Highlighted per text, not per read: a re-read that finds the file unchanged leaves this
+  // running, and a new text always gets its own (the old lines stay up meanwhile, no flash).
+  const text = data?.kind === "text" ? data.text : null
+  useEffect(() => {
+    if (text === null) return setLines([])
+    let live = true
+    setLines((prev) => (prev.length ? prev : plainLines(text)))
+    void highlightLines(text, languageForPath(path)).then((l) => live && setLines(l))
+    return () => {
+      live = false
+    }
+  }, [text, path])
 
   const dir = file ? placeOf(file).path : ""
   useEffect(() => {

@@ -250,8 +250,9 @@ interface AppState {
   setPaneRoot: (sessionId: string, root: string) => void
   /** Open a folder as a new tab of a pane (default: the active tab's focused pane), focused. */
   openFolder: (path: string, opts?: { tabId?: string; paneId?: string; wsl?: WslContext }) => void
-  /** Open a file as a tab of a pane (default: the active tab's focused pane), focused. A peek
-   *  replaces the pane's peek; a file already open there is focused (at `line`) instead. */
+  // Default: the active tab's focused pane. A peek replaces the pane's peek; a file already open
+  // there is focused (at `line`) instead.
+  /** Open a file as a tab of a pane, focused. */
   openFile: (
     path: string,
     opts?: { tabId?: string; paneId?: string; wsl?: WslContext; line?: number; peek?: boolean },
@@ -624,9 +625,16 @@ export const useStore = create<AppState>((set, get) => ({
       if (!pane) return {}
       const line = opts.line && opts.line > 0 ? { line: opts.line } : {}
       // Already open in this pane: show it there (at the line asked for).
+      // The same file: same distro (or both host), same path (any case on Windows).
+      const key = (p: string) => (state.platform === "win32" && !opts.wsl ? p.toLowerCase() : p)
       const open = pane.entryIds.find((id) => {
         const o = state.objects[id]
-        return o?.kind === "file" && o.path === path
+        return (
+          o?.kind === "file" &&
+          o.wsl?.distro === opts.wsl?.distro &&
+          !o.wsl === !opts.wsl &&
+          key(o.path) === key(path)
+        )
       })
       if (open) {
         const cur = state.objects[open] as FileEntry
@@ -687,7 +695,12 @@ export const useStore = create<AppState>((set, get) => ({
       const norm = normalizeRootPath(path)
       const open = pane.entryIds.find((e) => {
         const o = state.objects[e]
-        return o?.kind === "folder" && o.path === norm && !o.wsl === !opts.wsl
+        return (
+          o?.kind === "folder" &&
+          o.path === norm &&
+          !o.wsl === !opts.wsl &&
+          o.wsl?.distro === opts.wsl?.distro
+        )
       })
       if (open)
         return {
@@ -1278,11 +1291,11 @@ export const useStore = create<AppState>((set, get) => ({
   // Drop a dragged surface: the terminal keeps its session (re-attaches, no respawn),
   // becomes visible where it lands and takes focus.
   moveSurface: (tabId, sessionId, target) => {
-    get().keepEntry(sessionId) // a dragged peek is one you meant to keep
     // A terminal from another group (its group was spring-loaded open mid-drag).
     const here = get().tabs.find((t) => t.id === tabId)
     if (here && !findPane(here.root, sessionId))
       return get().moveTerminal(sessionId, { kind: "pane", tabId, target })
+    let moved = false
     set((state) => {
       const tab = state.tabs.find((t) => t.id === tabId)
       // Stale drop (the surface or target pane went away mid-drag): just end the drag.
@@ -1290,20 +1303,22 @@ export const useStore = create<AppState>((set, get) => ({
         return { dragging: null }
       }
       const root = moveSurface(tab.root, sessionId, target, { splitId: newId(), paneId: newId() })
+      moved = root !== tab.root
       return {
         dragging: null,
         tabs: replaceTab(state.tabs, tabId, (t) => withFocus(t, sessionId, root)),
         sessions: markSeen(state.sessions, sessionId),
       }
     })
+    if (moved) get().keepEntry(sessionId) // a peek dragged somewhere: kept
   },
 
   moveTerminal: (sessionId, drop) => {
-    get().keepEntry(sessionId)
     const state = get()
     const ids = { splitId: newId(), paneId: newId(), tabId: newId() }
     const r = moveTerminalPure(state.tabs, sessionId, drop, ids)
     if (!r) return set({ dragging: null })
+    get().keepEntry(sessionId) // a peek moved to another group: kept
     // closing(): a pending close confirm naming the emptied group / the moved terminal goes.
     set(
       closing(() => ({

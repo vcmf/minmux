@@ -1640,6 +1640,9 @@ function registerIpc() {
         )
         if (there || !wsl) return safeOpenPath(target)
       }
+      // No share form answers (the distro stopped): the first one, which reveals or says so.
+      const first = wslTargets(p, wsl)[0]
+      if (first) return safeOpenPath(first)
     })()
   })
   ipcMain.on("notify", (_e, title: string, body: string) => {
