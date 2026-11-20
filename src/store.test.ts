@@ -1743,6 +1743,23 @@ describe("store — folder entries", () => {
     expect(leaf().entryIds).toEqual([tab().activeEntryId])
   })
 
+  it("a file opens on its diff when asked (an open one too); its view switches back", () => {
+    st().newTab(shell)
+    st().openFile("/w/d.ts", { diff: true })
+    const d = tab().activeEntryId
+    expect(st().objects[d]).toEqual({ kind: "file", path: "/w/d.ts", view: "diff" })
+    st().setFileView(d, "source")
+    expect(st().objects[d]).toEqual({ kind: "file", path: "/w/d.ts" })
+    const objects = st().objects
+    st().setFileView(d, "source") // no change: the same state
+    expect(st().objects).toBe(objects)
+    st().openFile("/w/d.ts", { diff: true }) // already open: focused, now on its diff
+    expect(tab().activeEntryId).toBe(d)
+    expect((st().objects[d] as { view?: string }).view).toBe("diff")
+    st().setFileView(tab().activeSessionId, "diff") // a terminal has no view
+    expect(st().objects[tab().activeSessionId]).toBeUndefined()
+  })
+
   it("dragging a peek keeps it", () => {
     st().newTab(shell)
     st().splitActive("row", shell)

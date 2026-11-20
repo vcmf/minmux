@@ -132,4 +132,51 @@ describe("FileStore", () => {
     await tick()
     expect(s.get("f2")!.lines).toEqual(["<i>new</i>"])
   })
+
+  it("a changed file's diff: plain at once, highlighted by side, read again only on a new key", async () => {
+    const { read } = reads()
+    const lines = [
+      { type: "hunk" as const, text: "@@ -1,2 +1,2 @@" },
+      { type: "context" as const, text: "a", oldNo: 1, newNo: 1 },
+      { type: "del" as const, text: "b<", oldNo: 2 },
+      { type: "add" as const, text: "c", newNo: 2 },
+    ]
+    const diffOf = vi.fn(async () => lines)
+    const s = new FileStore(read, hl, 16, diffOf)
+    s.show("d1", "/w/r/x.ts")
+    s.wantDiff("d1", { root: "/w/r", rel: "x.ts", key: "M:1:1:5" })
+    expect(diffOf).toHaveBeenCalledWith("/w/r", "x.ts", undefined)
+    await tick()
+    await tick()
+    const d = s.get("d1")!.diff!
+    expect(d.bars.get(2)).toBe("mod")
+    expect(d.html).toEqual(["@@ -1,2 +1,2 @@", "<b>a</b>", "<b>b<</b>", "<b>c</b>"])
+    s.wantDiff("d1", { root: "/w/r", rel: "x.ts", key: "M:1:1:5" }) // same key: kept
+    expect(diffOf).toHaveBeenCalledTimes(1)
+    s.wantDiff("d1", null) // unchanged now
+    expect(s.get("d1")!.diff).toBeNull()
+  })
+
+  it("a diff that fails to read is an empty one; one for a closed tab is dropped", async () => {
+    const { read } = reads()
+    const s = new FileStore(
+      read,
+      async (t) => [t],
+      16,
+      vi.fn(async () => Promise.reject(new Error("x"))),
+    )
+    s.show("d2", "/w/y.ts")
+    s.wantDiff("d2", { root: "/w", rel: "y.ts", key: "D:0:1:0" })
+    await tick()
+    expect(s.get("d2")!.diff).toEqual({ lines: [], html: [], bars: new Map() })
+    let land: (l: never[]) => void = () => {}
+    const s2 = new FileStore(read, hl, 16, () => new Promise((r) => (land = r)))
+    s2.show("d3", "/w/z.ts")
+    s2.wantDiff("d3", { root: "/w", rel: "z.ts", key: "k" })
+    s2.forget("d3")
+    land([])
+    await tick()
+    expect(s2.get("d3")).toBeUndefined()
+    s2.wantDiff("nope", { root: "/w", rel: "z.ts", key: "k" }) // not shown: nothing
+  })
 })

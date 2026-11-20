@@ -8,6 +8,7 @@ import { joinPath } from "./file-tree"
 export interface GitDecorations {
   file: Map<string, ChangeStatus> // absolute file path → its status
   dir: Map<string, ChangeStatus> // absolute folder path → most-severe status inside it
+  count: Map<string, number> // absolute folder path → how many changed files are inside it
 }
 
 // Folder aggregate severity, low → high. A folder shows the most severe change it
@@ -28,7 +29,8 @@ const parentDir = (p: string) => {
 export function buildGitDecorations(repoRoot: string, files: GitFile[]): GitDecorations {
   const file = new Map<string, ChangeStatus>()
   const dir = new Map<string, ChangeStatus>()
-  if (!repoRoot) return { file, dir }
+  const count = new Map<string, number>()
+  if (!repoRoot) return { file, dir, count }
   for (const f of files) {
     const abs = joinPath(repoRoot, f.path)
     if (f.isDir)
@@ -39,11 +41,12 @@ export function buildGitDecorations(repoRoot: string, files: GitFile[]): GitDeco
     while (d === repoRoot || d.startsWith(`${repoRoot}/`)) {
       const cur = dir.get(d)
       dir.set(d, cur ? moreSevere(cur, f.status) : f.status)
+      count.set(d, (count.get(d) ?? 0) + 1)
       if (d === repoRoot) break
       d = parentDir(d)
     }
   }
-  return { file, dir }
+  return { file, dir, count }
 }
 
 /** Single-letter badge for a status (untracked shows as U). */

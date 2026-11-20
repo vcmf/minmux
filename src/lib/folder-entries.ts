@@ -21,6 +21,7 @@ export interface FileEntry {
   line?: number // where to scroll when it opens (a path click's `:line`)
   seq?: number // bumped when it's asked to go to `line` again (runtime: not saved)
   peek?: true
+  view?: "diff" // a changed file shown as its diff (absent: its source)
 }
 
 /** A pane entry that isn't a terminal. */
@@ -38,6 +39,7 @@ export function placeOf(o: ObjectEntry): { path: string; wsl?: WslContext } {
 export interface FolderView {
   expanded: string[]
   showAll: string[]
+  changesOnly?: true // the changed files under it, as a flat list (the Changes panel's job)
 }
 
 export const EMPTY_VIEW: FolderView = { expanded: [], showAll: [] }

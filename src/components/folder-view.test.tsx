@@ -188,6 +188,71 @@ describe("FolderView", () => {
     view.unmount()
   })
 
+  it("shows its repo in the bar, counts changes in folders, and lists only the changes", async () => {
+    vi.mocked(ipc.readdir).mockImplementation(async (dir: string) =>
+      dir === "/fvc" ? ls(["src", true], ["top.ts", false]) : ls(["a.ts", false]),
+    )
+    vi.mocked(ipc.gitStatus).mockResolvedValue({
+      isRepo: true,
+      root: "/fvc",
+      branch: "feat/x",
+      ahead: 2,
+      behind: 0,
+      files: [
+        { path: "src/a.ts", dir: "src", status: "M", add: 3, del: 1 },
+        { path: "gone.ts", dir: "", status: "D", add: 0, del: 4 },
+        { path: "tmp/", dir: "", status: "?", add: 0, del: 0, isDir: true },
+      ],
+      add: 3,
+      del: 5,
+    } as never)
+    vi.mocked(ipc.gitRoots).mockResolvedValue({ "/fvc": "/fvc" })
+    const { tabId, entryId } = open("/fvc")
+    const view = render(<FolderView entryId={entryId} tabId={tabId} />)
+    await waitFor(() => expect(screen.getByText("feat/x")).toBeInTheDocument())
+    expect(screen.getByText("↑2")).toBeInTheDocument()
+    expect(screen.queryByText(/↓/)).toBeNull()
+    expect(await screen.findByTitle("1 changed file inside")).toHaveTextContent("1") // src/
+
+    // The +/− pill: the changed files under it, flat, with their counts.
+    fireEvent.click(screen.getByTitle("Show only the 3 changed files"))
+    expect(st().folderViews[entryId]?.changesOnly).toBe(true)
+    expect(screen.queryByText("top.ts")).toBeNull()
+    expect(screen.getByText("a.ts")).toBeInTheDocument()
+    expect(screen.getByText("src/")).toBeInTheDocument() // its folder, after its name
+    expect(screen.getByText("−4")).toBeInTheDocument()
+
+    // A modified file opens on its diff (a peek); a deleted one too.
+    fireEvent.click(screen.getByText("a.ts"), { button: 0 })
+    const peek = st().tabs[0]!.activeEntryId
+    expect(st().objects[peek]).toEqual({
+      kind: "file",
+      path: "/fvc/src/a.ts",
+      peek: true,
+      view: "diff",
+    })
+    // A new folder opens as a folder tab.
+    fireEvent.click(screen.getByText("tmp/"), { button: 0 })
+    const dir = st().tabs[0]!.activeEntryId
+    expect(st().objects[dir]).toMatchObject({ kind: "folder", path: "/fvc/tmp" })
+
+    // Back to the tree.
+    fireEvent.click(screen.getByTitle("Show the folder"))
+    expect(st().folderViews[entryId]?.changesOnly).toBeUndefined()
+    expect(await screen.findByText("top.ts")).toBeInTheDocument()
+    view.unmount()
+  })
+
+  it("a folder in no repo has no repo bar and stays a tree", async () => {
+    vi.mocked(ipc.readdir).mockResolvedValue(ls(["x.ts", false]))
+    vi.mocked(ipc.gitRoots).mockResolvedValue({})
+    const { tabId, entryId } = open("/fvn")
+    st().setFolderView(entryId, { expanded: [], showAll: [], changesOnly: true })
+    render(<FolderView entryId={entryId} tabId={tabId} />)
+    expect(await screen.findByText("x.ts")).toBeInTheDocument()
+    expect(screen.queryByTitle(/changed file/)).toBeNull()
+  })
+
   it("a long tree renders only the rows around the view", async () => {
     const many = Array.from(
       { length: 480 },

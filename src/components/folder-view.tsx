@@ -5,6 +5,7 @@ import {
   CaretRight,
   File as FileIcon,
   Folder,
+  GitBranch,
   TerminalWindow,
 } from "@phosphor-icons/react"
 import { canOpenTerminalIn, useStore } from "../store"
@@ -24,6 +25,8 @@ import { rowWindow } from "../lib/virtual-rows"
 import { RootBreadcrumb } from "./root-breadcrumb"
 import { wantGit } from "../lib/folder-git-poll"
 import { repoKey, wantKey } from "../lib/folder-git"
+import { changesUnder, opensOnDiff } from "../lib/git-file"
+import { joinPath } from "../lib/file-tree"
 
 const SETTLE_MS = 2000 // one more read this long after a folder's last change event
 const ROW_H = 28 // every row of a folder tab (App.css .folder-view-rows): virtualization needs it
@@ -96,7 +99,6 @@ export function FolderView({ entryId, tabId }: { entryId: string; tabId: string 
       cancelAnimationFrame(raf)
     }
   }, [])
-  const { start, end } = rowWindow(rows.length, ROW_H, port.top, port.h)
   // The open folders you can see, as one key: reads and watches follow its content.
   const shown = useMemo(() => (root ? shownOpenDirs(tree) : []), [tree, root])
   const shownKey = shown.join("\0")
@@ -123,6 +125,17 @@ export function FolderView({ entryId, tabId }: { entryId: string; tabId: string 
     () => (git?.isRepo ? buildGitDecorations(git.root, git.files) : null),
     [git?.isRepo, git?.root, git?.files],
   )
+  // Changes only: the changed files under this folder, flat (the Changes panel's list), and
+  // their +/− in the bar. Off (the tree) when it isn't in a repo.
+  const changes = useMemo(() => changesUnder(git ?? undefined, root), [git, root])
+  const sum = useMemo(
+    () =>
+      changes.reduce((a, f) => ({ add: a.add + f.add, del: a.del + f.del }), { add: 0, del: 0 }),
+    [changes],
+  )
+  const changesOnly = !!view.changesOnly && !!git?.isRepo
+  const count = changesOnly ? changes.length : rows.length
+  const { start, end } = rowWindow(count, ROW_H, port.top, port.h)
 
   // `urgent`: the user waits on it (no listing yet, Refresh). One key per folder for every
   // view, so two views on one folder read it once.
@@ -230,18 +243,33 @@ export function FolderView({ entryId, tabId }: { entryId: string; tabId: string 
   }
   // A file: a tab of this pane (a peek until kept: the next file opened replaces it); one this
   // machine opens in its own app (a PDF, a video) goes there instead.
-  const openFile = (abs: string, keep: boolean) => {
+  const openFile = (abs: string, keep: boolean, diff = false) => {
     if (!isAbsoluteHostPath(abs, platform) && !wsl) return
     const s = useStore.getState()
     if (!opensInTab(abs)) return ipc.openPath(abs, wsl) // its own app (main: never one that runs it)
     const tab = s.tabs.find((t) => t.id === tabId)
     const pane = tab && findPane(tab.root, entryId)
     if (!pane) return
-    s.openFile(abs, { tabId, paneId: pane.id, wsl, peek: !keep })
+    s.openFile(abs, { tabId, paneId: pane.id, wsl, peek: !keep, ...(diff ? { diff } : {}) })
     if (keep) {
       const id = useStore.getState().tabs.find((t) => t.id === tabId)?.activeEntryId
       if (id) useStore.getState().keepEntry(id)
     }
+  }
+  // A new folder in the changes list (git reports it once): a folder tab beside this one.
+  const openDir = (abs: string) => {
+    const s = useStore.getState()
+    const tab = s.tabs.find((t) => t.id === tabId)
+    const pane = tab && findPane(tab.root, entryId)
+    if (pane) s.openFolder(abs, { tabId, paneId: pane.id, wsl })
+  }
+  const keepKey = (e: { metaKey: boolean; ctrlKey: boolean }) =>
+    platform === "darwin" ? e.metaKey : e.ctrlKey
+  const toggleChanges = () => {
+    const next = { ...view }
+    if (view.changesOnly) delete next.changesOnly
+    else next.changesOnly = true
+    setView(next)
   }
   const relTo = (abs: string) =>
     abs.startsWith(root) ? abs.slice(root.length).replace(/^[\\/]/, "") : abs
@@ -258,6 +286,33 @@ export function FolderView({ entryId, tabId }: { entryId: string; tabId: string 
           onSetRoot={setRoot}
           actions={
             <>
+              {git?.isRepo && (
+                <span className="folder-repo" title={git.root}>
+                  {git.branch && (
+                    <span className="folder-repo-branch">
+                      <GitBranch size={12} />
+                      <span className="folder-repo-name">{git.branch}</span>
+                    </span>
+                  )}
+                  {git.ahead > 0 && <span title="Ahead of its upstream">↑{git.ahead}</span>}
+                  {git.behind > 0 && <span title="Behind its upstream">↓{git.behind}</span>}
+                  {changes.length > 0 || changesOnly ? (
+                    <button
+                      className={`folder-repo-pill${changesOnly ? " on" : ""}`}
+                      title={
+                        changesOnly
+                          ? "Show the folder"
+                          : `Show only the ${changes.length} changed file${changes.length === 1 ? "" : "s"}`
+                      }
+                      aria-pressed={changesOnly}
+                      onClick={toggleChanges}
+                    >
+                      <span className="add">+{sum.add}</span>
+                      <span className="del">−{sum.del}</span>
+                    </button>
+                  ) : null}
+                </span>
+              )}
               <button
                 className="iconbtn"
                 style={{ width: 22, height: 22 }}
@@ -283,88 +338,146 @@ export function FolderView({ entryId, tabId }: { entryId: string; tabId: string 
       <div className="diff-files agents-files folder-view-rows" ref={scrollRef}>
         {/* Long trees render only the rows in view (lib/virtual-rows): spacers stand for the rest. */}
         {start > 0 && <div style={{ height: start * ROW_H }} />}
-        {rows.slice(start, end).map((r) => {
-          const pad = { paddingLeft: 8 + r.depth * 14 }
-          if (r.kind === "note" || r.kind === "more") {
-            const canReveal = !!r.dir && !wsl && isAbsoluteHostPath(r.dir, platform)
+        {changesOnly &&
+          changes.slice(start, end).map((f) => {
+            const abs = joinPath(git!.root, f.path)
+            const color = statusColor(f.status)
+            const rel = relTo(abs)
+            const slash = rel.replace(/[\\/]+$/, "").search(/[^\\/]*[\\/]?$/)
             return (
               <div
-                key={r.path}
-                className="status-faint more-row"
-                style={{ ...pad, paddingTop: 2, paddingBottom: 2, paddingRight: 10 }}
+                key={f.path}
+                className="diff-file file-row"
+                style={{ paddingLeft: 8 }}
+                title={
+                  f.isDir
+                    ? "A new folder: click to open it"
+                    : `Click to preview · ${platform === "darwin" ? "⌘" : "Ctrl"}-click to keep it open`
+                }
+                onClick={(e) => {
+                  if (e.button !== 0 || (platform === "darwin" && e.ctrlKey)) return
+                  if (f.isDir) return openDir(abs)
+                  openFile(abs, keepKey(e), opensOnDiff(f.status, true))
+                }}
+                onContextMenu={(e) => openFileMenu(e, { abs, rel, isDir: !!f.isDir })}
               >
-                <span>{r.name}</span>
-                {r.kind === "more" && (
-                  <button
-                    className="link-btn"
-                    onClick={() => r.dir && setView({ ...view, showAll: [...view.showAll, r.dir] })}
-                  >
-                    Show all
-                  </button>
+                {f.isDir ? (
+                  <Folder size={14} weight="fill" color="var(--blue)" />
+                ) : (
+                  <FileIcon size={14} color={color} />
                 )}
-                {canReveal && (
-                  <button className="link-btn" onClick={() => r.dir && ipc.revealPath(r.dir)}>
-                    {revealLabel(platform)}
-                  </button>
-                )}
+                <span className="tree-primary" style={{ color }}>
+                  {rel.slice(slash)}
+                </span>
+                {slash > 0 && <span className="folder-change-dir">{rel.slice(0, slash)}</span>}
+                <span className="git-badge folder-change-stat">
+                  {f.add > 0 && <span className="add">+{f.add}</span>}
+                  {f.del > 0 && <span className="del">−{f.del}</span>}
+                  <span style={{ color }}>{statusLetter(f.status)}</span>
+                </span>
               </div>
             )
-          }
-          if (r.kind === "dir") {
-            const st = deco?.dir.get(r.path)
+          })}
+        {!changesOnly &&
+          rows.slice(start, end).map((r) => {
+            const pad = { paddingLeft: 8 + r.depth * 14 }
+            if (r.kind === "note" || r.kind === "more") {
+              const canReveal = !!r.dir && !wsl && isAbsoluteHostPath(r.dir, platform)
+              return (
+                <div
+                  key={r.path}
+                  className="status-faint more-row"
+                  style={{ ...pad, paddingTop: 2, paddingBottom: 2, paddingRight: 10 }}
+                >
+                  <span>{r.name}</span>
+                  {r.kind === "more" && (
+                    <button
+                      className="link-btn"
+                      onClick={() =>
+                        r.dir && setView({ ...view, showAll: [...view.showAll, r.dir] })
+                      }
+                    >
+                      Show all
+                    </button>
+                  )}
+                  {canReveal && (
+                    <button className="link-btn" onClick={() => r.dir && ipc.revealPath(r.dir)}>
+                      {revealLabel(platform)}
+                    </button>
+                  )}
+                </div>
+              )
+            }
+            if (r.kind === "dir") {
+              const st = deco?.dir.get(r.path)
+              const n = deco?.count.get(r.path)
+              return (
+                <div
+                  key={r.path}
+                  className="diff-file file-row"
+                  style={pad}
+                  title="Click to expand · double-click to make it this tab's folder"
+                  onMouseDown={(e) => e.button === 0 && toggle(r.path, r.expanded)}
+                  onDoubleClick={() => setRoot(r.path)}
+                  onContextMenu={(e) =>
+                    openFileMenu(e, { abs: r.path, rel: relTo(r.path), isDir: true })
+                  }
+                >
+                  {r.expanded ? <CaretDown size={12} /> : <CaretRight size={12} />}
+                  <Folder size={14} weight="fill" color="var(--blue)" />
+                  <span
+                    className="tree-primary"
+                    style={st ? { color: statusColor(st) } : undefined}
+                  >
+                    {r.name}
+                  </span>
+                  {n ? (
+                    <span
+                      className="git-badge folder-count"
+                      title={`${n} changed file${n === 1 ? "" : "s"} inside`}
+                    >
+                      {n}
+                    </span>
+                  ) : null}
+                </div>
+              )
+            }
+            const st = deco?.file.get(r.path)
+            const color = st ? statusColor(st) : undefined
             return (
               <div
                 key={r.path}
                 className="diff-file file-row"
                 style={pad}
-                title="Click to expand · double-click to make it this tab's folder"
-                onMouseDown={(e) => e.button === 0 && toggle(r.path, r.expanded)}
-                onDoubleClick={() => setRoot(r.path)}
+                title={`Click to preview · ${platform === "darwin" ? "⌘" : "Ctrl"}-click to keep it open`}
+                onClick={(e) => {
+                  if (e.button !== 0) return
+                  // On a Mac, Ctrl-click is a right-click: its menu, not a kept tab.
+                  if (platform === "darwin" && e.ctrlKey) return
+                  openFile(r.path, keepKey(e))
+                }}
                 onContextMenu={(e) =>
-                  openFileMenu(e, { abs: r.path, rel: relTo(r.path), isDir: true })
+                  openFileMenu(e, { abs: r.path, rel: relTo(r.path), isDir: false })
                 }
               >
-                {r.expanded ? <CaretDown size={12} /> : <CaretRight size={12} />}
-                <Folder size={14} weight="fill" color="var(--blue)" />
-                <span className="tree-primary" style={st ? { color: statusColor(st) } : undefined}>
+                <span style={{ flex: "0 0 12px" }} />
+                <FileIcon size={14} color={color ?? "var(--dim)"} />
+                <span className="tree-primary" style={color ? { color } : undefined}>
                   {r.name}
                 </span>
+                {st && (
+                  <span className="git-badge" style={{ color }}>
+                    {statusLetter(st)}
+                  </span>
+                )}
               </div>
             )
-          }
-          const st = deco?.file.get(r.path)
-          const color = st ? statusColor(st) : undefined
-          return (
-            <div
-              key={r.path}
-              className="diff-file file-row"
-              style={pad}
-              title={`Click to preview · ${platform === "darwin" ? "⌘" : "Ctrl"}-click to keep it open`}
-              onClick={(e) => {
-                if (e.button !== 0) return
-                // On a Mac, Ctrl-click is a right-click: its menu, not a kept tab.
-                if (platform === "darwin" && e.ctrlKey) return
-                openFile(r.path, platform === "darwin" ? e.metaKey : e.ctrlKey)
-              }}
-              onContextMenu={(e) =>
-                openFileMenu(e, { abs: r.path, rel: relTo(r.path), isDir: false })
-              }
-            >
-              <span style={{ flex: "0 0 12px" }} />
-              <FileIcon size={14} color={color ?? "var(--dim)"} />
-              <span className="tree-primary" style={color ? { color } : undefined}>
-                {r.name}
-              </span>
-              {st && (
-                <span className="git-badge" style={{ color }}>
-                  {statusLetter(st)}
-                </span>
-              )}
-            </div>
-          )
-        })}
-        {end < rows.length && <div style={{ height: (rows.length - end) * ROW_H }} />}
-        {rows.length === 0 && hasListing(tree, root) && (
+          })}
+        {end < count && <div style={{ height: (count - end) * ROW_H }} />}
+        {changesOnly && changes.length === 0 && (
+          <div className="diff-empty status-faint">Nothing changed under this folder.</div>
+        )}
+        {!changesOnly && rows.length === 0 && hasListing(tree, root) && (
           <div className="diff-empty status-faint">This folder is empty.</div>
         )}
       </div>

@@ -256,8 +256,16 @@ interface AppState {
   /** Open a file as a tab of a pane, focused. */
   openFile: (
     path: string,
-    opts?: { tabId?: string; paneId?: string; wsl?: WslContext; line?: number; peek?: boolean },
+    opts?: {
+      tabId?: string
+      paneId?: string
+      wsl?: WslContext
+      line?: number
+      peek?: boolean
+      diff?: boolean // open on its diff (a changed file from the changes list)
+    },
   ) => void
+  setFileView: (id: string, view: "source" | "diff") => void
   keepEntry: (id: string) => void // a peek becomes a kept tab (double-click, drag)
   setFolderView: (id: string, view: FolderView) => void
   setFolderRoot: (id: string, path: string) => void // re-root a folder entry (double-click)
@@ -641,9 +649,9 @@ export const useStore = create<AppState>((set, get) => ({
       if (open) {
         const cur = state.objects[open] as FileEntry
         // At its line again, even the same one (scrolled away since): a new `seq` says "go".
-        const objects = opts.line
-          ? { ...state.objects, [open]: { ...cur, line: opts.line, seq: (cur.seq ?? 0) + 1 } }
-          : state.objects
+        let next: FileEntry = opts.line ? { ...cur, line: opts.line, seq: (cur.seq ?? 0) + 1 } : cur
+        if (opts.diff && cur.view !== "diff") next = { ...next, view: "diff" }
+        const objects = next === cur ? state.objects : { ...state.objects, [open]: next }
         return {
           objects,
           tabs: replaceTab(state.tabs, tab.id, (t) => withFocus(t, open)),
@@ -657,6 +665,7 @@ export const useStore = create<AppState>((set, get) => ({
         ...(opts.wsl ? { wsl: opts.wsl } : {}),
         ...line,
         ...(opts.peek ? { peek: true as const } : {}),
+        ...(opts.diff ? { view: "diff" as const } : {}),
       }
       // A peek takes the place of the pane's previous one.
       const old = opts.peek
@@ -677,6 +686,16 @@ export const useStore = create<AppState>((set, get) => ({
         tabs: replaceTab(state.tabs, tab.id, (t) => withFocus(t, id, root)),
         activeTabId: tab.id,
       }
+    }),
+
+  setFileView: (id, view) =>
+    set((state) => {
+      const o = state.objects[id]
+      if (o?.kind !== "file" || (o.view ?? "source") === view) return state
+      const next: FileEntry = { ...o }
+      if (view === "diff") next.view = "diff"
+      else delete next.view
+      return { objects: { ...state.objects, [id]: next } }
     }),
 
   keepEntry: (id) =>

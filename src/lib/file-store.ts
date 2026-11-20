@@ -5,12 +5,21 @@
 // file, and at most one more after it when a change arrived meanwhile, so a busy folder can't
 // cancel every read before it lands. Highlighting runs per text (lib/highlight-client).
 import { ipc } from "./ipc"
-import { HIGHLIGHT_MAX, languageForPath } from "./file-preview"
+import { escapeHtml, HIGHLIGHT_MAX, languageForPath } from "./file-preview"
+import { assembleDiff, changeBars, diffSides } from "./git-file"
+import type { DiffLine } from "./ipc"
 import { highlightLines, plainLines } from "./highlight-client"
 import type { FileData, FileStamp } from "./file-tab"
 import type { WslContext } from "./wsl"
 
 export const FILES_KEPT = 16 // files remembered after their tab hides (least recent go first)
+
+/** A changed file's diff, as its tab shows it. */
+export interface FileDiff {
+  lines: DiffLine[]
+  html: string[] // each line's HTML, highlighted by side once the worker answers
+  bars: Map<number, "add" | "mod" | "del"> // the Source view's change bars, by line number
+}
 
 /** One file tab's state. */
 export interface FileShown {
@@ -18,6 +27,7 @@ export interface FileShown {
   lines: string[] // highlighted (or plain while it's highlighted) HTML, one per line
   scrollTop: number
   went: string // the `line:seq` it last scrolled to (a remount doesn't jump again)
+  diff: FileDiff | null
 }
 
 interface Entry extends FileShown {
@@ -27,10 +37,12 @@ interface Entry extends FileShown {
   reading: boolean
   again: boolean // a change arrived while reading: read once more after
   highlighted: string | null // the text `lines` were highlighted from
+  diffKey: string // what `diff` was read for (status and stamp): another key reads it again
 }
 
 type Read = (path: string, wsl?: WslContext, since?: FileStamp) => Promise<FileData>
 type Highlight = (text: string, lang: string | null) => Promise<string[]>
+type Diff = (root: string, rel: string, wsl?: WslContext) => Promise<DiffLine[]>
 
 /** File tabs' state, by entry id, with a change signal for React (useSyncExternalStore). */
 export class FileStore {
@@ -43,6 +55,7 @@ export class FileStore {
     private readonly read: Read = (p, w, s) => ipc.readFile(p, w, s),
     private readonly highlight: Highlight = highlightLines,
     private readonly cap = FILES_KEPT,
+    private readonly diffOf: Diff = (root, rel, wsl) => ipc.gitDiff(root, rel, wsl),
   ) {}
 
   /** What entry `id` shows now (the same object until it changes). */
@@ -70,6 +83,8 @@ export class FileStore {
         lines: [],
         scrollTop: 0,
         went: "",
+        diff: null,
+        diffKey: "",
         reading: false,
         again: false,
         highlighted: null,
@@ -104,6 +119,39 @@ export class FileStore {
   setScroll(id: string, top: number): void {
     const e = this.files.get(id)
     if (e) e.scrollTop = top
+  }
+
+  // `key` says what the diff is of (the file's git status and its stamp): the same key keeps the
+  // diff it has; none (an unchanged file) drops it. Read in main (bounded `git diff`), each side
+  // highlighted whole in the worker, so a multi-line comment or string keeps its colours.
+  /** The file changed in git: have its diff (read only when the key changes). */
+  wantDiff(id: string, want: { root: string; rel: string; key: string } | null): void {
+    const e = this.files.get(id)
+    if (!e) return
+    const key = want?.key ?? ""
+    if (key === e.diffKey) return
+    e.diffKey = key
+    if (!want) {
+      e.diff = null
+      return this.publish(id)
+    }
+    void this.diffOf(want.root, want.rel, e.wsl)
+      .catch((): DiffLine[] => [])
+      .then(async (lines) => {
+        if (this.files.get(id) !== e || e.diffKey !== key) return
+        const escaped = lines.map((l) => escapeHtml(l.text))
+        e.diff = { lines, html: escaped, bars: changeBars(lines) } // plain first
+        this.publish(id)
+        const sides = diffSides(lines)
+        const lang = languageForPath(e.path)
+        const [o, n] = await Promise.all([
+          this.highlight(sides.old, lang),
+          this.highlight(sides.new, lang),
+        ])
+        if (this.files.get(id) !== e || e.diffKey !== key || !e.diff) return
+        e.diff = { ...e.diff, html: assembleDiff(sides.at, o, n, (k) => escaped[k]!) }
+        this.publish(id)
+      })
   }
 
   /** Where its view was last scrolled (live: not the snapshot, which only changes on a read). */
@@ -171,7 +219,13 @@ export class FileStore {
   private publish(id: string): void {
     const e = this.files.get(id)
     if (!e) return
-    this.snapshots.set(id, { data: e.data, lines: e.lines, scrollTop: e.scrollTop, went: e.went })
+    this.snapshots.set(id, {
+      data: e.data,
+      lines: e.lines,
+      scrollTop: e.scrollTop,
+      went: e.went,
+      diff: e.diff,
+    })
     this.listeners.forEach((fn) => fn())
   }
 }
