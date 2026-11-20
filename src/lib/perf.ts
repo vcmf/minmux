@@ -104,9 +104,10 @@ async function measureE2E(lines: number) {
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
-/** Keystroke latency: a key written to a real shell's PTY until its echo is parsed by xterm
- *  (renderer → main → pty → main → renderer → xterm). `load` runs a firehose in a second PTY
- *  meanwhile, as a busy agent pane would. */
+// Keystroke latency: a key written to a real shell's PTY until its echo is parsed by xterm
+// (renderer → main → pty → main → renderer → xterm). `load` keeps a firehose running in a
+// second PTY for the whole loop, as a busy agent pane would.
+/** Keystroke latency p50 / p95 / max over `keys` keys, optionally under load. */
 async function measureInput(keys: number, load: boolean) {
   const { term, dispose } = hiddenTerm()
   const id = `perf-in-${Math.floor(now())}`
@@ -129,7 +130,7 @@ async function measureInput(keys: number, load: boolean) {
     const t = bg.term
     bgOff = ipc.onPtyData(bgId, (d) => t.write(d))
     await sleep(800)
-    ipc.ptyWrite(bgId, "yes 0123456789abcdefghijklmnopqrstuvwxyz | head -n 3000000\r")
+    ipc.ptyWrite(bgId, "yes 0123456789abcdefghijklmnopqrstuvwxyz\r") // until ptyKill below
     await sleep(300)
   }
   const samples: number[] = []
@@ -137,14 +138,22 @@ async function measureInput(keys: number, load: boolean) {
   for (let i = 0; i < keys; i++) {
     const key = letters[i % letters.length]!
     const ms = await new Promise<number>((resolve) => {
-      waiter = { key, t0: now(), done: resolve }
-      ipc.ptyWrite(id, key)
-      setTimeout(() => {
-        if (waiter?.key === key) {
-          waiter = null
-          resolve(-1) // no echo within 1 s: not counted
-        }
+      // This key's own wait: a late timer never touches a later key's.
+      const w = {
+        key,
+        t0: now(),
+        done: (v: number) => {
+          clearTimeout(timer)
+          resolve(v)
+        },
+      }
+      const timer = setTimeout(() => {
+        if (waiter !== w) return
+        waiter = null
+        resolve(-1) // no echo within 1 s: not counted
       }, 1000)
+      waiter = w
+      ipc.ptyWrite(id, key)
     })
     if (ms >= 0) samples.push(ms)
     if (i % 20 === 19) {

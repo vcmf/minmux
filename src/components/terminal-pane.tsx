@@ -6,7 +6,13 @@ import { ipc } from "../lib/ipc"
 import { activeTheme, useStore } from "../store"
 import { sessionColor } from "../lib/session-color"
 import { agentByPane, type AgentKind } from "../lib/agent-graph"
-import { canMove, findPaneById, paneSessionIds, type MoveTarget } from "../lib/pane-tree"
+import {
+  canMove,
+  findPaneById,
+  paneSessionIds,
+  visibleTerminal,
+  type MoveTarget,
+} from "../lib/pane-tree"
 import { SURFACE_DRAG_TYPE } from "../lib/group-move"
 import { dropZone, insertIndex } from "../lib/drop-zone"
 import { displaySessionTitle, shellType } from "../lib/session-label"
@@ -134,7 +140,7 @@ export function TerminalPane({ pane, tabId }: { pane: PaneLeaf; tabId: string })
     const sessions = useStore.getState().sessions
     for (const id of paneSessionIds(pane)) {
       const s = sessions[id]
-      if (s && id !== activeId) TerminalManager.ensureRunning(s, activeId)
+      if (s && id !== activeId) TerminalManager.ensureRunning(s, visibleTerminal(pane))
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [idsKey, activeId])

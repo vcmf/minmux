@@ -51,17 +51,17 @@ Other baselines (2026-07-08):
 | Memory (main / renderer / GPU) | **~140 / 250 / 80 MB** | ~480 MB total (Electron baseline)      |
 
 **Keystroke latency** (2026-11-20, first baseline, measured before the workdir-objects epic's
-entry-ids refactor and after it, interleaved, two runs each; zsh with shell integration, keys
-15 ms apart, Ctrl-U every 20 keys):
+entry-ids refactor and after it, interleaved, four runs each; zsh with shell integration, 200
+keys 15 ms apart, Ctrl-U every 20 keys; "under load" keeps `yes` running in a second PTY for the
+whole loop):
 
 | Metric                     | before                | after                 |
 | -------------------------- | --------------------- | --------------------- |
-| Input p50 / p95            | 5.4–5.5 / 9.3–10.5 ms | 5.3–5.7 / 8.2–11.3 ms |
-| Input under load p50 / p95 | 4.2 / 5.5–7.1 ms      | 4.2–4.3 / 6.5–7.0 ms  |
+| Input p50 / p95            | 5.2–5.7 / 5.3–13.4 ms | 5.1–5.9 / 5.3–14.9 ms |
+| Input under load p50 / p95 | 4.2–5.8 / 5.7–25.4 ms | 4.2–5.5 / 5.1–21.1 ms |
 
-Max is noisy (15–31 ms either way). Under load reads lower than idle, most likely because the
-busy machine stays out of its low-power states; read the two rows separately, and compare
-before vs after, not one row to the other.
+p50 is steady; p95 and max swing a lot from run to run on both builds, so compare ranges over
+several interleaved runs, never one run against another.
 
 ## Findings & next steps
 

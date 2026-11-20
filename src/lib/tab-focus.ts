@@ -14,9 +14,10 @@ export const makeTab = (id: string, title: string, root: PaneNode, entryId: stri
   activeSessionId: entryId,
 })
 
-/** `tab` over `root` (default: its own) focused on `entryId`, which becomes its pane's visible
- *  surface unless `select` is false. The tab's terminal follows a terminal entry; otherwise it
- *  stays, or moves to the leftmost terminal when it left the tree. Same tab when unchanged. */
+// withFocus: the focus becomes its pane's visible surface unless `select` is false. The tab's
+// terminal follows a terminal entry; otherwise it stays, or moves to the leftmost terminal when
+// it left the tree. A tab left with no terminal at all is decided in step 2 (#181).
+/** `tab` over `root` (default: its own) focused on `entryId`; same tab when unchanged. */
 export function withFocus(
   tab: Tab,
   entryId: string,
