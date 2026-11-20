@@ -139,9 +139,6 @@ function wslShellFor(
   return ok(inherited) ? inherited : state.shells.find(ok)
 }
 
-// A focused folder's: a host shell, or a WSL one for its distro; a WSL folder no listed shell
-// matches gets none (a host or ssh shell can't open a Linux path), so nothing starts. A tab
-// with no folder focused: its terminal's own shell and folder.
 /** The shell a terminal opened in folder `f` runs: a WSL one for its distro, else a host one. */
 const folderShell = (state: AppState, src: Session | undefined, f: FolderEntry) =>
   f.wsl ? wslShellFor(state, src, f.wsl.distro) : hostShellFor(state, src)
@@ -149,9 +146,15 @@ const folderShell = (state: AppState, src: Session | undefined, f: FolderEntry) 
 /** Whether a terminal can open in folder entry `id` (its "New terminal here"). */
 export const canOpenTerminalIn = (state: AppState, id: string): boolean => {
   const f = state.objects[id]
-  return !!f && !!folderShell(state, undefined, f)
+  if (!f) return false
+  // The same shells the action would find: its tab's terminal's included.
+  const tab = state.tabs.find((t) => !!findPane(t.root, id))
+  return !!folderShell(state, tab ? state.sessions[tab.activeSessionId] : undefined, f)
 }
 
+// A focused folder's: a host shell, or a WSL one for its distro. A WSL folder no shell opens:
+// a terminal like the tab's own, where it is (not an ssh one). No folder focused: the tab's
+// terminal's own shell and folder.
 /** The shell and folder a new terminal of `tab` starts with; undefined: none can. */
 function newTerminalSource(
   state: AppState,
@@ -162,7 +165,10 @@ function newTerminalSource(
   const folder = focusedFolder(state, tab)
   if (folder) {
     const shell = folderShell(state, src, folder) ?? (folder.wsl ? undefined : fallback)
-    return shell ? { shell, cwd: folder.path, src } : undefined
+    if (shell) return { shell, cwd: folder.path, src }
+    // A WSL folder no shell opens: a terminal like the tab's own, where that one is (an ssh
+    // one isn't copied: the folder is on this machine), so ⌘T / ⌘D / + still do something.
+    if (src?.remote) return fallback ? { shell: fallback, cwd: undefined, src } : undefined
   }
   const shell = inheritShell(state.shells, src) ?? fallback
   return shell ? { shell, cwd: src?.cwd, src } : undefined

@@ -28,6 +28,14 @@ describe("findGitRoots", () => {
     expect(search).toHaveBeenCalledWith(["/r/tab"], false)
   })
 
+  it("…and keeps a Windows folder's own spelling (its rows are spelled so)", async () => {
+    const search = vi.fn<SearchFn>(async (): Promise<Record<string, string | null>> => ({
+      "C:\\w\\p": "C:\\w",
+    }))
+    const out = await findGitRoots([{ dir: "C:\\w\\p", spelled: true }], search, targets)
+    expect(out).toEqual({ "C:\\w\\p": "C:\\w" })
+  })
+
   it("a WSL folder: through its share, mapped back; the next form for those left", async () => {
     const wsl = { distro: "U" }
     const search = vi.fn<SearchFn>(async (paths) => {

@@ -571,7 +571,7 @@ export function TerminalPane({ pane, tabId }: { pane: PaneLeaf; tabId: string })
         </>
       ) : (
         <div className="folder-mount" ref={folderRef}>
-          <FolderView entryId={activeId} tabId={tabId} />
+          <FolderView key={activeId} entryId={activeId} tabId={tabId} />
         </div>
       )}
       {folderMenu && (

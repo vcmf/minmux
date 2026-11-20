@@ -44,7 +44,8 @@ export async function findGitRoots(
     jobs.push(
       search(spelled, false).then(
         (roots) => {
-          for (const [d, r] of Object.entries(roots)) out[d] = r && gitSpelling(r)
+          // In the folder's own spelling (C:\\x stays C:\\x): its rows are spelled that way.
+          for (const [d, r] of Object.entries(roots)) out[d] = r
         },
         () => {},
       ),

@@ -1659,13 +1659,23 @@ describe("store — folder entries", () => {
     expect(s.cwd).toBe("/home/u/proj")
   })
 
-  it("a WSL folder no listed shell matches: no terminal starts (none can open it)", () => {
+  it("a WSL folder no listed shell matches: no terminal in it, but ⌘T opens one like the tab's", () => {
     st().newTab(shell)
+    const term = tab().activeSessionId
+    st().setSessionCwd(term, "/w/own")
     st().openFolder("/home/u/proj", { wsl: { distro: "Gone" } })
-    const id = tab().activeEntryId
-    expect(canOpenTerminalIn(st(), id)).toBe(false)
-    const before = Object.keys(st().sessions).length
+    expect(canOpenTerminalIn(st(), tab().activeEntryId)).toBe(false) // no "New terminal here"
     st().newSurface(shell)
-    expect(Object.keys(st().sessions)).toHaveLength(before) // not a host shell given a Linux path
+    const s = st().sessions[tab().activeSessionId]!
+    expect(s.command).toBe(shell.command) // the tab's own shell, where it is
+    expect(s.cwd).toBe("/w/own") // never a Linux path handed to a host shell
+  })
+
+  it("New terminal here counts the tab's own WSL shell, as the action does", () => {
+    const plain = { id: "w", label: "WSL", command: "wsl.exe", args: [] }
+    useStore.setState({ shells: [shell] }) // plain wsl.exe isn't listed
+    st().newTab(plain)
+    st().openFolder("/home/u/proj", { wsl: {} })
+    expect(canOpenTerminalIn(st(), tab().activeEntryId)).toBe(true)
   })
 })
