@@ -460,6 +460,7 @@ function requestPty(id: string, entry: Entry, attachOnly: boolean, given?: Sessi
       shell: session.command,
       args: session.args,
       cwd: session.cwd, // inherited from the pane this was split/opened from
+      run: session.run, // `minmux open -- <argv>`
       // An ssh session: main rebuilds the command from its own host list (never ours).
       ...(session.remote ? { remote: session.remote } : {}),
       ...(attachOnly ? { attachOnly: true } : {}),

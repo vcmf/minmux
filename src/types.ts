@@ -46,6 +46,9 @@ export interface Session {
   // so a relaunch reopens it; only an integrated host ever uses it (lib/remote-reports).
   reopenCwd?: { dir: string; host: string }
   restored?: boolean // runtime only (never saved): came from workspace.json this launch/reload
+  // Runtime only (never saved): `minmux open -- <argv>` runs this in place of command/args, so a
+  // relaunch, a split or a new surface opens the shell (command/args) instead of re-running it.
+  run?: string[]
 }
 
 /** A pane: terminals ("surfaces") stacked as tabs; stable `id`, only the active one shows. */
@@ -88,4 +91,13 @@ export interface SpawnOpts {
   remote?: RemoteRef // an ssh session: main rebuilds the command from its own host list
   attachOnly?: boolean // reattach a live PTY, but start nothing (a restored on-focus ssh pane)
   reopen?: { dir: string; host: string } // an ssh session: the verified folder to open in
+  run?: string[] // run this argv instead of the shell (no shell integration): `minmux open --`
+}
+
+/** `minmux open …` (electron/cli.ts → renderer): a pane to open, in a tab picked by title. */
+export interface OpenRequest {
+  cwd: string // absolute: where the pane starts
+  tab?: string // the tab with this exact title (created if none); else the active tab
+  split?: "right" | "down" // which side of the tab's focused pane (default: right)
+  command?: string[] // what the pane runs instead of the default shell (argv, no shell)
 }

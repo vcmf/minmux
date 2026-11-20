@@ -332,11 +332,25 @@ CI: GitHub Actions matrix (macos/ubuntu/windows). Auto-update later via `electro
   (the Codex approval hint) · `fs:*` / `file:*` / `dialog:pick-directory` /
   `editor:info` (files panel, links, preview) · `window:*` (frameless controls, native bg) ·
   `platform:info` · `app:*` (version, update check, metrics) · `open-external` / `open-path` /
-  `notify` / `clipboard:*` · `ssh:list-hosts` (invoke) / `ssh:open-config` (send).
+  `notify` / `clipboard:*` · `ssh:list-hosts` (invoke) / `ssh:open-config` (send) ·
+  `workspace:open-ready` (restored: take the queued `minmux open` requests).
 - **Main → renderer** (`webContents.send`): `pty:data:<id>` (coalesced PTY bytes — the hot path;
   nothing else rides it) · `pty:exit:<id>` (the process ended on its own) · `ssh-hosts-changed`
   · `agents:events` (hook batches + token totals) · `agents:meta`
-  (per-pane session name/colour) · `settings-changed` · `window:maximize-change`.
+  (per-pane session name/colour) · `settings-changed` · `window:maximize-change` ·
+  `workspace:open` (a `minmux open` request, once the renderer is ready).
+- **CLI (`minmux open`):** no socket of its own — the single-instance lock is the doorbell.
+  Each launch parses its own argv (`electron/cli.ts`) before taking the lock and prints usage /
+  errors itself; a valid request is spooled as a JSON file (`<configDir>/cli-open/`) before it
+  asks for the lock, and the lock holder reads the spool on `second-instance`. Not the lock's
+  `additionalData`: Chromium's parser of that binary payload fails on some contents (two-byte
+  strings, numbers) and the second instance then kills the app as hung. A cold start keeps its
+  own request. Main
+  queues requests until the renderer has restored its workspace (and across a reload), then the
+  store's `openFromCli` splits the tab's focused pane. A command runs as the PTY's argv
+  (`SpawnOpts.run`, no shell integration); the session keeps the shell as its command and `run`
+  is never saved, so a relaunch, split or new surface there opens a shell. Every request's fate
+  is in `diagnostics.log` (`cli-open-*`).
 - **Security:** `contextIsolation: true`, `nodeIntegration: false`; the renderer only sees the
   typed API the preload exposes.
 
