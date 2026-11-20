@@ -3,7 +3,7 @@ import { ArrowSquareOut, FolderOpen, FolderSimple } from "@phosphor-icons/react"
 import { useStore } from "../store"
 import { ipc } from "../lib/ipc"
 import { watches } from "../lib/fs-reads"
-import { formatSize } from "../lib/file-preview"
+import { formatSize, HIGHLIGHT_MAX } from "../lib/file-preview"
 import { files, type FileShown } from "../lib/file-store"
 import { placeOf, type FileEntry } from "../lib/folder-entries"
 import { isAbsoluteHostPath, revealLabel } from "../lib/file-actions"
@@ -13,6 +13,8 @@ import { shortCwd } from "../lib/session-label"
 
 const LINE_H = 18 // every line of a file tab (App.css .file-view-line): the window needs it
 const RELOAD_MS = 200 // a live file (an agent writing it) re-reads at most this often
+const BIG_RELOAD_MS = 2000 // …and one past the highlight cap (a growing log) this often
+const WSL_POLL_MS = 3000 // a WSL file's stamp, checked this often while it shows
 const EMPTY: FileShown = { data: null, lines: [], scrollTop: 0, went: "" }
 const subscribeFiles = (fn: () => void) => files.subscribe(fn) // stable: no re-subscribe
 
@@ -30,30 +32,42 @@ export function FileView({ entryId, tabId }: { entryId: string; tabId: string })
   const data = shown.data
   const lines = shown.lines
   useEffect(() => {
-    if (path) files.show(entryId, path, wsl)
+    if (!path) return
+    files.show(entryId, path, wsl)
+    return () => files.hide(entryId) // it may be evicted from now on, not while it shows
   }, [entryId, path, wsl])
 
   // Watched while it shows; any change in its folder (a content-only one too, on Linux) asks
-  // the store to re-read, at most every RELOAD_MS.
+  // the store to re-read: every RELOAD_MS at most, a big file every BIG_RELOAD_MS. A WSL file
+  // can't be watched (its share): its stamp is checked every WSL_POLL_MS while it shows.
   const dir = file ? placeOf(file).path : ""
+  const big = (data && "size" in data ? data.size : 0) > HIGHLIGHT_MAX
   useEffect(() => {
-    if (!dir || wsl || !isAbsoluteHostPath(dir, platform)) return
+    if (!dir) return
+    if (wsl) {
+      const t = setInterval(() => files.refresh(entryId), WSL_POLL_MS)
+      return () => clearInterval(t)
+    }
+    if (!isAbsoluteHostPath(dir, platform)) return
     const owner = `file:${entryId}`
-    watches.set(owner, [dir])
+    watches.set(owner, [dir], true) // its content changes too (an agent editing it in place)
     let timer: ReturnType<typeof setTimeout> | undefined
     const off = ipc.onFsChanged((dirs, content) => {
       if ((!dirs.includes(dir) && !content.includes(dir)) || timer) return
-      timer = setTimeout(() => {
-        timer = undefined
-        files.refresh(entryId)
-      }, RELOAD_MS)
+      timer = setTimeout(
+        () => {
+          timer = undefined
+          files.refresh(entryId)
+        },
+        big ? BIG_RELOAD_MS : RELOAD_MS,
+      )
     })
     return () => {
       off()
       clearTimeout(timer)
       watches.set(owner, [])
     }
-  }, [dir, wsl, platform, entryId])
+  }, [dir, wsl, platform, entryId, big])
 
   // The lines in view (and a margin), from the scroll position, read once a frame at most.
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -121,7 +135,12 @@ export function FileView({ entryId, tabId }: { entryId: string; tabId: string })
 
   if (!file) return null
   return (
-    <div className="file-view" data-entry={entryId} tabIndex={-1}>
+    // Keyboard focus goes to what scrolls (arrows, PageDown, Space): the lines when it's text.
+    <div
+      className="file-view"
+      data-entry={data?.kind === "text" ? undefined : entryId}
+      tabIndex={data?.kind === "text" ? undefined : -1}
+    >
       <div className="rootbar">
         <span className="file-view-path" title={path}>
           {shortCwd(path, home)}
@@ -148,7 +167,7 @@ export function FileView({ entryId, tabId }: { entryId: string; tabId: string })
         </div>
       </div>
       {data?.kind === "text" && (
-        <div className="file-view-lines" ref={scrollRef}>
+        <div className="file-view-lines" ref={scrollRef} data-entry={entryId} tabIndex={-1}>
           <div style={{ height: lines.length * LINE_H, position: "relative" }}>
             {lines.slice(start, end).map((html, k) => {
               const n = start + k + 1

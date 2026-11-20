@@ -101,7 +101,8 @@ export interface Ipc {
   // Each folder's checkout root by a `.git` search (null: none); failed ones left out.
   gitRoots: (reqs: GitRootRequest[]) => Promise<Record<string, string | null>>
   // Watch these folders (the whole set; [] stops); fs:changed names folders that changed.
-  fsWatch: (dirs: string[]) => Promise<void>
+  // `content`: those of `dirs` whose content-only changes (Linux) a file tab wants too.
+  fsWatch: (dirs: string[], content?: string[]) => Promise<void>
   fsWatching: () => Promise<string[]> // what main actually watches (failed / capped ones aren't)
   // `content`: folders where only a file's content changed (Linux): listings are as they were.
   onFsChanged: (cb: (dirs: string[], content: string[]) => void) => () => void

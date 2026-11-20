@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest"
-import { osMayOpen } from "./open-policy"
+import { isBundle, osMayOpen } from "./open-policy"
 
 const file = { isFile: true }
 
@@ -29,5 +29,12 @@ describe("osMayOpen", () => {
   it("an allowlisted type opens by its type, whatever its mode (USB drives mark files +x)", () => {
     expect(osMayOpen("/Volumes/usb/report.pdf", file, "darwin")).toBe(true)
     expect(osMayOpen("C:\\a\\r.pdf", file, "win32")).toBe(true)
+  })
+
+  it("isBundle: an app or installer folder on macOS, never a plain folder", () => {
+    expect(isBundle("/Applications/Foo.app", "darwin")).toBe(true)
+    expect(isBundle("/x/Setup.pkg/", "darwin")).toBe(true)
+    expect(isBundle("/w/src", "darwin")).toBe(false)
+    expect(isBundle("C:\\x\\Foo.app", "win32")).toBe(false) // a plain folder there
   })
 })

@@ -20,11 +20,10 @@ import {
 } from "./pane-tree"
 import { withFocus } from "./tab-focus"
 
-// 2: file entries (step 3a), written only when there are some. An older build that knows only
-// folders then sees a newer file and leaves it alone (it would drop the file tabs and save over
-// them); without file tabs it still reads and restores the folders.
-const VERSION = 2
-const FOLDERS_ONLY = 1
+// Still 1 with file entries (step 3a): an older build drops the kinds it doesn't know (file
+// tabs) and keeps the folders, and if it saves, the file tabs are gone (quick to reopen). A
+// version bump would make it skip the whole file, folder tabs included (WORKDIR_OBJECTS.md).
+const VERSION = 1
 
 export interface LayoutState {
   tabs: Tab[]
@@ -63,7 +62,7 @@ export function serializeLayout(state: LayoutState, workspaceJson: string): stri
     if (state.folderViews[id]) folderViews[id] = state.folderViews[id]!
   }
   const file: LayoutFile = {
-    version: Object.values(objects).some((o) => o.kind === "file") ? VERSION : FOLDERS_ONLY,
+    version: VERSION,
     stamp: stampOf(workspaceJson),
     activeTabId: state.activeTabId,
     tabs: state.tabs,

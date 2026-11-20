@@ -8,7 +8,7 @@ import { splitHighlighted } from "./split-highlighted"
 let worker: Worker | null = null
 let broken = false // the worker failed to load or crashed: this thread highlights from now on
 let seq = 0
-const waiting = new Map<number, (html: string | null) => void>() // null: the worker failed
+const waiting = new Map<number, (lines: string[] | null) => void>() // null: the worker failed
 
 /** Every request still waiting gets null (it's highlighted here instead). */
 function fail(): void {
@@ -23,8 +23,8 @@ function getWorker(): Worker | null {
   if (worker || broken || typeof Worker === "undefined") return worker
   try {
     worker = new Worker(new URL("./highlight.worker.ts", import.meta.url), { type: "module" })
-    worker.onmessage = (e: MessageEvent<{ id: number; html: string }>) => {
-      waiting.get(e.data.id)?.(e.data.html)
+    worker.onmessage = (e: MessageEvent<{ id: number; lines: string[] }>) => {
+      waiting.get(e.data.id)?.(e.data.lines)
       waiting.delete(e.data.id)
     }
     worker.onerror = fail
@@ -38,16 +38,18 @@ function getWorker(): Worker | null {
 /** The text's lines as plain, escaped HTML (shown until the highlighted ones arrive). */
 export const plainLines = (code: string): string[] => escapeHtml(code).split("\n")
 
+// All of it (escape, highlight, split) runs in the worker; here only when there's no worker.
 /** The text's lines, highlighted as `lang` (plain when unknown or too big). */
 export async function highlightLines(code: string, lang: string | null): Promise<string[]> {
-  if (!lang || code.length > HIGHLIGHT_MAX) return plainLines(code)
   const w = getWorker()
   const fromWorker = w
-    ? await new Promise<string | null>((resolve) => {
+    ? await new Promise<string[] | null>((resolve) => {
         const id = ++seq
         waiting.set(id, resolve)
         w.postMessage({ id, code, lang })
       })
     : null
-  return splitHighlighted(fromWorker ?? (await highlightToHtml(code, lang)))
+  if (fromWorker) return fromWorker
+  if (!lang || code.length > HIGHLIGHT_MAX) return plainLines(code)
+  return splitHighlighted(await highlightToHtml(code, lang))
 }

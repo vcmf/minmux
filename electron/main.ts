@@ -115,7 +115,7 @@ import {
   type PreviewData,
 } from "../src/lib/file-preview"
 import type { FileData, FileStamp } from "../src/lib/file-tab"
-import { osMayOpen, type Os } from "./open-policy"
+import { isBundle, osMayOpen, type Os } from "./open-policy"
 
 // This process's profile (a dev build is `dev`): picked before anything reads a path. An
 // invalid MINMUX_PROFILE stops here, synchronously — before any name, path or lock is set —
@@ -364,8 +364,12 @@ const sessionDirExists = (d: string): Promise<boolean | undefined> =>
     STAT_MS,
   )
 // A watched folder changed: the renderer re-reads it (through its read queue).
-fsWorker.onChanged = (dirs, content) =>
-  mainWindow?.webContents.send("fs:changed", dirs, content ?? [])
+// Content-only changes (Linux) go on only for folders a file tab watches: a listing ignores them.
+let contentWanted = new Set<string>()
+fsWorker.onChanged = (dirs, content) => {
+  const c = (content ?? []).filter((d) => contentWanted.has(d))
+  if (dirs.length || c.length) mainWindow?.webContents.send("fs:changed", dirs, c)
+}
 
 /** Does the folder holding `p` still exist? Then a missing `p` was deleted — not an
  *  unmounted share (/Volumes/NAS gone) or a stopped WSL distro, whose parents are gone too.
@@ -659,6 +663,8 @@ async function safeOpenPath(p: string): Promise<void> {
     const os = process.platform as Os
     if (osMayOpen(real, { isFile: st.isFile() }, os)) {
       if (!(await shell.openPath(real))) return // "" = opened
+    } else if (st.isDirectory() && !isBundle(real, os)) {
+      if (!(await shell.openPath(real))) return // a folder: Finder / Explorer opens it
     }
   } catch {
     // gone or unreadable: reveal what's there
@@ -1453,10 +1459,13 @@ function registerIpc() {
 
   // Files browser: watch these folders (the whole set; [] stops). Host paths only: the
   // renderer doesn't send WSL panes' folders (a 9p share can't be watched reliably).
-  ipcMain.handle("fs:watch", (_e, dirs: unknown) => {
+  ipcMain.handle("fs:watch", (_e, dirs: unknown, content: unknown) => {
     const list = Array.isArray(dirs)
       ? dirs.filter((d): d is string => typeof d === "string" && path.isAbsolute(d))
       : []
+    contentWanted = new Set(
+      Array.isArray(content) ? content.filter((d): d is string => typeof d === "string") : [],
+    )
     // Not on Windows: a watched folder's open handle blocks renaming / deleting it and its
     // parents there (focus and Refresh still read).
     fsWorker.setWatched(process.platform === "win32" ? [] : list.slice(0, WATCH_CAP))

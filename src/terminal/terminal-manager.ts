@@ -167,8 +167,8 @@ async function openClickedPath(sessionId: string, cwd: string, m: FileLinkMatch)
   const wsl = sess ? wslContext(sess.command, sess.args) : undefined
   const outside = () => ipc.openFile(cwd, m.path, m.line, m.col)
   if (!tab || !pane || (st.platform === "win32" && !wsl)) return outside()
-  // A WSL shell's `~` is the distro's home, not known here: the editor resolves it.
-  if (wsl && m.path.startsWith("~")) return outside()
+  // A WSL shell's `~` is the distro's home, not known here (main would take this machine's).
+  if (wsl && m.path.startsWith("~")) return
   const abs = resolveLinkPath(cwd, m.path, wsl ? "" : st.home)
   if (await ipc.pathIsDir(abs, wsl).catch(() => false)) {
     useStore.getState().openFolder(abs, { tabId: tab.id, paneId: pane.id, wsl })

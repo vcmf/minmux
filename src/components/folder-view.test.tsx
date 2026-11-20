@@ -48,9 +48,9 @@ describe("FolderView", () => {
     vi.mocked(ipc.readdir).mockResolvedValue(ls(["a", false]))
     const { tabId, entryId } = open("/fv3")
     const view = render(<FolderView entryId={entryId} tabId={tabId} />)
-    await waitFor(() => expect(ipc.fsWatch).toHaveBeenLastCalledWith(["/fv3"]))
+    await waitFor(() => expect(ipc.fsWatch).toHaveBeenLastCalledWith(["/fv3"], expect.any(Array)))
     view.unmount()
-    await waitFor(() => expect(ipc.fsWatch).toHaveBeenLastCalledWith([]))
+    await waitFor(() => expect(ipc.fsWatch).toHaveBeenLastCalledWith([], expect.any(Array)))
   })
 
   it("re-reads a folder the watcher says changed", async () => {

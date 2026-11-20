@@ -127,6 +127,10 @@ it reads the file as empty, starts fresh and **saves over it**. Today's build do
   re-added.
 - Round-trip tests: new → old → new keeps every terminal and never empties the workspace.
 - An entry whose path is gone at restore shows a "gone" placeholder.
+- `layout.json` keeps one version across folder and file entries. An older build that knows only
+  folder entries drops the file entries it can't read and keeps the folders; if it saves, the file
+  tabs are gone. Accepted: a version bump would make it skip the whole file, folder tabs included,
+  and file tabs are quick to reopen.
 
 ## Performance
 

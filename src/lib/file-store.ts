@@ -5,7 +5,7 @@
 // file, and at most one more after it when a change arrived meanwhile, so a busy folder can't
 // cancel every read before it lands. Highlighting runs per text (lib/highlight-client).
 import { ipc } from "./ipc"
-import { languageForPath } from "./file-preview"
+import { HIGHLIGHT_MAX, languageForPath } from "./file-preview"
 import { highlightLines, plainLines } from "./highlight-client"
 import type { FileData, FileStamp } from "./file-tab"
 import type { WslContext } from "./wsl"
@@ -37,6 +37,7 @@ export class FileStore {
   private files = new Map<string, Entry>() // insertion order = least → most recently shown
   private snapshots = new Map<string, FileShown>()
   private listeners = new Set<() => void>()
+  private showing = new Set<string>() // on screen: never evicted
 
   constructor(
     private readonly read: Read = (p, w, s) => ipc.readFile(p, w, s),
@@ -76,9 +77,19 @@ export class FileStore {
     }
     this.files.delete(id)
     this.files.set(id, e) // most recent
-    while (this.files.size > this.cap) this.forget(this.files.keys().next().value!)
+    this.showing.add(id)
+    // Past the cap, the least recent hidden ones go (a visible one never: it'd go blank).
+    for (const old of [...this.files.keys()]) {
+      if (this.files.size <= this.cap) break
+      if (!this.showing.has(old)) this.forget(old)
+    }
     this.publish(id)
     this.refresh(id)
+  }
+
+  /** Its tab hid (a tab switch, a close): it may be evicted from now on. */
+  hide(id: string): void {
+    this.showing.delete(id)
   }
 
   /** Something in its folder changed: read it again (skipped in the worker if it didn't). */
@@ -111,9 +122,11 @@ export class FileStore {
     if (e) e.went = went
   }
 
+  /** Its entry closed (or another took its place): its text and lines go now. */
   forget(id: string): void {
     this.files.delete(id)
     this.snapshots.delete(id)
+    this.showing.delete(id)
   }
 
   private async readNow(id: string, e: Entry): Promise<void> {
@@ -130,7 +143,9 @@ export class FileStore {
           e.lines = []
           e.highlighted = null
         } else if (d.text !== e.highlighted) {
-          if (!e.lines.length) e.lines = plainLines(d.text) // no flash on a re-read
+          // A first read: plain lines while it's highlighted (a big one waits for the worker:
+          // escaping 2 MB here would hold up the thread xterm draws on).
+          if (!e.lines.length && d.text.length <= HIGHLIGHT_MAX) e.lines = plainLines(d.text)
           void this.highlightNow(id, e, d.text)
         }
         this.publish(id)

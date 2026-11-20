@@ -81,7 +81,7 @@ describe("FileView", () => {
     const { tabId, entryId } = open("/w/live.txt")
     render(<FileView entryId={entryId} tabId={tabId} />)
     expect(await screen.findByText("v1")).toBeInTheDocument()
-    await waitFor(() => expect(ipc.fsWatch).toHaveBeenLastCalledWith(["/w"]))
+    await waitFor(() => expect(ipc.fsWatch).toHaveBeenLastCalledWith(["/w"], expect.any(Array)))
     vi.mocked(ipc.readFile).mockResolvedValue({
       kind: "text",
       text: "v2",

@@ -31,6 +31,10 @@ const RUNS: Record<Os, Set<string>> = {
   linux: new Set(["desktop", "appimage", "sh", "run", "bin", "jar"]),
 }
 
+/** A folder macOS runs or installs when opened (an app, an installer), not one it browses. */
+export const isBundle = (p: string, os: Os): boolean =>
+  os === "darwin" && /\.(app|pkg|mpkg|bundle|framework|plugin|kext|prefpane)\/?$/i.test(p)
+
 const extOf = (p: string) => {
   const name = p.split(/[\\/]/).pop() ?? ""
   const i = name.lastIndexOf(".")

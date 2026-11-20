@@ -73,7 +73,9 @@ describe("FileStore", () => {
     const { read } = reads()
     const s = new FileStore(read, hl, 2)
     s.show("a", "/a")
+    s.hide("a")
     s.show("b", "/b")
+    s.hide("b")
     s.show("c", "/c")
     expect(s.get("a")).toBeUndefined()
     expect(s.get("c")).toBeDefined()
@@ -87,5 +89,16 @@ describe("FileStore", () => {
     await tick()
     s.show("e4", "/w/two.ts")
     expect(s.get("e4")!.data).toBeNull()
+  })
+
+  it("never evicts a file still on screen", () => {
+    const { read } = reads()
+    const s = new FileStore(read, hl, 1)
+    s.show("a", "/a") // on screen
+    s.show("b", "/b") // on screen too: over the cap, but neither goes
+    expect(s.get("a")).toBeDefined()
+    s.hide("a")
+    s.show("c", "/c")
+    expect(s.get("a")).toBeUndefined() // hidden: now it goes
   })
 })

@@ -19,6 +19,7 @@ import {
   visibleSessionIds,
 } from "./lib/pane-tree"
 import { makeTab, withFocus } from "./lib/tab-focus"
+import { files } from "./lib/file-store"
 import {
   EMPTY_VIEW,
   objectId,
@@ -512,6 +513,7 @@ function dropSessions(
 function dropObjects(state: AppState, ids: string[]): Pick<AppState, "objects" | "folderViews"> {
   const gone = ids.filter((id) => id in state.objects || id in state.folderViews)
   if (!gone.length) return { objects: state.objects, folderViews: state.folderViews }
+  gone.forEach((id) => files.forget(id)) // a file tab's read and lines go with it
   const objects = { ...state.objects }
   const folderViews = { ...state.folderViews }
   for (const id of gone) {
@@ -666,7 +668,10 @@ export const useStore = create<AppState>((set, get) => ({
       let root = addSurface(tab.root, pane.id, id, at)
       if (old) root = removeNode(root, old) ?? root
       const objects = { ...state.objects, [id]: file }
-      if (old) delete objects[old]
+      if (old) {
+        delete objects[old]
+        files.forget(old) // the replaced peek's text and lines go now
+      }
       return {
         objects,
         tabs: replaceTab(state.tabs, tab.id, (t) => withFocus(t, id, root)),
