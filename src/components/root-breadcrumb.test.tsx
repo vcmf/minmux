@@ -1,41 +1,54 @@
-import { describe, it, expect, beforeEach, vi } from "vitest"
-import { render, screen, fireEvent } from "@testing-library/react"
+import { describe, it, expect, vi } from "vitest"
+import { render, screen, fireEvent, waitFor } from "@testing-library/react"
 import { RootBreadcrumb } from "./root-breadcrumb"
-import { useStore } from "../store"
-import { resetStore } from "../test/helpers"
+import { ipc } from "../lib/ipc"
 
 describe("RootBreadcrumb", () => {
-  beforeEach(resetStore)
-
   it("renders the trailing path segments as crumbs", () => {
-    render(<RootBreadcrumb root="/a/b/c" cwd="/a/b/c" sessionId="s" diverged={false} />)
+    render(<RootBreadcrumb root="/a/b/c" onSetRoot={() => {}} />)
     expect(screen.getByText("c")).toBeInTheDocument()
     expect(screen.getByText("b")).toBeInTheDocument()
   })
 
   it("clicking a crumb sets that ancestor as the root", () => {
     const spy = vi.fn()
-    useStore.setState({ setPaneRoot: spy })
-    render(<RootBreadcrumb root="/a/b/c" cwd="/a/b/c" sessionId="s" diverged={false} />)
+    render(<RootBreadcrumb root="/a/b/c" onSetRoot={spy} />)
     fireEvent.click(screen.getByText("b"))
-    expect(spy).toHaveBeenCalledWith("s", "/a/b")
+    expect(spy).toHaveBeenCalledWith("/a/b")
   })
 
-  it("shows an amber reset only when diverged, and it clears the override", () => {
+  it("shows a reset only when given one", () => {
     const spy = vi.fn()
-    useStore.setState({ clearPaneRoot: spy })
-    const { rerender } = render(
-      <RootBreadcrumb root="/a/b" cwd="/a/b" sessionId="s" diverged={false} />,
-    )
+    const { rerender } = render(<RootBreadcrumb root="/a/b" onSetRoot={() => {}} />)
     expect(screen.queryByTitle(/Reset to terminal folder/)).toBeNull()
-    rerender(<RootBreadcrumb root="/a/b" cwd="/x" sessionId="s" diverged={true} />)
+    rerender(
+      <RootBreadcrumb
+        root="/a/b"
+        onSetRoot={() => {}}
+        reset={{ title: "Reset to terminal folder (/x)", onReset: spy }}
+      />,
+    )
     fireEvent.click(screen.getByTitle(/Reset to terminal folder/))
-    expect(spy).toHaveBeenCalledWith("s")
+    expect(spy).toHaveBeenCalled()
   })
 
-  it("the edit button reveals a path input", () => {
-    render(<RootBreadcrumb root="/a/b" cwd="/a/b" sessionId="s" diverged={false} />)
+  it("a typed path is applied only when it's a folder", async () => {
+    const spy = vi.fn()
+    render(<RootBreadcrumb root="/a/b" onSetRoot={spy} />)
     fireEvent.click(screen.getByTitle("Enter a path"))
-    expect(screen.getByPlaceholderText(/folder path/i)).toBeInTheDocument()
+    const input = screen.getByPlaceholderText(/folder path/i)
+    vi.mocked(ipc.pathIsDir).mockResolvedValueOnce(false)
+    fireEvent.change(input, { target: { value: "/nope" } })
+    fireEvent.keyDown(input, { key: "Enter" })
+    await waitFor(() => expect(input.className).toContain("invalid"))
+    vi.mocked(ipc.pathIsDir).mockResolvedValueOnce(true)
+    fireEvent.change(input, { target: { value: "/w/rts" } })
+    fireEvent.keyDown(input, { key: "Enter" })
+    await waitFor(() => expect(spy).toHaveBeenCalledWith("/w/rts"))
+  })
+
+  it("the owner's own buttons sit after its actions", () => {
+    render(<RootBreadcrumb root="/a" onSetRoot={() => {}} actions={<button title="Mine" />} />)
+    expect(screen.getByTitle("Mine")).toBeInTheDocument()
   })
 })

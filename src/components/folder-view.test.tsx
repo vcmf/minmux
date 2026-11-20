@@ -93,7 +93,7 @@ describe("FolderView", () => {
     expect(st().folderViews[entryId]!.showAll).toEqual(["/fv6"])
   })
 
-  it("Parent folder re-roots one level up; Refresh re-reads what's open", async () => {
+  it("a breadcrumb segment re-roots there; Refresh re-reads what's open", async () => {
     vi.mocked(ipc.readdir).mockResolvedValue(ls(["a", false]))
     const { tabId, entryId } = open("/fv7/sub")
     render(<FolderView entryId={entryId} tabId={tabId} />)
@@ -101,15 +101,20 @@ describe("FolderView", () => {
     vi.mocked(ipc.readdir).mockClear()
     fireEvent.click(screen.getByTitle("Refresh"))
     await waitFor(() => expect(ipc.readdir).toHaveBeenCalledWith("/fv7/sub", undefined))
-    fireEvent.click(screen.getByTitle("Parent folder"))
+    fireEvent.click(screen.getByText("fv7")) // its breadcrumb's parent segment
     expect(st().objects[entryId]!.path).toBe("/fv7")
   })
 
-  it("no Parent folder at the filesystem root", () => {
+  it("a typed path in its breadcrumb re-roots it, once it's a folder", async () => {
     vi.mocked(ipc.readdir).mockResolvedValue(ls())
-    const { tabId, entryId } = open("/")
+    vi.mocked(ipc.pathIsDir).mockResolvedValue(true)
+    const { tabId, entryId } = open("/fv12")
     render(<FolderView entryId={entryId} tabId={tabId} />)
-    expect(screen.queryByTitle("Parent folder")).toBeNull()
+    fireEvent.click(screen.getByTitle("Enter a path"))
+    const input = screen.getByPlaceholderText(/folder path/i)
+    fireEvent.change(input, { target: { value: "/fv12-other" } })
+    fireEvent.keyDown(input, { key: "Enter" })
+    await waitFor(() => expect(st().objects[entryId]!.path).toBe("/fv12-other"))
   })
 
   it("back to the window: re-reads the open folders no watcher covers", async () => {

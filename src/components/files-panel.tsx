@@ -287,7 +287,21 @@ export function FilesPanel() {
           <X size={13} />
         </button>
       </div>
-      {root && <RootBreadcrumb root={root} cwd={cwd} sessionId={sessionId} diverged={diverged} />}
+      {root && (
+        <RootBreadcrumb
+          root={root}
+          wsl={getActiveWsl()}
+          onSetRoot={(p) => sessionId && useStore.getState().setPaneRoot(sessionId, p)}
+          reset={
+            diverged && sessionId
+              ? {
+                  title: `Reset to terminal folder${cwd ? ` (${cwd})` : ""}`,
+                  onReset: () => useStore.getState().clearPaneRoot(sessionId),
+                }
+              : undefined
+          }
+        />
+      )}
       <div className="diff-files agents-files">
         {remote && <RemoteNotice remote={remote} what="files" />}
         {!root && !remote && (

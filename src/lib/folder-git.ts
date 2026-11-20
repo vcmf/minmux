@@ -44,34 +44,28 @@ export function logicalRoot(wantPath: string, root: string): string {
   return root
 }
 
-/** Record a poll's answer for `want` (and its repo root, so other folders in it are known). */
+/** Record a poll's answer for the folder `want`. A known repo answering "not a repo" keeps what
+ *  was learned (git timing out on a big repo says the same); a deleted `.git` shows on the next
+ *  answer that's sure. */
 export function learn(
   learned: Map<string, Learned>,
   want: GitWant,
   status: Pick<GitStatus, "isRepo" | "root">,
   now: number,
 ): void {
-  const scope = gitScope(want.wsl)
+  const k = key(gitScope(want.wsl), want.path)
   const root = status.isRepo && status.root ? logicalRoot(want.path, status.root) : null
-  learned.set(key(scope, want.path), { root, at: now })
-  if (root) learned.set(key(scope, root), { root, at: now })
+  if (root === null && learned.get(k)?.root) return
+  learned.set(k, { root, at: now })
 }
 
-/** The repo `want` is in, as far as known: undefined unknown, null not a repo. */
-export function rootOf(learned: Map<string, Learned>, want: GitWant): string | null | undefined {
-  const scope = gitScope(want.wsl)
-  const own = learned.get(key(scope, want.path))
-  if (own) return own.root
-  let best: string | undefined
-  for (const [k, l] of learned) {
-    if (!l.root || !k.startsWith(`${scope}\0`)) continue
-    if (isInside(want.path, l.root) && (!best || l.root.length > best.length)) best = l.root
-  }
-  return best
-}
+/** The repo the folder `want` is in, from its own answer only (a folder may be a nested repo or
+ *  worktree, so another folder's repo says nothing): undefined unknown, null not a repo. */
+export const rootOf = (learned: Map<string, Learned>, want: GitWant): string | null | undefined =>
+  learned.get(key(gitScope(want.wsl), want.path))?.root
 
-/** The folders to poll this round, one per repo: unknown ones, and known repos other than the
- *  focused terminal's; a "not a repo" answer is trusted for NOT_REPO_TTL. */
+/** The folders to poll this round: each never asked, and one per known repo other than the
+ *  focused terminal's (its own poll covers it); "not a repo" is trusted for NOT_REPO_TTL. */
 export function gitTargets(
   wants: GitWant[],
   learned: Map<string, Learned>,
@@ -82,21 +76,27 @@ export function gitTargets(
   const repos = new Set<string>()
   for (const w of wants) {
     const own = learned.get(key(gitScope(w.wsl), w.path))
-    const root = rootOf(learned, w)
-    if (root === null && own && now - own.at < NOT_REPO_TTL) continue
-    if (root && !w.wsl && focusedRoot && samePath(root, focusedRoot)) continue
-    const k = root ? key(gitScope(w.wsl), root) : key(gitScope(w.wsl), w.path)
-    if (repos.has(k)) continue
-    if (root) {
-      if (repos.size >= MAX_REPOS) continue
-      repos.add(k)
-      out.push({ ...w, path: root })
-    } else {
-      repos.add(k)
-      out.push(w)
+    if (!own) {
+      out.push(w) // never asked: ask this folder itself
+      continue
     }
+    if (own.root === null) {
+      if (now - own.at >= NOT_REPO_TTL) out.push(w)
+      continue
+    }
+    if (!w.wsl && focusedRoot && samePath(own.root, focusedRoot)) continue
+    const k = key(gitScope(w.wsl), own.root)
+    if (repos.has(k) || repos.size >= MAX_REPOS) continue
+    repos.add(k)
+    out.push(w)
   }
   return out
+}
+
+/** Forget what was learned about folders no longer shown. */
+export function forgetOthers(learned: Map<string, Learned>, wants: GitWant[]): void {
+  const keep = new Set(wants.map((w) => key(gitScope(w.wsl), w.path)))
+  for (const k of [...learned.keys()]) if (!keep.has(k)) learned.delete(k)
 }
 
 /** The status covering `path` among polled repos (the innermost), if any. */

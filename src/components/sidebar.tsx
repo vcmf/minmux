@@ -555,7 +555,11 @@ export function Sidebar() {
         <ContextMenu
           x={dirMenu.x}
           y={dirMenu.y}
-          items={folderMenuItems(revealLabel(platform), dirMenu.revealHint)}
+          items={folderMenuItems(
+            revealLabel(platform),
+            dirMenu.revealHint,
+            isTerminalEntry(dirMenu.sessionId),
+          )}
           onSelect={onDirAction}
           onClose={closeDirMenu}
         />

@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest"
 import {
+  forgetOthers,
   gitTargets,
   learn,
   logicalRoot,
@@ -31,18 +32,44 @@ describe("folder git", () => {
     ])
   })
 
-  it("folders in one repo poll it once, at its root", () => {
+  it("folders in one repo, once each knows it, poll it once", () => {
     const l = new Map<string, Learned>()
     learn(l, { path: "/w/rts/src" }, repo("/w/rts"), 0)
-    expect(rootOf(l, { path: "/w/rts/docs" })).toBe("/w/rts")
+    learn(l, { path: "/w/rts/docs" }, repo("/w/rts"), 0)
     expect(gitTargets([{ path: "/w/rts/src" }, { path: "/w/rts/docs" }], l, undefined, 1)).toEqual([
-      { path: "/w/rts" },
+      { path: "/w/rts/src" },
     ])
+  })
+
+  it("a nested worktree is asked itself, never taken for its outer repo", () => {
+    const l = new Map<string, Learned>()
+    learn(l, { path: "/w/rts" }, repo("/w/rts"), 0)
+    const wt = { path: "/w/rts/.claude/worktrees/feat" }
+    expect(rootOf(l, wt)).toBeUndefined()
+    expect(gitTargets([{ path: "/w/rts" }, wt], l, undefined, 1)).toContainEqual(wt)
+    learn(l, wt, repo("/w/rts/.claude/worktrees/feat"), 2)
+    expect(rootOf(l, wt)).toBe("/w/rts/.claude/worktrees/feat")
+  })
+
+  it("a known repo answering 'not a repo' (git timed out) keeps what it knew", () => {
+    const l = new Map<string, Learned>()
+    learn(l, { path: "/big" }, repo("/big"), 0)
+    learn(l, { path: "/big" }, { isRepo: false, root: "" }, 1)
+    expect(rootOf(l, { path: "/big" })).toBe("/big")
+  })
+
+  it("forgets folders no longer shown", () => {
+    const l = new Map<string, Learned>()
+    learn(l, { path: "/a" }, repo("/a"), 0)
+    learn(l, { path: "/b" }, repo("/b"), 0)
+    forgetOthers(l, [{ path: "/b" }])
+    expect(rootOf(l, { path: "/a" })).toBeUndefined()
+    expect(rootOf(l, { path: "/b" })).toBe("/b")
   })
 
   it("skips the focused terminal's repo (its own poll covers it)", () => {
     const l = new Map<string, Learned>()
-    learn(l, { path: "/w/rts" }, repo("/w/rts"), 0)
+    learn(l, { path: "/w/rts/src" }, repo("/w/rts"), 0)
     expect(gitTargets([{ path: "/w/rts/src" }], l, "/w/rts/", 1)).toEqual([])
   })
 
@@ -57,6 +84,7 @@ describe("folder git", () => {
     const l = new Map<string, Learned>()
     learn(l, { path: "/home/u/p" }, repo("/home/u/p"), 0)
     expect(rootOf(l, { path: "/home/u/p", wsl: { distro: "Ubuntu" } })).toBeUndefined()
+    expect(rootOf(l, { path: "/home/u/p" })).toBe("/home/u/p")
   })
 
   it("statusFor picks the innermost polled repo holding the folder", () => {
@@ -80,6 +108,6 @@ describe("folder git", () => {
   it("learns the folder's spelling of a symlinked repo", () => {
     const l = new Map<string, Learned>()
     learn(l, { path: "/var/t/proj/src" }, repo("/private/var/t/proj"), 0)
-    expect(rootOf(l, { path: "/var/t/proj/docs" })).toBe("/var/t/proj")
+    expect(rootOf(l, { path: "/var/t/proj/src" })).toBe("/var/t/proj")
   })
 })

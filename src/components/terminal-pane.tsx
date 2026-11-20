@@ -52,6 +52,11 @@ import { wslContext } from "../lib/wsl"
 export function TerminalPane({ pane, tabId }: { pane: PaneLeaf; tabId: string }) {
   const mountRef = useRef<HTMLDivElement>(null)
   const folderRef = useRef<HTMLDivElement>(null) // the folder view's box, while one shows
+  // The terminal font (a change refits the parked terminals behind a folder).
+  const fontKey = useStore((s) => {
+    const f = s.settings.font
+    return `${f.family}|${f.size}|${f.lineHeight}`
+  })
   const stripRef = useRef<HTMLDivElement>(null)
   const [menu, setMenu] = useState<{ x: number; y: number; hasSel: boolean } | null>(null)
   const activeId = pane.activeEntryId
@@ -206,15 +211,21 @@ export function TerminalPane({ pane, tabId }: { pane: PaneLeaf; tabId: string })
   useEffect(() => {
     const el = folderRef.current
     if (!el || isTerminalEntry(activeId)) return
-    const ro = new ResizeObserver(() => {
+    const size = () => {
       const r = el.getBoundingClientRect()
       for (const id of paneSessionIds(pane))
         TerminalManager.sizeHidden(id, r.width - 8, r.height - 4)
-    })
+    }
+    const ro = new ResizeObserver(size)
     ro.observe(el)
-    return () => ro.disconnect()
+    // A font change gives the same box a different grid: refit once the new font is applied.
+    const raf = requestAnimationFrame(size)
+    return () => {
+      ro.disconnect()
+      cancelAnimationFrame(raf)
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- the pane's terminals, by content
-  }, [activeId, pane.entryIds.join(" ")])
+  }, [activeId, pane.entryIds.join(" "), fontKey])
 
   // Hidden surfaces still run: spawn/reattach their PTY (status, notifications, cwd)
   // without mounting them — e.g. after a restore or renderer reload.

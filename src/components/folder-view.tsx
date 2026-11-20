@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from "react"
 import {
   ArrowClockwise,
-  ArrowUp,
   CaretDown,
   CaretRight,
   File as FileIcon,
@@ -18,8 +17,8 @@ import { EMPTY_VIEW, toggleExpanded } from "../lib/folder-entries"
 import { buildGitDecorations, statusColor, statusLetter } from "../lib/git-decorations"
 import { isAbsoluteHostPath, revealLabel } from "../lib/file-actions"
 import { isInside, samePath } from "../lib/agent-dirs"
-import { shortCwd } from "../lib/session-label"
 import { useFileMenu } from "./use-file-menu"
+import { RootBreadcrumb } from "./root-breadcrumb"
 import { wantGit } from "../lib/folder-git-poll"
 import { statusFor } from "../lib/folder-git"
 
@@ -46,7 +45,6 @@ const readKey = (scope: string, dir: string) => `view\0${scope}\0${dir}`
 export function FolderView({ entryId, tabId }: { entryId: string; tabId: string }) {
   const folder = useStore((s) => s.objects[entryId])
   const view = useStore((s) => s.folderViews[entryId]) ?? EMPTY_VIEW
-  const home = useStore((s) => s.home)
   const platform = useStore((s) => s.platform)
   const focusedGit = useStore((s) => s.git)
   const folderGit = useStore((s) => s.folderGit)
@@ -79,11 +77,17 @@ export function FolderView({ entryId, tabId }: { entryId: string; tabId: string 
     wantGit(entryId, { path: root, wsl })
     return () => wantGit(entryId, null)
   }, [entryId, root, wsl])
+  // The repo this folder is in, from its own answer (it may be a nested repo or worktree). While
+  // that's the focused terminal's repo, its fresher status is used; before the first answer, a
+  // folder inside the focused repo borrows it.
+  const polled = statusFor(folderGit, root, wsl)
+  const focusedOk = !!focusedGit?.isRepo && !wsl
   const inFocused =
-    !!focusedGit?.isRepo &&
-    !wsl &&
-    (samePath(root, focusedGit.root) || isInside(root, focusedGit.root))
-  const git = inFocused ? focusedGit : statusFor(folderGit, root, wsl)
+    focusedOk &&
+    (polled
+      ? samePath(polled.root, focusedGit!.root)
+      : samePath(root, focusedGit!.root) || isInside(root, focusedGit!.root))
+  const git = inFocused ? focusedGit : polled
   const deco = useMemo(
     () => (git?.isRepo ? buildGitDecorations(git.root, git.files) : null),
     [git?.isRepo, git?.root, git?.files],
@@ -188,11 +192,6 @@ export function FolderView({ entryId, tabId }: { entryId: string; tabId: string 
   }
   const refresh = () => shownRef.current.forEach((d) => load(d, true))
   const setRoot = (p: string) => useStore.getState().setFolderRoot(entryId, p)
-  // None at a share's root (\\\\server\\share): \\\\server alone isn't a folder.
-  const uncRoot = /^\\\\[^\\]+\\[^\\]+\\?$/.test(root)
-  const parent = uncRoot
-    ? ""
-    : root.replace(/[\\/][^\\/]+[\\/]?$/, "") || (root.startsWith("/") ? "/" : "")
   const terminalHere = () => {
     const s = useStore.getState()
     s.setActivePane(tabId, entryId)
@@ -211,37 +210,31 @@ export function FolderView({ entryId, tabId }: { entryId: string; tabId: string 
     // Focusable, so keyboard focus can land here when this entry is the focus (refocus-terminal).
     <div className="folder-view" data-entry={entryId} tabIndex={-1}>
       <div className="folder-view-header">
-        <span className="folder-view-path" title={root}>
-          {shortCwd(root, home)}
-        </span>
-        {parent && parent !== root && (
-          <button
-            className="iconbtn"
-            style={{ width: 22, height: 22 }}
-            title="Parent folder"
-            onClick={() => setRoot(parent)}
-          >
-            <ArrowUp size={13} />
-          </button>
-        )}
-        <button
-          className="iconbtn"
-          style={{ width: 22, height: 22 }}
-          title="Refresh"
-          onClick={refresh}
-        >
-          <ArrowClockwise size={13} />
-        </button>
-        {!wsl && (
-          <button
-            className="iconbtn"
-            style={{ width: 22, height: 22 }}
-            title="New terminal here"
-            onClick={terminalHere}
-          >
-            <TerminalWindow size={13} />
-          </button>
-        )}
+        <RootBreadcrumb
+          root={root}
+          wsl={wsl}
+          onSetRoot={setRoot}
+          actions={
+            <>
+              <button
+                className="iconbtn"
+                style={{ width: 22, height: 22 }}
+                title="Refresh"
+                onClick={refresh}
+              >
+                <ArrowClockwise size={13} />
+              </button>
+              <button
+                className="iconbtn"
+                style={{ width: 22, height: 22 }}
+                title="New terminal here"
+                onClick={terminalHere}
+              >
+                <TerminalWindow size={13} />
+              </button>
+            </>
+          }
+        />
       </div>
       <div className="diff-files agents-files folder-view-rows">
         {rows.map((r) => {

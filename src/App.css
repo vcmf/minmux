@@ -1319,22 +1319,7 @@ body.resizing-col {
   outline: none;
 }
 .folder-view-header {
-  height: 30px;
-  flex: 0 0 auto;
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  padding: 0 6px 0 12px;
-  border-bottom: 1px solid var(--border);
-}
-.folder-view-path {
-  flex: 1 1 auto;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--dim);
-  font-size: 12px;
+  flex: 0 0 auto; /* the breadcrumb bar (.rootbar) draws its own height and border */
 }
 .folder-view-rows {
   overflow-y: auto;

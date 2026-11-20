@@ -1658,4 +1658,15 @@ describe("store — folder entries", () => {
     expect(s.args).toEqual(["-d", "Ubuntu"])
     expect(s.cwd).toBe("/home/u/proj")
   })
+
+  it("a WSL folder no listed shell matches: the tab's terminal, in its own folder", () => {
+    st().newTab(shell)
+    const term = tab().activeSessionId
+    st().setSessionCwd(term, "/w/own")
+    st().openFolder("/home/u/proj", { wsl: { distro: "Gone" } })
+    st().newSurface()
+    const s = st().sessions[tab().activeSessionId]!
+    expect(s.command).toBe(shell.command) // not a host shell handed a Linux path
+    expect(s.cwd).toBe("/w/own")
+  })
 })

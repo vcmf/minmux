@@ -65,11 +65,15 @@ export function fileMenuItems(input: FileMenuInput): MenuItemSpec[] {
 }
 
 /** The sidebar's folder-line menu; `revealHint` = why Reveal is unavailable (e.g. a WSL path). */
-export function folderMenuItems(revealLabel: string, revealHint?: string): MenuItemSpec[] {
+export function folderMenuItems(
+  revealLabel: string,
+  revealHint?: string,
+  openTab = true, // a folder line of a terminal: a folder tab in its pane (a folder row is one)
+): MenuItemSpec[] {
   return [
     { id: "copyPath", label: "Copy path" },
     { id: "openHere", label: "Open terminal here" },
-    { id: "openTab", label: "Open in a tab" }, // a folder tab in the terminal's pane
+    ...(openTab ? [{ id: "openTab" as const, label: "Open in a tab" }] : []),
     {
       id: "reveal",
       label: revealLabel,

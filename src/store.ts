@@ -111,7 +111,8 @@ function hostShellFor(state: AppState, src: Session | undefined): ShellOption | 
   return state.shells.find(ok) ?? def
 }
 
-/** Where new panes/tabs open: the focused folder entry's path, else the tab's terminal's cwd. */
+// A WSL folder isn't used: a new tab takes the shell it's given, which may not be WSL.
+/** Where new tabs open: the focused folder entry's path, else the tab's terminal's cwd. */
 function focusedCwd(state: AppState): string | undefined {
   const tab = state.tabs.find((t) => t.id === state.activeTabId)
   const folder = tab ? state.objects[tab.activeEntryId] : undefined
@@ -138,9 +139,26 @@ function wslShellFor(
   return ok(inherited) ? inherited : state.shells.find(ok)
 }
 
-/** The shell for a new terminal in folder `f`: a WSL one for its distro, else a host one. */
-const shellForFolder = (state: AppState, src: Session | undefined, f: FolderEntry) =>
-  f.wsl ? wslShellFor(state, src, f.wsl.distro) : hostShellFor(state, src)
+// A focused folder's: a host shell, or a WSL one for its distro. A WSL folder no listed shell
+// matches falls back to the tab's terminal in its own folder (a host shell can't use a Linux
+// path), as does a tab with no folder focused.
+/** The shell and folder a new terminal of `tab` starts with. */
+function newTerminalSource(
+  state: AppState,
+  tab: Tab,
+  fallback: ShellOption | undefined,
+): { shell: ShellOption; cwd: string | undefined; src: Session | undefined } | undefined {
+  const src = state.sessions[tab.activeSessionId]
+  const folder = focusedFolder(state, tab)
+  if (folder) {
+    const shell = folder.wsl
+      ? wslShellFor(state, src, folder.wsl.distro)
+      : (hostShellFor(state, src) ?? fallback)
+    if (shell) return { shell, cwd: folder.path, src }
+  }
+  const shell = inheritShell(state.shells, src) ?? fallback
+  return shell ? { shell, cwd: src?.cwd, src } : undefined
+}
 
 /** The single right-side panel's active view (null = hidden). Files / Changes / Agents
  *  share one panel — the top-bar icons switch it (click the active one to hide). */
@@ -887,14 +905,12 @@ export const useStore = create<AppState>((set, get) => ({
       if (!tab) return {}
       // Inherit the source pane's shell + cwd (WSL → WSL), not the list's first entry.
       const src = state.sessions[tab.activeSessionId]
-      // A focused folder: a terminal in that folder (a local one: the folder is on this machine).
-      const folder = focusedFolder(state, tab)
-      const shell =
-        (folder ? shellForFolder(state, src, folder) : inheritShell(state.shells, src)) ?? fallback
-      if (!shell) return {}
+      // A focused folder: a terminal in that folder (newTerminalSource).
+      const from = newTerminalSource(state, tab, fallback)
+      if (!from) return {}
+      const { shell, cwd } = from
       // An ssh pane's split opens where it verifiably is (its host's shell integration).
       const reopen = shell.remote ? reopenFor(src) : undefined
-      const cwd = folder ? folder.path : src?.cwd
       const next = splitActivePane(state, { shell, cwd, direction, reopen })
       return { ...next, ...hintFor(state, shell, next) }
     }),
@@ -941,11 +957,9 @@ export const useStore = create<AppState>((set, get) => ({
       const pane = findPane(tab.root, tab.activeEntryId) // the focused pane
       if (!pane) return {}
       const src = state.sessions[tab.activeSessionId]
-      const folder = focusedFolder(state, tab) // a terminal in the focused folder
-      const shell =
-        (folder ? shellForFolder(state, src, folder) : inheritShell(state.shells, src)) ?? fallback
-      if (!shell) return {}
-      const cwd = folder ? folder.path : src?.cwd
+      const from = newTerminalSource(state, tab, fallback) // in the focused folder, if any
+      if (!from) return {}
+      const { shell, cwd } = from
       const session = makeSession(shell, cwd, shell.remote ? reopenFor(src) : undefined)
       const root = addSurface(tab.root, pane.id, session.id)
       const next = {
