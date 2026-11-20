@@ -148,4 +148,23 @@ describe("FolderView", () => {
     render(<FolderView entryId={entryId} tabId={tabId} />)
     expect(await screen.findByText("Couldn't read this folder")).toBeInTheDocument()
   })
+
+  it("shows git marks for a folder in another repo, from the folder entries' own poll", async () => {
+    vi.mocked(ipc.readdir).mockResolvedValue(ls(["app.ts", false]))
+    vi.mocked(ipc.gitStatus).mockResolvedValue({
+      isRepo: true,
+      root: "/fvg",
+      branch: "main",
+      ahead: 0,
+      behind: 0,
+      files: [{ path: "app.ts", status: "M" }],
+      add: 1,
+      del: 0,
+    } as never)
+    const { tabId, entryId } = open("/fvg")
+    const view = render(<FolderView entryId={entryId} tabId={tabId} />)
+    await waitFor(() => expect(screen.getByText("M")).toBeInTheDocument())
+    expect(ipc.gitStatus).toHaveBeenCalledWith("/fvg", undefined)
+    view.unmount()
+  })
 })

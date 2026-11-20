@@ -51,6 +51,7 @@ import { wslContext } from "../lib/wsl"
  *  Terminals live in TerminalManager, so switching surfaces re-attaches (no respawn). */
 export function TerminalPane({ pane, tabId }: { pane: PaneLeaf; tabId: string }) {
   const mountRef = useRef<HTMLDivElement>(null)
+  const folderRef = useRef<HTMLDivElement>(null) // the folder view's box, while one shows
   const stripRef = useRef<HTMLDivElement>(null)
   const [menu, setMenu] = useState<{ x: number; y: number; hasSel: boolean } | null>(null)
   const activeId = pane.activeEntryId
@@ -199,6 +200,21 @@ export function TerminalPane({ pane, tabId }: { pane: PaneLeaf; tabId: string })
       TerminalManager.detach(activeId, el)
     }
   }, [activeId, pane.id, tabId])
+
+  // A folder shows: the pane's parked terminals still follow its size (a terminal's mount would
+  // be this box minus its 4px / 2px padding), so a TUI isn't drawn at a stale width meanwhile.
+  useEffect(() => {
+    const el = folderRef.current
+    if (!el || isTerminalEntry(activeId)) return
+    const ro = new ResizeObserver(() => {
+      const r = el.getBoundingClientRect()
+      for (const id of paneSessionIds(pane))
+        TerminalManager.sizeHidden(id, r.width - 8, r.height - 4)
+    })
+    ro.observe(el)
+    return () => ro.disconnect()
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- the pane's terminals, by content
+  }, [activeId, pane.entryIds.join(" ")])
 
   // Hidden surfaces still run: spawn/reattach their PTY (status, notifications, cwd)
   // without mounting them — e.g. after a restore or renderer reload.
@@ -543,7 +559,9 @@ export function TerminalPane({ pane, tabId }: { pane: PaneLeaf; tabId: string })
           <div className="terminal-mount" ref={mountRef} />
         </>
       ) : (
-        <FolderView entryId={activeId} tabId={tabId} />
+        <div className="folder-mount" ref={folderRef}>
+          <FolderView entryId={activeId} tabId={tabId} />
+        </div>
       )}
       {folderMenu && (
         <ContextMenu

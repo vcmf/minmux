@@ -1304,6 +1304,12 @@ body.resizing-col {
 }
 /* A folder entry in a pane (a tab beside its terminals): a lazy tree on a fixed path. Plain
    DOM, never over a WebGL canvas (showing it parks the pane's terminals). */
+.folder-mount {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
 .folder-view {
   flex: 1 1 auto;
   min-height: 0;

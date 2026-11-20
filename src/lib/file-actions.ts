@@ -26,7 +26,7 @@ export function revealLabel(platform: string): string {
 }
 
 export type FileActionId =
-  "preview" | "open" | "setRoot" | "reveal" | "copyPath" | "copyRel" | "openHere"
+  "preview" | "open" | "setRoot" | "reveal" | "copyPath" | "copyRel" | "openHere" | "openTab"
 
 export interface MenuItemSpec<Id extends string = FileActionId> {
   id: Id
@@ -69,6 +69,7 @@ export function folderMenuItems(revealLabel: string, revealHint?: string): MenuI
   return [
     { id: "copyPath", label: "Copy path" },
     { id: "openHere", label: "Open terminal here" },
+    { id: "openTab", label: "Open in a tab" }, // a folder tab in the terminal's pane
     {
       id: "reveal",
       label: revealLabel,

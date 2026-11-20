@@ -120,13 +120,27 @@ function focusedCwd(state: AppState): string | undefined {
   return sid ? state.sessions[sid]?.cwd : undefined
 }
 
-// A WSL folder's new terminals still come from the tab's terminal (a known limit: they don't
-// open in the folder yet).
-/** The focused folder entry of `tab`, when its focus is one on this machine. */
-const focusedFolder = (state: AppState, tab: Tab): FolderEntry | undefined => {
-  const f = state.objects[tab.activeEntryId]
-  return f && !f.wsl ? f : undefined
+/** The focused folder entry of `tab`, if its focus is one. */
+const focusedFolder = (state: AppState, tab: Tab): FolderEntry | undefined =>
+  state.objects[tab.activeEntryId]
+
+/** A WSL shell for `distro` (undefined: the default one): the inherited one if it matches. */
+function wslShellFor(
+  state: AppState,
+  src: Session | undefined,
+  distro: string | undefined,
+): ShellOption | undefined {
+  const ok = (s: ShellOption | undefined) => {
+    const w = s && !s.remote ? wslContext(s.command, s.args) : undefined
+    return !!w && w.distro === distro
+  }
+  const inherited = inheritShell(state.shells, src)
+  return ok(inherited) ? inherited : state.shells.find(ok)
 }
+
+/** The shell for a new terminal in folder `f`: a WSL one for its distro, else a host one. */
+const shellForFolder = (state: AppState, src: Session | undefined, f: FolderEntry) =>
+  f.wsl ? wslShellFor(state, src, f.wsl.distro) : hostShellFor(state, src)
 
 /** The single right-side panel's active view (null = hidden). Files / Changes / Agents
  *  share one panel — the top-bar icons switch it (click the active one to hide). */
@@ -161,6 +175,7 @@ interface AppState {
   rightPanelWidth: number // px width of the right panel (drag-resizable, persisted)
   sidebarCollapsed: boolean
   git: GitStatus | null
+  folderGit: Record<string, GitStatus> // folder entries' other repos, by repoKey (lib/folder-git)
   agents: AgentGraph // live tree of agents/sub-agents (M6, fed by hook events)
   home: string
   platform: string // process.platform ("darwin"|"win32"|"linux"); "" until fetched
@@ -196,6 +211,7 @@ interface AppState {
   clearPaneRoot: (sessionId: string) => void
   setSessionOscTitle: (sessionId: string, title: string) => void
   setGit: (git: GitStatus | null) => void
+  setFolderGit: (key: string, git: GitStatus | null) => void // null drops it
   applyAgentEvents: (events: AgentEvent[]) => void
   agentExited: (paneId: string) => void // the pane's shell prompt came back after its agent
   setRightView: (view: RightView) => void
@@ -518,6 +534,7 @@ export const useStore = create<AppState>((set, get) => ({
   paneRoot: {},
   objects: {},
   folderViews: {},
+  folderGit: {},
   closeConfirm: null,
   dragging: null,
   agentMeta: {},
@@ -598,6 +615,16 @@ export const useStore = create<AppState>((set, get) => ({
       return { sessions: { ...state.sessions, [sessionId]: { ...s, oscTitle: next } } }
     }),
   setGit: (git) => set({ git }),
+  setFolderGit: (key, git) =>
+    set((state) => {
+      const cur = state.folderGit[key]
+      if (git && cur && JSON.stringify(cur) === JSON.stringify(git)) return state // no re-render
+      if (!git && !cur) return state
+      const folderGit = { ...state.folderGit }
+      if (git) folderGit[key] = git
+      else delete folderGit[key]
+      return { folderGit }
+    }),
 
   // Fold a coalesced batch of hook events into the agent tree (one re-render per batch).
   applyAgentEvents: (events) =>
@@ -863,7 +890,7 @@ export const useStore = create<AppState>((set, get) => ({
       // A focused folder: a terminal in that folder (a local one: the folder is on this machine).
       const folder = focusedFolder(state, tab)
       const shell =
-        (folder ? hostShellFor(state, src) : inheritShell(state.shells, src)) ?? fallback
+        (folder ? shellForFolder(state, src, folder) : inheritShell(state.shells, src)) ?? fallback
       if (!shell) return {}
       // An ssh pane's split opens where it verifiably is (its host's shell integration).
       const reopen = shell.remote ? reopenFor(src) : undefined
@@ -916,7 +943,7 @@ export const useStore = create<AppState>((set, get) => ({
       const src = state.sessions[tab.activeSessionId]
       const folder = focusedFolder(state, tab) // a terminal in the focused folder
       const shell =
-        (folder ? hostShellFor(state, src) : inheritShell(state.shells, src)) ?? fallback
+        (folder ? shellForFolder(state, src, folder) : inheritShell(state.shells, src)) ?? fallback
       if (!shell) return {}
       const cwd = folder ? folder.path : src?.cwd
       const session = makeSession(shell, cwd, shell.remote ? reopenFor(src) : undefined)

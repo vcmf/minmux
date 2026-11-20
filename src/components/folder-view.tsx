@@ -20,6 +20,8 @@ import { isAbsoluteHostPath, revealLabel } from "../lib/file-actions"
 import { isInside, samePath } from "../lib/agent-dirs"
 import { shortCwd } from "../lib/session-label"
 import { useFileMenu } from "./use-file-menu"
+import { wantGit } from "../lib/folder-git-poll"
+import { statusFor } from "../lib/folder-git"
 
 const SETTLE_MS = 2000 // one more read this long after a folder's last change event
 const subscribe = (fn: () => void) => listings.subscribe(fn) // stable: React re-subscribes on change
@@ -46,7 +48,8 @@ export function FolderView({ entryId, tabId }: { entryId: string; tabId: string 
   const view = useStore((s) => s.folderViews[entryId]) ?? EMPTY_VIEW
   const home = useStore((s) => s.home)
   const platform = useStore((s) => s.platform)
-  const git = useStore((s) => s.git)
+  const focusedGit = useStore((s) => s.git)
+  const folderGit = useStore((s) => s.folderGit)
   const root = folder?.path ?? ""
   const wsl = folder?.wsl
   const scope = wsl ? `wsl:${wsl.distro ?? ""}` : ""
@@ -68,14 +71,22 @@ export function FolderView({ entryId, tabId }: { entryId: string; tabId: string 
   const shownRef = useRef(shown)
   shownRef.current = shown
 
-  // Git marks from the poll that already runs (the focused terminal's repo) when this folder is
-  // in that repo; other repos get their own poll later (WORKDIR_OBJECTS.md, step 2b).
+  // Git marks: from the poll that already runs when this folder is in the focused terminal's
+  // repo, else from the folder entries' own poll (lib/folder-git-poll), which this view joins
+  // while it's shown.
+  useEffect(() => {
+    if (!root) return
+    wantGit(entryId, { path: root, wsl })
+    return () => wantGit(entryId, null)
+  }, [entryId, root, wsl])
+  const inFocused =
+    !!focusedGit?.isRepo &&
+    !wsl &&
+    (samePath(root, focusedGit.root) || isInside(root, focusedGit.root))
+  const git = inFocused ? focusedGit : statusFor(folderGit, root, wsl)
   const deco = useMemo(
-    () =>
-      git?.isRepo && !wsl && (samePath(root, git.root) || isInside(root, git.root))
-        ? buildGitDecorations(git.root, git.files)
-        : null,
-    [git?.isRepo, git?.root, git?.files, root, wsl],
+    () => (git?.isRepo ? buildGitDecorations(git.root, git.files) : null),
+    [git?.isRepo, git?.root, git?.files],
   )
 
   // `urgent`: the user waits on it (no listing yet, Refresh). One key per folder for every

@@ -1646,4 +1646,16 @@ describe("store — folder entries", () => {
     const fresh = st().tabs.find((t) => t.activeEntryId === id)!
     expect(fresh.activeSessionId).toBe("")
   })
+
+  it("a WSL folder's new terminal is a WSL shell for its distro, in the folder", () => {
+    const ubuntu = { id: "u", label: "Ubuntu", command: "wsl.exe", args: ["-d", "Ubuntu"] }
+    useStore.setState({ shells: [shell, ubuntu] })
+    st().newTab(shell)
+    st().openFolder("/home/u/proj", { wsl: { distro: "Ubuntu" } })
+    st().newSurface()
+    const s = st().sessions[tab().activeSessionId]!
+    expect(s.command).toBe("wsl.exe")
+    expect(s.args).toEqual(["-d", "Ubuntu"])
+    expect(s.cwd).toBe("/home/u/proj")
+  })
 })
