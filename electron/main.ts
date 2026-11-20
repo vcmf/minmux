@@ -1833,6 +1833,7 @@ app.on("quit", () => diag("quit"))
 /** OS logout/restart: end every PTY without holding the quit (a hold reads as "cancelled"). */
 function killNow(): void {
   sessionLedger().freeze()
+  userNamesStore?.saveSync() // a name set just before: its async write may never land
   for (const rec of sessions.values()) rec.coalescer?.dispose()
   for (const p of livePtys) {
     try {
@@ -1868,6 +1869,7 @@ function shutdownPtys(): Promise<void> {
     // Keep every "inside Claude" entry for the relaunch BEFORE our kill makes Claude fire
     // SessionEnd (which would otherwise clear them).
     sessionLedger().freeze()
+    userNamesStore?.saveSync()
     for (const rec of sessions.values()) rec.coalescer?.dispose()
     const count = livePtys.size
     const drained = drainPtys([...livePtys], ptyDrainOptions({}))
