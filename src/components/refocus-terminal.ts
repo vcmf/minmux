@@ -1,10 +1,18 @@
-import { focusedTerminal, useStore } from "../store"
+import { useStore } from "../store"
+import { isTerminalEntry } from "../lib/entries"
 import { TerminalManager } from "../terminal/terminal-manager"
+
+/** Give the keyboard to entry `id`: a terminal, or a folder / file view (its element). */
+export function focusEntry(id: string): void {
+  if (isTerminalEntry(id)) TerminalManager.focus(id)
+  else document.querySelector<HTMLElement>(`[data-entry="${id}"]`)?.focus()
+}
 
 /** Give the keyboard to the active tab's focused entry, now. */
 export function focusActiveEntry(): void {
-  const sid = focusedTerminal(useStore.getState())
-  if (sid) TerminalManager.focus(sid)
+  const s = useStore.getState()
+  const id = s.tabs.find((t) => t.id === s.activeTabId)?.activeEntryId
+  if (id) focusEntry(id)
 }
 
 /** Give the keyboard back to the active entry (after a rename or a menu) — unless by the

@@ -134,7 +134,8 @@ export interface Ipc {
   prReviewers: (req: PrReviewersRequest) => Promise<PrReviewersResult> // request / un-request
   gitDiff: (cwd: string, file: string, wsl?: WslContext) => Promise<DiffLine[]>
   readWorkspace: () => Promise<string>
-  writeWorkspace: (contents: string) => void
+  writeWorkspace: (contents: string, layout?: string) => void // layout: layout.json, written first
+  readLayout: () => Promise<string> // layout.json ("" when there's none)
   appMetrics: () => Promise<ProcMetric[]>
   perfMode: () => Promise<boolean>
   appVersion: () => Promise<string>

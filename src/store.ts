@@ -5,6 +5,7 @@ import type { Session, ShellOption, SshHost, Tab } from "./types"
 import type { PrRef } from "./lib/pr-detail"
 import {
   addSurface,
+  allEntryIds,
   allSessionIds,
   findPane,
   findPaneById,
@@ -18,6 +19,7 @@ import {
   visibleSessionIds,
 } from "./lib/pane-tree"
 import { makeTab, withFocus } from "./lib/tab-focus"
+import { EMPTY_VIEW, objectId, type FolderEntry, type FolderView } from "./lib/folder-entries"
 import { isTerminalEntry } from "./lib/entries"
 import { inheritShell, resolveDefaultShell } from "./lib/shells"
 import { hostShellOption, sameHosts } from "./lib/ssh-hosts-ui"
@@ -97,11 +99,20 @@ function localShellFor(state: AppState, src: Session | undefined): ShellOption |
   return resolveDefaultShell(state.shells, state.settings.defaultShell)
 }
 
-/** The cwd of the currently focused terminal, if known — new panes/tabs inherit it. */
+/** Where new panes/tabs open: the focused folder entry's path, else the tab's terminal's cwd. */
 function focusedCwd(state: AppState): string | undefined {
   const tab = state.tabs.find((t) => t.id === state.activeTabId)
+  const folder = tab ? state.objects[tab.activeEntryId] : undefined
+  if (folder && !folder.wsl) return folder.path
   const sid = tab?.activeSessionId
   return sid ? state.sessions[sid]?.cwd : undefined
+}
+
+/** The focused folder entry of `tab`, if its focus is one on this machine (a WSL folder's
+ *  terminals still come from the tab's WSL terminal). */
+const focusedFolder = (state: AppState, tab: Tab): FolderEntry | undefined => {
+  const f = state.objects[tab.activeEntryId]
+  return f && !f.wsl ? f : undefined
 }
 
 /** The single right-side panel's active view (null = hidden). Files / Changes / Agents
@@ -146,6 +157,8 @@ interface AppState {
   // is read via its UNC share (captured at open time — the active pane may change after).
   preview: { abs: string; name: string; wsl?: WslContext } | null
   paneRoot: Record<string, string> // per-session Files-panel root override (absent = follow cwd)
+  objects: Record<string, FolderEntry> // pane entries that aren't terminals, by `obj-` id
+  folderViews: Record<string, FolderView> // per folder entry: what its view has open
   closeConfirm: CloseConfirm | null // a close awaiting the "are you sure?" dialog (lib/close-confirm)
   dragging: { tabId: string; sessionId: string } | null // surface being dragged (drop hints on)
   agentMeta: Record<string, SessionMeta> // per pane: the agent session's /color + /rename
@@ -162,6 +175,11 @@ interface AppState {
   setEditor: (editor: EditorInfo) => void
   setPreview: (preview: { abs: string; name: string; wsl?: WslContext } | null) => void
   setPaneRoot: (sessionId: string, root: string) => void
+  /** Open a folder as a new tab of a pane (default: the active tab's focused pane), focused. */
+  openFolder: (path: string, opts?: { tabId?: string; paneId?: string; wsl?: WslContext }) => void
+  setFolderView: (id: string, view: FolderView) => void
+  setFolderRoot: (id: string, path: string) => void // re-root a folder entry (double-click)
+  requestCloseEntry: (tabId: string, entryId: string) => void // a terminal asks; a folder closes
   clearPaneRoot: (sessionId: string) => void
   setSessionOscTitle: (sessionId: string, title: string) => void
   setGit: (git: GitStatus | null) => void
@@ -407,6 +425,19 @@ function dropSessions(
   }
 }
 
+/** Drop folder / file entries from the store maps (terminal ids are ignored). */
+function dropObjects(state: AppState, ids: string[]): Pick<AppState, "objects" | "folderViews"> {
+  const gone = ids.filter((id) => id in state.objects || id in state.folderViews)
+  if (!gone.length) return { objects: state.objects, folderViews: state.folderViews }
+  const objects = { ...state.objects }
+  const folderViews = { ...state.folderViews }
+  for (const id of gone) {
+    delete objects[id]
+    delete folderViews[id]
+  }
+  return { objects, folderViews }
+}
+
 /** Remove a tab; if it was active, the last remaining tab takes over. */
 function withoutTab(state: AppState, tabId: string): Pick<AppState, "tabs" | "activeTabId"> {
   const tabs = state.tabs.filter((t) => t.id !== tabId)
@@ -472,6 +503,8 @@ export const useStore = create<AppState>((set, get) => ({
   editor: null,
   preview: null,
   paneRoot: {},
+  objects: {},
+  folderViews: {},
   closeConfirm: null,
   dragging: null,
   agentMeta: {},
@@ -497,6 +530,46 @@ export const useStore = create<AppState>((set, get) => ({
       if (!isAbsoluteHostPath(norm)) return {}
       return { paneRoot: { ...s.paneRoot, [sessionId]: norm } }
     }),
+  openFolder: (path, opts = {}) =>
+    set((state) => {
+      const tab = state.tabs.find((t) => t.id === (opts.tabId ?? state.activeTabId))
+      if (!tab || !path) return {}
+      const pane = opts.paneId
+        ? findPaneById(tab.root, opts.paneId)
+        : findPane(tab.root, tab.activeEntryId)
+      if (!pane) return {}
+      const id = objectId(newId())
+      const folder: FolderEntry = {
+        kind: "folder",
+        path: normalizeRootPath(path),
+        ...(opts.wsl ? { wsl: opts.wsl } : {}),
+      }
+      const root = addSurface(tab.root, pane.id, id)
+      return {
+        objects: { ...state.objects, [id]: folder },
+        tabs: replaceTab(state.tabs, tab.id, (t) => withFocus(t, id, root)),
+        activeTabId: tab.id,
+      }
+    }),
+
+  setFolderView: (id, view) =>
+    set((state) =>
+      !state.objects[id] || state.folderViews[id] === view
+        ? state // same state: nothing notified, nothing saved
+        : { folderViews: { ...state.folderViews, [id]: view } },
+    ),
+
+  setFolderRoot: (id, path) =>
+    set((state) => {
+      const cur = state.objects[id]
+      const norm = normalizeRootPath(path)
+      if (!cur || cur.path === norm) return state
+      return {
+        objects: { ...state.objects, [id]: { ...cur, path: norm } },
+        folderViews: { ...state.folderViews, [id]: EMPTY_VIEW },
+      }
+    }),
+
   clearPaneRoot: (sessionId) =>
     set((s) => {
       if (!(sessionId in s.paneRoot)) return {}
@@ -704,6 +777,8 @@ export const useStore = create<AppState>((set, get) => ({
       remoteDetail: {},
       tabs: ws.tabs,
       activeTabId: ws.activeTabId,
+      objects: ws.objects ?? {},
+      folderViews: ws.folderViews ?? {},
       ...(ws.rightPanelWidth !== undefined ? { rightPanelWidth: ws.rightPanelWidth } : {}),
     }),
   setRightPanelWidth: (px, maxAvail) => set({ rightPanelWidth: clampPanelWidth(px, maxAvail) }),
@@ -725,7 +800,11 @@ export const useStore = create<AppState>((set, get) => ({
       closing((state) => {
         const tab = state.tabs.find((t) => t.id === tabId)
         if (!tab) return {}
-        return { ...dropSessions(state, allSessionIds(tab.root)), ...withoutTab(state, tabId) }
+        return {
+          ...dropSessions(state, allSessionIds(tab.root)),
+          ...dropObjects(state, allEntryIds(tab.root)),
+          ...withoutTab(state, tabId),
+        }
       }),
     ),
 
@@ -768,11 +847,15 @@ export const useStore = create<AppState>((set, get) => ({
       if (!tab) return {}
       // Inherit the source pane's shell + cwd (WSL → WSL), not the list's first entry.
       const src = state.sessions[tab.activeSessionId]
-      const shell = inheritShell(state.shells, src) ?? fallback
+      // A focused folder: a terminal in that folder (a local one: the folder is on this machine).
+      const folder = focusedFolder(state, tab)
+      const shell =
+        (folder ? localShellFor(state, src) : inheritShell(state.shells, src)) ?? fallback
       if (!shell) return {}
       // An ssh pane's split opens where it verifiably is (its host's shell integration).
       const reopen = shell.remote ? reopenFor(src) : undefined
-      const next = splitActivePane(state, { shell, cwd: src?.cwd, direction, reopen })
+      const cwd = folder ? folder.path : src?.cwd
+      const next = splitActivePane(state, { shell, cwd, direction, reopen })
       return { ...next, ...hintFor(state, shell, next) }
     }),
 
@@ -818,9 +901,12 @@ export const useStore = create<AppState>((set, get) => ({
       const pane = findPane(tab.root, tab.activeEntryId) // the focused pane
       if (!pane) return {}
       const src = state.sessions[tab.activeSessionId]
-      const shell = inheritShell(state.shells, src) ?? fallback
+      const folder = focusedFolder(state, tab) // a terminal in the focused folder
+      const shell =
+        (folder ? localShellFor(state, src) : inheritShell(state.shells, src)) ?? fallback
       if (!shell) return {}
-      const session = makeSession(shell, src?.cwd, shell.remote ? reopenFor(src) : undefined)
+      const cwd = folder ? folder.path : src?.cwd
+      const session = makeSession(shell, cwd, shell.remote ? reopenFor(src) : undefined)
       const root = addSurface(tab.root, pane.id, session.id)
       const next = {
         sessions: { ...state.sessions, [session.id]: session },
@@ -835,7 +921,7 @@ export const useStore = create<AppState>((set, get) => ({
         const tab = state.tabs.find((t) => t.id === tabId)
         const pane = tab && findPane(tab.root, sessionId)
         if (!tab || !pane) return {}
-        const dropped = dropSessions(state, [sessionId])
+        const dropped = { ...dropSessions(state, [sessionId]), ...dropObjects(state, [sessionId]) }
         const root = removeNode(tab.root, sessionId)
         if (root === null) return { ...dropped, ...withoutTab(state, tabId) }
         // Closing the focused terminal: focus moves to the surface its pane now shows,
@@ -860,7 +946,10 @@ export const useStore = create<AppState>((set, get) => ({
         const tab = state.tabs.find((t) => t.id === tabId)
         const pane = tab && findPaneById(tab.root, paneId)
         if (!tab || !pane) return {}
-        const dropped = dropSessions(state, paneSessionIds(pane))
+        const dropped = {
+          ...dropSessions(state, paneSessionIds(pane)),
+          ...dropObjects(state, pane.entryIds),
+        }
         const root = removePane(tab.root, paneId)
         if (root === null) return { ...dropped, ...withoutTab(state, tabId) }
         const focus = pane.entryIds.includes(tab.activeEntryId)
@@ -881,9 +970,18 @@ export const useStore = create<AppState>((set, get) => ({
     const ids = paneSessionIds(pane)
     if (ids.length > 1) {
       set({ closeConfirm: { kind: "pane", tabId, paneId, count: ids.length } })
-    } else if (ids[0]) {
+    } else if (ids[0] && pane.entryIds.length === 1) {
       // One terminal: the terminal rule (asks while it runs a command or Claude).
       get().requestCloseTerminal(tabId, ids[0])
+    } else if (ids[0]) {
+      // One terminal beside folders: its question, but the whole pane closes.
+      const s = get()
+      const [t] = terminalStates(s, ids)
+      const session = s.sessions[ids[0]]
+      const ask =
+        t && session ? terminalCloseConfirm(tabId, displaySessionTitle(session, s.home), t) : null
+      if (ask?.kind === "terminal") set({ closeConfirm: { ...ask, paneId } })
+      else s.closePane(tabId, paneId)
     } else {
       get().closePane(tabId, paneId) // no terminal: nothing to ask about
     }
@@ -915,7 +1013,13 @@ export const useStore = create<AppState>((set, get) => ({
     if (!c) return
     if (c.kind === "pane") get().closePane(c.tabId, c.paneId)
     else if (c.kind === "tab") get().closeTab(c.tabId)
+    else if (c.paneId) get().closePane(c.tabId, c.paneId)
     else get().closeSurface(c.tabId, c.sessionId)
+  },
+
+  requestCloseEntry: (tabId, entryId) => {
+    if (isTerminalEntry(entryId)) get().requestCloseTerminal(tabId, entryId)
+    else get().closeSurface(tabId, entryId) // a folder / file: nothing runs, nothing to ask
   },
 
   cancelClose: () => set({ closeConfirm: null }),

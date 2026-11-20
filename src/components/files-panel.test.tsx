@@ -209,6 +209,6 @@ describe("FilesPanel — live refresh", () => {
     await waitFor(() => expect(screen.getByText("y.ts")).toBeInTheDocument())
     expect(ipc.readdir).not.toHaveBeenCalledWith("/somewhere/else", undefined)
     unmount()
-    expect(ipc.fsWatch).toHaveBeenLastCalledWith([])
+    await waitFor(() => expect(ipc.fsWatch).toHaveBeenLastCalledWith([])) // sent at the tick's end
   })
 })

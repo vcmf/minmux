@@ -96,6 +96,7 @@ const minmuxStub = {
   gitDiff: vi.fn(async () => []),
   readWorkspace: vi.fn(async () => ""),
   writeWorkspace: vi.fn(),
+  readLayout: vi.fn(async () => ""),
   appMetrics: vi.fn(async () => []),
   perfMode: vi.fn(async () => false),
   appVersion: vi.fn(async () => "0.1.24"),

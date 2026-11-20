@@ -14,7 +14,14 @@ import { allSessionIds, findPaneById } from "./pane-tree"
 export type CloseConfirm =
   | { kind: "pane"; tabId: string; paneId: string; count: number }
   | { kind: "tab"; tabId: string; title: string; count: number; agents: AgentKind[] }
-  | { kind: "terminal"; tabId: string; sessionId: string; title: string; agent?: AgentKind }
+  | {
+      kind: "terminal"
+      tabId: string
+      sessionId: string
+      title: string
+      agent?: AgentKind
+      paneId?: string // closing this pane (its only terminal, beside folders), not just the terminal
+    }
 
 /** A terminal's state, as far as closing it is concerned. */
 export interface TerminalState {

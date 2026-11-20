@@ -25,7 +25,7 @@ import {
   type FileTreeState,
 } from "../lib/file-tree"
 import { BIG_FOLDER, WATCH_CAP } from "../lib/dir-listing"
-import { ReadQueue } from "../lib/read-queue"
+import { folderReads as reads, watches } from "../lib/fs-reads"
 import { buildGitDecorations, statusLetter, statusColor } from "../lib/git-decorations"
 import { useFileMenu } from "./use-file-menu"
 import { RootBreadcrumb } from "./root-breadcrumb"
@@ -34,10 +34,10 @@ import { RootBreadcrumb } from "./root-breadcrumb"
 // tree instantly instead of re-listing. Bounded to 16 folders (each listing itself capped
 // by the backend → a few-MB ceiling). Module-level so it survives the panel unmounting.
 const cache = new FileTreeCache(16)
-// Every folder read goes through one queue: one at a time, rate-limited, big folders backed
-// off (lib/read-queue). Module-level like the cache; a closed panel drops its queued reads,
-// and a running read's late result is cached (or dropped by `apply` for a root you've left).
-const reads = new ReadQueue()
+// Every folder read goes through the renderer's one queue (lib/fs-reads), under this panel's
+// own key prefix; a closed panel drops its queued reads, and a running read's late result is
+// cached (or dropped by `apply` for a root you've left).
+const PANEL = "panel\0"
 const SETTLE_MS = 2000 // one more read this long after a folder's last change event
 
 /** Right-rail lazy file browser rooted at the focused pane's root (its cwd by default, or
@@ -83,7 +83,7 @@ export function FilesPanel() {
       // Same test as the tree's preview (lib/dir-listing previewEntries): over BIG_FOLDER.
       const big = (cache.peek(key)?.listings[dir]?.total ?? 0) > BIG_FOLDER
       reads.request({
-        key: `${key}\0${dir}`,
+        key: `${PANEL}${key}\0${dir}`,
         urgent,
         front,
         big,
@@ -98,7 +98,7 @@ export function FilesPanel() {
   useEffect(() => {
     rootRef.current = root
     // Queued reads for roots no longer shown would hold up this one's.
-    reads.drop((k) => !root || !k.startsWith(`${root}\0`))
+    reads.drop((k) => k.startsWith(PANEL) && (!root || !k.startsWith(`${PANEL}${root}\0`)))
     if (!root) {
       setTree(null)
       return
@@ -124,7 +124,7 @@ export function FilesPanel() {
   }, [root, load])
 
   // A closed panel shows nothing: its queued reads would only hold up the next one.
-  useEffect(() => () => reads.drop(() => true), [])
+  useEffect(() => () => reads.drop((k) => k.startsWith(PANEL)), [])
 
   // ── Live refresh (watchers in main's fs worker) ──
   // Watched: the open folders you can see, on a local pane (a WSL 9p share can't be watched
@@ -142,10 +142,10 @@ export function FilesPanel() {
   )
   const watchKey = watched.join("\0")
   useEffect(() => {
-    void ipc.fsWatch(watched).catch(() => {})
+    watches.set("files-panel", watched)
     // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on the set's content
   }, [watchKey])
-  useEffect(() => () => void ipc.fsWatch([]).catch(() => {}), []) // panel closed: stop
+  useEffect(() => () => watches.set("files-panel", []), []) // panel closed: stop
 
   // The open folders you can see now (for the fallbacks below), from the cache's latest.
   const shownNow = useCallback(() => {

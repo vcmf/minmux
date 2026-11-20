@@ -46,7 +46,8 @@ src/
                           pane-git, terminal-keys, …; ipc.ts = the only backend seam
   settings/               schema (merge/validate) · themes (families × dark/light) · io
   components/             top-bar, sidebar, terminal-pane (surface tabs, drag & drop),
-                          pane-layout, theme-picker, close-pane-dialog, palettes/panels, …
+                          folder-view (a folder entry in a pane: lib/folder-entries,
+                          listing-store, fs-reads), pane-layout, theme-picker, palettes/panels, …
 .claude/skills/run-minmux drive the BUILT app with Playwright (real-app verification)
 ```
 
@@ -99,7 +100,8 @@ Rules the code relies on but can't enforce — most past review findings broke o
 - **Settings change via `store.updateSettings`** (validate + apply + persist); the theme to
   render is `activeTheme(state)` (family × appearance), never `settings.theme` directly.
 - **Persisted files stay readable by older builds** (workspace v2 keeps a legacy `sessionId`
-  per leaf), and a file written by a **newer** build is never overwritten.
+  per leaf and lists terminals only; folder entries live in `layout.json`, lib/layout-file),
+  and a file written by a **newer** build is never overwritten.
 - **Claude hook payloads + transcripts are internal formats** — parse best-effort, never throw,
   read incrementally off the hot path (Codex's and OpenCode's too). → GOTCHAS #claude-transcript
 - **Agent specifics live in `electron/agents/*` and `src/lib/agent-kinds.ts`** (plus icons and

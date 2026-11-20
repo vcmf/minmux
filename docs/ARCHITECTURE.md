@@ -355,7 +355,12 @@ non-default profile; a dev build is `minmux-dev` (GOTCHAS #profiles).
   width, and enough per session to respawn it (shell, args, cwd). **v2** leaves are
   `{id, sessionIds, activeSessionId}` (the pane's terminals) plus a legacy `sessionId` mirror so
   an older build still restores every pane; v1 files migrate on read. A file from a **newer** build is not parsed
-  and not overwritten. Restore de-duplicates / prunes broken entries.
+  and not overwritten. Restore de-duplicates / prunes broken entries. Panes and tabs with no
+  terminal are left out of it (an older build would drop them, maybe the whole file).
+- **`layout.json`** — the full layout beside it: folder entries (`obj-` ids), panes and tabs of
+  folders only, and what each folder view has open. Saved with `workspace.json` and stamped with
+  its hash; read back whole only while that stamp matches, else `workspace.json` wins and the
+  folders go back into panes still there (`lib/layout-file`).
 - **`agent-sessions.json`** (Claude) and **`agent-sessions.<agent>.json`** — which agent session
   each terminal is inside, so a relaunch can resume it (GOTCHAS #resume).
 - **`agent-names.json`** (the sessions the user named: their colour survives a resume) and

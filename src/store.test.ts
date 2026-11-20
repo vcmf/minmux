@@ -1,7 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest"
 import { reopenFor } from "./lib/remote-reports"
 import { useStore, isVisibleIn, isSessionVisible } from "./store"
-import { allSessionIds, findPane, visibleSessionIds } from "./lib/pane-tree"
+import { allEntryIds, allSessionIds, findPane, visibleSessionIds } from "./lib/pane-tree"
+import { isTerminalEntry } from "./lib/entries"
 import { resetStore, testHost, testShell as shell } from "./test/helpers"
 import { hostShellOption } from "./lib/ssh-hosts-ui"
 import { RIGHT_PANEL_MIN, RIGHT_PANEL_MAX } from "./lib/right-panel"
@@ -10,13 +11,19 @@ import type { ShellOption } from "./types"
 const st = () => useStore.getState()
 
 // Every test ends with a consistent focus: the focused entry is in its tab and is its pane's
-// visible one, and (terminals only, for now) the tab's terminal is the focus.
+// visible one; the tab's terminal is the focus when that's a terminal, else one of the tab's
+// terminals ("" when it has none); and every folder entry in a tab is known to the store.
 afterEach(() => {
   for (const t of st().tabs) {
     const pane = findPane(t.root, t.activeEntryId)
     expect(pane, `tab ${t.id}: focus ${t.activeEntryId} is in no pane`).toBeDefined()
     expect(pane!.activeEntryId).toBe(t.activeEntryId)
-    expect(t.activeSessionId).toBe(t.activeEntryId)
+    const terms = allSessionIds(t.root)
+    if (isTerminalEntry(t.activeEntryId)) expect(t.activeSessionId).toBe(t.activeEntryId)
+    else if (terms.length) expect(terms).toContain(t.activeSessionId)
+    else expect(t.activeSessionId).toBe("")
+    for (const id of allEntryIds(t.root))
+      if (!isTerminalEntry(id)) expect(st().objects[id], `${id} unknown`).toBeDefined()
   }
 })
 const firstTab = () => st().tabs[0]!
@@ -1512,5 +1519,108 @@ describe("reordering sessions", () => {
     expect(order()).toEqual([b, a])
     st().moveActiveTab(1)
     expect(order()).toEqual([a, b])
+  })
+})
+
+describe("store — folder entries", () => {
+  beforeEach(resetStore)
+  const tab = () => st().tabs[0]!
+  const leaf = (n = tab().root) => {
+    if (n.type !== "leaf") throw new Error("expected one pane")
+    return n
+  }
+
+  it("opens a folder as a new, focused tab of the focused pane", () => {
+    st().newTab(shell)
+    const term = tab().activeSessionId
+    st().openFolder("/w/rts/")
+    const id = tab().activeEntryId
+    expect(isTerminalEntry(id)).toBe(false)
+    expect(leaf().entryIds).toEqual([term, id])
+    expect(st().objects[id]).toEqual({ kind: "folder", path: "/w/rts" })
+    expect(tab().activeSessionId).toBe(term) // the tab's terminal stays
+    expect(isVisibleIn(st(), term)).toBe(false) // hidden behind the folder now
+  })
+
+  it("closing a folder tab needs no confirm and drops its state", () => {
+    st().newTab(shell)
+    st().openFolder("/w")
+    const id = tab().activeEntryId
+    st().setFolderView(id, { expanded: ["/w/src"], showAll: [] })
+    st().requestCloseEntry(tab().id, id)
+    expect(st().closeConfirm).toBeNull()
+    expect(st().objects[id]).toBeUndefined()
+    expect(st().folderViews[id]).toBeUndefined()
+    expect(leaf().entryIds).toEqual([tab().activeSessionId])
+  })
+
+  it('a tab can lose its last terminal: its terminal becomes ""', () => {
+    st().newTab(shell)
+    const term = tab().activeSessionId
+    st().openFolder("/w")
+    st().closeSurface(tab().id, term)
+    expect(allSessionIds(tab().root)).toEqual([])
+    expect(tab().activeSessionId).toBe("")
+  })
+
+  it("close pane with one idle terminal beside a folder closes the whole pane", () => {
+    st().newTab(shell)
+    st().splitActive("row", shell)
+    st().openFolder("/w")
+    const id = tab().activeEntryId
+    const pane = findPane(tab().root, id)!
+    st().requestClosePane(tab().id, pane.id)
+    expect(st().closeConfirm).toBeNull()
+    expect(findPane(tab().root, id)).toBeUndefined()
+    expect(st().objects[id]).toBeUndefined()
+  })
+
+  it("…and when its terminal is running, asks first, then closes the whole pane", () => {
+    st().newTab(shell)
+    st().splitActive("row", shell)
+    const term = tab().activeSessionId
+    st().signalSession(term, { type: "command-start" })
+    st().openFolder("/w")
+    const id = tab().activeEntryId
+    const pane = findPane(tab().root, id)!
+    st().requestClosePane(tab().id, pane.id)
+    expect(st().closeConfirm).toMatchObject({ kind: "terminal", sessionId: term, paneId: pane.id })
+    st().confirmClose()
+    expect(findPane(tab().root, id)).toBeUndefined()
+  })
+
+  it("closing a tab drops its folder entries", () => {
+    st().newTab(shell)
+    st().openFolder("/w")
+    const id = tab().activeEntryId
+    st().closeTab(tab().id)
+    expect(st().objects[id]).toBeUndefined()
+  })
+
+  it("a split or a new terminal from a focused folder opens in that folder", () => {
+    st().newTab(shell)
+    st().openFolder("/w/rts")
+    st().newSurface()
+    expect(st().sessions[tab().activeSessionId]!.cwd).toBe("/w/rts")
+    st().openFolder("/w/docs")
+    st().splitActive("row", shell)
+    expect(st().sessions[tab().activeSessionId]!.cwd).toBe("/w/docs")
+  })
+
+  it("setFolderView / setFolderRoot keep the same state when nothing changes", () => {
+    st().newTab(shell)
+    st().openFolder("/w")
+    const id = tab().activeEntryId
+    const before = st()
+    st().setFolderRoot(id, "/w/")
+    expect(st()).toBe(before)
+    const v = { expanded: ["/w/a"], showAll: [] }
+    st().setFolderView(id, v)
+    const after = st()
+    st().setFolderView(id, v)
+    expect(st()).toBe(after)
+    st().setFolderRoot(id, "/w/a")
+    expect(st().objects[id]!.path).toBe("/w/a")
+    expect(st().folderViews[id]!.expanded).toEqual([]) // a new root starts collapsed
   })
 })
