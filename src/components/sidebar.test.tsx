@@ -1071,4 +1071,28 @@ describe("Sidebar — folder tabs", () => {
     fireEvent.mouseDown(screen.getByText("Open in a tab"), { button: 0 })
     expect(st().objects[st().tabs[0]!.activeEntryId]!.path).toBe("/w/rts")
   })
+
+  it("a folder row's menu: a terminal in that folder, no Open in a tab (it is one)", () => {
+    st().newTab(testShell)
+    st().openFolder("/w/docs")
+    render(<Sidebar />)
+    const row = screen.getByTitle("/w/docs")
+    fireEvent.contextMenu(row)
+    expect(screen.queryByText("Open in a tab")).toBeNull()
+    fireEvent.mouseDown(screen.getByText("Open terminal here"), { button: 0 })
+    const tab = st().tabs[0]!
+    expect(st().sessions[tab.activeEntryId]!.cwd).toBe("/w/docs")
+  })
+
+  it("a Git Bash path on Windows can't open as a folder tab", () => {
+    useStore.setState({ platform: "win32" })
+    st().newTab(testShell)
+    const id = allSessionIds(st().tabs[0]!.root)[0]!
+    st().setSessionCwd(id, "/c/Users/me/proj")
+    render(<Sidebar />)
+    const line = screen.getAllByText(/proj/).find((el) => el.closest(".tree-dir"))!
+    fireEvent.contextMenu(line)
+    const item = screen.getByText("Open in a tab").closest("button")!
+    expect(item).toBeDisabled()
+  })
 })

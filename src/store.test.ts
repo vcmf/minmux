@@ -1678,4 +1678,41 @@ describe("store — folder entries", () => {
     st().openFolder("/home/u/proj", { wsl: {} })
     expect(canOpenTerminalIn(st(), tab().activeEntryId)).toBe(true)
   })
+
+  it("setFolderRoots / setFolderGit keep the same state when nothing changes; null drops", () => {
+    st().setFolderRoots({ a: "/r" })
+    const s1 = st()
+    st().setFolderRoots({ a: "/r" })
+    expect(st()).toBe(s1)
+    const g = {
+      isRepo: true,
+      root: "/r",
+      branch: "m",
+      ahead: 0,
+      behind: 0,
+      files: [],
+      add: 0,
+      del: 0,
+    }
+    st().setFolderGit("k", g as never)
+    const s2 = st()
+    st().setFolderGit("k", { ...g } as never) // equal content
+    expect(st()).toBe(s2)
+    st().setFolderGit("k", null)
+    expect(st().folderGit).toEqual({})
+    const s3 = st()
+    st().setFolderGit("k", null)
+    expect(st()).toBe(s3)
+  })
+
+  it("an ssh tab's WSL folder with no shell: the given shell, not the ssh one", () => {
+    const host = hostShellOption(testHost("prod"))
+    useStore.setState({ shells: [shell, host] })
+    st().newTab(host)
+    st().openFolder("/home/u/p", { wsl: { distro: "Gone" } })
+    st().newSurface(shell)
+    const s = st().sessions[tab().activeSessionId]!
+    expect(s.remote).toBeUndefined()
+    expect(s.command).toBe(shell.command)
+  })
 })
