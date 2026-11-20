@@ -1623,4 +1623,27 @@ describe("store — folder entries", () => {
     expect(st().objects[id]!.path).toBe("/w/a")
     expect(st().folderViews[id]!.expanded).toEqual([]) // a new root starts collapsed
   })
+
+  it("a host folder's new terminal is a host shell, even when the default is WSL", () => {
+    const wsl = { id: "wsl", label: "Ubuntu", command: "wsl.exe", args: ["-d", "Ubuntu"] }
+    useStore.setState({
+      shells: [wsl, shell],
+      settings: { ...st().settings, defaultShell: "wsl.exe" },
+    })
+    st().newTab(wsl)
+    st().openFolder("C:\\Users\\me\\proj")
+    st().newSurface()
+    const s = st().sessions[tab().activeSessionId]!
+    expect(s.command).toBe(shell.command) // not wsl.exe: it would start in ~
+    expect(s.cwd).toBe("C:\\Users\\me\\proj")
+  })
+
+  it("a folder dragged out into a new group: a tab with no terminal", () => {
+    st().newTab(shell)
+    st().openFolder("/w")
+    const id = tab().activeEntryId
+    st().moveTerminal(id, { kind: "new", insertAt: 1 })
+    const fresh = st().tabs.find((t) => t.activeEntryId === id)!
+    expect(fresh.activeSessionId).toBe("")
+  })
 })

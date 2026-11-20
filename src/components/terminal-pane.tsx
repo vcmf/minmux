@@ -20,6 +20,7 @@ import {
   canMove,
   findPaneById,
   paneSessionIds,
+  visibleSessionIds,
   visibleTerminal,
   type MoveTarget,
 } from "../lib/pane-tree"
@@ -139,9 +140,17 @@ export function TerminalPane({ pane, tabId }: { pane: PaneLeaf; tabId: string })
     store.newSurface(resolveDefaultShell(store.shells, store.settings.defaultShell))
   }
 
-  // A size for this pane's hidden terminals while it shows a folder: the tab's terminal's grid
-  // (on screen elsewhere, or as last shown), so they don't start at xterm's 80x24.
-  const sizeLike = () => useStore.getState().tabs.find((t) => t.id === tabId)?.activeSessionId
+  // The terminal whose grid hidden terminal `id` takes: this pane's visible one, else one on screen
+  // elsewhere in the tab, else the tab's terminal; never `id` itself (that sizes nothing).
+  const sizeLike = (id: string) => {
+    const tab = useStore.getState().tabs.find((t) => t.id === tabId)
+    const options = [
+      visibleTerminal(pane),
+      ...(tab ? visibleSessionIds(tab.root) : []),
+      tab?.activeSessionId,
+    ]
+    return options.find((o) => !!o && o !== id)
+  }
 
   // ▤+: this pane's terminal's folder as a new tab here; a menu when its shell, its agent and
   // the checkouts the agent edits in are different folders (the sidebar's from / in / edits).
@@ -198,8 +207,7 @@ export function TerminalPane({ pane, tabId }: { pane: PaneLeaf; tabId: string })
     const sessions = useStore.getState().sessions
     for (const id of paneSessionIds(pane)) {
       const s = sessions[id]
-      if (s && id !== activeId)
-        TerminalManager.ensureRunning(s, visibleTerminal(pane) ?? sizeLike())
+      if (s && id !== activeId) TerminalManager.ensureRunning(s, sizeLike(id))
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [idsKey, activeId])

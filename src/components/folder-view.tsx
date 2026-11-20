@@ -22,11 +22,25 @@ import { shortCwd } from "../lib/session-label"
 import { useFileMenu } from "./use-file-menu"
 
 const SETTLE_MS = 2000 // one more read this long after a folder's last change event
+const subscribe = (fn: () => void) => listings.subscribe(fn) // stable: React re-subscribes on change
 
-/** A folder entry's view in its pane: a lazy tree on a fixed path. Listings are shared by path
- *  (lib/listing-store); reads and watches go through the renderer's one queue and watch set
- *  (lib/fs-reads). Mounted only while it's its pane's visible tab, so a hidden one costs
- *  nothing but its cached listings. */
+// The read keys each mounted view needs: a view going away (hidden, closed, re-rooted) drops its
+// queued reads that no other view still needs, so they don't hold up the next ones.
+const mounted = new Map<string, Set<string>>()
+function release(entryId: string, keep: Set<string>): void {
+  const mine = mounted.get(entryId)
+  if (keep.size) mounted.set(entryId, keep)
+  else mounted.delete(entryId)
+  if (!mine) return
+  const needed = new Set([...mounted.values()].flatMap((s) => [...s]))
+  folderReads.drop((k) => mine.has(k) && !keep.has(k) && !needed.has(k))
+}
+const readKey = (scope: string, dir: string) => `view\0${scope}\0${dir}`
+
+// Listings are shared by path (lib/listing-store); reads and watches go through the renderer's
+// one queue and watch set (lib/fs-reads). Mounted only while it's its pane's visible tab, so a
+// hidden one costs nothing but its cached listings.
+/** A folder entry's view in its pane: a lazy tree on a fixed path. */
 export function FolderView({ entryId, tabId }: { entryId: string; tabId: string }) {
   const folder = useStore((s) => s.objects[entryId])
   const view = useStore((s) => s.folderViews[entryId]) ?? EMPTY_VIEW
@@ -37,10 +51,7 @@ export function FolderView({ entryId, tabId }: { entryId: string; tabId: string 
   const wsl = folder?.wsl
   const scope = wsl ? `wsl:${wsl.distro ?? ""}` : ""
 
-  const all = useSyncExternalStore(
-    (fn) => listings.subscribe(fn),
-    () => listings.get(scope),
-  )
+  const all = useSyncExternalStore(subscribe, () => listings.get(scope))
   const tree: FileTreeState = useMemo(
     () => ({
       root,
@@ -73,7 +84,7 @@ export function FolderView({ entryId, tabId }: { entryId: string; tabId: string 
     (dir: string, urgent = false, front = false, skipIfReadWithin = 0) => {
       const big = (listings.get(scope)[dir]?.total ?? 0) > BIG_FOLDER
       folderReads.request({
-        key: `view\0${scope}\0${dir}`,
+        key: readKey(scope, dir),
         urgent,
         front,
         big,
@@ -98,6 +109,10 @@ export function FolderView({ entryId, tabId }: { entryId: string; tabId: string 
     }
   }, [shownKey, scope, wsl, load])
   useEffect(() => () => seen.current.clear(), [root])
+  useEffect(() => {
+    release(entryId, new Set(shownRef.current.map((d) => readKey(scope, d))))
+  }, [shownKey, scope, entryId])
+  useEffect(() => () => release(entryId, new Set()), [entryId])
 
   // Watched while visible: its open folders on this machine (a WSL share can't be watched
   // reliably). Released when it hides or closes.

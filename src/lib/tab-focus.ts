@@ -5,13 +5,13 @@ import type { PaneNode, Tab } from "../types"
 import { isTerminalEntry } from "./entries"
 import { allSessionIds, findPane, firstSessionId, selectSurface } from "./pane-tree"
 
-/** A tab over `root`, focused on `entryId` (a terminal: tabs open on one). */
+/** A tab over `root`, focused on `entryId`; its terminal is that entry, or none ("") for a folder. */
 export const makeTab = (id: string, title: string, root: PaneNode, entryId: string): Tab => ({
   id,
   title,
   root,
   activeEntryId: entryId,
-  activeSessionId: entryId,
+  activeSessionId: isTerminalEntry(entryId) ? entryId : "",
 })
 
 // withFocus: the focus becomes its pane's visible surface unless `select` is false. The tab's

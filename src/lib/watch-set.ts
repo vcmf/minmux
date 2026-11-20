@@ -10,6 +10,9 @@ export class WatchSet {
   private pending = false
   constructor(
     private readonly send: (dirs: string[]) => void,
+    // Owners whose folders come first in the capped union, whenever they joined (the Files
+    // panel, which had the whole cap to itself before folder views shared it).
+    private readonly first: string[] = [],
     private readonly cap = WATCH_CAP,
     // Wrapped: a bare `queueMicrotask` called as this object's method throws in Chromium.
     private readonly schedule: (fn: () => void) => void = (fn) => queueMicrotask(fn),
@@ -29,7 +32,11 @@ export class WatchSet {
   /** The folders sent now (the union, capped). */
   current(): string[] {
     const out = new Set<string>()
-    for (const dirs of this.owners.values()) for (const d of dirs) out.add(d)
+    const order = [
+      ...this.first.filter((o) => this.owners.has(o)),
+      ...[...this.owners.keys()].filter((o) => !this.first.includes(o)),
+    ]
+    for (const o of order) for (const d of this.owners.get(o)!) out.add(d)
     return [...out].slice(0, this.cap)
   }
 

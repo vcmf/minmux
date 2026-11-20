@@ -65,7 +65,7 @@ import type { GitStatus } from "./lib/ipc"
 import { isAbsoluteHostPath } from "./lib/file-actions"
 import type { EditorInfo } from "./lib/file-actions"
 import { normalizeRootPath } from "./lib/breadcrumb"
-import type { WslContext } from "./lib/wsl"
+import { wslContext, type WslContext } from "./lib/wsl"
 import type { WorkspaceState } from "./lib/workspace"
 import type { MoveTarget } from "./lib/pane-tree"
 import type { SessionMeta } from "./lib/session-color"
@@ -97,6 +97,18 @@ function localShellFor(state: AppState, src: Session | undefined): ShellOption |
   const inherited = inheritShell(state.shells, src)
   if (inherited && !inherited.remote) return inherited
   return resolveDefaultShell(state.shells, state.settings.defaultShell)
+}
+
+/** A shell that runs on this machine's own filesystem (not ssh, not WSL) for a host folder:
+ *  the inherited one, else the default, else the first such shell. A WSL shell would start in
+ *  `~`, as main can't hand a host path to `wsl --cd`. */
+function hostShellFor(state: AppState, src: Session | undefined): ShellOption | undefined {
+  const ok = (s: ShellOption | undefined) => !!s && !s.remote && !wslContext(s.command, s.args)
+  const inherited = inheritShell(state.shells, src)
+  if (ok(inherited)) return inherited
+  const def = resolveDefaultShell(state.shells, state.settings.defaultShell)
+  if (ok(def)) return def
+  return state.shells.find(ok) ?? def
 }
 
 /** Where new panes/tabs open: the focused folder entry's path, else the tab's terminal's cwd. */
@@ -850,7 +862,7 @@ export const useStore = create<AppState>((set, get) => ({
       // A focused folder: a terminal in that folder (a local one: the folder is on this machine).
       const folder = focusedFolder(state, tab)
       const shell =
-        (folder ? localShellFor(state, src) : inheritShell(state.shells, src)) ?? fallback
+        (folder ? hostShellFor(state, src) : inheritShell(state.shells, src)) ?? fallback
       if (!shell) return {}
       // An ssh pane's split opens where it verifiably is (its host's shell integration).
       const reopen = shell.remote ? reopenFor(src) : undefined
@@ -903,7 +915,7 @@ export const useStore = create<AppState>((set, get) => ({
       const src = state.sessions[tab.activeSessionId]
       const folder = focusedFolder(state, tab) // a terminal in the focused folder
       const shell =
-        (folder ? localShellFor(state, src) : inheritShell(state.shells, src)) ?? fallback
+        (folder ? hostShellFor(state, src) : inheritShell(state.shells, src)) ?? fallback
       if (!shell) return {}
       const cwd = folder ? folder.path : src?.cwd
       const session = makeSession(shell, cwd, shell.remote ? reopenFor(src) : undefined)

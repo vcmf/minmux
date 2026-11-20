@@ -109,8 +109,9 @@ function savedLeaves(v: unknown): { id: string; entryIds: string[] }[] {
   return Array.isArray(n.children) ? n.children.flatMap(savedLeaves) : []
 }
 
-/** The layout to restore: `ws` (workspace.json, null when it held no tab) completed by
- *  layout.json. `blocked`: layout.json comes from a newer build (don't overwrite it). */
+// `ws` is workspace.json's (null when it held no tab). `blocked`: layout.json comes from a newer
+// build, so it must not be overwritten.
+/** The layout to restore: workspace.json's, completed by layout.json. */
 export function restoreLayout(
   ws: WorkspaceState | null,
   wsText: string,

@@ -1,11 +1,12 @@
 import { describe, it, expect } from "vitest"
 import { WatchSet } from "./watch-set"
 
-const make = (cap = 32) => {
+const make = (cap = 32, first: string[] = []) => {
   const sent: string[][] = []
   const jobs: (() => void)[] = []
   const w = new WatchSet(
     (d) => sent.push(d),
+    first,
     cap,
     (fn) => jobs.push(fn),
   )
@@ -47,5 +48,17 @@ describe("WatchSet", () => {
     w.set("v2", ["/c"])
     tick()
     expect(sent).toEqual([["/a", "/b"]])
+  })
+
+  it("a `first` owner keeps its place under the cap, even when it rejoins later", () => {
+    const { w, sent, tick } = make(2, ["panel"])
+    w.set("panel", ["/p"])
+    w.set("view", ["/v1", "/v2"])
+    tick()
+    w.set("panel", []) // e.g. a WSL pane
+    tick()
+    w.set("panel", ["/p"])
+    tick()
+    expect(sent[sent.length - 1]).toEqual(["/p", "/v1"])
   })
 })
