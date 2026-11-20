@@ -246,7 +246,8 @@ export function FolderView({ entryId, tabId }: { entryId: string; tabId: string 
   const openFile = (abs: string, keep: boolean, diff = false) => {
     if (!isAbsoluteHostPath(abs, platform) && !wsl) return
     const s = useStore.getState()
-    if (!opensInTab(abs)) return ipc.openPath(abs, wsl) // its own app (main: never one that runs it)
+    // Its own app (main: never one that runs it); one opened on its diff (a deleted PDF) is a tab.
+    if (!diff && !opensInTab(abs)) return ipc.openPath(abs, wsl)
     const tab = s.tabs.find((t) => t.id === tabId)
     const pane = tab && findPane(tab.root, entryId)
     if (!pane) return

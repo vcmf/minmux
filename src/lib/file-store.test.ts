@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from "vitest"
-import { FileStore } from "./file-store"
+import { DIFF_MIN_MS, FileStore } from "./file-store"
+import { HIGHLIGHT_MAX } from "./file-preview"
 import type { FileData } from "./file-tab"
 
 const text = (t: string, mtimeMs = 1): FileData => ({
@@ -178,5 +179,83 @@ describe("FileStore", () => {
     await tick()
     expect(s2.get("d3")).toBeUndefined()
     s2.wantDiff("nope", { root: "/w", rel: "z.ts", key: "k" }) // not shown: nothing
+  })
+
+  it("a live file's diff is read at most every DIFF_MIN_MS, the last key always", async () => {
+    vi.useFakeTimers()
+    try {
+      const { read } = reads()
+      let now = 1000
+      const diffOf = vi.fn(async () => [{ type: "add" as const, text: "x", newNo: 1 }])
+      const s = new FileStore(read, hl, 16, diffOf, () => now)
+      s.show("t1", "/w/a.ts")
+      const want = (key: string) => s.wantDiff("t1", { root: "/w", rel: "a.ts", key })
+      want("M:1")
+      await vi.advanceTimersByTimeAsync(0)
+      expect(diffOf).toHaveBeenCalledTimes(1)
+      now += 200
+      want("M:2") // the agent wrote again
+      now += 200
+      want("M:3")
+      await vi.advanceTimersByTimeAsync(0)
+      expect(diffOf).toHaveBeenCalledTimes(1) // waiting
+      now += DIFF_MIN_MS
+      await vi.advanceTimersByTimeAsync(DIFF_MIN_MS)
+      expect(diffOf).toHaveBeenCalledTimes(2) // the last one
+      now += 100
+      want("M:4")
+      s.hide("t1") // hidden before its turn: not read…
+      now += DIFF_MIN_MS
+      await vi.advanceTimersByTimeAsync(DIFF_MIN_MS)
+      expect(diffOf).toHaveBeenCalledTimes(2)
+      s.show("t1", "/w/a.ts")
+      want("M:4") // …until it shows again
+      await vi.advanceTimersByTimeAsync(0)
+      expect(diffOf).toHaveBeenCalledTimes(3)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it("a big diff is escaped in the worker and not highlighted", async () => {
+    const { read } = reads()
+    const big = "y".repeat(HIGHLIGHT_MAX)
+    const h = vi.fn(async (t: string, lang: string | null) =>
+      t.split("\n").map((l) => `${lang}:${l.length}`),
+    )
+    const s = new FileStore(read, h, 16, async () => [
+      { type: "add" as const, text: big, newNo: 1 },
+      { type: "add" as const, text: "z", newNo: 2 },
+    ])
+    s.show("b1", "/w/big.ts")
+    s.wantDiff("b1", { root: "/w", rel: "big.ts", key: "k" })
+    await tick()
+    await tick()
+    expect(h).toHaveBeenCalledTimes(1)
+    expect(h.mock.calls[0]![1]).toBeNull() // plain: escaped and split there
+    expect(s.get("b1")!.diff!.html).toEqual([`null:${HIGHLIGHT_MAX}`, "null:1"])
+  })
+
+  it("Source and Diff keep their own scroll", () => {
+    const s = new FileStore(reads().read, hl)
+    s.show("s1", "/w/a.ts")
+    s.setScroll("s1", 500)
+    s.setScroll("s1", 90, true)
+    expect(s.scrollOf("s1")).toBe(500)
+    expect(s.scrollOf("s1", true)).toBe(90)
+  })
+
+  it("a highlight that fails keeps the plain diff", async () => {
+    const s = new FileStore(
+      reads().read,
+      () => Promise.reject(new Error("crash")),
+      16,
+      async () => [{ type: "add" as const, text: "a<", newNo: 1 }],
+    )
+    s.show("h1", "/w/a.ts")
+    s.wantDiff("h1", { root: "/w", rel: "a.ts", key: "k" })
+    await tick()
+    await tick()
+    expect(s.get("h1")!.diff!.html).toEqual(["a&lt;"])
   })
 })

@@ -651,6 +651,10 @@ export const useStore = create<AppState>((set, get) => ({
         // At its line again, even the same one (scrolled away since): a new `seq` says "go".
         let next: FileEntry = opts.line ? { ...cur, line: opts.line, seq: (cur.seq ?? 0) + 1 } : cur
         if (opts.diff && cur.view !== "diff") next = { ...next, view: "diff" }
+        else if (opts.line && !opts.diff && next.view) {
+          next = { ...next } // a line is the source's: back to Source to show it
+          delete next.view
+        }
         const objects = next === cur ? state.objects : { ...state.objects, [open]: next }
         return {
           objects,

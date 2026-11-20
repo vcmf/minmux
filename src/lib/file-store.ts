@@ -13,6 +13,7 @@ import type { FileData, FileStamp } from "./file-tab"
 import type { WslContext } from "./wsl"
 
 export const FILES_KEPT = 16 // files remembered after their tab hides (least recent go first)
+export const DIFF_MIN_MS = 3000 // a file's diff is read again at most this often (a live file)
 
 /** A changed file's diff, as its tab shows it. */
 export interface FileDiff {
@@ -26,6 +27,7 @@ export interface FileShown {
   data: Exclude<FileData, { kind: "same" }> | null
   lines: string[] // highlighted (or plain while it's highlighted) HTML, one per line
   scrollTop: number
+  diffTop: number // where its Diff view was scrolled (each view keeps its own)
   went: string // the `line:seq` it last scrolled to (a remount doesn't jump again)
   diff: FileDiff | null
 }
@@ -38,6 +40,8 @@ interface Entry extends FileShown {
   again: boolean // a change arrived while reading: read once more after
   highlighted: string | null // the text `lines` were highlighted from
   diffKey: string // what `diff` was read for (status and stamp): another key reads it again
+  diffAt: number // when its diff was last read (Date.now)
+  diffTimer?: ReturnType<typeof setTimeout> // a re-read waiting out DIFF_MIN_MS
 }
 
 type Read = (path: string, wsl?: WslContext, since?: FileStamp) => Promise<FileData>
@@ -56,6 +60,7 @@ export class FileStore {
     private readonly highlight: Highlight = highlightLines,
     private readonly cap = FILES_KEPT,
     private readonly diffOf: Diff = (root, rel, wsl) => ipc.gitDiff(root, rel, wsl),
+    private readonly now: () => number = Date.now,
   ) {}
 
   /** What entry `id` shows now (the same object until it changes). */
@@ -82,9 +87,11 @@ export class FileStore {
         data: null,
         lines: [],
         scrollTop: 0,
+        diffTop: 0,
         went: "",
         diff: null,
         diffKey: "",
+        diffAt: 0,
         reading: false,
         again: false,
         highlighted: null,
@@ -115,15 +122,19 @@ export class FileStore {
     else void this.readNow(id, e)
   }
 
-  /** Where its view is scrolled (kept for when it shows again; nothing re-renders). */
-  setScroll(id: string, top: number): void {
+  /** Where its view (Source, or Diff) is scrolled (kept for when it shows again; nothing
+   *  re-renders). */
+  setScroll(id: string, top: number, diff = false): void {
     const e = this.files.get(id)
-    if (e) e.scrollTop = top
+    if (e && diff) e.diffTop = top
+    else if (e) e.scrollTop = top
   }
 
   // `key` says what the diff is of (the file's git status and its stamp): the same key keeps the
-  // diff it has; none (an unchanged file) drops it. Read in main (bounded `git diff`), each side
-  // highlighted whole in the worker, so a multi-line comment or string keeps its colours.
+  // diff it has; none (an unchanged file) drops it. Read in main (bounded `git diff`) at most
+  // every DIFF_MIN_MS (an agent writing the file moves its stamp every few hundred ms: each read
+  // is a git spawn), the last key always read. Each side is highlighted whole in the worker, so
+  // a multi-line comment or string keeps its colours; a big diff is escaped there too.
   /** The file changed in git: have its diff (read only when the key changes). */
   wantDiff(id: string, want: { root: string; rel: string; key: string } | null): void {
     const e = this.files.get(id)
@@ -131,32 +142,61 @@ export class FileStore {
     const key = want?.key ?? ""
     if (key === e.diffKey) return
     e.diffKey = key
+    clearTimeout(e.diffTimer)
+    e.diffTimer = undefined
     if (!want) {
       e.diff = null
       return this.publish(id)
     }
+    const wait = e.diffAt + DIFF_MIN_MS - this.now()
+    if (e.diff && wait > 0) {
+      e.diffTimer = setTimeout(() => {
+        e.diffTimer = undefined
+        if (this.files.get(id) !== e || e.diffKey !== key) return
+        if (this.showing.has(id)) this.readDiff(id, e, want)
+        else e.diffKey = "" // hidden meanwhile: read when it shows again
+      }, wait)
+      return
+    }
+    this.readDiff(id, e, want)
+  }
+
+  private readDiff(id: string, e: Entry, want: { root: string; rel: string; key: string }): void {
+    const key = want.key
+    e.diffAt = this.now()
+    const current = () => this.files.get(id) === e && e.diffKey === key
     void this.diffOf(want.root, want.rel, e.wsl)
       .catch((): DiffLine[] => [])
       .then(async (lines) => {
-        if (this.files.get(id) !== e || e.diffKey !== key) return
-        const escaped = lines.map((l) => escapeHtml(l.text))
-        e.diff = { lines, html: escaped, bars: changeBars(lines) } // plain first
-        this.publish(id)
+        if (!current()) return
+        const bars = changeBars(lines)
         const sides = diffSides(lines)
+        const size = sides.old.length + sides.new.length
+        // Plain first; a big one is escaped in the worker (megabytes here would hold up xterm).
+        const plain =
+          size <= HIGHLIGHT_MAX
+            ? lines.map((l) => escapeHtml(l.text))
+            : await this.highlight(lines.map((l) => l.text).join("\n"), null)
+        if (!current()) return
+        e.diff = { lines, html: plain, bars }
+        this.publish(id)
+        if (size > HIGHLIGHT_MAX) return // too big to highlight: plain it stays
         const lang = languageForPath(e.path)
         const [o, n] = await Promise.all([
           this.highlight(sides.old, lang),
           this.highlight(sides.new, lang),
         ])
-        if (this.files.get(id) !== e || e.diffKey !== key || !e.diff) return
-        e.diff = { ...e.diff, html: assembleDiff(sides.at, o, n, (k) => escaped[k]!) }
+        if (!current() || !e.diff) return
+        e.diff = { ...e.diff, html: assembleDiff(sides.at, o, n, (k) => plain[k]!) }
         this.publish(id)
       })
+      .catch(() => {}) // a highlight that failed: the plain diff stays
   }
 
   /** Where its view was last scrolled (live: not the snapshot, which only changes on a read). */
-  scrollOf(id: string): number {
-    return this.files.get(id)?.scrollTop ?? 0
+  scrollOf(id: string, diff = false): number {
+    const e = this.files.get(id)
+    return (diff ? e?.diffTop : e?.scrollTop) ?? 0
   }
 
   /** The `line:seq` it last scrolled to. */
@@ -172,6 +212,7 @@ export class FileStore {
 
   /** Its entry closed (or another took its place): its text and lines go now. */
   forget(id: string): void {
+    clearTimeout(this.files.get(id)?.diffTimer)
     this.files.delete(id)
     this.snapshots.delete(id)
     this.showing.delete(id)
@@ -223,6 +264,7 @@ export class FileStore {
       data: e.data,
       lines: e.lines,
       scrollTop: e.scrollTop,
+      diffTop: e.diffTop,
       went: e.went,
       diff: e.diff,
     })

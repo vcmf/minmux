@@ -202,4 +202,45 @@ describe("FileView", () => {
     expect(ipc.gitDiff).not.toHaveBeenCalled()
     expect(screen.queryByText("Diff")).toBeNull()
   })
+
+  it("a diff deep in a file sizes its gutter for the file's line numbers", async () => {
+    vi.mocked(ipc.readFile).mockResolvedValue({
+      kind: "text",
+      text: "x\n",
+      truncated: false,
+      size: 2,
+    })
+    vi.mocked(ipc.gitDiff).mockResolvedValue([
+      { type: "hunk", text: "@@ -4200 +4200 @@" },
+      { type: "del", text: "a", oldNo: 4200 },
+      { type: "add", text: "b", newNo: 4200 },
+    ])
+    inRepo([{ path: "src/deep.ts", status: "M", add: 1, del: 1 }])
+    st().newTab(testShell)
+    st().openFile("/gr/src/deep.ts", { diff: true })
+    const t = st().tabs[0]!
+    const { container } = render(<FileView entryId={t.activeEntryId} tabId={t.id} />)
+    await waitFor(() => expect(container.querySelector(".diff-line.del")).not.toBeNull())
+    expect((container.querySelector(".file-view-no") as HTMLElement).style.width).toBe("4ch")
+  })
+
+  it("an image's change has no Diff: the picture shows", async () => {
+    vi.mocked(ipc.readFile).mockResolvedValue({
+      kind: "image",
+      dataUrl: "data:image/png;base64,AA==",
+      size: 1,
+    })
+    vi.mocked(ipc.gitDiff).mockResolvedValue([
+      { type: "hunk", text: "Binary files a/p.png and b/p.png differ" },
+    ])
+    inRepo([{ path: "src/p.png", status: "M", add: 0, del: 0 }])
+    st().newTab(testShell)
+    st().openFile("/gr/src/p.png", { diff: true })
+    const t = st().tabs[0]!
+    const { container } = render(<FileView entryId={t.activeEntryId} tabId={t.id} />)
+    expect(await screen.findByAltText("/gr/src/p.png")).toBeInTheDocument()
+    await waitFor(() => expect(ipc.gitDiff).toHaveBeenCalled())
+    expect(container.querySelector(".diff-line")).toBeNull()
+    expect(screen.queryByText("Diff")).toBeNull()
+  })
 })

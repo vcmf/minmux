@@ -1756,6 +1756,8 @@ describe("store — folder entries", () => {
     st().openFile("/w/d.ts", { diff: true }) // already open: focused, now on its diff
     expect(tab().activeEntryId).toBe(d)
     expect((st().objects[d] as { view?: string }).view).toBe("diff")
+    st().openFile("/w/d.ts", { line: 12 }) // a line is the source's: back to Source
+    expect(st().objects[d]).toEqual({ kind: "file", path: "/w/d.ts", line: 12, seq: 1 })
     st().setFileView(tab().activeSessionId, "diff") // a terminal has no view
     expect(st().objects[tab().activeSessionId]).toBeUndefined()
   })

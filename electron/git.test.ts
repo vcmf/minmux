@@ -70,6 +70,33 @@ describe("parseDiff", () => {
   })
 })
 
+describe("parseDiff headers", () => {
+  it("skips a file's headers before its first hunk (modes, renames), notes a binary one", () => {
+    const del = [
+      "diff --git a/a.ts b/a.ts",
+      "deleted file mode 100644",
+      "index 1..0",
+      "--- a/a.ts",
+      "+++ /dev/null",
+      "@@ -1 +0,0 @@",
+      "-x",
+      "\\ No newline at end of file",
+    ].join("\n")
+    expect(parseDiff(del)).toEqual([
+      { type: "hunk", text: "@@ -1 +0,0 @@" },
+      { type: "del", text: "x", oldNo: 1 },
+    ])
+    const bin = [
+      "diff --git a/p.png b/p.png",
+      "index 1..2 100644",
+      "Binary files a/p.png and b/p.png differ",
+    ].join("\n")
+    expect(parseDiff(bin)).toEqual([
+      { type: "hunk", text: "Binary files a/p.png and b/p.png differ" },
+    ])
+  })
+})
+
 describe("wslGitArgs", () => {
   it("runs git in the given distro at the Linux cwd via --cd", () => {
     expect(wslGitArgs("Ubuntu", "/home/me/repo", ["status", "--porcelain=v1"])).toEqual([

@@ -202,6 +202,7 @@ describe("FolderView", () => {
         { path: "src/a.ts", dir: "src", status: "M", add: 3, del: 1 },
         { path: "gone.ts", dir: "", status: "D", add: 0, del: 4 },
         { path: "tmp/", dir: "", status: "?", add: 0, del: 0, isDir: true },
+        { path: "spec.pdf", dir: "", status: "D", add: 0, del: 0 },
       ],
       add: 3,
       del: 5,
@@ -215,7 +216,7 @@ describe("FolderView", () => {
     expect(await screen.findByTitle("1 changed file inside")).toHaveTextContent("1") // src/
 
     // The +/− pill: the changed files under it, flat, with their counts.
-    fireEvent.click(screen.getByTitle("Show only the 3 changed files"))
+    fireEvent.click(screen.getByTitle("Show only the 4 changed files"))
     expect(st().folderViews[entryId]?.changesOnly).toBe(true)
     expect(screen.queryByText("top.ts")).toBeNull()
     expect(screen.getByText("a.ts")).toBeInTheDocument()
@@ -229,6 +230,13 @@ describe("FolderView", () => {
       kind: "file",
       path: "/fvc/src/a.ts",
       peek: true,
+      view: "diff",
+    })
+    // A deleted PDF opens on its diff, never in the OS's app (it's gone).
+    fireEvent.click(screen.getByText("spec.pdf"), { button: 0 })
+    expect(ipc.openPath).not.toHaveBeenCalled()
+    expect(st().objects[st().tabs[0]!.activeEntryId]).toMatchObject({
+      path: "/fvc/spec.pdf",
       view: "diff",
     })
     // A new folder opens as a folder tab.
