@@ -11,7 +11,7 @@ import {
 } from "../lib/file-preview"
 import { highlightToHtml } from "../lib/highlighter"
 
-/** Quick-look popup for the file clicked in the Files / Changes panels: reads the file
+/** Quick-look popup for a folder tab's right-click Preview: reads the file
  *  (size-guarded), lazily syntax-highlights small text files, and renders a line-numbered
  *  view. Binary / oversized / unreadable files get an explain-and-open-externally state. */
 export function FilePreview() {

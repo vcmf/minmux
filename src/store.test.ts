@@ -314,10 +314,10 @@ describe("store — cwd & UI toggles", () => {
   it("toggles paletteOpen / settingsOpen / rightView", () => {
     st().setPaletteOpen(true)
     st().setSettingsOpen(true)
-    st().setRightView("changes")
+    st().setRightView("agents")
     expect(st().paletteOpen).toBe(true)
     expect(st().settingsOpen).toBe(true)
-    expect(st().rightView).toBe("changes")
+    expect(st().rightView).toBe("agents")
     st().setRightView(null) // one panel, hidden when null
     expect(st().rightView).toBeNull()
   })
@@ -441,53 +441,6 @@ describe("store — right panel width", () => {
   })
 })
 
-describe("store — paneRoot (Files-panel root override)", () => {
-  beforeEach(resetStore)
-  const activeId = () => firstTab().activeSessionId
-
-  it("accepts an absolute host path and normalizes a trailing slash", () => {
-    st().newTab(shell)
-    st().setPaneRoot(activeId(), "/Users/me/proj/")
-    expect(st().paneRoot[activeId()]).toBe("/Users/me/proj")
-  })
-  it("rejects a non-absolute path", () => {
-    st().newTab(shell)
-    st().setPaneRoot(activeId(), "relative/x")
-    expect(st().paneRoot[activeId()]).toBeUndefined()
-  })
-  it("accepts a WSL pane's Linux path (read via the distro's UNC share)", () => {
-    st().newTab(wslShell)
-    st().setPaneRoot(activeId(), "/home/me/proj")
-    expect(st().paneRoot[activeId()]).toBe("/home/me/proj")
-  })
-  it("clearPaneRoot removes the override", () => {
-    st().newTab(shell)
-    const sid = activeId()
-    st().setPaneRoot(sid, "/Users/me/proj")
-    st().clearPaneRoot(sid)
-    expect(st().paneRoot[sid]).toBeUndefined()
-  })
-  it("closeSurface drops the closed pane's override, keeps the sibling's", () => {
-    st().newTab(shell)
-    st().splitActive("row", shell)
-    const tab = firstTab()
-    const [a, b] = allSessionIds(tab.root)
-    st().setPaneRoot(a!, "/Users/me/a")
-    st().setPaneRoot(b!, "/Users/me/b")
-    st().closeSurface(tab.id, a!)
-    expect(st().paneRoot[a!]).toBeUndefined()
-    expect(st().paneRoot[b!]).toBe("/Users/me/b")
-  })
-  it("closeTab drops its panes' overrides", () => {
-    st().newTab(shell)
-    const tab = firstTab()
-    const sid = tab.activeSessionId
-    st().setPaneRoot(sid, "/Users/me/proj")
-    st().closeTab(tab.id)
-    expect(st().paneRoot[sid]).toBeUndefined()
-  })
-})
-
 describe("store — surfaces (terminal tabs inside a pane)", () => {
   beforeEach(resetStore)
 
@@ -605,13 +558,11 @@ describe("store — surfaces (terminal tabs inside a pane)", () => {
     if (root.type !== "split") throw new Error("expected split")
     const right = root.children[1]
     if (right.type !== "leaf") throw new Error("expected leaf")
-    st().setPaneRoot(right.entryIds[0]!, "/Users/me/b")
     st().requestClosePane(firstTab().id, right.id)
     st().confirmClose()
     expect(st().closeConfirm).toBeNull()
     expect(firstTab().root.type).toBe("leaf")
     for (const id of right.entryIds) expect(st().sessions[id]).toBeUndefined()
-    expect(st().paneRoot[right.entryIds[0]!]).toBeUndefined()
     expect(allSessionIds(firstTab().root)).toContain(firstTab().activeSessionId)
   })
 

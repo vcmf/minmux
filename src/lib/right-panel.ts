@@ -1,4 +1,4 @@
-// Pure sizing for the resizable right panel (Files / Changes / Agents share one width).
+// Pure sizing for the resizable right panel (the agents list).
 // The drag handle + persistence live elsewhere; the clamp is here so it's unit-tested.
 
 export const RIGHT_PANEL_MIN = 280 // keep tree rows + breadcrumb readable

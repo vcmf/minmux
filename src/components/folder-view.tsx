@@ -125,7 +125,7 @@ export function FolderView({ entryId, tabId }: { entryId: string; tabId: string 
     () => (git?.isRepo ? buildGitDecorations(git.root, git.files) : null),
     [git?.isRepo, git?.root, git?.files],
   )
-  // Changes only: the changed files under this folder, flat (the Changes panel's list), and
+  // Changes only: the changed files under this folder, flat (the old Changes panel's list), and
   // their +/− in the bar. Off (the tree) when it isn't in a repo.
   const changes = useMemo(() => changesUnder(git ?? undefined, root), [git, root])
   const sum = useMemo(

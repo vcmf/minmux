@@ -6,9 +6,7 @@ import {
   CaretDown,
   MagnifyingGlass,
   GearSix,
-  GitDiff,
   GithubLogo,
-  FolderOpen,
   Bell,
   Minus,
   Square,
@@ -333,25 +331,8 @@ export function TopBar() {
           <span>Search or run</span>
           <span className="kbd">⌘K</span>
         </button>
-        {/* One right-side panel; these icons switch its view (click active → hide). */}
-        <button
-          className={`iconbtn${rightView === "files" ? " on" : ""}`}
-          data-tip="Files"
-          aria-label="Files"
-          onClick={() => useStore.getState().setRightView(rightView === "files" ? null : "files")}
-        >
-          <FolderOpen size={15} />
-        </button>
-        <button
-          className={`iconbtn${rightView === "changes" ? " on" : ""}`}
-          data-tip="Changes (git)"
-          aria-label="Changes"
-          onClick={() =>
-            useStore.getState().setRightView(rightView === "changes" ? null : "changes")
-          }
-        >
-          <GitDiff size={15} />
-        </button>
+        {/* The right-side panel: the agents list (click again → hide). Folders and their git
+            changes are pane tabs now (docs/design/WORKDIR_OBJECTS.md). */}
         <button
           className={`iconbtn${rightView === "agents" ? " on" : ""}`}
           data-tip="Agents"

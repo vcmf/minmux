@@ -39,7 +39,7 @@ export function placeOf(o: ObjectEntry): { path: string; wsl?: WslContext } {
 export interface FolderView {
   expanded: string[]
   showAll: string[]
-  changesOnly?: true // the changed files under it, as a flat list (the Changes panel's job)
+  changesOnly?: true // the changed files under it, as a flat list (the old Changes panel's job)
 }
 
 export const EMPTY_VIEW: FolderView = { expanded: [], showAll: [] }

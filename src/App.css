@@ -1237,11 +1237,6 @@ body.resizing-col {
   padding: 0 8px 0 12px;
   border-bottom: 1px solid var(--border);
 }
-.diff-summary {
-  flex: 1 1 auto;
-  font-size: 11px;
-  color: var(--dim);
-}
 .diffpanel .add {
   color: var(--accent);
 }
@@ -1946,36 +1941,15 @@ body.resizing-col {
   bottom: 0;
   border-left: var(--tree-line);
 }
-.diff-body {
-  flex: 1 1 auto;
-  overflow: auto;
-  padding: 6px 0;
-  font-family: var(--code-font);
-  font-size: 12px;
-  line-height: 1.85;
-}
 .diff-line {
   display: flex;
   white-space: pre;
-}
-.diff-gutter {
-  width: 30px;
-  flex: 0 0 auto;
-  text-align: right;
-  padding-right: 6px;
-  color: var(--faint);
-  font-size: 10.5px;
-  user-select: none;
 }
 .diff-sign {
   width: 16px;
   flex: 0 0 auto;
   text-align: center;
   user-select: none;
-}
-.diff-code {
-  flex: 1 1 auto;
-  padding-right: 10px;
 }
 .diff-line.context {
   color: var(--dim);
@@ -1995,9 +1969,6 @@ body.resizing-col {
 .diff-line.hunk {
   background: color-mix(in srgb, var(--blue) 10%, transparent);
   color: var(--blue);
-}
-.diff-line.hunk .diff-code {
-  padding-left: 6px;
 }
 
 /* ── Status bar (28px) ───────────────────────────────── */
@@ -2708,13 +2679,6 @@ body.resizing-col {
   align-items: center;
   gap: 1px;
   flex: 0 0 auto;
-}
-.root-reset {
-  color: var(--amber);
-}
-.root-reset:hover:not(:disabled) {
-  color: var(--amber);
-  background: color-mix(in srgb, var(--amber) 15%, transparent);
 }
 .root-input {
   flex: 1 1 auto;

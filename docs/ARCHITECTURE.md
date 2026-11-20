@@ -327,11 +327,11 @@ CI: GitHub Actions matrix (macos/ubuntu/windows). Auto-update later via `electro
   import Electron.
 - **Renderer → main** (`invoke` for answers, `send` for fire-and-forget), by family: `pty:*`
   (spawn = attach-or-spawn, write, resize, kill) · `shells:list` · `settings:*` / `workspace:*`
-  (read/write the JSON files) · `git:status` / `git:diff` (changes panel) · `pane:git-info`
+  (read/write the JSON files) · `git:status` / `git:diff` (folder and file tabs) · `pane:git-info`
   (sidebar branch + PR) · `agents:meta-snapshot` · `agents:resume-plan` /
   `agents:resume-consume` / `agents:shell-idle` · `agents:hint-wanted` / `agents:hint-dismiss`
   (the Codex approval hint) · `fs:*` / `file:*` / `dialog:pick-directory` /
-  `editor:info` (files panel, links, preview) · `window:*` (frameless controls, native bg) ·
+  `editor:info` (folder tabs, links, preview) · `window:*` (frameless controls, native bg) ·
   `platform:info` · `app:*` (version, update check, metrics) · `open-external` / `open-path` /
   `notify` / `clipboard:*` · `ssh:list-hosts` (invoke) / `ssh:open-config` (send).
 - **Main → renderer** (`webContents.send`): `pty:data:<id>` (coalesced PTY bytes — the hot path;
@@ -389,7 +389,7 @@ Design: `docs/design/SSH_REMOTES.md`; build log: `docs/design/SSH_IMPLEMENTATION
   (`ssh [keepalive] -t -- <alias>`, or `wsl.exe -d <distro> -e ssh …`). An unknown host is
   refused, never run as a bare alias.
 - **Plain ssh.** No connection reuse, no shell integration, no local cwd: OSC 7, file links,
-  git and the Files panel are off for remote panes (their paths are on the host).
+  git and folder tabs are off for remote panes (their paths are on the host).
 - **One spawn per pane** (`pending-spawns.ts`): building the plan is async, so a reload joins
   the pending spawn, a close means it never starts, and keys typed before ssh exists are
   dropped (never echoed ahead of a password prompt).

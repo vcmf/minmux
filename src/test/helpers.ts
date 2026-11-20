@@ -42,7 +42,6 @@ export function resetStore() {
     rightView: null,
     sidebarCollapsed: false,
     git: null,
-    paneRoot: {},
     objects: {},
     folderViews: {},
     folderGit: {},

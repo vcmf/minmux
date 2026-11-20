@@ -34,7 +34,7 @@ export interface Session {
   status: SessionStatus
   unread: boolean
   running?: boolean // a command/agent is executing (OSC 133 C..D)
-  cwd?: string // reported by the shell via OSC 7; drives the git diff panel
+  cwd?: string // reported by the shell via OSC 7; drives git (status bar, folder tabs)
   oscTitle?: string // raw window title from OSC 0/2 (a program may set it)
   detail?: string // why it needs attention (OSC-9 message / "needs input")
   remote?: RemoteRef // runs on an ssh host: no local cwd, files or git (splits stay on it)
