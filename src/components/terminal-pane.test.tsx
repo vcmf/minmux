@@ -88,7 +88,7 @@ describe("TerminalPane — surfaces", () => {
     const { tabId } = mountPane()
     const view = renderPane(tabId)
     fireEvent.mouseDown(screen.getByTitle(/New terminal/))
-    expect(leaf().sessionIds).toHaveLength(2)
+    expect(leaf().entryIds).toHaveLength(2)
     view.rerender()
     expect(screen.getAllByRole("tab")).toHaveLength(2)
     expect(screen.getAllByTitle("Close terminal")).toHaveLength(2)
@@ -99,7 +99,7 @@ describe("TerminalPane — surfaces", () => {
     st().newSurface()
     const view = renderPane(tabId)
     fireEvent.mouseDown(screen.getAllByRole("tab")[0]!)
-    expect(leaf().activeSessionId).toBe(first)
+    expect(leaf().activeEntryId).toBe(first)
     expect(st().tabs[0]!.activeSessionId).toBe(first)
     view.rerender()
     expect(screen.getAllByRole("tab")[0]).toHaveAttribute("aria-selected", "true")
@@ -110,7 +110,7 @@ describe("TerminalPane — surfaces", () => {
     st().newSurface()
     renderPane(tabId)
     fireEvent.mouseDown(screen.getAllByTitle("Close terminal")[1]!)
-    expect(leaf().sessionIds).toEqual([first])
+    expect(leaf().entryIds).toEqual([first])
   })
 
   it("closing a multi-terminal pane asks for confirmation instead of closing", () => {
@@ -119,14 +119,14 @@ describe("TerminalPane — surfaces", () => {
     renderPane(tabId)
     fireEvent.mouseDown(screen.getByTitle("Close pane"))
     expect(st().closeConfirm).toMatchObject({ kind: "pane", count: 2 })
-    expect(leaf().sessionIds).toHaveLength(2)
+    expect(leaf().entryIds).toHaveLength(2)
   })
 
   it("switching the visible surface re-attaches: detach old, attach new", async () => {
     const { TerminalManager } = await import("../terminal/terminal-manager")
     const { tabId, id: first } = mountPane()
     st().newSurface()
-    const second = leaf().activeSessionId
+    const second = leaf().activeEntryId
     const view = renderPane(tabId)
     expect(TerminalManager.attach).toHaveBeenLastCalledWith(
       expect.objectContaining({ id: second }),
@@ -147,7 +147,7 @@ describe("TerminalPane — hidden surfaces keep running", () => {
     const { TerminalManager } = await import("../terminal/terminal-manager")
     const { tabId, id: first } = mountPane()
     st().newSurface()
-    const visible = leaf().activeSessionId
+    const visible = leaf().activeEntryId
     renderPane(tabId)
     expect(TerminalManager.ensureRunning).toHaveBeenCalledWith(
       expect.objectContaining({ id: first }),
@@ -174,18 +174,18 @@ describe("TerminalPane — hidden surfaces keep running", () => {
     const close = screen.getAllByTitle("Close terminal")[0]!
     fireEvent.mouseDown(close, { button: 2 })
     fireEvent.mouseDown(close, { button: 1 })
-    expect(leaf().sessionIds).toHaveLength(2)
+    expect(leaf().entryIds).toHaveLength(2)
     fireEvent.mouseDown(close, { button: 0 })
-    expect(leaf().sessionIds).toHaveLength(1)
+    expect(leaf().entryIds).toHaveLength(1)
   })
 
   it("only a left-click on the new-terminal button adds a surface", () => {
     const { tabId } = mountPane()
     renderPane(tabId)
     fireEvent.mouseDown(screen.getByTitle(/New terminal/), { button: 2 })
-    expect(leaf().sessionIds).toHaveLength(1)
+    expect(leaf().entryIds).toHaveLength(1)
     fireEvent.mouseDown(screen.getByTitle(/New terminal/), { button: 0 })
-    expect(leaf().sessionIds).toHaveLength(2)
+    expect(leaf().entryIds).toHaveLength(2)
   })
 })
 
@@ -232,7 +232,7 @@ describe("TerminalPane — drag & drop", () => {
     const root = st().tabs[0]!.root
     expect(root.type).toBe("split")
     if (root.type !== "split") return
-    expect(root.children[1]).toMatchObject({ sessionIds: [first] })
+    expect(root.children[1]).toMatchObject({ entryIds: [first] })
     expect(st().tabs[0]!.activeSessionId).toBe(first)
     expect(st().dragging).toBeNull()
   })
@@ -262,8 +262,8 @@ describe("TerminalPane — drag & drop", () => {
     view.rerender()
     expect(tabs[1]).toHaveClass("insert-after")
     drag("drop", strip, 190)
-    expect(leaf().sessionIds[1]).toBe(first)
-    expect(leaf().activeSessionId).toBe(first)
+    expect(leaf().entryIds[1]).toBe(first)
+    expect(leaf().activeEntryId).toBe(first)
   })
 
   it("dropping before the first tab of its own slot shows no marker", () => {

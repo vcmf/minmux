@@ -33,7 +33,8 @@ describe("AgentsPanel", () => {
         {
           id: "t",
           title: "t",
-          root: { type: "leaf", id: "pp", sessionIds: ["p"], activeSessionId: "p" },
+          root: { type: "leaf", id: "pp", entryIds: ["p"], activeEntryId: "p" },
+          activeEntryId: "p",
           activeSessionId: "p",
         },
       ],
@@ -101,7 +102,8 @@ describe("AgentsPanel", () => {
         {
           id: "t",
           title: "t",
-          root: { type: "leaf", id: "pp", sessionIds: ["p"], activeSessionId: "p" },
+          root: { type: "leaf", id: "pp", entryIds: ["p"], activeEntryId: "p" },
+          activeEntryId: "p",
           activeSessionId: "p",
         },
       ],
@@ -117,7 +119,8 @@ describe("AgentsPanel", () => {
         {
           id: "t",
           title: "t",
-          root: { type: "leaf", id: "po", sessionIds: ["other"], activeSessionId: "other" },
+          root: { type: "leaf", id: "po", entryIds: ["other"], activeEntryId: "other" },
+          activeEntryId: "other",
           activeSessionId: "other",
         },
       ],

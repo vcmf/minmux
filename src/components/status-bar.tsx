@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react"
 import { HardDrives, Bell, GitBranch } from "@phosphor-icons/react"
-import { useStore } from "../store"
+import { focusedTerminal, useStore } from "../store"
 import { ipc } from "../lib/ipc"
 import { applyUpdateResult, type UpdateStatus } from "../lib/version"
 
@@ -12,9 +12,7 @@ export function StatusBar() {
   const sessions = useStore((s) => s.sessions)
   const remotePhase = useStore((s) => s.remotePhase)
   // The pane you're driving never counts as waiting (the attention rule).
-  const driving = useStore((s) =>
-    s.windowFocused ? s.tabs.find((t) => t.id === s.activeTabId)?.activeSessionId : undefined,
-  )
+  const driving = useStore((s) => (s.windowFocused ? focusedTerminal(s) : undefined))
   const git = useStore((s) => s.git)
   const [platform, setPlatform] = useState("")
   const [clock, setClock] = useState(clockNow)

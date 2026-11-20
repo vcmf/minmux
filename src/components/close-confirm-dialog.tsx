@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react"
 import { useStore } from "../store"
-import { TerminalManager } from "../terminal/terminal-manager"
+import { focusActiveEntry } from "./refocus-terminal"
 import { closeConfirmText } from "../lib/close-confirm"
 
 /** "Are you sure?" before a close that would kill work: a pane of several terminals, a
@@ -21,12 +21,7 @@ export function CloseConfirmDialog() {
   const cancelRef = useRef<HTMLButtonElement>(null)
 
   // Hand keyboard focus back to the focused terminal once the dialog is gone.
-  const refocus = () =>
-    requestAnimationFrame(() => {
-      const s = useStore.getState()
-      const sid = s.tabs.find((t) => t.id === s.activeTabId)?.activeSessionId
-      if (sid) TerminalManager.focus(sid)
-    })
+  const refocus = () => requestAnimationFrame(focusActiveEntry)
   const cancel = () => {
     useStore.getState().cancelClose()
     refocus()

@@ -88,8 +88,10 @@ Rules the code relies on but can't enforce — most past review findings broke o
   disposed on unmount (only when its session leaves the store). Starting is lazy per tab:
   after a restore/reload only the active tab's terminals start (incl. its hidden surfaces);
   a background tab starts when first shown. → GOTCHAS #hidden-terminals
-- **`Tab.activeSessionId` is the focus.** Focusing a terminal also makes it its pane's visible
-  surface (`focusIn`); keyboard focus follows the store, never "whatever just mounted".
+- **`Tab.activeEntryId` is the focus**; `Tab.activeSessionId` is the tab's terminal (the focus
+  when it's a terminal, else the last one: cwd, git, titles). Change both only via
+  `lib/tab-focus` (`withFocus`), which also makes the focus its pane's visible surface;
+  keyboard focus follows the store, never "whatever just mounted".
 - **Store actions return the same reference when nothing changed** — `tabs`/`sessions`
   subscribers trigger WebGL reconcile and a workspace save (`replaceTab`, `markSeen`, …).
 - **`useShallow` selectors return primitives** (flatten to `[id, value, …]`); new objects per

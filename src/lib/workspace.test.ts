@@ -23,7 +23,8 @@ const session: Session = {
 const tab: Tab = {
   id: "t1",
   title: "zsh",
-  root: { type: "leaf", id: "p1", sessionIds: ["s1"], activeSessionId: "s1" },
+  root: { type: "leaf", id: "p1", entryIds: ["s1"], activeEntryId: "s1" },
+  activeEntryId: "s1",
   activeSessionId: "s1",
 }
 const state: WorkspaceState = { sessions: { s1: session }, tabs: [tab], activeTabId: "t1" }
@@ -115,8 +116,8 @@ describe("workspace v1 → v2 pane migration", () => {
       id: "sp",
       direction: "row",
       children: [
-        { type: "leaf", id: "pane-a", sessionIds: ["a"], activeSessionId: "a" },
-        { type: "leaf", id: "pane-b", sessionIds: ["b"], activeSessionId: "b" },
+        { type: "leaf", id: "pane-a", entryIds: ["a"], activeEntryId: "a" },
+        { type: "leaf", id: "pane-b", entryIds: ["b"], activeEntryId: "b" },
       ],
     })
     expect(restored.tabs[0]!.activeSessionId).toBe("b")
@@ -129,7 +130,8 @@ describe("workspace v1 → v2 pane migration", () => {
         {
           id: "t1",
           title: "",
-          root: { type: "leaf", id: "p1", sessionIds: ["s1", "s2"], activeSessionId: "s2" },
+          root: { type: "leaf", id: "p1", entryIds: ["s1", "s2"], activeEntryId: "s2" },
+          activeEntryId: "s2",
           activeSessionId: "s2",
         },
       ],
@@ -161,7 +163,7 @@ describe("workspace v1 → v2 pane migration", () => {
       ],
       sessions: v1.sessions,
     })!
-    expect(restored.tabs[0]!.root).toMatchObject({ activeSessionId: "a" })
+    expect(restored.tabs[0]!.root).toMatchObject({ activeEntryId: "a" })
   })
 
   it("migratePaneNode rejects malformed nodes", () => {
@@ -185,7 +187,45 @@ describe("workspace v1 → v2 pane migration", () => {
   it("migratePaneNode repairs a v2 leaf whose active surface is missing", () => {
     expect(
       migratePaneNode({ type: "leaf", id: "p", sessionIds: ["a", "b"], activeSessionId: "zz" }),
-    ).toMatchObject({ activeSessionId: "a" })
+    ).toMatchObject({ activeEntryId: "a" })
+  })
+
+  it("a v2 file reads back and saves byte-identical (older builds see the same layout)", () => {
+    const file = {
+      version: 2,
+      activeTabId: "t1",
+      tabs: [
+        {
+          id: "t1",
+          title: "work",
+          root: {
+            type: "split",
+            id: "sp",
+            direction: "row",
+            children: [
+              {
+                type: "leaf",
+                id: "p1",
+                sessionIds: ["a", "b"],
+                activeSessionId: "b",
+                sessionId: "b",
+              },
+              { type: "leaf", id: "p2", sessionIds: ["c"], activeSessionId: "c", sessionId: "c" },
+            ],
+          },
+          activeSessionId: "b",
+        },
+      ],
+      sessions: ["a", "b", "c"].map((id) => ({
+        id,
+        title: "zsh",
+        command: "/bin/zsh",
+        args: [],
+        cwd: "/w",
+      })),
+    }
+    const text = serializeToJson(deserializeWorkspace(file)!)
+    expect(text).toBe(`${JSON.stringify(file, null, 2)}\n`)
   })
 
   it("rejects a workspace written by a newer build instead of misparsing it", () => {
@@ -199,7 +239,8 @@ describe("workspace v1 → v2 pane migration", () => {
         {
           id: "t1",
           title: "",
-          root: { type: "leaf", id: "p1", sessionIds: ["s1", "s2"], activeSessionId: "s2" },
+          root: { type: "leaf", id: "p1", entryIds: ["s1", "s2"], activeEntryId: "s2" },
+          activeEntryId: "s2",
           activeSessionId: "s2",
         },
       ],
@@ -210,8 +251,8 @@ describe("workspace v1 → v2 pane migration", () => {
     expect(deserializeWorkspace(w)!.tabs[0]!.root).toEqual({
       type: "leaf",
       id: "p1",
-      sessionIds: ["s1", "s2"],
-      activeSessionId: "s2",
+      entryIds: ["s1", "s2"],
+      activeEntryId: "s2",
     })
   })
 
@@ -236,8 +277,8 @@ describe("workspace v1 → v2 pane migration", () => {
     expect(restored.tabs[0]!.root).toEqual({
       type: "leaf",
       id: "p1",
-      sessionIds: ["a", "b"],
-      activeSessionId: "b", // the tab's focus (b) is made visible on restore
+      entryIds: ["a", "b"],
+      activeEntryId: "b", // the tab's focus (b) is made visible on restore
     })
   })
 
@@ -280,8 +321,8 @@ describe("workspace v1 → v2 pane migration", () => {
     expect(restored.tabs[0]!.root).toEqual({
       type: "leaf",
       id: "p1",
-      sessionIds: ["a"],
-      activeSessionId: "a",
+      entryIds: ["a"],
+      activeEntryId: "a",
     })
   })
 
@@ -476,7 +517,8 @@ describe("workspace — runtime-only session fields", () => {
         {
           id: "t",
           title: "",
-          root: { type: "leaf", id: "p", sessionIds: ["r"], activeSessionId: "r" },
+          root: { type: "leaf", id: "p", entryIds: ["r"], activeEntryId: "r" },
+          activeEntryId: "r",
           activeSessionId: "r",
         },
       ],

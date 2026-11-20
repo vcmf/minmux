@@ -14,7 +14,8 @@ export default defineConfig({
       reportsDirectory: "./coverage",
       reporter: ["text-summary", "lcov"],
       // Main-process modules are unit-tested too (ledger, parsers, trackers) — count them. The
-      // Electron wiring (main.ts, preload.ts) is exercised by the real-app checks instead.
+      // Electron wiring (main.ts, preload.ts) is exercised by the real-app checks instead, and
+      // so is the perf harness (lib/perf.ts: real PTYs and WebGL, run with MINMUX_PERF=1).
       include: ["src/**/*.{ts,tsx}", "electron/**/*.ts"],
       exclude: [
         "src/**/*.test.{ts,tsx}",
@@ -24,6 +25,7 @@ export default defineConfig({
         "src/vite-env.d.ts",
         "electron/main.ts",
         "electron/preload.ts",
+        "src/lib/perf.ts",
       ],
     },
   },

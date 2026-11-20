@@ -6,7 +6,13 @@ import { ipc } from "../lib/ipc"
 import { activeTheme, useStore } from "../store"
 import { sessionColor } from "../lib/session-color"
 import { agentByPane, type AgentKind } from "../lib/agent-graph"
-import { canMove, findPaneById, type MoveTarget } from "../lib/pane-tree"
+import {
+  canMove,
+  findPaneById,
+  paneSessionIds,
+  visibleTerminal,
+  type MoveTarget,
+} from "../lib/pane-tree"
 import { SURFACE_DRAG_TYPE } from "../lib/group-move"
 import { dropZone, insertIndex } from "../lib/drop-zone"
 import { displaySessionTitle, shellType } from "../lib/session-label"
@@ -28,23 +34,23 @@ export function TerminalPane({ pane, tabId }: { pane: PaneLeaf; tabId: string })
   const mountRef = useRef<HTMLDivElement>(null)
   const stripRef = useRef<HTMLDivElement>(null)
   const [menu, setMenu] = useState<{ x: number; y: number; hasSel: boolean } | null>(null)
-  const activeId = pane.activeSessionId
-  const surfaces = useStore(useShallow((s) => pane.sessionIds.map((id) => s.sessions[id])))
+  const activeId = pane.activeEntryId
+  const surfaces = useStore(useShallow((s) => pane.entryIds.map((id) => s.sessions[id])))
   // Each surface's agent session colour (/color, or derived from /rename) — undefined = none.
   const agentMeta = useStore((s) => s.agentMeta) // stable ref — changes only on a meta update
   const scheme = useStore((s) => activeTheme(s).scheme)
-  const accents = pane.sessionIds.map((id) => sessionColor(agentMeta[id], scheme))
+  const accents = pane.entryIds.map((id) => sessionColor(agentMeta[id], scheme))
   // Which agent runs in each surface, as one string ("claude,,codex") so a hook event only
   // re-renders the pane when that changes.
   const agentFlags = useStore((s) => {
     const byPane = agentByPane(s.agents)
-    return pane.sessionIds.map((id) => byPane[id] ?? "").join(",")
+    return pane.entryIds.map((id) => byPane[id] ?? "").join(",")
   }).split(",")
   const home = useStore((s) => s.home)
-  const session = surfaces[pane.sessionIds.indexOf(activeId)]
+  const session = surfaces[pane.entryIds.indexOf(activeId)]
   const focused = useStore(
     (s) =>
-      s.activeTabId === tabId && s.tabs.find((t) => t.id === tabId)?.activeSessionId === activeId,
+      s.activeTabId === tabId && s.tabs.find((t) => t.id === tabId)?.activeEntryId === activeId,
   )
   const status = session?.status ?? "idle"
   // An ssh pane waiting at a Connect prompt (restored on-focus, closed, or failed).
@@ -66,7 +72,7 @@ export function TerminalPane({ pane, tabId }: { pane: PaneLeaf; tabId: string })
   // Each surface's remote phase + detail, flat primitives (a surface tab shows its state dot).
   const remoteFlat = useStore(
     useShallow((s) =>
-      pane.sessionIds.flatMap((id) => [s.remotePhase[id] ?? "", s.remoteDetail[id] ?? ""]),
+      pane.entryIds.flatMap((id) => [s.remotePhase[id] ?? "", s.remoteDetail[id] ?? ""]),
     ),
   )
   // The focus/attention top rail only disambiguates between panes — pointless when
@@ -75,7 +81,7 @@ export function TerminalPane({ pane, tabId }: { pane: PaneLeaf; tabId: string })
     const tab = s.tabs.find((t) => t.id === tabId)
     return tab ? tab.root.type === "split" : false
   })
-  const multi = pane.sessionIds.length > 1
+  const multi = pane.entryIds.length > 1
   // A terminal is being dragged — from this group or another (whose drag opened this one) —
   // → show drop targets (overlay + strip markers).
   const dragging = useStore((s) => s.dragging)
@@ -89,7 +95,7 @@ export function TerminalPane({ pane, tabId }: { pane: PaneLeaf; tabId: string })
   // The visible surface read at event time (the render closure can be a frame stale).
   const visibleNow = () => {
     const tab = useStore.getState().tabs.find((t) => t.id === tabId)
-    return (tab && findPaneById(tab.root, pane.id)?.activeSessionId) ?? activeId
+    return (tab && findPaneById(tab.root, pane.id)?.activeEntryId) ?? activeId
   }
 
   // Header actions act on THIS pane: focus it first, then split / add a surface.
@@ -129,12 +135,12 @@ export function TerminalPane({ pane, tabId }: { pane: PaneLeaf; tabId: string })
 
   // Hidden surfaces still run: spawn/reattach their PTY (status, notifications, cwd)
   // without mounting them — e.g. after a restore or renderer reload.
-  const idsKey = pane.sessionIds.join(" ")
+  const idsKey = pane.entryIds.join(" ")
   useEffect(() => {
     const sessions = useStore.getState().sessions
-    for (const id of pane.sessionIds) {
+    for (const id of paneSessionIds(pane)) {
       const s = sessions[id]
-      if (s && id !== activeId) TerminalManager.ensureRunning(s, activeId)
+      if (s && id !== activeId) TerminalManager.ensureRunning(s, visibleTerminal(pane))
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [idsKey, activeId])
@@ -178,7 +184,7 @@ export function TerminalPane({ pane, tabId }: { pane: PaneLeaf; tabId: string })
   // that says which agent is blocked); else a Claude session colour paints it — on any pane,
   // split or not (faded on unfocused panes so focus still reads); else it only marks focus
   // between split panes.
-  const accent = accents[pane.sessionIds.indexOf(activeId)]
+  const accent = accents[pane.entryIds.indexOf(activeId)]
   const railClass =
     isSplit && !focused && status === "attention"
       ? " waiting"
@@ -255,7 +261,7 @@ export function TerminalPane({ pane, tabId }: { pane: PaneLeaf; tabId: string })
             if (e.deltaY && !e.deltaX) e.currentTarget.scrollLeft += e.deltaY
           }}
         >
-          {pane.sessionIds.map((id, i) => {
+          {pane.entryIds.map((id, i) => {
             const s = surfaces[i]
             const active = id === activeId
             const ui = s?.remote
@@ -274,7 +280,7 @@ export function TerminalPane({ pane, tabId }: { pane: PaneLeaf; tabId: string })
                   `surface-tab${active ? " active" : ""}${multi ? " multi" : ""}` +
                   (dragging?.sessionId === id ? " dragging" : "") +
                   (stripSlot === i ? " insert-before" : "") +
-                  (stripSlot === pane.sessionIds.length && i === pane.sessionIds.length - 1
+                  (stripSlot === pane.entryIds.length && i === pane.entryIds.length - 1
                     ? " insert-after"
                     : "")
                 }

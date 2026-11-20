@@ -2,7 +2,7 @@ import { useCallback, useMemo, useState } from "react"
 import { useTabDrag } from "./use-tab-drag"
 import { SURFACE_DRAG_TYPE } from "../lib/group-move"
 import { useTabRename } from "./use-tab-rename"
-import { refocusActiveTerminal } from "./refocus-terminal"
+import { focusActiveEntry, refocusActiveTerminal } from "./refocus-terminal"
 import { useShallow } from "zustand/react/shallow"
 import {
   CaretDown,
@@ -39,7 +39,7 @@ import { messageSnippet, prStateUi, type PaneGitInfo, type PrInfo } from "../lib
 import { ipc } from "../lib/ipc"
 import { openLink } from "../lib/open-link"
 import { TerminalManager } from "../terminal/terminal-manager"
-import { allPanes } from "../lib/pane-tree"
+import { allPanes, paneSessionIds } from "../lib/pane-tree"
 import { resolveDefaultShell } from "../lib/shells"
 import { statusUi } from "../lib/status-ui"
 import { detailUser, homeRelative, shortRemoteCwd } from "../lib/remote-cwd"
@@ -235,9 +235,9 @@ export function Sidebar() {
         )}
         {tabs.map((tab) => {
           const panes = allPanes(tab.root) // one walk → ids, pane count, visible set
-          const ids = panes.flatMap((p) => p.sessionIds)
+          const ids = panes.flatMap(paneSessionIds)
           const paneCount = panes.length
-          const visible = new Set(panes.map((p) => p.activeSessionId))
+          const visible = new Set(panes.map((p) => p.activeEntryId))
           const open = !collapsed.has(tab.id)
           const active = tab.id === activeTabId
           const focused = sessions[tab.activeSessionId]
@@ -323,7 +323,7 @@ export function Sidebar() {
                         remoteDetail[id],
                       )
                     : statusUi(s.status)
-                  const isActive = active && tab.activeSessionId === id
+                  const isActive = active && tab.activeEntryId === id
                   // The host's colour, looked up once for the icon and the host box.
                   const rowColor = s.remote ? hostCss(s.remote.target) : undefined
                   const rowUser = s.remote
@@ -644,10 +644,8 @@ function RowClose({ title, onClose }: { title: string; onClose: () => void }) {
         onClose()
         // Closed at once (no dialog): keep typing where you were — or in the terminal that
         // took over if you closed the focused one.
-        const s = useStore.getState()
-        if (s.closeConfirm) return
-        const sid = s.tabs.find((t) => t.id === s.activeTabId)?.activeSessionId
-        if (sid) requestAnimationFrame(() => TerminalManager.focus(sid))
+        if (useStore.getState().closeConfirm) return
+        requestAnimationFrame(focusActiveEntry)
       }}
     >
       <X size={12} />

@@ -29,6 +29,7 @@ import { anyToResolve, planEditPoll } from "./lib/agent-work"
 import type { PaneGitInfo } from "./lib/pane-git"
 import { TerminalManager } from "./terminal/terminal-manager"
 import { activeTheme, useStore } from "./store"
+import { focusActiveEntry } from "./components/refocus-terminal"
 import { ensureNotificationPermission } from "./lib/notify"
 import { loadSettings } from "./settings/io"
 import { applyThemeVars } from "./settings/themes"
@@ -621,11 +622,7 @@ function App() {
       if (prev.dragging && !state.dragging) {
         window.removeEventListener("mousemove", onMove)
         window.removeEventListener("mousedown", end, true)
-        requestAnimationFrame(() => {
-          const s = useStore.getState()
-          const sid = s.tabs.find((t) => t.id === s.activeTabId)?.activeSessionId
-          if (sid) TerminalManager.focus(sid)
-        })
+        requestAnimationFrame(focusActiveEntry)
       }
     })
     window.addEventListener("dragend", end)

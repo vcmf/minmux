@@ -209,9 +209,10 @@ Output stream: main → renderer via `webContents.send('pty:data:'+id, Uint8Arra
 - **Stores (Zustand):** `Session { id, title, cwd, shell, status, unread }`, a per-tab binary
   **pane tree**, and `settings`.
 - **Layout model:** each tab holds a binary pane tree — leaf or split (`row`/`column`, two
-  children). A leaf is a **pane** holding one or more terminals (**surfaces**, cmux-style) shown
-  as tabs in its header (`{id, sessionIds, activeSessionId}`); only the active surface is
-  mounted. Resizable dividers; each leaf resize → fit → `pty:resize`. Hidden surfaces keep
+  children). A leaf is a **pane** holding one or more entries (**surfaces**, cmux-style) shown
+  as tabs in its header (`{id, entryIds, activeEntryId}`); only the active surface is
+  mounted. An entry is a terminal (its id is its session id); folder and file entries are
+  planned (`docs/design/WORKDIR_OBJECTS.md`, `lib/entries`). Resizable dividers; each leaf resize → fit → `pty:resize`. Hidden surfaces keep
   running: their xterm is opened in an off-screen, `inert` **parking** element (xterm pauses
   rendering off-viewport, so no paint cost) and takes its pane's grid via `followSize`.
   `workspace.json` v2 persists surfaces (v1 leaves migrate; each v2 leaf also writes a legacy
@@ -352,8 +353,8 @@ non-default profile; a dev build is `minmux-dev` (GOTCHAS #profiles).
   the same file. `mergeSettings` validates everything and maps legacy values.
 - **`workspace.json`** — the layout: tabs, pane trees with their surfaces, focus, right-panel
   width, and enough per session to respawn it (shell, args, cwd). **v2** leaves are
-  `{id, sessionIds, activeSessionId}` plus a legacy `sessionId` mirror so an older build still
-  restores every pane; v1 files migrate on read. A file from a **newer** build is not parsed
+  `{id, sessionIds, activeSessionId}` (the pane's terminals) plus a legacy `sessionId` mirror so
+  an older build still restores every pane; v1 files migrate on read. A file from a **newer** build is not parsed
   and not overwritten. Restore de-duplicates / prunes broken entries.
 - **`agent-sessions.json`** (Claude) and **`agent-sessions.<agent>.json`** — which agent session
   each terminal is inside, so a relaunch can resume it (GOTCHAS #resume).

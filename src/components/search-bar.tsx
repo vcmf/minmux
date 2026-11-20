@@ -1,14 +1,11 @@
 import { useEffect, useRef, useState } from "react"
 import { CaretUp, CaretDown, X, TextAa } from "@phosphor-icons/react"
 import { TerminalManager } from "../terminal/terminal-manager"
-import { useStore } from "../store"
+import { focusedTerminal, useStore } from "../store"
 
 /** ⌘F find-in-scrollback overlay — drives @xterm/addon-search on the focused pane. */
 export function SearchBar() {
-  const sessionId = useStore((s) => {
-    const tab = s.tabs.find((t) => t.id === s.activeTabId)
-    return tab?.activeSessionId ?? null
-  })
+  const sessionId = useStore((s) => focusedTerminal(s) ?? null)
   const setSearchOpen = useStore((s) => s.setSearchOpen)
   const inputRef = useRef<HTMLInputElement>(null)
   const [query, setQuery] = useState("")

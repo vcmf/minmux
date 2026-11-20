@@ -8,7 +8,7 @@ import { useCallback, useEffect, useRef, useState, type DragEvent } from "react"
 import { useStore } from "../store"
 import { TAB_DRAG_TYPE } from "../lib/tab-order"
 import { insertIndex } from "../lib/drop-zone"
-import { TerminalManager } from "../terminal/terminal-manager"
+import { focusActiveEntry } from "./refocus-terminal"
 import { SURFACE_DRAG_TYPE, canDrop, type GroupDrop } from "../lib/group-move"
 
 const EDGE = 28 // px from the list's edge where dragging scrolls it (an overflowing tab bar)
@@ -179,9 +179,7 @@ export function useTabDrag(axis: "x" | "y") {
     onDragEnd: () => {
       reset()
       // The press moved focus off the terminal and the drag swallowed the mouseup: give it back.
-      const s = useStore.getState()
-      const sid = s.tabs.find((t) => t.id === s.activeTabId)?.activeSessionId
-      if (sid) requestAnimationFrame(() => TerminalManager.focus(sid))
+      requestAnimationFrame(focusActiveEntry)
     },
   })
 
