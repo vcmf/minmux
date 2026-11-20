@@ -161,6 +161,24 @@ describe("FolderView", () => {
     expect(st().objects[entryId]!.path).toBe("/fv10/lib")
   })
 
+  it("its right-click menu previews a file; a WSL folder opens no menu", async () => {
+    vi.mocked(ipc.readdir).mockResolvedValue(ls(["n.md", false]))
+    vi.mocked(ipc.editorInfo).mockResolvedValue({ available: false, name: "" })
+    useStore.setState({ platform: "darwin" })
+    const { tabId, entryId } = open("/fv12")
+    const v = render(<FolderView entryId={entryId} tabId={tabId} />)
+    fireEvent.contextMenu(await screen.findByText("n.md"))
+    fireEvent.mouseDown(screen.getByText("Preview"), { button: 0 })
+    expect(st().preview).toEqual({ abs: "/fv12/n.md", name: "n.md" })
+    v.unmount()
+    st().newTab(testShell)
+    st().openFolder("/home/u/w", { wsl: { distro: "Ubuntu" } })
+    const t = st().tabs[1]!
+    render(<FolderView entryId={t.activeEntryId} tabId={t.id} />)
+    fireEvent.contextMenu(await screen.findAllByText("n.md").then((x) => x[x.length - 1]!))
+    expect(screen.queryByText("Preview")).toBeNull()
+  })
+
   it("a folder that can't be read says so", async () => {
     vi.mocked(ipc.readdir).mockResolvedValue({ ...ls(), error: true })
     const { tabId, entryId } = open("/fv11")
@@ -276,6 +294,26 @@ describe("FolderView", () => {
       await screen.findByText(/5000 more changes in this repo, not listed/),
     ).toBeInTheDocument()
     expect(screen.getByTitle("Show the folder")).toBeInTheDocument()
+  })
+
+  it("one unlisted change is counted in the pill and the list", async () => {
+    vi.mocked(ipc.readdir).mockResolvedValue(ls(["a.ts", false]))
+    vi.mocked(ipc.gitStatus).mockResolvedValue({
+      isRepo: true,
+      root: "/fvu",
+      branch: "main",
+      ahead: 0,
+      behind: 0,
+      files: [{ path: "a.ts", dir: "", status: "M", add: 1, del: 0 }],
+      add: 1,
+      del: 0,
+      total: 2,
+    } as never)
+    vi.mocked(ipc.gitRoots).mockResolvedValue({ "/fvu": "/fvu" })
+    const { tabId, entryId } = open("/fvu")
+    render(<FolderView entryId={entryId} tabId={tabId} />)
+    fireEvent.click(await screen.findByTitle("Show only the 1+ changed files"))
+    expect(screen.getByText(/1 more change in this repo, not listed/)).toBeInTheDocument()
   })
 
   it("a folder in no repo has no repo bar and stays a tree", async () => {
