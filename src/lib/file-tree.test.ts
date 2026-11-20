@@ -28,6 +28,7 @@ describe("path helpers", () => {
   })
   it("baseName returns the last segment", () => {
     expect(baseName("/a/b/c")).toBe("c")
+    expect(baseName("C:\\work\\rts")).toBe("rts") // a Windows path too
     expect(baseName("/a/b/")).toBe("b")
     expect(baseName("/")).toBe("/")
   })

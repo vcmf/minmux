@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest"
 import { reopenFor } from "./lib/remote-reports"
-import { useStore, isVisibleIn, isSessionVisible } from "./store"
+import { useStore, isVisibleIn, isSessionVisible, canOpenTerminalIn } from "./store"
 import { allEntryIds, allSessionIds, findPane, visibleSessionIds } from "./lib/pane-tree"
 import { isTerminalEntry } from "./lib/entries"
 import { resetStore, testHost, testShell as shell } from "./test/helpers"
@@ -1645,5 +1645,74 @@ describe("store — folder entries", () => {
     st().moveTerminal(id, { kind: "new", insertAt: 1 })
     const fresh = st().tabs.find((t) => t.activeEntryId === id)!
     expect(fresh.activeSessionId).toBe("")
+  })
+
+  it("a WSL folder's new terminal is a WSL shell for its distro, in the folder", () => {
+    const ubuntu = { id: "u", label: "Ubuntu", command: "wsl.exe", args: ["-d", "Ubuntu"] }
+    useStore.setState({ shells: [shell, ubuntu] })
+    st().newTab(shell)
+    st().openFolder("/home/u/proj", { wsl: { distro: "Ubuntu" } })
+    st().newSurface()
+    const s = st().sessions[tab().activeSessionId]!
+    expect(s.command).toBe("wsl.exe")
+    expect(s.args).toEqual(["-d", "Ubuntu"])
+    expect(s.cwd).toBe("/home/u/proj")
+  })
+
+  it("a WSL folder no listed shell matches: no terminal in it, but ⌘T opens one like the tab's", () => {
+    st().newTab(shell)
+    const term = tab().activeSessionId
+    st().setSessionCwd(term, "/w/own")
+    st().openFolder("/home/u/proj", { wsl: { distro: "Gone" } })
+    expect(canOpenTerminalIn(st(), tab().activeEntryId)).toBe(false) // no "New terminal here"
+    st().newSurface(shell)
+    const s = st().sessions[tab().activeSessionId]!
+    expect(s.command).toBe(shell.command) // the tab's own shell, where it is
+    expect(s.cwd).toBe("/w/own") // never a Linux path handed to a host shell
+  })
+
+  it("New terminal here counts the tab's own WSL shell, as the action does", () => {
+    const plain = { id: "w", label: "WSL", command: "wsl.exe", args: [] }
+    useStore.setState({ shells: [shell] }) // plain wsl.exe isn't listed
+    st().newTab(plain)
+    st().openFolder("/home/u/proj", { wsl: {} })
+    expect(canOpenTerminalIn(st(), tab().activeEntryId)).toBe(true)
+  })
+
+  it("setFolderRoots / setFolderGit keep the same state when nothing changes; null drops", () => {
+    st().setFolderRoots({ a: "/r" })
+    const s1 = st()
+    st().setFolderRoots({ a: "/r" })
+    expect(st()).toBe(s1)
+    const g = {
+      isRepo: true,
+      root: "/r",
+      branch: "m",
+      ahead: 0,
+      behind: 0,
+      files: [],
+      add: 0,
+      del: 0,
+    }
+    st().setFolderGit("k", g as never)
+    const s2 = st()
+    st().setFolderGit("k", { ...g } as never) // equal content
+    expect(st()).toBe(s2)
+    st().setFolderGit("k", null)
+    expect(st().folderGit).toEqual({})
+    const s3 = st()
+    st().setFolderGit("k", null)
+    expect(st()).toBe(s3)
+  })
+
+  it("an ssh tab's WSL folder with no shell: the given shell, not the ssh one", () => {
+    const host = hostShellOption(testHost("prod"))
+    useStore.setState({ shells: [shell, host] })
+    st().newTab(host)
+    st().openFolder("/home/u/p", { wsl: { distro: "Gone" } })
+    st().newSurface(shell)
+    const s = st().sessions[tab().activeSessionId]!
+    expect(s.remote).toBeUndefined()
+    expect(s.command).toBe(shell.command)
   })
 })

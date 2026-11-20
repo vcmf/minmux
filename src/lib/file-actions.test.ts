@@ -82,9 +82,10 @@ describe("folderMenuItems", () => {
     expect(folderMenuItems("Reveal in Finder").map((i) => i.label)).toEqual([
       "Copy path",
       "Open terminal here",
+      "Open in a tab",
       "Reveal in Finder",
     ])
-    const wsl = folderMenuItems("Reveal in Explorer", "WSL path")[2]
+    const wsl = folderMenuItems("Reveal in Explorer", "WSL path")[3]
     expect(wsl).toMatchObject({ disabled: true, hint: "WSL path" })
   })
 })

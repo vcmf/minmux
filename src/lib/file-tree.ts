@@ -10,7 +10,11 @@ export const joinPath = (dir: string, name: string) =>
   dir.endsWith("/") ? dir + name : `${dir}/${name}`
 
 /** Last path segment (for the panel header). */
-export const baseName = (p: string) => p.replace(/\/+$/, "").split("/").pop() || p
+export const baseName = (p: string) =>
+  p
+    .replace(/[\\/]+$/, "")
+    .split(/[\\/]/)
+    .pop() || p
 
 /** One browser's state: the folder it's rooted at, cached listings per directory,
  *  and which directories are expanded. Immutable — every op returns a new state. */

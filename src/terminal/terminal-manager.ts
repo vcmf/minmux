@@ -1230,6 +1230,16 @@ export const TerminalManager = {
     }
   },
 
+  // Its pane shows a folder, so there's no terminal there to follow. PTY resized only on change.
+  /** A parked terminal takes the grid of a `w`×`h` px mount. */
+  sizeHidden(id: string, w: number, h: number) {
+    const entry = entries.get(id)
+    if (!entry?.opened || entry.host.parentElement !== parking || w <= 0 || h <= 0) return
+    entry.host.style.width = `${Math.floor(w)}px`
+    entry.host.style.height = `${Math.floor(h)}px`
+    syncSize(id, entry)
+  },
+
   /** Give a hidden surface its pane's grid (it can't self-fit); PTY resized only on change. */
   followSize(id: string, likeId: string) {
     const entry = entries.get(id)
@@ -1249,6 +1259,8 @@ export const TerminalManager = {
   /** Mount a session's terminal into `container`, creating + spawning on first use. */
   attach(session: Session, container: HTMLElement) {
     const entry = entryFor(session.id)
+    entry.host.style.width = "" // sized by sizeHidden while parked: the mount sizes it now
+    entry.host.style.height = ""
     container.appendChild(entry.host)
     if (!entry.opened) {
       openEntry(session, entry)

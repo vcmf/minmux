@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react"
+import { useEffect, useRef, useState, type ReactNode } from "react"
 import {
   CaretRight,
   DotsThree,
@@ -6,27 +6,29 @@ import {
   PencilSimple,
   ArrowCounterClockwise,
 } from "@phosphor-icons/react"
-import { useStore } from "../store"
 import { ipc } from "../lib/ipc"
-import { getActiveWsl } from "../lib/use-active-cwd"
+import type { WslContext } from "../lib/wsl"
 import { parseBreadcrumb, collapseBreadcrumb } from "../lib/breadcrumb"
 import { isAbsoluteHostPath } from "../lib/file-actions"
 
 const MAX_VISIBLE = 3 // trailing crumbs shown inline; the rest fold into the "…" menu
 
-/** Root navigation bar for the Files panel: a collapsible clickable breadcrumb of the
- *  current root, a "…" dropdown for folded ancestors, browse (native picker) + type-a-path
- *  entry, and an amber reset button when the root has diverged from the terminal cwd. */
+// A collapsible clickable breadcrumb of the current root, a "…" dropdown for folded ancestors,
+// browse (native picker) + type-a-path entry, an optional amber reset (the Files panel's root
+// diverged from the terminal), and the owner's own buttons after them (a folder tab's).
+/** Root navigation bar of the Files panel and of a folder tab. */
 export function RootBreadcrumb({
   root,
-  cwd,
-  sessionId,
-  diverged,
+  wsl,
+  onSetRoot,
+  reset,
+  actions,
 }: {
   root: string
-  cwd: string | undefined
-  sessionId: string | undefined
-  diverged: boolean
+  wsl?: WslContext // a WSL folder: its paths are checked and picked in the distro
+  onSetRoot: (path: string) => void
+  reset?: { title: string; onReset: () => void }
+  actions?: ReactNode
 }) {
   const [editing, setEditing] = useState(false)
   const [value, setValue] = useState("")
@@ -34,8 +36,7 @@ export function RootBreadcrumb({
   const [menuOpen, setMenuOpen] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
 
-  const setRoot = (p: string) => sessionId && useStore.getState().setPaneRoot(sessionId, p)
-  const reset = () => sessionId && useStore.getState().clearPaneRoot(sessionId)
+  const setRoot = onSetRoot
 
   const beginEdit = () => {
     setValue(root)
@@ -51,7 +52,7 @@ export function RootBreadcrumb({
     if (p === root) return setEditing(false)
     // Must be an absolute host path (setPaneRoot enforces it too) AND an existing dir —
     // checked via the pane's WSL context so a Linux path validates through the UNC share.
-    if (isAbsoluteHostPath(p) && (await ipc.pathIsDir(p, getActiveWsl()))) {
+    if (isAbsoluteHostPath(p) && (await ipc.pathIsDir(p, wsl))) {
       setRoot(p)
       setEditing(false)
     } else {
@@ -59,7 +60,7 @@ export function RootBreadcrumb({
     }
   }
   const browse = async () => {
-    const picked = await ipc.pickDirectory(root, getActiveWsl())
+    const picked = await ipc.pickDirectory(root, wsl)
     if (picked) setRoot(picked)
   }
 
@@ -145,16 +146,17 @@ export function RootBreadcrumb({
         >
           <FolderOpen size={13} />
         </button>
-        {diverged && (
+        {reset && (
           <button
             className="iconbtn root-reset"
             style={btn}
-            title={`Reset to terminal folder${cwd ? ` (${cwd})` : ""}`}
-            onClick={reset}
+            title={reset.title}
+            onClick={reset.onReset}
           >
             <ArrowCounterClockwise size={13} />
           </button>
         )}
+        {actions}
       </div>
     </div>
   )

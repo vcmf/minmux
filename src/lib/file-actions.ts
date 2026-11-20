@@ -26,7 +26,7 @@ export function revealLabel(platform: string): string {
 }
 
 export type FileActionId =
-  "preview" | "open" | "setRoot" | "reveal" | "copyPath" | "copyRel" | "openHere"
+  "preview" | "open" | "setRoot" | "reveal" | "copyPath" | "copyRel" | "openHere" | "openTab"
 
 export interface MenuItemSpec<Id extends string = FileActionId> {
   id: Id
@@ -65,10 +65,32 @@ export function fileMenuItems(input: FileMenuInput): MenuItemSpec[] {
 }
 
 /** The sidebar's folder-line menu; `revealHint` = why Reveal is unavailable (e.g. a WSL path). */
-export function folderMenuItems(revealLabel: string, revealHint?: string): MenuItemSpec[] {
+export function folderMenuItems(
+  revealLabel: string,
+  revealHint?: string,
+  // A folder line of a terminal: "Open in a tab" (a folder row is one already), with why it's
+  // off (a path this machine can't list); a folder row whose terminal can't start: why.
+  opts: { openTab?: boolean; openTabHint?: string; openHereHint?: string } = {},
+): MenuItemSpec[] {
+  const { openTab = true, openTabHint, openHereHint } = opts
   return [
     { id: "copyPath", label: "Copy path" },
-    { id: "openHere", label: "Open terminal here" },
+    {
+      id: "openHere",
+      label: "Open terminal here",
+      disabled: !!openHereHint,
+      hint: openHereHint,
+    },
+    ...(openTab
+      ? [
+          {
+            id: "openTab" as const,
+            label: "Open in a tab",
+            disabled: !!openTabHint,
+            hint: openTabHint,
+          },
+        ]
+      : []),
     {
       id: "reveal",
       label: revealLabel,

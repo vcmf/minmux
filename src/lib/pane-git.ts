@@ -10,6 +10,7 @@ export const MAX_GIT_ROOTS = 64
 export interface GitRootRequest {
   dir: string
   wsl?: WslContext
+  spelled?: boolean // a host folder's root as it's spelled (symlinks kept): a folder tab's
 }
 
 export type PrState = "open" | "draft" | "merged" | "closed"

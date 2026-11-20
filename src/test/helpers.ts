@@ -45,6 +45,8 @@ export function resetStore() {
     paneRoot: {},
     objects: {},
     folderViews: {},
+    folderGit: {},
+    folderRoots: {},
     closeConfirm: null,
     dragging: null,
     agentMeta: {},

@@ -1294,3 +1294,32 @@ describe("TerminalManager — mode 2031 on ssh panes, and a reattach", () => {
     expect(writes(id)).toEqual([])
   })
 })
+
+describe("TerminalManager — a parked terminal behind a folder tab", () => {
+  beforeEach(() => {
+    resetStore()
+    vi.clearAllMocks()
+  })
+
+  it("sizeHidden gives it the folder view's box, and its PTY the grid it fits", () => {
+    st().newTab(testShell)
+    const id = st().tabs[0]!.activeSessionId
+    TerminalManager.ensureRunning(st().sessions[id] as Session)
+    const hosts = document.querySelectorAll<HTMLElement>(".terminal-host")
+    const host = hosts[hosts.length - 1]!
+    terms[terms.length - 1]!.cols = 132 // what fitting that box gives (the fit addon is a stub)
+    TerminalManager.sizeHidden(id, 900.6, 600.2)
+    expect(host.style.width).toBe("900px")
+    expect(host.style.height).toBe("600px")
+    expect(ipc.ptyResize).toHaveBeenCalledWith(id, 132, 24)
+    // Shown again: its mount sizes it, not the box it was given.
+    const mount = document.createElement("div")
+    TerminalManager.attach(st().sessions[id] as Session, mount)
+    expect(host.style.width).toBe("")
+  })
+
+  it("does nothing for a terminal on screen or never opened", () => {
+    TerminalManager.sizeHidden("nope", 900, 600)
+    expect(ipc.ptyResize).not.toHaveBeenCalled()
+  })
+})

@@ -212,3 +212,22 @@ describe("FilesPanel — live refresh", () => {
     await waitFor(() => expect(ipc.fsWatch).toHaveBeenLastCalledWith([])) // sent at the tick's end
   })
 })
+
+describe("FilesPanel — its root", () => {
+  beforeEach(() => {
+    resetStore()
+    vi.clearAllMocks()
+  })
+
+  it("a crumb re-roots the panel; the reset returns it to the terminal's folder", async () => {
+    vi.mocked(ipc.readdir).mockResolvedValue({ entries: [], truncated: false })
+    st().newTab(testShell)
+    const id = allSessionIds(st().tabs[0]!.root)[0]!
+    st().setSessionCwd(id, "/proj/sub")
+    render(<FilesPanel />)
+    fireEvent.click(await screen.findByText("proj"))
+    expect(st().paneRoot[id]).toBe("/proj")
+    fireEvent.click(await screen.findByTitle(/Reset to terminal folder/))
+    expect(st().paneRoot[id]).toBeUndefined()
+  })
+})

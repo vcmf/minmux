@@ -93,7 +93,7 @@ describe("FolderView", () => {
     expect(st().folderViews[entryId]!.showAll).toEqual(["/fv6"])
   })
 
-  it("Parent folder re-roots one level up; Refresh re-reads what's open", async () => {
+  it("a breadcrumb segment re-roots there; Refresh re-reads what's open", async () => {
     vi.mocked(ipc.readdir).mockResolvedValue(ls(["a", false]))
     const { tabId, entryId } = open("/fv7/sub")
     render(<FolderView entryId={entryId} tabId={tabId} />)
@@ -101,15 +101,20 @@ describe("FolderView", () => {
     vi.mocked(ipc.readdir).mockClear()
     fireEvent.click(screen.getByTitle("Refresh"))
     await waitFor(() => expect(ipc.readdir).toHaveBeenCalledWith("/fv7/sub", undefined))
-    fireEvent.click(screen.getByTitle("Parent folder"))
+    fireEvent.click(screen.getByText("fv7")) // its breadcrumb's parent segment
     expect(st().objects[entryId]!.path).toBe("/fv7")
   })
 
-  it("no Parent folder at the filesystem root", () => {
+  it("a typed path in its breadcrumb re-roots it, once it's a folder", async () => {
     vi.mocked(ipc.readdir).mockResolvedValue(ls())
-    const { tabId, entryId } = open("/")
+    vi.mocked(ipc.pathIsDir).mockResolvedValue(true)
+    const { tabId, entryId } = open("/fv12")
     render(<FolderView entryId={entryId} tabId={tabId} />)
-    expect(screen.queryByTitle("Parent folder")).toBeNull()
+    fireEvent.click(screen.getByTitle("Enter a path"))
+    const input = screen.getByPlaceholderText(/folder path/i)
+    fireEvent.change(input, { target: { value: "/fv12-other" } })
+    fireEvent.keyDown(input, { key: "Enter" })
+    await waitFor(() => expect(st().objects[entryId]!.path).toBe("/fv12-other"))
   })
 
   it("back to the window: re-reads the open folders no watcher covers", async () => {
@@ -147,5 +152,39 @@ describe("FolderView", () => {
     const { tabId, entryId } = open("/fv11")
     render(<FolderView entryId={entryId} tabId={tabId} />)
     expect(await screen.findByText("Couldn't read this folder")).toBeInTheDocument()
+  })
+
+  it("shows git marks for a folder in another repo, from the folder entries' own poll", async () => {
+    vi.mocked(ipc.readdir).mockResolvedValue(ls(["app.ts", false]))
+    vi.mocked(ipc.gitStatus).mockResolvedValue({
+      isRepo: true,
+      root: "/fvg",
+      branch: "main",
+      ahead: 0,
+      behind: 0,
+      files: [{ path: "app.ts", status: "M" }],
+      add: 1,
+      del: 0,
+    } as never)
+    vi.mocked(ipc.gitRoots).mockResolvedValue({ "/fvg": "/fvg" }) // its own .git search
+    const { tabId, entryId } = open("/fvg")
+    const view = render(<FolderView entryId={entryId} tabId={tabId} />)
+    await waitFor(() => expect(screen.getByText("M")).toBeInTheDocument())
+    expect(ipc.gitStatus).toHaveBeenCalledWith("/fvg", undefined)
+    view.unmount()
+  })
+
+  it("a long tree renders only the rows around the view", async () => {
+    const many = Array.from(
+      { length: 480 },
+      (_, i) => [`n${String(i).padStart(3, "0")}`, false] as [string, boolean],
+    )
+    vi.mocked(ipc.readdir).mockResolvedValue({ ...ls(...many), total: 480 })
+    const { tabId, entryId } = open("/fvv")
+    const { container } = render(<FolderView entryId={entryId} tabId={tabId} />)
+    fireEvent.click(await screen.findByText("Show all"))
+    await screen.findByText("n000")
+    expect(container.querySelectorAll(".file-row").length).toBeLessThan(60)
+    expect(screen.queryByText("n479")).toBeNull() // far below: a spacer stands for it
   })
 })
