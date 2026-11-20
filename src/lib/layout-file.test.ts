@@ -146,4 +146,65 @@ describe("layout.json", () => {
     expect(left!.entryIds).toEqual(["a", F, K])
     expect(left!.activeEntryId).toBe("a")
   })
+
+  it("takes nothing from a layout.json it can't read as one", () => {
+    const { ws } = save(state())
+    const base = deserializeWorkspace(JSON.parse(ws))
+    for (const bad of ["null", "42", JSON.stringify({ version: 1 }), JSON.stringify({ tabs: 3 })])
+      expect(restoreLayout(base, ws, bad).state).toBe(base)
+  })
+
+  it("skips malformed tabs and nodes, keeps the good ones", () => {
+    const s = state()
+    const { ws, layout } = save(s)
+    const file = JSON.parse(layout)
+    file.tabs = [
+      null,
+      { title: "no id" },
+      { id: "x", root: { type: "split", id: "s", direction: "diagonal", children: [] } },
+      { id: "y", root: { type: "split", id: "s", direction: "row", children: [1] } },
+      { id: "z", root: { type: "leaf", id: 7, entryIds: ["a"] } },
+      ...file.tabs,
+    ]
+    const r = restoreLayout(deserializeWorkspace(JSON.parse(ws)), ws, JSON.stringify(file)).state!
+    expect(r.tabs.map((t) => t.id)).toEqual(["t1", "t2"])
+  })
+
+  it("keeps a WSL folder's distro, and nothing else from its context", () => {
+    const s = state()
+    s.objects[F] = { kind: "folder", path: "/home/u/p", wsl: { distro: "Ubuntu" } }
+    const { ws, layout } = save(s)
+    const file = JSON.parse(layout)
+    file.objects[G] = { kind: "folder", path: "/home/u/q", wsl: { distro: 5 } }
+    file.objects[H] = { kind: "file", path: "/x" }
+    const r = restoreLayout(deserializeWorkspace(JSON.parse(ws)), ws, JSON.stringify(file)).state!
+    expect(r.objects![F]).toEqual({ kind: "folder", path: "/home/u/p", wsl: { distro: "Ubuntu" } })
+    expect(r.objects![G]).toEqual({ kind: "folder", path: "/home/u/q", wsl: {} })
+    expect(r.objects![H]).toBeUndefined()
+  })
+
+  it("a saved focus or terminal that's gone falls back to what's there", () => {
+    const s = state()
+    const { ws, layout } = save(s)
+    const file = JSON.parse(layout)
+    file.tabs[0].activeEntryId = "gone"
+    file.tabs[0].activeSessionId = "gone"
+    file.activeTabId = "nope"
+    const r = restoreLayout(deserializeWorkspace(JSON.parse(ws)), ws, JSON.stringify(file)).state!
+    expect(r.tabs[0]!.activeSessionId).toBe("a")
+    expect(r.activeTabId).toBe("t1")
+  })
+
+  it("a layout with nothing usable left keeps workspace.json's", () => {
+    const { ws, layout } = save(state())
+    const file = JSON.parse(layout)
+    file.tabs = []
+    const base = deserializeWorkspace(JSON.parse(ws))
+    expect(restoreLayout(base, ws, JSON.stringify(file)).state).toBe(base)
+  })
+
+  it("a mismatched layout with no workspace.json: nothing to restore", () => {
+    const { layout } = save(state())
+    expect(restoreLayout(null, "different", layout).state).toBeNull()
+  })
 })
