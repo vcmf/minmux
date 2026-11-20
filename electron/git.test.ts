@@ -59,6 +59,7 @@ describe("parseDiff", () => {
       "-old",
       "+new1",
       "+new2",
+      "", // git's output ends with a newline: not a line of the file
     ].join("\n")
     const lines = parseDiff(out)
     expect(lines.map((l) => l.type)).toEqual(["hunk", "context", "del", "add", "add"])

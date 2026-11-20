@@ -116,7 +116,8 @@ export function parseDiff(out: string): DiffLine[] {
     if (raw.startsWith("\\") || !inHunk) continue // "\ No newline at end of file", headers
     if (raw.startsWith("+")) lines.push({ type: "add", text: raw.slice(1), newNo: newNo++ })
     else if (raw.startsWith("-")) lines.push({ type: "del", text: raw.slice(1), oldNo: oldNo++ })
-    else if (raw.length || lines.length)
+    else if (raw.startsWith(" "))
+      // (the last line of git's output is empty: not a line of the file)
       lines.push({ type: "context", text: raw.slice(1), oldNo: oldNo++, newNo: newNo++ })
   }
   return lines

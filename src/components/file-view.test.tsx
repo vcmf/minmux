@@ -243,4 +243,35 @@ describe("FileView", () => {
     expect(container.querySelector(".diff-line")).toBeNull()
     expect(screen.queryByText("Diff")).toBeNull()
   })
+
+  it("a file git deleted but still on disk (git rm --cached) shows its Source", async () => {
+    vi.mocked(ipc.readFile).mockResolvedValue({
+      kind: "text",
+      text: "kept\n",
+      truncated: false,
+      size: 5,
+    })
+    vi.mocked(ipc.gitDiff).mockResolvedValue([diff[0]!, diff[2]!])
+    inRepo([{ path: "src/kept.ts", status: "D", add: 0, del: 1 }])
+    const a = open("/gr/src/kept.ts")
+    const { container } = render(<FileView entryId={a.entryId} tabId={a.tabId} />)
+    await waitFor(() => expect(ipc.gitDiff).toHaveBeenCalled())
+    await waitFor(() => expect(container.textContent).toContain("kept"))
+    expect(container.querySelector(".diff-line")).toBeNull()
+  })
+
+  it("a renamed file reads no diff (it'd be all new)", async () => {
+    vi.mocked(ipc.readFile).mockResolvedValue({
+      kind: "text",
+      text: "r\n",
+      truncated: false,
+      size: 2,
+    })
+    inRepo([{ path: "src/r.ts", status: "R", add: 1, del: 0 }])
+    const a = open("/gr/src/r.ts")
+    const { container } = render(<FileView entryId={a.entryId} tabId={a.tabId} />)
+    await waitFor(() => expect(container.querySelector(".file-view-line")).not.toBeNull())
+    expect(ipc.gitDiff).not.toHaveBeenCalled()
+    expect(screen.queryByText("Diff")).toBeNull()
+  })
 })

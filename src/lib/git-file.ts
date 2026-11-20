@@ -6,8 +6,10 @@ import { joinPath } from "./file-tree"
 
 /** `abs` relative to `root` (forward slashes, as git's paths), or undefined if outside it. */
 export function relTo(root: string, abs: string): string | undefined {
-  const r = root.replace(/[\\/]+$/, "").replace(/\\/g, "/")
-  const a = abs.replace(/\\/g, "/")
+  // A Windows drive letter in either case (git says C:, a link may say c:).
+  const norm = (p: string) => p.replace(/\\/g, "/").replace(/^[A-Z]:/, (d) => d.toLowerCase())
+  const r = norm(root.replace(/[\\/]+$/, ""))
+  const a = norm(abs)
   return a.startsWith(`${r}/`) ? a.slice(r.length + 1) : undefined
 }
 
@@ -21,7 +23,7 @@ export function gitFileFor(git: GitStatus | undefined, abs: string): GitFile | u
 /** The changed files under `folder` (its whole repo's when it's the root), in git's order. */
 export function changesUnder(git: GitStatus | undefined, folder: string): GitFile[] {
   if (!git?.isRepo) return []
-  const atRoot = folder.replace(/[\\/]+$/, "") === git.root.replace(/[\\/]+$/, "")
+  const atRoot = relTo(folder, `${git.root.replace(/[\\/]+$/, "")}/x`) === "x"
   return git.files.filter((f) => {
     if (atRoot) return true
     return relTo(folder, joinPath(git.root, f.path)) !== undefined
@@ -31,15 +33,16 @@ export function changesUnder(git: GitStatus | undefined, folder: string): GitFil
 /** Which view a file opens on: Diff from the changes list (a change git can diff), else Source. */
 export function opensOnDiff(status: ChangeStatus | undefined, fromChanges: boolean): boolean {
   if (status === "D") return true // there's no file to show
-  return fromChanges && (status === "M" || status === "R")
+  return fromChanges && status === "M"
 }
 
-/** Whether a file's tab offers Source / Diff (a tracked change; a new file is all change). */
-export const hasDiffToggle = (status: ChangeStatus | undefined): boolean =>
-  status === "M" || status === "R"
+// Not a new file (it's all change) nor a rename: git's status has no old path for the diff to
+// pair it with, so it would read as all new.
+/** Whether a file's tab offers Source / Diff. */
+export const hasDiffToggle = (status: ChangeStatus | undefined): boolean => status === "M"
 
-/** The Source view's change bars, by new-side line number: added, modified (an add next to a
- *  delete), and lines with deleted lines just above them. */
+// Added, modified (an add next to a delete), and lines with deleted lines just above them.
+/** The Source view's change bars, by new-side line number. */
 export function changeBars(lines: DiffLine[]): Map<number, "add" | "mod" | "del"> {
   const out = new Map<number, "add" | "mod" | "del">()
   let i = 0

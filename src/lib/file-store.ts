@@ -42,11 +42,14 @@ interface Entry extends FileShown {
   diffKey: string // what `diff` was read for (status and stamp): another key reads it again
   diffAt: number // when its diff was last read (Date.now)
   diffTimer?: ReturnType<typeof setTimeout> // a re-read waiting out DIFF_MIN_MS
+  diffWant: DiffWant | null // the latest diff asked for
+  diffReading: boolean // a diff read in flight: a newer key waits for it
 }
 
 type Read = (path: string, wsl?: WslContext, since?: FileStamp) => Promise<FileData>
 type Highlight = (text: string, lang: string | null) => Promise<string[]>
 type Diff = (root: string, rel: string, wsl?: WslContext) => Promise<DiffLine[]>
+type DiffWant = { root: string; rel: string; key: string }
 
 /** File tabs' state, by entry id, with a change signal for React (useSyncExternalStore). */
 export class FileStore {
@@ -92,6 +95,8 @@ export class FileStore {
         diff: null,
         diffKey: "",
         diffAt: 0,
+        diffWant: null,
+        diffReading: false,
         reading: false,
         again: false,
         highlighted: null,
@@ -122,8 +127,8 @@ export class FileStore {
     else void this.readNow(id, e)
   }
 
-  /** Where its view (Source, or Diff) is scrolled (kept for when it shows again; nothing
-   *  re-renders). */
+  // Kept for when it shows again; nothing re-renders.
+  /** Where its view (Source, or Diff) is scrolled. */
   setScroll(id: string, top: number, diff = false): void {
     const e = this.files.get(id)
     if (e && diff) e.diffTop = top
@@ -136,34 +141,40 @@ export class FileStore {
   // is a git spawn), the last key always read. Each side is highlighted whole in the worker, so
   // a multi-line comment or string keeps its colours; a big diff is escaped there too.
   /** The file changed in git: have its diff (read only when the key changes). */
-  wantDiff(id: string, want: { root: string; rel: string; key: string } | null): void {
+  wantDiff(id: string, want: DiffWant | null): void {
     const e = this.files.get(id)
     if (!e) return
     const key = want?.key ?? ""
     if (key === e.diffKey) return
     e.diffKey = key
+    e.diffWant = want
     clearTimeout(e.diffTimer)
     e.diffTimer = undefined
     if (!want) {
       e.diff = null
       return this.publish(id)
     }
-    const wait = e.diffAt + DIFF_MIN_MS - this.now()
-    if (e.diff && wait > 0) {
-      e.diffTimer = setTimeout(() => {
-        e.diffTimer = undefined
-        if (this.files.get(id) !== e || e.diffKey !== key) return
-        if (this.showing.has(id)) this.readDiff(id, e, want)
-        else e.diffKey = "" // hidden meanwhile: read when it shows again
-      }, wait)
-      return
-    }
-    this.readDiff(id, e, want)
+    if (!e.diffReading) this.scheduleDiff(id, e) // else: when the one in flight lands
   }
 
-  private readDiff(id: string, e: Entry, want: { root: string; rel: string; key: string }): void {
+  // Now, or once DIFF_MIN_MS has passed since the last read (the first one never waits).
+  private scheduleDiff(id: string, e: Entry): void {
+    const wait = e.diffAt + DIFF_MIN_MS - this.now()
+    if (!e.diff || wait <= 0) return this.readDiff(id, e)
+    e.diffTimer = setTimeout(() => {
+      e.diffTimer = undefined
+      if (this.files.get(id) !== e || !e.diffWant) return
+      if (this.showing.has(id)) this.readDiff(id, e)
+      else e.diffKey = "" // hidden meanwhile: read when it shows again
+    }, wait)
+  }
+
+  private readDiff(id: string, e: Entry): void {
+    const want = e.diffWant
+    if (!want) return
     const key = want.key
     e.diffAt = this.now()
+    e.diffReading = true
     const current = () => this.files.get(id) === e && e.diffKey === key
     void this.diffOf(want.root, want.rel, e.wsl)
       .catch((): DiffLine[] => [])
@@ -172,11 +183,12 @@ export class FileStore {
         const bars = changeBars(lines)
         const sides = diffSides(lines)
         const size = sides.old.length + sides.new.length
+        const escaped = () => lines.map((l) => escapeHtml(l.text))
         // Plain first; a big one is escaped in the worker (megabytes here would hold up xterm).
         const plain =
           size <= HIGHLIGHT_MAX
-            ? lines.map((l) => escapeHtml(l.text))
-            : await this.highlight(lines.map((l) => l.text).join("\n"), null)
+            ? escaped()
+            : await this.highlight(lines.map((l) => l.text).join("\n"), null).catch(escaped)
         if (!current()) return
         e.diff = { lines, html: plain, bars }
         this.publish(id)
@@ -191,6 +203,11 @@ export class FileStore {
         this.publish(id)
       })
       .catch(() => {}) // a highlight that failed: the plain diff stays
+      .finally(() => {
+        e.diffReading = false
+        // A newer key arrived meanwhile: its turn (throttled).
+        if (this.files.get(id) === e && e.diffWant && e.diffKey !== key) this.scheduleDiff(id, e)
+      })
   }
 
   /** Where its view was last scrolled (live: not the snapshot, which only changes on a read). */

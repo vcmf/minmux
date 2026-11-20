@@ -243,11 +243,11 @@ export function FolderView({ entryId, tabId }: { entryId: string; tabId: string 
   }
   // A file: a tab of this pane (a peek until kept: the next file opened replaces it); one this
   // machine opens in its own app (a PDF, a video) goes there instead.
-  const openFile = (abs: string, keep: boolean, diff = false) => {
+  const openFile = (abs: string, keep: boolean, diff = false, gone = false) => {
     if (!isAbsoluteHostPath(abs, platform) && !wsl) return
     const s = useStore.getState()
-    // Its own app (main: never one that runs it); one opened on its diff (a deleted PDF) is a tab.
-    if (!diff && !opensInTab(abs)) return ipc.openPath(abs, wsl)
+    // Its own app (main: never one that runs it); a deleted one (a PDF) is a tab: its diff.
+    if (!gone && !opensInTab(abs)) return ipc.openPath(abs, wsl)
     const tab = s.tabs.find((t) => t.id === tabId)
     const pane = tab && findPane(tab.root, entryId)
     if (!pane) return
@@ -358,7 +358,7 @@ export function FolderView({ entryId, tabId }: { entryId: string; tabId: string 
                 onClick={(e) => {
                   if (e.button !== 0 || (platform === "darwin" && e.ctrlKey)) return
                   if (f.isDir) return openDir(abs)
-                  openFile(abs, keepKey(e), opensOnDiff(f.status, true))
+                  openFile(abs, keepKey(e), opensOnDiff(f.status, true), f.status === "D")
                 }}
                 onContextMenu={(e) => openFileMenu(e, { abs, rel, isDir: !!f.isDir })}
               >
@@ -435,7 +435,7 @@ export function FolderView({ entryId, tabId }: { entryId: string; tabId: string 
                   {n ? (
                     <span
                       className="git-badge folder-count"
-                      title={`${n} changed file${n === 1 ? "" : "s"} inside`}
+                      title={`${n} change${n === 1 ? "" : "s"} inside`}
                     >
                       {n}
                     </span>

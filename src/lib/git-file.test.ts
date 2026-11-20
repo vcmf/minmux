@@ -30,6 +30,7 @@ describe("git-file", () => {
     expect(relTo("/w/rts/", "/w/rts/src/a.ts")).toBe("src/a.ts")
     expect(relTo("/w/rts", "/w/other/a.ts")).toBeUndefined()
     expect(relTo("C:\\w\\rts", "C:\\w\\rts\\src\\a.ts")).toBe("src/a.ts")
+    expect(relTo("C:/w/rts", "c:\\w\\rts\\a.ts")).toBe("a.ts") // a drive letter in either case
     const g = git([f("src/a.ts", "M")])
     expect(gitFileFor(g, "/w/rts/src/a.ts")!.status).toBe("M")
     expect(gitFileFor(g, "/w/rts/src/b.ts")).toBeUndefined()
@@ -48,6 +49,8 @@ describe("git-file", () => {
     expect(opensOnDiff("?", true)).toBe(false)
     expect(hasDiffToggle("M")).toBe(true)
     expect(hasDiffToggle("A")).toBe(false)
+    expect(hasDiffToggle("R")).toBe(false) // no old path to pair a rename with
+    expect(opensOnDiff("R", true)).toBe(false)
   })
 
   it("change bars: modified where adds replace deletes, added beyond, deleted above the next", () => {

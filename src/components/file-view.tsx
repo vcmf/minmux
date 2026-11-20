@@ -68,8 +68,10 @@ export function FileView({ entryId, tabId }: { entryId: string; tabId: string })
   const repo = inFocused ? focusedGit : polled
   const gf = gitFileFor(repo ?? undefined, path)
   const stampMs = data && "stamp" in data ? (data.stamp?.mtimeMs ?? 0) : 0
+  // Not for a new file (all of it is new) nor a rename (git's status has no old path to pair).
+  // Asked once the file is read: its stamp is in the key, and a key without it would read twice.
   const diffWant =
-    gf && gf.status !== "?" && repo
+    data && gf && gf.status !== "?" && gf.status !== "R" && repo
       ? { root: repo.root, rel: gf.path, key: `${gf.status}:${gf.add}:${gf.del}:${stampMs}` }
       : null
   const diffKey = diffWant ? `${diffWant.root}\0${diffWant.rel}\0${diffWant.key}` : ""
@@ -77,7 +79,8 @@ export function FileView({ entryId, tabId }: { entryId: string; tabId: string })
     files.wantDiff(entryId, diffWant)
     // eslint-disable-next-line react-hooks/exhaustive-deps -- keyed on what it reads
   }, [entryId, diffKey])
-  const deleted = gf?.status === "D"
+  // Deleted in git and gone (`git rm --cached` keeps the file: that one shows its Source).
+  const deleted = gf?.status === "D" && data?.kind === "error"
   // Diff for a text file (an image's or a binary's diff is a "Binary files differ" line), or a
   // deleted one; a diff with no rows (it failed, or there's none to show) falls back to Source.
   const isText = data?.kind === "text"

@@ -258,4 +258,40 @@ describe("FileStore", () => {
     await tick()
     expect(s.get("h1")!.diff!.html).toEqual(["a&lt;"])
   })
+
+  it("a key that changes while a diff is read waits for it: one read at a time", async () => {
+    vi.useFakeTimers()
+    try {
+      let now = 1000
+      let land: (l: never[]) => void = () => {}
+      const diffOf = vi.fn(() => new Promise<never[]>((r) => (land = r)))
+      const s = new FileStore(reads().read, hl, 16, diffOf, () => now)
+      s.show("q1", "/w/a.ts")
+      s.wantDiff("q1", { root: "/w", rel: "a.ts", key: "M:0" })
+      s.wantDiff("q1", { root: "/w", rel: "a.ts", key: "M:7" }) // the read landed: its stamp
+      expect(diffOf).toHaveBeenCalledTimes(1)
+      land([])
+      await vi.advanceTimersByTimeAsync(0)
+      now += DIFF_MIN_MS
+      await vi.advanceTimersByTimeAsync(DIFF_MIN_MS)
+      expect(diffOf).toHaveBeenCalledTimes(2) // the newer key, after
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it("a big diff the worker can't escape is escaped here instead", async () => {
+    const big = "y".repeat(HIGHLIGHT_MAX)
+    const s = new FileStore(
+      reads().read,
+      () => Promise.reject(new Error("gone")),
+      16,
+      async () => [{ type: "add" as const, text: big, newNo: 1 }],
+    )
+    s.show("b2", "/w/big.ts")
+    s.wantDiff("b2", { root: "/w", rel: "big.ts", key: "k" })
+    await tick()
+    await tick()
+    expect(s.get("b2")!.diff!.html).toEqual([big])
+  })
 })
