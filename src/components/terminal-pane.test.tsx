@@ -458,3 +458,48 @@ describe("TerminalPane — a host colour beats a Claude accent", () => {
     expect(icon.getAttribute("color") ?? icon.getAttribute("fill")).toContain("var(--red)")
   })
 })
+
+describe("TerminalPane — folder entries", () => {
+  it("▤+ opens the terminal's folder as a new tab here when it's the only one", () => {
+    const { tabId, id } = mountPane()
+    st().setSessionCwd(id, "/w/rts")
+    renderPane(tabId)
+    fireEvent.mouseDown(screen.getByTitle("Open folder in a new tab"), { button: 0 })
+    const pane = leaf()
+    expect(pane.entryIds).toHaveLength(2)
+    expect(st().objects[pane.activeEntryId]).toEqual({ kind: "folder", path: "/w/rts" })
+  })
+
+  it("…and a menu of from / in / edits when they differ", () => {
+    const { tabId, id } = mountPane()
+    st().setSessionCwd(id, "/w/rts")
+    useStore.setState({
+      paneWork: {
+        [id]: { session: "c", agent: "claude", dirs: {}, shown: "/w/rts-e", more: [] },
+      },
+    })
+    renderPane(tabId)
+    fireEvent.mouseDown(screen.getByTitle("Open folder in a new tab"), { button: 0 })
+    expect(leaf().entryIds).toHaveLength(1) // nothing opened yet
+    fireEvent.mouseDown(screen.getByText(/^edits · /), { button: 0 })
+    expect(st().objects[leaf().activeEntryId]!.path).toBe("/w/rts-e")
+  })
+
+  it("a folder tab shows the folder view, not the terminal, and closes without asking", async () => {
+    vi.mocked(ipc.readdir).mockResolvedValue({
+      entries: [{ name: "src", isDir: true }],
+      truncated: false,
+    })
+    const { tabId, id } = mountPane()
+    st().setSessionCwd(id, "/w/rts")
+    st().openFolder("/w/rts")
+    const view = renderPane(tabId)
+    expect(await screen.findByText("src")).toBeInTheDocument()
+    expect(TerminalManager.attach).not.toHaveBeenCalled() // the terminal stays parked
+    const folderTab = screen.getAllByRole("tab")[1]!
+    fireEvent.mouseDown(folderTab.querySelector(".surface-close")!, { button: 0 })
+    view.rerender()
+    expect(st().closeConfirm).toBeNull()
+    expect(leaf().entryIds).toEqual([id])
+  })
+})

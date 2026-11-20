@@ -1,4 +1,5 @@
 import type { PaneNode, RemoteRef, Session, Tab } from "../types"
+import type { FolderEntry, FolderView } from "./folder-entries"
 import { parseRemoteRef, sshLabel } from "./ssh-validate"
 import { parseReopen, reopenFor, type ReopenCwd } from "./remote-reports"
 import { clampPanelWidth } from "./right-panel"
@@ -74,30 +75,42 @@ export interface WorkspaceState {
   activeTabId: string | null
   rightPanelWidth?: number
   pruned?: string[] // session records dropped on restore — their PTYs (after a reload) must die
+  // Folder entries and their views (from layout.json, lib/layout-file): not in workspace.json.
+  objects?: Record<string, FolderEntry>
+  folderViews?: Record<string, FolderView>
 }
 
+// A pane with no terminal is left out (older builds would drop it, maybe the whole file): it
+// lives in layout.json only. Null when no pane has a terminal.
 /** The tree as written to disk: each leaf's terminals, plus the legacy `sessionId` mirror. */
-function persistTree(node: PaneNode): PersistedNode {
+function persistTree(node: PaneNode): PersistedNode | null {
   if (node.type === "leaf") {
     const sessionIds = paneSessionIds(node)
-    // Folder / file panes come with the separate layout file (WORKDIR_OBJECTS.md, step 2).
-    const shown = visibleTerminal(node) ?? sessionIds[0] ?? ""
+    if (!sessionIds.length) return null
+    // A pane showing a folder: its first terminal stands for it (older builds show that).
+    const shown = visibleTerminal(node) ?? sessionIds[0]!
     return { type: "leaf", id: node.id, sessionIds, activeSessionId: shown, sessionId: shown }
   }
-  return { ...node, children: [persistTree(node.children[0]), persistTree(node.children[1])] }
+  const a = persistTree(node.children[0])
+  const b = persistTree(node.children[1])
+  if (!a || !b) return a ?? b
+  return { ...node, children: [a, b] }
 }
 
 /** Snapshot the store's layout into the persistable shape (drops runtime status). */
 export function serializeWorkspace(state: WorkspaceState): PersistedWorkspace {
+  // Tabs with no terminal stay out (layout.json has them); so does a focus on one of them.
+  const tabs: PersistedTab[] = state.tabs.flatMap((t) => {
+    const root = persistTree(t.root)
+    return root ? [{ id: t.id, title: t.title, root, activeSessionId: t.activeSessionId }] : []
+  })
+  const activeTabId = tabs.some((t) => t.id === state.activeTabId)
+    ? state.activeTabId
+    : (tabs[0]?.id ?? null)
   return {
     version: VERSION,
-    activeTabId: state.activeTabId,
-    tabs: state.tabs.map((t) => ({
-      id: t.id,
-      title: t.title,
-      root: persistTree(t.root),
-      activeSessionId: t.activeSessionId,
-    })),
+    activeTabId,
+    tabs,
     sessions: Object.values(state.sessions).map((s) => ({
       id: s.id,
       title: s.title,

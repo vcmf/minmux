@@ -27,7 +27,10 @@ interface MenuState extends FileTarget {
 /** Shared file/folder right-click menu for the files + changes panels: one hook holds
  *  the open menu, builds items from the current editor/platform, and dispatches each
  *  action to the IPC seam. Returns the menu node to render and an onContextMenu opener. */
-export function useFileMenu(): {
+export function useFileMenu(
+  // A folder view: "Set as root" re-roots it, and its own WSL-ness (not the active pane's) counts.
+  opts: { onSetRoot?: (abs: string) => void; wsl?: boolean } = {},
+): {
   menu: ReactNode
   openFileMenu: (e: MouseEvent, target: FileTarget) => void
 } {
@@ -40,7 +43,8 @@ export function useFileMenu(): {
     // The actions run on the host fs (reveal/open/copy), so skip when we don't have a
     // resolvable host path: a repo-relative path (empty git root) or a WSL pane whose
     // paths the Windows/macOS host can't reach.
-    if (getActiveWsl() || !isAbsoluteHostPath(target.abs, platform)) return
+    const wsl = opts.onSetRoot ? opts.wsl : !!getActiveWsl()
+    if (wsl || !isAbsoluteHostPath(target.abs, platform)) return
     setMenu({ ...target, x: e.clientX, y: e.clientY })
     // Re-probe on open so an editor installed mid-session (without a settings change)
     // is reflected in the label/enabled state; main memoises so this stays cheap.
@@ -53,6 +57,7 @@ export function useFileMenu(): {
       // No wsl here: openFileMenu refuses to open the menu on a WSL pane (#21), so this
       // path is native-only. WSL preview is the left-click path (files-panel).
       useStore.getState().setPreview({ abs: menu.abs, name: baseName(menu.abs) })
+    else if (id === "setRoot" && opts.onSetRoot) opts.onSetRoot(menu.abs)
     else if (id === "setRoot") {
       const s = useStore.getState()
       const sid = s.tabs.find((t) => t.id === s.activeTabId)?.activeSessionId

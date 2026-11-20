@@ -646,6 +646,10 @@ function workspacePath(): string {
   return path.join(configDir(), "workspace.json")
 }
 
+function layoutPath(): string {
+  return path.join(configDir(), "layout.json")
+}
+
 function readSettings(): string {
   try {
     return fs.readFileSync(settingsPath(), "utf8")
@@ -1403,9 +1407,20 @@ function registerIpc() {
       return ""
     }
   })
-  ipcMain.handle("workspace:write", async (_e, contents: string) => {
+  // The full layout (folder entries too) beside workspace.json, which lists terminals only so
+  // older builds can read it. Written first: a crash between the two leaves a layout.json that
+  // no longer matches, and the renderer then trusts workspace.json (lib/layout-file).
+  ipcMain.handle("layout:read", async () => {
+    try {
+      return fs.readFileSync(layoutPath(), "utf8")
+    } catch {
+      return ""
+    }
+  })
+  ipcMain.handle("workspace:write", async (_e, contents: string, layout?: string) => {
     try {
       fs.mkdirSync(configDir(), { recursive: true })
+      if (typeof layout === "string") fs.writeFileSync(layoutPath(), layout)
       fs.writeFileSync(workspacePath(), contents)
     } catch {
       // best-effort

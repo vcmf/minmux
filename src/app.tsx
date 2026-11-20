@@ -34,6 +34,7 @@ import { ensureNotificationPermission } from "./lib/notify"
 import { loadSettings } from "./settings/io"
 import { applyThemeVars } from "./settings/themes"
 import { readWorkspaceFile, serializeToJson } from "./lib/workspace"
+import { restoreLayout, serializeLayout } from "./lib/layout-file"
 import { appShortcut } from "./lib/terminal-keys"
 import { wslContext } from "./lib/wsl"
 import { isPosixShell, type ResumePlan } from "./lib/resume"
@@ -46,6 +47,8 @@ import "./App.css"
 // Set when workspace.json was written by a NEWER build: we can't read it, so we must not
 // overwrite it either (a downgrade would otherwise wipe the saved layout).
 let persistBlocked = false
+// layout.json is a newer build's: workspace.json is still saved, layout.json left alone.
+let layoutBlocked = false
 
 /** How long after mount the host list is first fetched (the first tab spawns before). */
 const SSH_HOSTS_DELAY_MS = 800
@@ -94,9 +97,17 @@ function App() {
       if (store.tabs.length === 0) {
         let restored = null
         try {
-          const file = readWorkspaceFile(await ipc.readWorkspace())
+          const wsText = await ipc.readWorkspace()
+          const file = readWorkspaceFile(wsText)
           persistBlocked = file.newer
           restored = file.state
+          // The folder entries (and folder-only panes) live in layout.json (lib/layout-file).
+          const layoutText = persistBlocked ? "" : await ipc.readLayout().catch(() => "")
+          if (layoutText) {
+            const layout = restoreLayout(restored, wsText, layoutText)
+            restored = layout.state
+            layoutBlocked = layout.blocked
+          }
         } catch {
           // no/invalid workspace — start fresh
         }
@@ -204,16 +215,30 @@ function App() {
         activeTabId: s.activeTabId,
         rightPanelWidth: s.rightPanelWidth,
       })
-      if (json === last) return
-      last = json
-      ipc.writeWorkspace(json)
+      const layout = layoutBlocked
+        ? undefined
+        : serializeLayout(
+            {
+              tabs: s.tabs,
+              activeTabId: s.activeTabId,
+              objects: s.objects,
+              folderViews: s.folderViews,
+            },
+            json,
+          )
+      const both = `${json}\0${layout ?? ""}`
+      if (both === last) return
+      last = both
+      ipc.writeWorkspace(json, layout)
     }
     const unsub = useStore.subscribe((state, prev) => {
       if (
         state.tabs !== prev.tabs ||
         state.sessions !== prev.sessions ||
         state.activeTabId !== prev.activeTabId ||
-        state.rightPanelWidth !== prev.rightPanelWidth
+        state.rightPanelWidth !== prev.rightPanelWidth ||
+        state.objects !== prev.objects ||
+        state.folderViews !== prev.folderViews
       ) {
         clearTimeout(timer)
         timer = setTimeout(save, 600)

@@ -43,6 +43,8 @@ export function resetStore() {
     sidebarCollapsed: false,
     git: null,
     paneRoot: {},
+    objects: {},
+    folderViews: {},
     closeConfirm: null,
     dragging: null,
     agentMeta: {},

@@ -191,7 +191,9 @@ const api = {
     ipcRenderer.invoke("git:diff", cwd, file, wsl),
 
   readWorkspace: () => ipcRenderer.invoke("workspace:read") as Promise<string>,
-  writeWorkspace: (contents: string) => ipcRenderer.invoke("workspace:write", contents),
+  writeWorkspace: (contents: string, layout?: string) =>
+    ipcRenderer.invoke("workspace:write", contents, layout),
+  readLayout: () => ipcRenderer.invoke("layout:read") as Promise<string>,
 
   appMetrics: () => ipcRenderer.invoke("app:metrics"),
   perfMode: () => ipcRenderer.invoke("app:perf-mode") as Promise<boolean>,

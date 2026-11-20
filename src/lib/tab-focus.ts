@@ -5,18 +5,18 @@ import type { PaneNode, Tab } from "../types"
 import { isTerminalEntry } from "./entries"
 import { allSessionIds, findPane, firstSessionId, selectSurface } from "./pane-tree"
 
-/** A tab over `root`, focused on `entryId` (a terminal: tabs open on one). */
+/** A tab over `root`, focused on `entryId`; its terminal is that entry, or none ("") for a folder. */
 export const makeTab = (id: string, title: string, root: PaneNode, entryId: string): Tab => ({
   id,
   title,
   root,
   activeEntryId: entryId,
-  activeSessionId: entryId,
+  activeSessionId: isTerminalEntry(entryId) ? entryId : "",
 })
 
 // withFocus: the focus becomes its pane's visible surface unless `select` is false. The tab's
 // terminal follows a terminal entry; otherwise it stays, or moves to the leftmost terminal when
-// it left the tree. A tab left with no terminal at all is decided in step 2 (#181).
+// it left the tree; "" when the tab has none left.
 /** `tab` over `root` (default: its own) focused on `entryId`; same tab when unchanged. */
 export function withFocus(
   tab: Tab,
@@ -30,7 +30,7 @@ export function withFocus(
     ? entryId
     : allSessionIds(shown).includes(tab.activeSessionId)
       ? tab.activeSessionId
-      : (firstSessionId(shown) ?? tab.activeSessionId)
+      : (firstSessionId(shown) ?? "") // no terminal left in the tab
   if (
     shown === tab.root &&
     tab.activeEntryId === entryId &&
