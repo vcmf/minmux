@@ -1,11 +1,12 @@
-# Folders and files in panes, and a Workdirs view
+# Folders and files as entries in panes and the sidebar
 
-Status: **proposal** · Epic branch `epic/workdir-objects` · Scope: `src/types.ts` (pane leaves),
-`src/lib/workspace.ts`, `src/store.ts`, `src/components/terminal-pane.tsx`, `sidebar.tsx`,
-`files-panel.tsx` (retired), the fs worker (`electron/fs-worker*.ts`)
+Status: **proposal, revised after review** · Epic branch `epic/workdir-objects` · Scope:
+`src/types.ts` (pane leaves), `src/lib/pane-tree.ts`, `src/lib/workspace.ts`, `src/store.ts`,
+`src/terminal/terminal-manager.ts`, `src/components/terminal-pane.tsx`, `sidebar.tsx`,
+`files-panel.tsx` (retired), `electron/main.ts` (open handlers), the fs worker
 
 Markdown rendering (files, PR bodies, comments) is a separate design and PR. Until it lands, a
-markdown file opens as source.
+markdown file previews as source.
 
 ## Problem
 
@@ -15,34 +16,24 @@ often has three or four checkouts in play.
 
 The Files panel shows one tree, rooted at the focused pane's folder (or a per-pane override). To
 look at the folder an agent writes in, you focus the agent's pane, and the tree resets. The tree
-can't sit next to the terminal it belongs to, a file can only be seen in a modal, and nothing in
-the app groups work by checkout.
+can't sit next to the terminal it belongs to, and a file can only be seen in a modal.
 
 ## Idea
 
-Terminals, folders and files are three kinds of the same thing: an **object** that opens in a
-pane, as a tab next to other tabs, and can be dragged, split, moved and closed like a terminal
-today. There is no explorer panel. A folder is something you open.
+A pane's tabs today are terminals. They become **entries** of three kinds: terminal, folder and
+file. A folder or file entry opens, closes, drags and splits like a terminal, and shows in the
+sidebar under its group like a terminal does. Groups stay what they are today. There is no
+explorer panel: a folder is something you open.
 
-Each object opens the others:
-
-| From     | Action                               | Opens                                                      |
-| -------- | ------------------------------------ | ---------------------------------------------------------- |
-| terminal | ▤+ in the pane header (or ⌘⇧O)       | its folder, as a new tab in the same pane (see below)      |
-| terminal | click a path in output               | that file or folder, as a peek                             |
-| sidebar  | right-click a terminal › Open folder | the same choices as ▤+                                     |
-| folder   | open a file                          | a peek (Enter), a kept tab (⌘Enter)                        |
-| folder   | double-click an unsupported file     | the OS default app (see below)                             |
-| folder   | new terminal here                    | a terminal in that folder, as a new tab in the same pane   |
-| file     | open its folder / terminal there     | a folder with the file revealed / a terminal in its folder |
-
-The app then has two views of the same objects:
-
-- **Groups**: tabs you arrange yourself, as today.
-- **Workdirs**: the app groups every object by the checkout it belongs to, one layout per
-  checkout.
-
-Switching between them moves and restarts nothing.
+| From               | Action                               | Opens                                                           |
+| ------------------ | ------------------------------------ | --------------------------------------------------------------- |
+| terminal           | ▤+ in the pane header (or ⌘⇧O)       | its folder, as a new tab in the same pane (see below)           |
+| sidebar            | right-click a terminal › Open folder | the same choices as ▤+                                          |
+| terminal           | click a path in output               | the file (at its line) or folder, as a new tab in the same pane |
+| folder             | open a file                          | the file, as a new tab in the same pane                         |
+| folder             | new terminal here                    | a terminal in that folder, as a new tab in the same pane        |
+| file               | open its folder / terminal there     | a folder with the file revealed / a terminal in its folder      |
+| file (any preview) | Open in editor                       | the editor, as the preview's button does today                  |
 
 ## Decisions
 
@@ -50,122 +41,140 @@ Switching between them moves and restarts nothing.
 
 - ▤+ opens the folder **as a new tab in the same pane**, focused. Never a split; you drag it out
   if you want one.
-- A folder object is **always a fixed path**. It never follows a terminal: agents wander into
-  new worktrees, so you open the folder you want when you want it.
-- Which folder: the ones the sidebar already shows for that terminal. **from** (the shell's
-  folder, OSC 7), **in** (the agent's folder) and the checkout the agent **edits** in. When they
-  are all the same folder, ▤+ opens it in one click. When they differ, ▤+ shows a menu of the 2 or
-  3 distinct ones, labelled like the sidebar. The sidebar's right-click "Open folder in…" lists
-  the same choices.
-- One pure function builds that list from what `agent-dirs` already computes, so the button and
-  the sidebar can't disagree.
+- A folder entry is **always a fixed path**. It never follows a terminal: agents wander into new
+  worktrees, so you open the folder you want when you want it.
+- Which folder: the ones the sidebar shows for that terminal. **from** (the shell's folder, OSC 7),
+  **in** (the agent's folder) and the checkouts the agent **edits** in (`paneWork`: the shown one
+  and its `+N` more). When they are all the same folder, ▤+ opens it in one click. When they
+  differ, ▤+ shows a menu of the distinct ones, labelled like the sidebar. The sidebar's
+  right-click "Open folder in…" lists the same choices, built by the same pure function.
 
-### Peeks
+### Opening a file
 
-Clicking a path, or Enter on a file in a folder, opens a **peek**: an italic tab that the next
-peek in that pane replaces. It becomes a kept tab when you scroll it, pin it or drag it. Browsing
-twenty files leaves one tab behind.
+One rule wherever a file is opened (path click, a folder, the sidebar):
 
-### Which files open as objects
+1. **minmux can show it** (a text file, sniffed, up to about 2 MB, or an image): a preview entry
+   opens, scrolled to the line when the path had one. The preview has an **Open in editor**
+   button, as the popup has today.
+2. **A text or code file minmux won't show** (too large) and **Open in editor**: the configured
+   editor when one is set, else the OS default app. This is today's `openFile` path.
+3. **Anything else**: the OS default app, `shell.openPath` (LaunchServices, `xdg-open`, a WSL path
+   through its `\\wsl.localhost\` share).
 
-Small files of supported types: text, code, config, markdown (as source until the markdown PR)
-and images, up to about 2 MB. Anything else opens in the configured editor or the OS.
+**Never execute.** An agent can write any file into a folder, and for some types the OS default
+action runs them (`.command`, `.app`, `.exe`, `.vbs`, `.js` under Windows Script Host, `.jar`,
+`.desktop`, `.webloc`, a file with no extension and the exec bit…). So:
 
-**Double-click on an unsupported file** opens it with the OS default app: `shell.openPath` (macOS
-LaunchServices, Linux `xdg-open`, a WSL path through its `\\wsl.localhost\` share). Two rules:
+- The check lives in **main**, on every `shell.openPath` call site, including the existing
+  `open-path` handler and `openFile`'s OS-default branch, which today open any path unchecked.
+- It runs **after resolving symlinks**, compares extensions case-insensitively, and treats the
+  exec bit or a bundle directory as runnable.
+- It's an **allowlist per platform**: a type goes to the OS default app only when that platform
+  opens it (documents, images, media, archives as data, text and code where the default is an
+  editor). Everything else is revealed in the file manager. `shell.openPath` failing (no handler,
+  no desktop session) also reveals.
+- The list itself is a pure, tested function; its exact contents are decided in the
+  implementation PR.
 
-- **Never execute.** Files whose default action runs them (`.app`, `.command`, `.pkg`, `.exe`,
-  `.bat`, `.cmd`, `.ps1`, `.lnk`, `.msi`, `.desktop`, `.AppImage`, …) are revealed in the file
-  manager instead. An agent can write any of these into a folder. The denylist is a pure, tested
-  function.
-- **Never silent.** `shell.openPath` reports failure as a string (no handler, no desktop session);
-  on failure the file is revealed instead, as `openFile` already does for editors.
+### Fewer tabs: peeks
 
-SSH panes have no local path: no folder or file objects there, as in today's Files panel.
+A file opened by a path click or from a folder opens as a **peek**: an italic tab that the next
+peek in that pane replaces. It becomes a kept tab when you double-click its tab, pin it or drag
+it. Browsing twenty files leaves one tab behind.
 
-### The Workdirs view
+### The sidebar
 
-- An object's workdir is its checkout root: for a folder or a file, the repo its path is in; for a
-  terminal, its shell folder's repo, or the checkout its agent edits in while the agent runs.
-  Outside any repo, the folder itself.
-- The view lists workdirs in the sidebar; picking one shows its objects in that workdir's
-  remembered layout (a default one the first time).
-- **Nothing moves while you look.** A terminal whose workdir changes moves to its new group the
-  next time the view is shown, never under your hands.
-- Closing an object closes it in both views. Arranging objects in Workdirs doesn't change Groups.
-- A terminal opened in the Workdirs view also lands in the group that last had focus.
+Folder and file entries show in the sidebar under their group, next to the group's terminals,
+with their own icon and name. Clicking one shows it, as for a terminal. Today's groups, their
+order and drag and drop are unchanged.
 
 ### What happens to the Files panel
 
-Folder objects replace it. The right rail keeps Changes and Agents.
+Folder entries replace it. The right rail keeps Changes and Agents.
 
-## Performance
+SSH panes have no local path: no folder or file entries there, as in today's Files panel.
 
-Every new cost stays off the terminal hot path (PTY → main → renderer → xterm), and **an object
-costs something only while it's visible**:
+## Model
 
-| State   | When                  | Holds                                                       | Cost                         |
-| ------- | --------------------- | ----------------------------------------------------------- | ---------------------------- |
-| Visible | on screen             | DOM, watchers on its open folders or its file, live updates | full, a handful at once      |
-| Warm    | hidden, recently seen | no DOM, no watchers; its listing or text in a shared cache  | memory, inside a fixed limit |
-| Cold    | everything else       | a small record: path, scroll position, expanded folders     | none                         |
+**Every entry gets its own id.** Today a pane's tabs and its visible tab are session ids
+(`sessionIds`, `activeSessionId`), and `Tab.activeSessionId` is also the focus. WebGL
+(`visibleSessionIds` → `reconcileRenderers`), unread suppression (`isVisibleIn`), keyboard focus
+(`refocusActiveTerminal`), ⌘F, hidden-surface sizing (`syncHiddenSizes`), drag and drop and every
+pane-tree operation read those fields. If a folder simply became the visible tab, keys would go
+to a parked terminal and resizes would be lost.
 
-- **Reads and watches** stay in the fs worker, through today's read queue (concurrency 1, ≤ 4
-  reads/s, big folders backed off, equal listings skip the render). A watch costs no CPU while
-  nothing changes; events are batched (≤ 1 message per 250 ms).
-- **One watch budget** (today's 32) shared by every visible object and ref-counted; a hidden
-  object releases its watches. Showing it again shows the cached copy at once and queues one
-  refresh read.
-- Places that can't be watched (WSL shares, network mounts) refresh on window focus, on a git
-  change, or on Refresh, as today. No timer polls.
-- **Caches are shared by path**: two folder tabs on one root share one listing.
-- **Git marks** come from one poll per distinct repo among visible folders, piggybacking today's
-  git poll; never one per object.
-- **Startup** loads only the active tab's objects, like terminals today.
-- **Switching tab or view** re-attaches the visible terminals, the same path a tab switch takes
-  today; hidden objects stay parked or unmounted.
-- A folder or file view never joins the WebGL set: showing one parks the pane's terminal through
-  the existing park path.
-
-Each step is measured with `MINMUX_PERF=1`. A new scenario, 200 folder and file objects across 30
-tabs, must give 0% CPU at idle, memory within the cache limit, a tab or view switch within one
-frame, and keystroke echo equal to the baseline.
+- A leaf holds one ordered list of entries (terminals included), each with an id and a kind, and
+  one visible entry. `sessionIds` / `activeSessionId` become values derived from it.
+- The tab knows its **focused entry** and, separately, its **focused terminal**. Every reader of
+  `activeSessionId` (about 50 in the store and components) is audited and moved to the one it
+  means.
+- This lands first, with terminals only and no visible change (step 1).
+- Entry view state (expanded folders, scroll position) is **not** stored in `tabs`: every `tabs`
+  change runs a WebGL reconcile and a workspace save. It lives in its own store slice with its own
+  save, and scroll is captured when an entry hides.
+- Each folder or file entry keeps its WSL context, as `readdir` and the preview read need it.
 
 ## Persistence
 
-- `workspace.json` **stays at version 2**. A version bump would make older builds drop the layout
-  entirely (`deserializeWorkspace` refuses a newer file). Folder and file objects are optional
-  additions to a leaf; a leaf's `sessionIds` keeps listing its terminals, so an older build opens
-  the same terminals and ignores the rest.
-- An older build that saves drops the folder and file tabs. Accepted: they are cheap to reopen.
-- Workdir layouts are stored under their own key, keyed by checkout root.
-- Objects whose path is gone at restore are kept and marked missing, with one-click cleanup.
+An older build drops a pane with no terminal, then a tab with no pane left, and if no tab is left
+it reads the file as empty, starts fresh and **saves over it**. Today's build does the same.
 
-## Invariants touched
+- `workspace.json` keeps only what an older build understands: the layout with **terminals
+  only**. A pane holding only folders and files is left out of that copy.
+- The full layout, folders and files included, goes in a separate file next to it. A build that
+  knows it reads it; when its terminals don't match `workspace.json` (an older build saved
+  since), the terminals-only layout wins and the folder and file entries that still fit are
+  re-added.
+- Round-trip tests: new → old → new keeps every terminal and never empties the workspace.
+- An entry whose path is gone at restore shows a "gone" placeholder.
 
-- **`Tab.activeSessionId` is the focus.** It stays the terminal focus. A pane gets an optional
-  active object; when set, that object is the visible tab and the terminal is parked. Keyboard
-  focus follows the store either way.
-- **Started terminals are mounted or parked, never unopened.** Showing a folder or file in a pane
-  parks its terminal; it doesn't unmount it.
-- **Store actions return the same reference when nothing changed**, including for object state
-  (scroll, expanded folders), so a scroll doesn't trigger a workspace save per frame.
+## Performance
+
+Every new cost stays off the terminal hot path, and **an entry costs something only while it's
+visible**:
+
+| State   | When                  | Holds                                                      | Cost                         |
+| ------- | --------------------- | ---------------------------------------------------------- | ---------------------------- |
+| Visible | on screen             | DOM, watches on its open folders or its file, live updates | full, a handful at once      |
+| Warm    | hidden, recently seen | no DOM, no watches; its listing or text in a shared cache  | memory, inside a fixed limit |
+| Cold    | everything else       | a small record: path, expanded folders, scroll position    | none                         |
+
+- **Reads and watches** stay in the fs worker, through today's read queue. A watch costs no CPU
+  while nothing changes. **File reads move there too**: today's preview read runs in main.
+- **Watches** today have one owner (the Files panel sends its whole set). A small aggregator in
+  the renderer merges every visible entry's folders into that set, ref-counted, under today's cap
+  of 32; a hidden entry releases its own.
+- **No watches** on Windows (as today), WSL shares and network mounts: those refresh on window
+  focus, on a git change, or on Refresh. No timer polls.
+- **Live files**: a watched file re-reads at most every 200 ms while visible, and highlighting of
+  a live file is throttled and runs off the renderer's main thread.
+- **Caches are shared by path**: the folder cache is split into listings (shared by path) and
+  each entry's expanded folders.
+- **Git marks** need a new, capped poll: today's git poll covers only the focused terminal's
+  folder. One poll per distinct repo among visible folder entries, with its own budget, and repo
+  lookups batched under the existing request cap.
+- A folder or file view never joins the WebGL set: showing one parks the pane's terminal through
+  the existing park path.
+
+Measured with `MINMUX_PERF=1`. Keystroke latency has no baseline yet (PERF.md), so step 1
+measures one before anything changes. A scenario of 200 folder and file entries across 30 tabs
+must give 0% CPU at idle, memory within the cache limit, a tab switch within one frame, and
+keystroke latency equal to the baseline.
 
 ## Steps
 
-1. **Folder and file objects in panes.** The leaf model and persistence (v2 compatible), the
-   folder view (today's file tree, read queue and watches, behind the shared budget and the three
-   states) and the file view (source with today's highlighter). Open, close, drag and split like
-   terminals.
-2. **Opening things.** ▤+ and the sidebar's "Open folder in…" with from / in / edits; path clicks
-   and Enter open peeks; new terminal here; double-click to the OS default app with the denylist.
-3. **The Workdirs view.** Grouping by checkout, a layout per workdir, the switch in the top bar.
-4. **Retire the Files panel.** Once folder objects cover it.
+1. **Entry ids.** The leaf's entry list, focused entry vs focused terminal, the `activeSessionId`
+   audit, a keystroke-latency baseline. Terminals only; nothing visible changes.
+2. **Folder entries.** The folder view on today's file tree and read queue, the watch aggregator,
+   the three states, the separate layout file, sidebar rows. ▤+ and "Open folder in…".
+3. **File entries.** The preview entry, file reads in the fs worker, peeks, path clicks, "Open in
+   editor", the main-side open check on every `shell.openPath`.
+4. **Retire the Files panel.** Once folder entries cover it.
 
 ## Not in scope
 
 - Markdown rendering (its own design and PR).
 - Editing files.
-- A workdir jumper / fuzzy file finder (a later step; it needs a per-checkout file index in the
-  fs worker and a direct channel from the worker to the renderer).
+- Grouping or a view by checkout.
+- A workdir jumper / fuzzy file finder.
 - SSH panes (no local path).
