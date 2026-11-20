@@ -29,7 +29,7 @@ ownership, native modules. No DOM, no React here. (Renderer rules: root `CLAUDE.
   → `../docs/design/AGENT_PROCESSES.md`
 - `shell-integration.ts` — inlined zsh/bash scripts (OSC 133 + OSC 7 cwd + mouse-reset),
   `buildInjection`, WSL `listShells`. Scripts are line-arrays, not template literals.
-- `git.ts` — pure git parsers + `gitStatus`/`gitDiff` for the changes panel.
+- `git.ts` — pure git parsers + `gitStatus`/`gitDiff` for folder and file tabs.
 - `coalescer.ts` / `output-buffer.ts` — PTY output batching (IPC) + replay buffer (reattach).
 - `diagnostics.ts` — temporary always-on event log (`diagnostics.log` in the config dir:
   `~/.config/minmux/`, or `minmux-<profile>/` for a dev build).

@@ -1,7 +1,7 @@
 // Where a pane's agent session works vs where it started. The shell's folder (`from`) is
 // where the agent was started (Claude saves the session there); the agent's own cwd (`in`)
 // moves with worktrees and `cd`s.
-// Pure — the sidebar, the branch/PR poll and the changes panel share these rules.
+// Pure — the sidebar, the branch/PR poll and the status bar's git share these rules.
 import { paneLeads, type AgentGraph, type AgentKind, type Worktree } from "./agent-graph"
 import { agentInfo } from "./agent-kinds"
 import type { PaneGitInfo, PaneGitRequest } from "./pane-git"

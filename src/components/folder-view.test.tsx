@@ -157,8 +157,48 @@ describe("FolderView", () => {
     const { tabId, entryId } = open("/fv10")
     render(<FolderView entryId={entryId} tabId={tabId} />)
     fireEvent.contextMenu(await screen.findByText("lib"))
-    fireEvent.mouseDown(screen.getByText(/root/i), { button: 0 })
+    fireEvent.mouseDown(screen.getByText("Set as root folder"), { button: 0 })
     expect(st().objects[entryId]!.path).toBe("/fv10/lib")
+  })
+
+  it("its right-click menu previews a file; a WSL folder opens no menu", async () => {
+    vi.mocked(ipc.readdir).mockResolvedValue(ls(["n.md", false]))
+    vi.mocked(ipc.editorInfo).mockResolvedValue({ available: true, name: "Zed" })
+    useStore.setState({ editor: { available: true, name: "Zed" } })
+    useStore.setState({ platform: "darwin" })
+    const { tabId, entryId } = open("/fvp1")
+    const v = render(<FolderView entryId={entryId} tabId={tabId} />)
+    fireEvent.contextMenu(await screen.findByText("n.md"))
+    fireEvent.mouseDown(screen.getByText("Preview"), { button: 0 })
+    expect(st().preview).toEqual({ abs: "/fvp1/n.md", name: "n.md" })
+    fireEvent.contextMenu(screen.getByText("n.md"))
+    fireEvent.mouseDown(screen.getByText("Open in Zed"), { button: 0 })
+    expect(ipc.openFile).toHaveBeenCalledWith("", "/fvp1/n.md")
+    v.unmount()
+    st().newTab(testShell)
+    st().openFolder("/home/u/w", { wsl: { distro: "Ubuntu" } })
+    const t = st().tabs[1]!
+    render(<FolderView entryId={t.activeEntryId} tabId={t.id} />)
+    fireEvent.contextMenu(await screen.findAllByText("n.md").then((x) => x[x.length - 1]!))
+    expect(screen.queryByText("Preview")).toBeNull()
+  })
+
+  it("each file menu action reaches the ipc seam", async () => {
+    vi.mocked(ipc.readdir).mockResolvedValue(ls(["m.ts", false]))
+    vi.mocked(ipc.editorInfo).mockResolvedValue({ available: true, name: "Zed" })
+    useStore.setState({ platform: "darwin", editor: { available: true, name: "Zed" } })
+    const { tabId, entryId } = open("/fvm1")
+    render(<FolderView entryId={entryId} tabId={tabId} />)
+    const pick = async (label: string) => {
+      fireEvent.contextMenu(await screen.findByText("m.ts"))
+      fireEvent.mouseDown(screen.getByText(label), { button: 0 })
+    }
+    await pick("Open in Zed")
+    expect(ipc.openFile).toHaveBeenCalledWith("", "/fvm1/m.ts")
+    await pick("Copy path")
+    expect(ipc.clipboardWrite).toHaveBeenLastCalledWith("/fvm1/m.ts")
+    await pick("Copy relative path")
+    expect(ipc.clipboardWrite).toHaveBeenLastCalledWith("m.ts")
   })
 
   it("a folder that can't be read says so", async () => {
@@ -253,6 +293,49 @@ describe("FolderView", () => {
     expect(st().folderViews[entryId]?.changesOnly).toBeUndefined()
     expect(await screen.findByText("top.ts")).toBeInTheDocument()
     view.unmount()
+  })
+
+  it("a repo with more changes than its status lists says how many aren't shown", async () => {
+    vi.mocked(ipc.readdir).mockResolvedValue(ls(["a.ts", false]))
+    vi.mocked(ipc.gitStatus).mockResolvedValue({
+      isRepo: true,
+      root: "/fvt",
+      branch: "main",
+      ahead: 0,
+      behind: 0,
+      files: [{ path: "a.ts", dir: "", status: "M", add: 1, del: 0 }],
+      add: 1,
+      del: 0,
+      total: 5001,
+    } as never)
+    vi.mocked(ipc.gitRoots).mockResolvedValue({ "/fvt": "/fvt" })
+    const { tabId, entryId } = open("/fvt")
+    st().setFolderView(entryId, { expanded: [], showAll: [], changesOnly: true })
+    render(<FolderView entryId={entryId} tabId={tabId} />)
+    expect(
+      await screen.findByText(/5000 more changes in this repo, not listed/),
+    ).toBeInTheDocument()
+    expect(screen.getByTitle("Show the folder")).toBeInTheDocument()
+  })
+
+  it("one unlisted change is counted in the pill and the list", async () => {
+    vi.mocked(ipc.readdir).mockResolvedValue(ls(["a.ts", false]))
+    vi.mocked(ipc.gitStatus).mockResolvedValue({
+      isRepo: true,
+      root: "/fvu",
+      branch: "main",
+      ahead: 0,
+      behind: 0,
+      files: [{ path: "a.ts", dir: "", status: "M", add: 1, del: 0 }],
+      add: 1,
+      del: 0,
+      total: 2,
+    } as never)
+    vi.mocked(ipc.gitRoots).mockResolvedValue({ "/fvu": "/fvu" })
+    const { tabId, entryId } = open("/fvu")
+    render(<FolderView entryId={entryId} tabId={tabId} />)
+    fireEvent.click(await screen.findByTitle("Show only the 1+ changed files"))
+    expect(screen.getByText(/1 more change in this repo, not listed/)).toBeInTheDocument()
   })
 
   it("a folder in no repo has no repo bar and stays a tree", async () => {

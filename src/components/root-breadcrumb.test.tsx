@@ -17,21 +17,6 @@ describe("RootBreadcrumb", () => {
     expect(spy).toHaveBeenCalledWith("/a/b")
   })
 
-  it("shows a reset only when given one", () => {
-    const spy = vi.fn()
-    const { rerender } = render(<RootBreadcrumb root="/a/b" onSetRoot={() => {}} />)
-    expect(screen.queryByTitle(/Reset to terminal folder/)).toBeNull()
-    rerender(
-      <RootBreadcrumb
-        root="/a/b"
-        onSetRoot={() => {}}
-        reset={{ title: "Reset to terminal folder (/x)", onReset: spy }}
-      />,
-    )
-    fireEvent.click(screen.getByTitle(/Reset to terminal folder/))
-    expect(spy).toHaveBeenCalled()
-  })
-
   it("a typed path is applied only when it's a folder", async () => {
     const spy = vi.fn()
     render(<RootBreadcrumb root="/a/b" onSetRoot={spy} />)

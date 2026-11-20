@@ -7,9 +7,7 @@ import { StatusBar } from "./components/status-bar"
 import { CommandPalette } from "./components/command-palette"
 import { HostPicker } from "./components/host-picker"
 import { SearchBar } from "./components/search-bar"
-import { DiffPanel } from "./components/diff-panel"
 import { AgentsPanel } from "./components/agents-panel"
-import { FilesPanel } from "./components/files-panel"
 import { PaneLayout } from "./components/pane-layout"
 import { SettingsPanel } from "./components/settings-panel"
 import { PrDialog } from "./components/pr-dialog"
@@ -580,7 +578,8 @@ function App() {
     }
   }, [])
 
-  // Poll git status for the focused session's cwd (feeds status bar + diff panel).
+  // Poll git status for the focused session's cwd (feeds the status bar, and the folder and file
+  // tabs in its repo).
   useEffect(() => {
     if (!activeCwd) {
       useStore.getState().setGit(null)
@@ -729,8 +728,6 @@ function App() {
         {rightView && (
           <div className="rightpanel">
             <RightPanelResizer />
-            {rightView === "files" && <FilesPanel />}
-            {rightView === "changes" && <DiffPanel />}
             {rightView === "agents" && <AgentsPanel />}
           </div>
         )}

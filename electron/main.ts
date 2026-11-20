@@ -445,7 +445,7 @@ function createWindow() {
     mainWindow = null
     fsWorker.setWatched([])
   })
-  // A reloaded or crashed renderer re-sends its watch set when its Files panel shows again.
+  // A reloaded or crashed renderer re-sends its watch set when its folder tabs show again.
   win.webContents.on("did-start-loading", () => fsWorker.setWatched([]))
   win.webContents.on("render-process-gone", () => fsWorker.setWatched([]))
 
@@ -1287,7 +1287,7 @@ function registerIpc() {
   )
   ipcMain.handle("window:is-maximized", async () => mainWindow?.isMaximized() ?? false)
 
-  // Git — working-tree status + per-file diff for the changes panel.
+  // Git — working-tree status + per-file diff for folder and file tabs.
   // Branch + PR per terminal for the sidebar (cached/deduped; gh = the user's own login).
   ipcMain.handle("pane:git-info", async (_e, reqs: PaneGitRequest[]) =>
     Array.isArray(reqs) ? paneGit.lookup(reqs.slice(0, 64)) : {},

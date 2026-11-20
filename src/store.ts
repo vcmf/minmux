@@ -71,7 +71,6 @@ import { saveSettings } from "./settings/io"
 import { resolveTheme, type Theme } from "./settings/themes"
 import type { Settings } from "./settings/schema"
 import type { GitStatus } from "./lib/ipc"
-import { isAbsoluteHostPath } from "./lib/file-actions"
 import type { EditorInfo } from "./lib/file-actions"
 import { normalizeRootPath } from "./lib/breadcrumb"
 import { wslContext, type WslContext } from "./lib/wsl"
@@ -187,9 +186,8 @@ function newTerminalSource(
   return shell ? { shell, cwd: src?.cwd, src } : undefined
 }
 
-/** The single right-side panel's active view (null = hidden). Files / Changes / Agents
- *  share one panel — the top-bar icons switch it (click the active one to hide). */
-export type RightView = "files" | "changes" | "agents" | null
+/** The right-side panel's view (null = hidden): the agents list, from its top-bar icon. */
+export type RightView = "agents" | null
 
 interface AppState {
   sessions: Record<string, Session>
@@ -227,10 +225,7 @@ interface AppState {
   platform: string // process.platform ("darwin"|"win32"|"linux"); "" until fetched
   profile: string // a non-default profile's name ("dev"), shown by the brand; "" otherwise
   editor: EditorInfo | null // configured editor availability (file context menu)
-  // file open in the preview popup (null = closed); wsl = the pane's distro so a WSL path
-  // is read via its UNC share (captured at open time — the active pane may change after).
-  preview: { abs: string; name: string; wsl?: WslContext } | null
-  paneRoot: Record<string, string> // per-session Files-panel root override (absent = follow cwd)
+  preview: { abs: string; name: string } | null // the file in the preview popup (null = closed)
   objects: Record<string, ObjectEntry> // pane entries that aren't terminals, by `obj-` id
   folderViews: Record<string, FolderView> // per folder entry: what its view has open
   closeConfirm: CloseConfirm | null // a close awaiting the "are you sure?" dialog (lib/close-confirm)
@@ -247,8 +242,7 @@ interface AppState {
   setPlatform: (platform: string) => void
   setProfile: (profile: string) => void
   setEditor: (editor: EditorInfo) => void
-  setPreview: (preview: { abs: string; name: string; wsl?: WslContext } | null) => void
-  setPaneRoot: (sessionId: string, root: string) => void
+  setPreview: (preview: { abs: string; name: string } | null) => void
   /** Open a folder as a new tab of a pane (default: the active tab's focused pane), focused. */
   openFolder: (path: string, opts?: { tabId?: string; paneId?: string; wsl?: WslContext }) => void
   // Default: the active tab's focused pane. A peek replaces the pane's peek; a file already open
@@ -270,7 +264,6 @@ interface AppState {
   setFolderView: (id: string, view: FolderView) => void
   setFolderRoot: (id: string, path: string) => void // re-root a folder entry (double-click)
   requestCloseEntry: (tabId: string, entryId: string) => void // a terminal asks; a folder closes
-  clearPaneRoot: (sessionId: string) => void
   setSessionOscTitle: (sessionId: string, title: string) => void
   setGit: (git: GitStatus | null) => void
   setFolderGit: (key: string, git: GitStatus | null) => void // null drops it
@@ -466,7 +459,6 @@ function dropSessions(
 ): Pick<
   AppState,
   | "sessions"
-  | "paneRoot"
   | "agentMeta"
   | "paneGit"
   | "paneWork"
@@ -478,7 +470,6 @@ function dropSessions(
   | "integrationHint"
 > {
   const sessions = { ...state.sessions }
-  const paneRoot = { ...state.paneRoot }
   const agentMeta = { ...state.agentMeta }
   const paneGit = { ...state.paneGit }
   const paneWork = { ...state.paneWork }
@@ -496,15 +487,13 @@ function dropSessions(
     delete paneGit[gitKey(id, "edit")] // …and the checkout it edits in
     delete paneWork[id]
     delete sessions[id]
-    delete paneRoot[id] // don't leak the pane's root override
-    delete agentMeta[id] // …or its Claude accent
+    delete agentMeta[id] // don't leak its Claude accent
   }
   // The hint goes with the pane it was on (closing it isn't an answer: a later split asks again).
   const hint = state.integrationHint
   const integrationHint = hint && ids.includes(hint.sessionId) ? null : hint
   return {
     sessions,
-    paneRoot,
     agentMeta,
     paneGit,
     paneWork,
@@ -595,7 +584,6 @@ export const useStore = create<AppState>((set, get) => ({
   profile: "",
   editor: null,
   preview: null,
-  paneRoot: {},
   objects: {},
   folderViews: {},
   folderGit: {},
@@ -614,17 +602,6 @@ export const useStore = create<AppState>((set, get) => ({
   setProfile: (profile) => set({ profile }),
   setEditor: (editor) => set({ editor }),
   setPreview: (preview) => set({ preview }),
-  // Central guard for every reroot entry point (double-click, context menu, breadcrumb,
-  // typed path, picker): normalize and require an absolute path. WSL panes are allowed —
-  // their Linux paths (/home/…) are absolute, and readdir/preview read them via the
-  // distro's UNC share (the old WSL rejection predated that translation).
-  setPaneRoot: (sessionId, root) =>
-    set((s) => {
-      if (!s.sessions[sessionId]) return {}
-      const norm = normalizeRootPath(root)
-      if (!isAbsoluteHostPath(norm)) return {}
-      return { paneRoot: { ...s.paneRoot, [sessionId]: norm } }
-    }),
   openFile: (path, opts = {}) =>
     set((state) => {
       const tab = state.tabs.find((t) => t.id === (opts.tabId ?? state.activeTabId))
@@ -769,13 +746,6 @@ export const useStore = create<AppState>((set, get) => ({
       }
     }),
 
-  clearPaneRoot: (sessionId) =>
-    set((s) => {
-      if (!(sessionId in s.paneRoot)) return {}
-      const next = { ...s.paneRoot }
-      delete next[sessionId]
-      return { paneRoot: next }
-    }),
   setSessionOscTitle: (sessionId, title) =>
     set((state) => {
       const s = state.sessions[sessionId]

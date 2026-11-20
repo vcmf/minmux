@@ -1,7 +1,7 @@
 # Folders and files as entries in panes and the sidebar
 
-Status: **steps 1 and 2 shipped** (#186, #188, #189); **step 3 revised**: file tabs take over the
-Changes panel too (see "Git in folder and file tabs") · Epic branch `epic/workdir-objects` · Scope:
+Status: **shipped** (#186, #188, #189, #192, #193; step 4 retires the Files and Changes panels):
+folder and file tabs took over both panels (see "Git in folder and file tabs") · Epic branch `epic/workdir-objects` · Scope:
 `src/types.ts` (pane leaves), `src/lib/pane-tree.ts`, `src/lib/workspace.ts`, `src/store.ts`,
 `src/terminal/terminal-manager.ts`, `src/components/terminal-pane.tsx`, `sidebar.tsx`,
 `files-panel.tsx` and `diff-panel.tsx` (retired), `electron/main.ts` (open handlers), the fs

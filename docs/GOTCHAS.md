@@ -530,8 +530,8 @@ distro's).
 ## SSH panes {#ssh}
 
 - **A remote session never has a local cwd.** Its OSC 7 path is on the host, so the store
-  ignores it and `useActiveWorkCwd` returns nothing for it; the Changes/Files panels show a
-  notice instead of reading a local folder with the same name. Don't "fix" an SSH pane's
+  ignores it and `useActiveWorkCwd` returns nothing for it, and ▤+ offers no folder: nothing
+  reads a local folder with the same name. Don't "fix" an SSH pane's
   missing cwd — that would point git or readdir at the wrong machine.
 - **Main rebuilds the command.** Never trust `remote.target` from the renderer (or
   workspace.json); `trustedRemote` looks the host id up in main's list. A saved host this

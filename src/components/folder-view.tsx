@@ -125,7 +125,7 @@ export function FolderView({ entryId, tabId }: { entryId: string; tabId: string 
     () => (git?.isRepo ? buildGitDecorations(git.root, git.files) : null),
     [git?.isRepo, git?.root, git?.files],
   )
-  // Changes only: the changed files under this folder, flat (the Changes panel's list), and
+  // Changes only: the changed files under this folder, flat (the old Changes panel's list), and
   // their +/− in the bar. Off (the tree) when it isn't in a repo.
   const changes = useMemo(() => changesUnder(git ?? undefined, root), [git, root])
   const sum = useMemo(
@@ -134,6 +134,8 @@ export function FolderView({ entryId, tabId }: { entryId: string; tabId: string 
     [changes],
   )
   const changesOnly = !!view.changesOnly && !!git?.isRepo
+  // A repo with more changes than git's status lists (main caps it): say how many aren't shown.
+  const unlisted = git?.isRepo && git.total ? git.total - git.files.length : 0
   const count = changesOnly ? changes.length : rows.length
   const { start, end } = rowWindow(count, ROW_H, port.top, port.h)
 
@@ -303,7 +305,7 @@ export function FolderView({ entryId, tabId }: { entryId: string; tabId: string 
                       title={
                         changesOnly
                           ? "Show the folder"
-                          : `Show only the ${changes.length} changed file${changes.length === 1 ? "" : "s"}`
+                          : `Show only the ${changes.length}${unlisted > 0 ? "+" : ""} changed file${changes.length === 1 && !unlisted ? "" : "s"}`
                       }
                       aria-pressed={changesOnly}
                       onClick={toggleChanges}
@@ -475,7 +477,13 @@ export function FolderView({ entryId, tabId }: { entryId: string; tabId: string 
             )
           })}
         {end < count && <div style={{ height: (count - end) * ROW_H }} />}
-        {changesOnly && changes.length === 0 && (
+        {changesOnly && unlisted > 0 && (
+          <div className="diff-empty status-faint">
+            {unlisted} more change{unlisted === 1 ? "" : "s"} in this repo, not listed: too many for
+            git's status here.
+          </div>
+        )}
+        {changesOnly && changes.length === 0 && !unlisted && (
           <div className="diff-empty status-faint">Nothing changed under this folder.</div>
         )}
         {!changesOnly && rows.length === 0 && hasListing(tree, root) && (
