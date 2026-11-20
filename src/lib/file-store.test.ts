@@ -101,4 +101,35 @@ describe("FileStore", () => {
     s.show("c", "/c")
     expect(s.get("a")).toBeUndefined() // hidden: now it goes
   })
+
+  it("a failed read shows as an error; one landing after its entry closed is dropped", async () => {
+    const read = vi.fn().mockRejectedValueOnce(new Error("EIO")).mockResolvedValue(text("late"))
+    const s = new FileStore(read, hl)
+    s.show("f1", "/w/x")
+    await tick()
+    expect(s.get("f1")!.data).toMatchObject({ kind: "error", message: "Error: EIO" })
+    s.refresh("f1")
+    s.forget("f1") // closed while that read runs
+    await tick()
+    expect(s.get("f1")).toBeUndefined()
+  })
+
+  it("a highlight that lands after a newer text is dropped (the newer one's wins)", async () => {
+    const { read, pending } = reads()
+    let release: (l: string[]) => void = () => {}
+    const slow = vi
+      .fn()
+      .mockImplementationOnce(() => new Promise<string[]>((r) => (release = r)))
+      .mockImplementation(async (t: string) => [`<i>${t}</i>`])
+    const s = new FileStore(read, slow)
+    s.show("f2", "/w/y.ts")
+    pending.shift()!.resolve(text("old"))
+    await tick()
+    s.refresh("f2")
+    pending.shift()!.resolve(text("new", 2))
+    await tick()
+    release(["<i>old</i>"]) // the first text's highlight, late
+    await tick()
+    expect(s.get("f2")!.lines).toEqual(["<i>new</i>"])
+  })
 })

@@ -91,7 +91,7 @@ vi.mock("@xterm/addon-web-links", () => ({ WebLinksAddon: class {} }))
 vi.mock("@xterm/addon-webgl", () => ({ WebglAddon: class {} }))
 vi.mock("@xterm/addon-search", () => ({ SearchAddon: class {} }))
 
-const { TerminalManager } = await import("./terminal-manager")
+const { TerminalManager, openClickedPath } = await import("./terminal-manager")
 
 const st = () => useStore.getState()
 const flush = () => new Promise((r) => setTimeout(r, 0))
@@ -1321,5 +1321,57 @@ describe("TerminalManager — a parked terminal behind a folder tab", () => {
   it("does nothing for a terminal on screen or never opened", () => {
     TerminalManager.sizeHidden("nope", 900, 600)
     expect(ipc.ptyResize).not.toHaveBeenCalled()
+  })
+})
+
+describe("TerminalManager — a path clicked in output", () => {
+  beforeEach(() => {
+    resetStore()
+    vi.clearAllMocks()
+    useStore.setState({ platform: "darwin", home: "/Users/me" })
+  })
+  const term = () => {
+    st().newTab(testShell)
+    return st().tabs[0]!.activeSessionId
+  }
+  const m = (path: string, line?: number) => ({ start: 0, length: path.length, path, line })
+
+  it("a folder opens as a folder tab of its pane", async () => {
+    const id = term()
+    vi.mocked(ipc.pathIsDir).mockResolvedValue(true)
+    await openClickedPath(id, "/w/rts", m("src"))
+    const tab = st().tabs[0]!
+    expect(st().objects[tab.activeEntryId]).toEqual({ kind: "folder", path: "/w/rts/src" })
+  })
+
+  it("a file opens as a peek at its line", async () => {
+    const id = term()
+    vi.mocked(ipc.pathIsDir).mockResolvedValue(false)
+    await openClickedPath(id, "/w/rts", m("~/notes.md", 12))
+    const tab = st().tabs[0]!
+    expect(st().objects[tab.activeEntryId]).toEqual({
+      kind: "file",
+      path: "/Users/me/notes.md",
+      line: 12,
+      peek: true,
+    })
+  })
+
+  it("a PDF goes to its own app; a native Windows path to the editor, as before", async () => {
+    const id = term()
+    vi.mocked(ipc.pathIsDir).mockResolvedValue(false)
+    await openClickedPath(id, "/w", m("r.pdf"))
+    expect(ipc.openPath).toHaveBeenCalledWith("/w/r.pdf", undefined)
+    useStore.setState({ platform: "win32" })
+    await openClickedPath(id, "C:\\w", m("a.ts", 3))
+    expect(ipc.openFile).toHaveBeenCalledWith("C:\\w", "a.ts", 3, undefined)
+  })
+
+  it("a WSL pane's ~ path isn't opened with this machine's home", async () => {
+    st().newTab({ id: "u", label: "U", command: "wsl.exe", args: ["-d", "U"] })
+    const id = st().tabs[0]!.activeSessionId
+    await openClickedPath(id, "/home/u", m("~/x.ts"))
+    expect(ipc.openFile).not.toHaveBeenCalled()
+    expect(st().tabs[0]!.activeEntryId).toBe(id)
   })
 })

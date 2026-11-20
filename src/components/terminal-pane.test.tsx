@@ -504,3 +504,17 @@ describe("TerminalPane — folder entries", () => {
     expect(leaf().entryIds).toEqual([id])
   })
 })
+
+describe("TerminalPane — file tabs", () => {
+  it("a peek's tab is italic, says how to keep it, and a double-click keeps it", () => {
+    const { tabId } = mountPane()
+    st().openFile("/w/a.ts", { peek: true })
+    const view = renderPane(tabId)
+    const tab = screen.getAllByRole("tab")[1]!
+    expect(tab.className).toContain("peek")
+    expect(tab.getAttribute("title")).toContain("double-click to keep")
+    fireEvent.doubleClick(tab)
+    view.rerender()
+    expect(screen.getAllByRole("tab")[1]!.className).not.toContain("peek")
+  })
+})

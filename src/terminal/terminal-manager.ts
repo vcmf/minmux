@@ -159,7 +159,11 @@ const PATH_CACHE_MAX = 1000 // bound memory over long sessions (many distinct pa
 // line. Anything else (a PDF, a native Windows path, a terminal no pane holds): the editor or
 // the OS app, as before (main never lets that run a file).
 /** Open a path clicked in a terminal's output. */
-async function openClickedPath(sessionId: string, cwd: string, m: FileLinkMatch): Promise<void> {
+export async function openClickedPath(
+  sessionId: string,
+  cwd: string,
+  m: FileLinkMatch,
+): Promise<void> {
   const st = useStore.getState()
   const sess = st.sessions[sessionId]
   const tab = st.tabs.find((t) => !!findPane(t.root, sessionId))
