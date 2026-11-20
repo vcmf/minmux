@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest"
 import { reopenFor } from "./lib/remote-reports"
-import { useStore, isVisibleIn, isSessionVisible } from "./store"
+import { useStore, isVisibleIn, isSessionVisible, canOpenTerminalIn } from "./store"
 import { allEntryIds, allSessionIds, findPane, visibleSessionIds } from "./lib/pane-tree"
 import { isTerminalEntry } from "./lib/entries"
 import { resetStore, testHost, testShell as shell } from "./test/helpers"
@@ -1659,14 +1659,13 @@ describe("store — folder entries", () => {
     expect(s.cwd).toBe("/home/u/proj")
   })
 
-  it("a WSL folder no listed shell matches: the tab's terminal, in its own folder", () => {
+  it("a WSL folder no listed shell matches: no terminal starts (none can open it)", () => {
     st().newTab(shell)
-    const term = tab().activeSessionId
-    st().setSessionCwd(term, "/w/own")
     st().openFolder("/home/u/proj", { wsl: { distro: "Gone" } })
-    st().newSurface()
-    const s = st().sessions[tab().activeSessionId]!
-    expect(s.command).toBe(shell.command) // not a host shell handed a Linux path
-    expect(s.cwd).toBe("/w/own")
+    const id = tab().activeEntryId
+    expect(canOpenTerminalIn(st(), id)).toBe(false)
+    const before = Object.keys(st().sessions).length
+    st().newSurface(shell)
+    expect(Object.keys(st().sessions)).toHaveLength(before) // not a host shell given a Linux path
   })
 })

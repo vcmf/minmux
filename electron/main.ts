@@ -1449,7 +1449,10 @@ function registerIpc() {
     const list = Array.isArray(reqs)
       ? reqs.filter(
           (r): r is GitRootRequest =>
-            !!r && typeof r.dir === "string" && (r.dir.startsWith("/") || path.isAbsolute(r.dir)),
+            !!r &&
+            typeof r.dir === "string" &&
+            (r.dir.startsWith("/") || path.isAbsolute(r.dir)) &&
+            (r.spelled === undefined || typeof r.spelled === "boolean"),
         )
       : []
     return findGitRoots(

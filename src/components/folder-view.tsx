@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react"
 import {
   ArrowClockwise,
   CaretDown,
@@ -7,7 +7,7 @@ import {
   Folder,
   TerminalWindow,
 } from "@phosphor-icons/react"
-import { useStore } from "../store"
+import { canOpenTerminalIn, useStore } from "../store"
 import { ipc } from "../lib/ipc"
 import { listings } from "../lib/listing-store"
 import { folderReads, watches } from "../lib/fs-reads"
@@ -16,13 +16,15 @@ import { hasListing, shownOpenDirs, visibleRows, type FileTreeState } from "../l
 import { EMPTY_VIEW, toggleExpanded } from "../lib/folder-entries"
 import { buildGitDecorations, statusColor, statusLetter } from "../lib/git-decorations"
 import { isAbsoluteHostPath, revealLabel } from "../lib/file-actions"
-import { isInside, samePath } from "../lib/agent-dirs"
+import { samePath } from "../lib/agent-dirs"
 import { useFileMenu } from "./use-file-menu"
+import { rowWindow } from "../lib/virtual-rows"
 import { RootBreadcrumb } from "./root-breadcrumb"
 import { wantGit } from "../lib/folder-git-poll"
-import { statusFor } from "../lib/folder-git"
+import { repoKey, wantKey } from "../lib/folder-git"
 
 const SETTLE_MS = 2000 // one more read this long after a folder's last change event
+const ROW_H = 28 // every row of a folder tab (App.css .folder-view-rows): virtualization needs it
 const subscribe = (fn: () => void) => listings.subscribe(fn) // stable: React re-subscribes on change
 
 // The read keys each mounted view needs: a view going away (hidden, closed, re-rooted) drops its
@@ -47,7 +49,8 @@ export function FolderView({ entryId, tabId }: { entryId: string; tabId: string 
   const view = useStore((s) => s.folderViews[entryId]) ?? EMPTY_VIEW
   const platform = useStore((s) => s.platform)
   const focusedGit = useStore((s) => s.git)
-  const folderGit = useStore((s) => s.folderGit)
+  // A WSL folder with no shell listed for its distro can't host a terminal: no button then.
+  const canTerminal = useStore((s) => canOpenTerminalIn(s, entryId))
   const root = folder?.path ?? ""
   const wsl = folder?.wsl
   const scope = wsl ? `wsl:${wsl.distro ?? ""}` : ""
@@ -63,6 +66,35 @@ export function FolderView({ entryId, tabId }: { entryId: string; tabId: string 
     [root, all, view],
   )
   const rows = useMemo(() => (root ? visibleRows(tree) : []), [tree, root])
+  // The rows' scroll position and height, read at most once a frame (virtualization).
+  const scrollRef = useRef<HTMLDivElement>(null)
+  const [port, setPort] = useState({ top: 0, h: 0 })
+  useEffect(() => {
+    const el = scrollRef.current
+    if (!el) return
+    let raf = 0
+    const read = () => {
+      raf = 0
+      setPort((p) =>
+        p.top === el.scrollTop && p.h === el.clientHeight
+          ? p
+          : { top: el.scrollTop, h: el.clientHeight },
+      )
+    }
+    const onChange = () => {
+      if (!raf) raf = requestAnimationFrame(read)
+    }
+    el.addEventListener("scroll", onChange, { passive: true })
+    const ro = new ResizeObserver(onChange)
+    ro.observe(el)
+    read()
+    return () => {
+      el.removeEventListener("scroll", onChange)
+      ro.disconnect()
+      cancelAnimationFrame(raf)
+    }
+  }, [])
+  const { start, end } = rowWindow(rows.length, ROW_H, port.top, port.h)
   // The open folders you can see, as one key: reads and watches follow its content.
   const shown = useMemo(() => (root ? shownOpenDirs(tree) : []), [tree, root])
   const shownKey = shown.join("\0")
@@ -77,16 +109,13 @@ export function FolderView({ entryId, tabId }: { entryId: string; tabId: string 
     wantGit(entryId, { path: root, wsl })
     return () => wantGit(entryId, null)
   }, [entryId, root, wsl])
-  // The repo this folder is in, from its own answer (it may be a nested repo or worktree). While
-  // that's the focused terminal's repo, its fresher status is used; before the first answer, a
-  // folder inside the focused repo borrows it.
-  const polled = statusFor(folderGit, root, wsl)
-  const focusedOk = !!focusedGit?.isRepo && !wsl
+  // Its repo, from its own `.git` search (lib/folder-git): the focused terminal's repo uses that
+  // fresher status; another one, the folder tabs' own poll. Selected by this folder's own keys,
+  // so a status change in another repo doesn't re-render this view.
+  const folderRoot = useStore((s) => s.folderRoots[wantKey({ path: root, wsl })])
+  const polled = useStore((s) => (folderRoot ? s.folderGit[repoKey(wsl, folderRoot)] : undefined))
   const inFocused =
-    focusedOk &&
-    (polled
-      ? samePath(polled.root, focusedGit!.root)
-      : samePath(root, focusedGit!.root) || isInside(root, focusedGit!.root))
+    !!folderRoot && !wsl && !!focusedGit?.isRepo && samePath(folderRoot, focusedGit.root)
   const git = inFocused ? focusedGit : polled
   const deco = useMemo(
     () => (git?.isRepo ? buildGitDecorations(git.root, git.files) : null),
@@ -224,20 +253,24 @@ export function FolderView({ entryId, tabId }: { entryId: string; tabId: string 
               >
                 <ArrowClockwise size={13} />
               </button>
-              <button
-                className="iconbtn"
-                style={{ width: 22, height: 22 }}
-                title="New terminal here"
-                onClick={terminalHere}
-              >
-                <TerminalWindow size={13} />
-              </button>
+              {canTerminal && (
+                <button
+                  className="iconbtn"
+                  style={{ width: 22, height: 22 }}
+                  title="New terminal here"
+                  onClick={terminalHere}
+                >
+                  <TerminalWindow size={13} />
+                </button>
+              )}
             </>
           }
         />
       </div>
-      <div className="diff-files agents-files folder-view-rows">
-        {rows.map((r) => {
+      <div className="diff-files agents-files folder-view-rows" ref={scrollRef}>
+        {/* Long trees render only the rows in view (lib/virtual-rows): spacers stand for the rest. */}
+        {start > 0 && <div style={{ height: start * ROW_H }} />}
+        {rows.slice(start, end).map((r) => {
           const pad = { paddingLeft: 8 + r.depth * 14 }
           if (r.kind === "note" || r.kind === "more") {
             const canReveal = !!r.dir && !wsl && isAbsoluteHostPath(r.dir, platform)
@@ -312,6 +345,7 @@ export function FolderView({ entryId, tabId }: { entryId: string; tabId: string 
             </div>
           )
         })}
+        {end < rows.length && <div style={{ height: (rows.length - end) * ROW_H }} />}
         {rows.length === 0 && hasListing(tree, root) && (
           <div className="diff-empty status-faint">This folder is empty.</div>
         )}

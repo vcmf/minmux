@@ -20,7 +20,9 @@ export async function findGitRoots(
 ): Promise<Record<string, string | null>> {
   const out: Record<string, string | null> = {}
   const list = reqs.slice(0, MAX_GIT_ROOTS)
-  const host = list.filter((r) => !r.wsl).map((r) => r.dir)
+  // Folder tabs want their root in their own spelling (a symlink kept); the sidebar's, resolved.
+  const host = list.filter((r) => !r.wsl && !r.spelled).map((r) => r.dir)
+  const spelled = list.filter((r) => !r.wsl && r.spelled).map((r) => r.dir)
   const byDistro = new Map<string, GitRootRequest[]>()
   for (const r of list) {
     if (!r.wsl) continue
@@ -32,6 +34,15 @@ export async function findGitRoots(
   if (host.length)
     jobs.push(
       search(host, true).then(
+        (roots) => {
+          for (const [d, r] of Object.entries(roots)) out[d] = r && gitSpelling(r)
+        },
+        () => {},
+      ),
+    )
+  if (spelled.length)
+    jobs.push(
+      search(spelled, false).then(
         (roots) => {
           for (const [d, r] of Object.entries(roots)) out[d] = r && gitSpelling(r)
         },

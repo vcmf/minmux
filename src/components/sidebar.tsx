@@ -23,7 +23,7 @@ import {
   Terminal,
   X,
 } from "@phosphor-icons/react"
-import { activeTheme, useStore } from "../store"
+import { activeTheme, canOpenTerminalIn, useStore } from "../store"
 import { sessionColor } from "../lib/session-color"
 import { agentPanes, paneAgents, type AgentKind } from "../lib/agent-graph"
 import { agentWorkDirs, agentWorkFlat, gitKey, inLabel, inLine, samePath } from "../lib/agent-dirs"
@@ -555,11 +555,16 @@ export function Sidebar() {
         <ContextMenu
           x={dirMenu.x}
           y={dirMenu.y}
-          items={folderMenuItems(
-            revealLabel(platform),
-            dirMenu.revealHint,
-            isTerminalEntry(dirMenu.sessionId),
-          )}
+          items={folderMenuItems(revealLabel(platform), dirMenu.revealHint, {
+            openTab: isTerminalEntry(dirMenu.sessionId),
+            // A folder tab lists host paths, or WSL ones in their distro: not Git Bash's /c/….
+            openTabHint: dirMenu.revealHint === "not a host path" ? dirMenu.revealHint : undefined,
+            openHereHint:
+              !isTerminalEntry(dirMenu.sessionId) &&
+              !canOpenTerminalIn(useStore.getState(), dirMenu.sessionId)
+                ? "no shell for it"
+                : undefined,
+          })}
           onSelect={onDirAction}
           onClose={closeDirMenu}
         />

@@ -1230,8 +1230,8 @@ export const TerminalManager = {
     }
   },
 
-  /** A parked terminal takes the grid of a `w`×`h` px mount: its pane shows a folder, so no
-   *  terminal there to follow. PTY resized only on change. */
+  // Its pane shows a folder, so there's no terminal there to follow. PTY resized only on change.
+  /** A parked terminal takes the grid of a `w`×`h` px mount. */
   sizeHidden(id: string, w: number, h: number) {
     const entry = entries.get(id)
     if (!entry?.opened || entry.host.parentElement !== parking || w <= 0 || h <= 0) return

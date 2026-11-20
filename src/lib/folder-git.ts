@@ -1,14 +1,16 @@
-// Git marks for folder entries in repos other than the focused terminal's (whose status the app
-// already polls). Pure planning; lib/folder-git-poll runs it. Off the hot path by budget: one
-// repo per tick, round-robin, a tick at most every FOLDER_GIT_MIN_MS (each `git` launch blocks
-// main for a few ms), and a folder found not to be a repo isn't asked again for NOT_REPO_TTL.
-import type { GitStatus } from "./ipc"
+// Git marks for folder tabs in repos other than the focused terminal's (whose status the app
+// already polls). Pure planning; lib/folder-git-poll runs it.
+//  - A folder's repo comes from the fs worker's `.git` search up from the folder itself, in its
+//    own spelling (no git process, no symlink guessing): a nested repo or worktree is its own,
+//    and "no .git up the tree" is a sure "not a repo". Looked up again every ROOT_EVERY, so a
+//    `git init` or a deleted `.git` shows.
+//  - `git status` then runs only for marks: one repo per tick, in turn over every repo shown, a
+//    tick at most every FOLDER_GIT_MIN_MS (each launch blocks main a few ms).
 import type { WslContext } from "./wsl"
-import { isInside, pathKey, samePath } from "./agent-dirs"
+import { pathKey, samePath } from "./agent-dirs"
 
 export const FOLDER_GIT_MIN_MS = 3000
-export const NOT_REPO_TTL = 60_000
-export const MAX_REPOS = 8 // repos polled at all, however many folders are shown
+export const ROOT_EVERY = 10_000
 
 /** A shown folder that wants marks. */
 export interface GitWant {
@@ -16,101 +18,72 @@ export interface GitWant {
   wsl?: WslContext
 }
 
-/** What a poll learned about a folder: its repo root (null: not in one), and when. */
+/** A folder's repo root (null: in none), and when it was looked up. */
 export interface Learned {
   root: string | null
   at: number
 }
 
-/** Keeps a WSL distro's Linux paths apart from the host's. */
-export const gitScope = (wsl: WslContext | undefined) => (wsl ? `wsl:${wsl.distro ?? ""}` : "")
-const key = (scope: string, path: string) => `${scope}\0${pathKey(path)}`
+/** A repo to poll. */
+export interface GitRepo {
+  root: string
+  wsl?: WslContext
+}
+
+const scope = (wsl: WslContext | undefined) => (wsl ? `wsl:${wsl.distro ?? ""}` : "")
+
+/** A folder's key (a WSL distro's Linux paths kept apart from the host's). */
+export const wantKey = (w: GitWant) => `${scope(w.wsl)}\0${pathKey(w.path)}`
 
 /** The key a repo's status is stored under. */
-export const repoKey = (wsl: WslContext | undefined, root: string) => key(gitScope(wsl), root)
+export const repoKey = (wsl: WslContext | undefined, root: string) =>
+  `${scope(wsl)}\0${pathKey(root)}`
 
-/** The repo root as `want`'s own spelling: git resolves symlinks (macOS's /var is
- *  /private/var), so a root that isn't above `want` is matched by its trailing segments. */
-export function logicalRoot(wantPath: string, root: string): string {
-  if (samePath(wantPath, root) || isInside(wantPath, root)) return root
-  const sep = wantPath.includes("\\") && !wantPath.includes("/") ? "\\" : "/"
-  const parts = wantPath.split(sep)
-  for (let n = parts.length; n > 1; n--) {
-    const prefix = parts.slice(0, n).join(sep)
-    const real = pathKey(root)
-    const mine = pathKey(prefix)
-    if (real === mine || real.endsWith(mine.startsWith("/") ? mine : `/${mine}`)) return prefix
-  }
-  return root
+/** The folder's repo root as last looked up: undefined unknown, null not a repo. */
+export const rootOf = (learned: Map<string, Learned>, w: GitWant): string | null | undefined =>
+  learned.get(wantKey(w))?.root
+
+/** The folders whose root to look up now: never looked up, or not for ROOT_EVERY. */
+export function rootLookups(wants: GitWant[], learned: Map<string, Learned>, now: number) {
+  return wants.filter((w) => {
+    const l = learned.get(wantKey(w))
+    return !l || now - l.at >= ROOT_EVERY
+  })
 }
 
-/** Record a poll's answer for the folder `want`. A known repo answering "not a repo" keeps what
- *  was learned (git timing out on a big repo says the same); a deleted `.git` shows on the next
- *  answer that's sure. */
-export function learn(
+/** Record a lookup's answers; a folder whose search failed (no answer) keeps what it had. */
+export function learnRoots(
   learned: Map<string, Learned>,
-  want: GitWant,
-  status: Pick<GitStatus, "isRepo" | "root">,
+  asked: GitWant[],
+  answers: Record<string, string | null>,
   now: number,
 ): void {
-  const k = key(gitScope(want.wsl), want.path)
-  const root = status.isRepo && status.root ? logicalRoot(want.path, status.root) : null
-  if (root === null && learned.get(k)?.root) return
-  learned.set(k, { root, at: now })
+  for (const w of asked)
+    if (w.path in answers) learned.set(wantKey(w), { root: answers[w.path]!, at: now })
 }
 
-/** The repo the folder `want` is in, from its own answer only (a folder may be a nested repo or
- *  worktree, so another folder's repo says nothing): undefined unknown, null not a repo. */
-export const rootOf = (learned: Map<string, Learned>, want: GitWant): string | null | undefined =>
-  learned.get(key(gitScope(want.wsl), want.path))?.root
-
-/** The folders to poll this round: each never asked, and one per known repo other than the
- *  focused terminal's (its own poll covers it); "not a repo" is trusted for NOT_REPO_TTL. */
-export function gitTargets(
+/** The repos the shown folders are in, each once, other than the focused terminal's. */
+export function reposOf(
   wants: GitWant[],
   learned: Map<string, Learned>,
   focusedRoot: string | undefined,
-  now: number,
-): GitWant[] {
-  const out: GitWant[] = []
-  const repos = new Set<string>()
+): GitRepo[] {
+  const out: GitRepo[] = []
+  const seen = new Set<string>()
   for (const w of wants) {
-    const own = learned.get(key(gitScope(w.wsl), w.path))
-    if (!own) {
-      out.push(w) // never asked: ask this folder itself
-      continue
-    }
-    if (own.root === null) {
-      if (now - own.at >= NOT_REPO_TTL) out.push(w)
-      continue
-    }
-    if (!w.wsl && focusedRoot && samePath(own.root, focusedRoot)) continue
-    const k = key(gitScope(w.wsl), own.root)
-    if (repos.has(k) || repos.size >= MAX_REPOS) continue
-    repos.add(k)
-    out.push(w)
+    const root = rootOf(learned, w)
+    if (!root) continue
+    if (!w.wsl && focusedRoot && samePath(root, focusedRoot)) continue
+    const k = repoKey(w.wsl, root)
+    if (seen.has(k)) continue
+    seen.add(k)
+    out.push({ root, ...(w.wsl ? { wsl: w.wsl } : {}) })
   }
   return out
 }
 
-/** Forget what was learned about folders no longer shown. */
+/** Forget the folders no longer shown. */
 export function forgetOthers(learned: Map<string, Learned>, wants: GitWant[]): void {
-  const keep = new Set(wants.map((w) => key(gitScope(w.wsl), w.path)))
+  const keep = new Set(wants.map(wantKey))
   for (const k of [...learned.keys()]) if (!keep.has(k)) learned.delete(k)
-}
-
-/** The status covering `path` among polled repos (the innermost), if any. */
-export function statusFor(
-  folderGit: Record<string, GitStatus>,
-  path: string,
-  wsl: WslContext | undefined,
-): GitStatus | undefined {
-  const scope = gitScope(wsl)
-  let best: GitStatus | undefined
-  for (const [k, g] of Object.entries(folderGit)) {
-    if (!k.startsWith(`${scope}\0`)) continue
-    if (!samePath(path, g.root) && !isInside(path, g.root)) continue
-    if (!best || g.root.length > best.root.length) best = g
-  }
-  return best
 }

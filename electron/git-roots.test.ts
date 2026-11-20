@@ -15,6 +15,19 @@ describe("findGitRoots", () => {
     expect(search).toHaveBeenCalledWith(["/r/src", "/x"], true)
   })
 
+  it("a folder tab's host folders: their own spelling, symlinks kept", async () => {
+    const search = vi.fn<SearchFn>(async (_paths, real): Promise<Record<string, string | null>> =>
+      real ? { "/r/src": "/private/r" } : { "/r/tab": "/r" },
+    )
+    const out = await findGitRoots(
+      [{ dir: "/r/src" }, { dir: "/r/tab", spelled: true }],
+      search,
+      targets,
+    )
+    expect(out).toEqual({ "/r/src": "/private/r", "/r/tab": "/r" })
+    expect(search).toHaveBeenCalledWith(["/r/tab"], false)
+  })
+
   it("a WSL folder: through its share, mapped back; the next form for those left", async () => {
     const wsl = { distro: "U" }
     const search = vi.fn<SearchFn>(async (paths) => {

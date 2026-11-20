@@ -1324,6 +1324,16 @@ body.resizing-col {
 .folder-view-rows {
   overflow-y: auto;
 }
+/* One height for every row (folder-view.tsx ROW_H): long trees are virtualized by it. */
+.folder-view-rows > .file-row,
+.folder-view-rows > .more-row {
+  height: 28px;
+  box-sizing: border-box;
+  padding-top: 0 !important;
+  padding-bottom: 0 !important;
+  display: flex;
+  align-items: center;
+}
 
 /* Agents board reuses .diff-files, but has no diff body below — so let it fill. */
 .agents-files {

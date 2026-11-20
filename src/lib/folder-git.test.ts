@@ -1,113 +1,68 @@
 import { describe, it, expect } from "vitest"
 import {
   forgetOthers,
-  gitTargets,
-  learn,
-  logicalRoot,
-  NOT_REPO_TTL,
+  learnRoots,
   repoKey,
+  reposOf,
+  ROOT_EVERY,
+  rootLookups,
   rootOf,
-  statusFor,
+  wantKey,
   type Learned,
 } from "./folder-git"
-import type { GitStatus } from "./ipc"
-
-const repo = (root: string): GitStatus =>
-  ({
-    isRepo: true,
-    root,
-    branch: "main",
-    ahead: 0,
-    behind: 0,
-    files: [],
-    add: 0,
-    del: 0,
-  }) as GitStatus
 
 describe("folder git", () => {
-  it("unknown folders are asked once each", () => {
-    expect(gitTargets([{ path: "/a" }, { path: "/b" }], new Map(), undefined, 0)).toEqual([
-      { path: "/a" },
-      { path: "/b" },
-    ])
+  it("looks a folder's root up once, then again every ROOT_EVERY", () => {
+    const l = new Map<string, Learned>()
+    const w = { path: "/w/rts/src" }
+    expect(rootLookups([w], l, 0)).toEqual([w])
+    learnRoots(l, [w], { "/w/rts/src": "/w/rts" }, 0)
+    expect(rootLookups([w], l, ROOT_EVERY - 1)).toEqual([])
+    expect(rootLookups([w], l, ROOT_EVERY)).toEqual([w])
   })
 
-  it("folders in one repo, once each knows it, poll it once", () => {
+  it("a failed search keeps what was known; 'no .git' is a sure not-a-repo", () => {
     const l = new Map<string, Learned>()
-    learn(l, { path: "/w/rts/src" }, repo("/w/rts"), 0)
-    learn(l, { path: "/w/rts/docs" }, repo("/w/rts"), 0)
-    expect(gitTargets([{ path: "/w/rts/src" }, { path: "/w/rts/docs" }], l, undefined, 1)).toEqual([
-      { path: "/w/rts/src" },
-    ])
+    const w = { path: "/w/p" }
+    learnRoots(l, [w], { "/w/p": "/w/p" }, 0)
+    learnRoots(l, [w], {}, 1) // the search failed (a dead mount): no answer
+    expect(rootOf(l, w)).toBe("/w/p")
+    learnRoots(l, [w], { "/w/p": null }, 2) // .git deleted
+    expect(rootOf(l, w)).toBeNull()
   })
 
-  it("a nested worktree is asked itself, never taken for its outer repo", () => {
+  it("polls each repo once, a nested worktree as its own", () => {
     const l = new Map<string, Learned>()
-    learn(l, { path: "/w/rts" }, repo("/w/rts"), 0)
+    const a = { path: "/w/rts/src" }
+    const b = { path: "/w/rts/docs" }
     const wt = { path: "/w/rts/.claude/worktrees/feat" }
-    expect(rootOf(l, wt)).toBeUndefined()
-    expect(gitTargets([{ path: "/w/rts" }, wt], l, undefined, 1)).toContainEqual(wt)
-    learn(l, wt, repo("/w/rts/.claude/worktrees/feat"), 2)
-    expect(rootOf(l, wt)).toBe("/w/rts/.claude/worktrees/feat")
+    learnRoots(l, [a, b, wt], { [a.path]: "/w/rts", [b.path]: "/w/rts", [wt.path]: wt.path }, 0)
+    expect(reposOf([a, b, wt], l, undefined)).toEqual([{ root: "/w/rts" }, { root: wt.path }])
   })
 
-  it("a known repo answering 'not a repo' (git timed out) keeps what it knew", () => {
+  it("skips the focused terminal's repo (its own poll covers it) and folders in no repo", () => {
     const l = new Map<string, Learned>()
-    learn(l, { path: "/big" }, repo("/big"), 0)
-    learn(l, { path: "/big" }, { isRepo: false, root: "" }, 1)
-    expect(rootOf(l, { path: "/big" })).toBe("/big")
-  })
-
-  it("forgets folders no longer shown", () => {
-    const l = new Map<string, Learned>()
-    learn(l, { path: "/a" }, repo("/a"), 0)
-    learn(l, { path: "/b" }, repo("/b"), 0)
-    forgetOthers(l, [{ path: "/b" }])
-    expect(rootOf(l, { path: "/a" })).toBeUndefined()
-    expect(rootOf(l, { path: "/b" })).toBe("/b")
-  })
-
-  it("skips the focused terminal's repo (its own poll covers it)", () => {
-    const l = new Map<string, Learned>()
-    learn(l, { path: "/w/rts/src" }, repo("/w/rts"), 0)
-    expect(gitTargets([{ path: "/w/rts/src" }], l, "/w/rts/", 1)).toEqual([])
-  })
-
-  it("a folder that isn't a repo is asked again only after the TTL", () => {
-    const l = new Map<string, Learned>()
-    learn(l, { path: "/tmp/x" }, { isRepo: false, root: "" }, 0)
-    expect(gitTargets([{ path: "/tmp/x" }], l, undefined, NOT_REPO_TTL - 1)).toEqual([])
-    expect(gitTargets([{ path: "/tmp/x" }], l, undefined, NOT_REPO_TTL)).toHaveLength(1)
+    const a = { path: "/w/rts" }
+    const n = { path: "/tmp/x" }
+    learnRoots(l, [a, n], { "/w/rts": "/w/rts", "/tmp/x": null }, 0)
+    expect(reposOf([a, n], l, "/w/rts/")).toEqual([])
   })
 
   it("a WSL folder's repo is kept apart from a host path that reads the same", () => {
     const l = new Map<string, Learned>()
-    learn(l, { path: "/home/u/p" }, repo("/home/u/p"), 0)
-    expect(rootOf(l, { path: "/home/u/p", wsl: { distro: "Ubuntu" } })).toBeUndefined()
-    expect(rootOf(l, { path: "/home/u/p" })).toBe("/home/u/p")
+    const host = { path: "/home/u/p" }
+    const linux = { path: "/home/u/p", wsl: { distro: "Ubuntu" } }
+    learnRoots(l, [host], { "/home/u/p": "/home/u/p" }, 0)
+    expect(rootOf(l, linux)).toBeUndefined()
+    expect(wantKey(host)).not.toBe(wantKey(linux))
+    expect(repoKey(undefined, "/r")).not.toBe(repoKey({ distro: "U" }, "/r"))
   })
 
-  it("statusFor picks the innermost polled repo holding the folder", () => {
-    const g = {
-      [repoKey(undefined, "/w")]: repo("/w"),
-      [repoKey(undefined, "/w/sub")]: repo("/w/sub"),
-    }
-    expect(statusFor(g, "/w/sub/x", undefined)!.root).toBe("/w/sub")
-    expect(statusFor(g, "/w/y", undefined)!.root).toBe("/w")
-    expect(statusFor(g, "/elsewhere", undefined)).toBeUndefined()
-    expect(statusFor(g, "/w/y", { distro: "U" })).toBeUndefined()
-  })
-
-  it("logicalRoot maps git's resolved root back onto the folder's own path", () => {
-    expect(logicalRoot("/var/t/proj", "/private/var/t/proj")).toBe("/var/t/proj")
-    expect(logicalRoot("/var/t/proj/src", "/private/var/t/proj")).toBe("/var/t/proj")
-    expect(logicalRoot("/w/rts/src", "/w/rts")).toBe("/w/rts")
-    expect(logicalRoot("/a/b", "/elsewhere/c")).toBe("/elsewhere/c")
-  })
-
-  it("learns the folder's spelling of a symlinked repo", () => {
+  it("forgets folders no longer shown", () => {
     const l = new Map<string, Learned>()
-    learn(l, { path: "/var/t/proj/src" }, repo("/private/var/t/proj"), 0)
-    expect(rootOf(l, { path: "/var/t/proj/src" })).toBe("/var/t/proj")
+    learnRoots(l, [{ path: "/a" }, { path: "/b" }], { "/a": "/a", "/b": "/b" }, 0)
+    forgetOthers(l, [{ path: "/b" }])
+    expect(rootOf(l, { path: "/a" })).toBeUndefined()
+    expect(rootOf(l, { path: "/b" })).toBe("/b")
   })
 })

@@ -139,10 +139,20 @@ function wslShellFor(
   return ok(inherited) ? inherited : state.shells.find(ok)
 }
 
-// A focused folder's: a host shell, or a WSL one for its distro. A WSL folder no listed shell
-// matches falls back to the tab's terminal in its own folder (a host shell can't use a Linux
-// path), as does a tab with no folder focused.
-/** The shell and folder a new terminal of `tab` starts with. */
+// A focused folder's: a host shell, or a WSL one for its distro; a WSL folder no listed shell
+// matches gets none (a host or ssh shell can't open a Linux path), so nothing starts. A tab
+// with no folder focused: its terminal's own shell and folder.
+/** The shell a terminal opened in folder `f` runs: a WSL one for its distro, else a host one. */
+const folderShell = (state: AppState, src: Session | undefined, f: FolderEntry) =>
+  f.wsl ? wslShellFor(state, src, f.wsl.distro) : hostShellFor(state, src)
+
+/** Whether a terminal can open in folder entry `id` (its "New terminal here"). */
+export const canOpenTerminalIn = (state: AppState, id: string): boolean => {
+  const f = state.objects[id]
+  return !!f && !!folderShell(state, undefined, f)
+}
+
+/** The shell and folder a new terminal of `tab` starts with; undefined: none can. */
 function newTerminalSource(
   state: AppState,
   tab: Tab,
@@ -151,10 +161,8 @@ function newTerminalSource(
   const src = state.sessions[tab.activeSessionId]
   const folder = focusedFolder(state, tab)
   if (folder) {
-    const shell = folder.wsl
-      ? wslShellFor(state, src, folder.wsl.distro)
-      : (hostShellFor(state, src) ?? fallback)
-    if (shell) return { shell, cwd: folder.path, src }
+    const shell = folderShell(state, src, folder) ?? (folder.wsl ? undefined : fallback)
+    return shell ? { shell, cwd: folder.path, src } : undefined
   }
   const shell = inheritShell(state.shells, src) ?? fallback
   return shell ? { shell, cwd: src?.cwd, src } : undefined
@@ -194,6 +202,7 @@ interface AppState {
   sidebarCollapsed: boolean
   git: GitStatus | null
   folderGit: Record<string, GitStatus> // folder entries' other repos, by repoKey (lib/folder-git)
+  folderRoots: Record<string, string | null> // each shown folder's repo root, by wantKey
   agents: AgentGraph // live tree of agents/sub-agents (M6, fed by hook events)
   home: string
   platform: string // process.platform ("darwin"|"win32"|"linux"); "" until fetched
@@ -230,6 +239,7 @@ interface AppState {
   setSessionOscTitle: (sessionId: string, title: string) => void
   setGit: (git: GitStatus | null) => void
   setFolderGit: (key: string, git: GitStatus | null) => void // null drops it
+  setFolderRoots: (roots: Record<string, string | null>) => void
   applyAgentEvents: (events: AgentEvent[]) => void
   agentExited: (paneId: string) => void // the pane's shell prompt came back after its agent
   setRightView: (view: RightView) => void
@@ -553,6 +563,7 @@ export const useStore = create<AppState>((set, get) => ({
   objects: {},
   folderViews: {},
   folderGit: {},
+  folderRoots: {},
   closeConfirm: null,
   dragging: null,
   agentMeta: {},
@@ -633,6 +644,13 @@ export const useStore = create<AppState>((set, get) => ({
       return { sessions: { ...state.sessions, [sessionId]: { ...s, oscTitle: next } } }
     }),
   setGit: (git) => set({ git }),
+  setFolderRoots: (roots) =>
+    set((state) => {
+      const cur = state.folderRoots
+      const keys = Object.keys(roots)
+      const same = keys.length === Object.keys(cur).length && keys.every((k) => cur[k] === roots[k])
+      return same ? state : { folderRoots: roots }
+    }),
   setFolderGit: (key, git) =>
     set((state) => {
       const cur = state.folderGit[key]

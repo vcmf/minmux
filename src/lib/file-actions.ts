@@ -68,12 +68,29 @@ export function fileMenuItems(input: FileMenuInput): MenuItemSpec[] {
 export function folderMenuItems(
   revealLabel: string,
   revealHint?: string,
-  openTab = true, // a folder line of a terminal: a folder tab in its pane (a folder row is one)
+  // A folder line of a terminal: "Open in a tab" (a folder row is one already), with why it's
+  // off (a path this machine can't list); a folder row whose terminal can't start: why.
+  opts: { openTab?: boolean; openTabHint?: string; openHereHint?: string } = {},
 ): MenuItemSpec[] {
+  const { openTab = true, openTabHint, openHereHint } = opts
   return [
     { id: "copyPath", label: "Copy path" },
-    { id: "openHere", label: "Open terminal here" },
-    ...(openTab ? [{ id: "openTab" as const, label: "Open in a tab" }] : []),
+    {
+      id: "openHere",
+      label: "Open terminal here",
+      disabled: !!openHereHint,
+      hint: openHereHint,
+    },
+    ...(openTab
+      ? [
+          {
+            id: "openTab" as const,
+            label: "Open in a tab",
+            disabled: !!openTabHint,
+            hint: openTabHint,
+          },
+        ]
+      : []),
     {
       id: "reveal",
       label: revealLabel,

@@ -166,10 +166,25 @@ describe("FolderView", () => {
       add: 1,
       del: 0,
     } as never)
+    vi.mocked(ipc.gitRoots).mockResolvedValue({ "/fvg": "/fvg" }) // its own .git search
     const { tabId, entryId } = open("/fvg")
     const view = render(<FolderView entryId={entryId} tabId={tabId} />)
     await waitFor(() => expect(screen.getByText("M")).toBeInTheDocument())
     expect(ipc.gitStatus).toHaveBeenCalledWith("/fvg", undefined)
     view.unmount()
+  })
+
+  it("a long tree renders only the rows around the view", async () => {
+    const many = Array.from(
+      { length: 480 },
+      (_, i) => [`n${String(i).padStart(3, "0")}`, false] as [string, boolean],
+    )
+    vi.mocked(ipc.readdir).mockResolvedValue({ ...ls(...many), total: 480 })
+    const { tabId, entryId } = open("/fvv")
+    const { container } = render(<FolderView entryId={entryId} tabId={tabId} />)
+    fireEvent.click(await screen.findByText("Show all"))
+    await screen.findByText("n000")
+    expect(container.querySelectorAll(".file-row").length).toBeLessThan(60)
+    expect(screen.queryByText("n479")).toBeNull() // far below: a spacer stands for it
   })
 })
