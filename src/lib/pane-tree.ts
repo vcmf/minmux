@@ -1,15 +1,17 @@
 import type { DropZone, PaneLeaf, PaneNode } from "../types"
+import { isTerminalEntry } from "./entries"
 
-// Pure pane-tree ops. A leaf is a pane holding one or more terminals (surfaces);
-// IDs are passed in (not generated) to keep everything pure and testable. Ops return
-// the same node reference when nothing changed so store selectors stay quiet.
+// Pure pane-tree ops. A leaf is a pane holding one or more entries (surfaces): terminals today,
+// folders and files later (lib/entries). IDs are passed in (not generated) to keep everything
+// pure and testable. Ops return the same node reference when nothing changed so store
+// selectors stay quiet.
 
-/** A pane with a single terminal. */
-export const makeLeaf = (paneId: string, sessionId: string): PaneLeaf => ({
+/** A pane with a single entry. */
+export const makeLeaf = (paneId: string, entryId: string): PaneLeaf => ({
   type: "leaf",
   id: paneId,
-  sessionIds: [sessionId],
-  activeSessionId: sessionId,
+  entryIds: [entryId],
+  activeEntryId: entryId,
 })
 
 /** Rebuild splits only along the path where a child actually changed. */
@@ -32,41 +34,41 @@ function filterLeaves(node: PaneNode, fn: (leaf: PaneLeaf) => PaneNode | null): 
 }
 
 /**
- * Split the pane holding `targetSessionId` into a `direction` split whose two
- * children are that pane and a new pane (`newPaneId`) for `newSessionId`.
+ * Split the pane holding `targetEntryId` into a `direction` split whose two
+ * children are that pane and a new pane (`newPaneId`) for `newEntryId`.
  */
 export function splitNode(
   node: PaneNode,
-  targetSessionId: string,
+  targetEntryId: string,
   direction: "row" | "column",
-  newSessionId: string,
+  newEntryId: string,
   newSplitId: string,
   newPaneId: string,
 ): PaneNode {
   return mapLeaves(node, (leaf) =>
-    leaf.sessionIds.includes(targetSessionId)
+    leaf.entryIds.includes(targetEntryId)
       ? {
           type: "split",
           id: newSplitId,
           direction,
-          children: [leaf, makeLeaf(newPaneId, newSessionId)],
+          children: [leaf, makeLeaf(newPaneId, newEntryId)],
         }
       : leaf,
   )
 }
 
-/** Add `sessionId` as the active surface of pane `paneId`, at `index` (default: the end). */
+/** Add `entryId` as the active surface of pane `paneId`, at `index` (default: the end). */
 export function addSurface(
   node: PaneNode,
   paneId: string,
-  sessionId: string,
+  entryId: string,
   index?: number,
 ): PaneNode {
   return mapLeaves(node, (leaf) => {
-    if (leaf.id !== paneId || leaf.sessionIds.includes(sessionId)) return leaf
-    const sessionIds = [...leaf.sessionIds]
-    sessionIds.splice(index ?? sessionIds.length, 0, sessionId)
-    return { ...leaf, sessionIds, activeSessionId: sessionId }
+    if (leaf.id !== paneId || leaf.entryIds.includes(entryId)) return leaf
+    const entryIds = [...leaf.entryIds]
+    entryIds.splice(index ?? entryIds.length, 0, entryId)
+    return { ...leaf, entryIds, activeEntryId: entryId }
   })
 }
 
@@ -95,29 +97,29 @@ export type MoveTarget = { paneId: string; zone: DropZone } | { paneId: string; 
 
 /** Whether moving a surface to `target` would change the layout (drives the drop hints). A
  *  surface from another tree (another group) can go anywhere there. */
-export function canMove(node: PaneNode, sessionId: string, target: MoveTarget): boolean {
-  const src = findPane(node, sessionId)
+export function canMove(node: PaneNode, entryId: string, target: MoveTarget): boolean {
+  const src = findPane(node, entryId)
   const dst = findPaneById(node, target.paneId)
   if (!dst) return false
   if (!src) return true
   const samePane = src.id === dst.id
   if ("index" in target) {
     if (!samePane) return true
-    const from = src.sessionIds.indexOf(sessionId)
+    const from = src.entryIds.indexOf(entryId)
     return target.index !== from && target.index !== from + 1 // either side of itself = stay
   }
   if (target.zone === "center") return !samePane
-  return !(samePane && src.sessionIds.length === 1) // can't split its only surface off itself
+  return !(samePane && src.entryIds.length === 1) // can't split its only surface off itself
 }
 
 /** Move a surface to `target` (it becomes visible there); same reference if nothing changes. */
 export function moveSurface(
   node: PaneNode,
-  sessionId: string,
+  entryId: string,
   target: MoveTarget,
   ids: { splitId: string; paneId: string },
 ): PaneNode {
-  const src = findPane(node, sessionId)
+  const src = findPane(node, entryId)
   const dst = findPaneById(node, target.paneId)
   if (!src || !dst) return node
   const samePane = src.id === dst.id
@@ -125,95 +127,95 @@ export function moveSurface(
   if ("index" in target) {
     if (samePane) {
       // `index` is a slot in the strip as rendered (moved tab included): account for its removal.
-      const from = src.sessionIds.indexOf(sessionId)
+      const from = src.entryIds.indexOf(entryId)
       const to = Math.max(
         0,
-        Math.min(target.index > from ? target.index - 1 : target.index, src.sessionIds.length - 1),
+        Math.min(target.index > from ? target.index - 1 : target.index, src.entryIds.length - 1),
       )
-      if (to === from) return selectSurface(node, sessionId)
-      const sessionIds = src.sessionIds.filter((id) => id !== sessionId)
-      sessionIds.splice(to, 0, sessionId)
+      if (to === from) return selectSurface(node, entryId)
+      const entryIds = src.entryIds.filter((id) => id !== entryId)
+      entryIds.splice(to, 0, entryId)
       return mapLeaves(node, (leaf) =>
-        leaf.id === src.id ? { ...leaf, sessionIds, activeSessionId: sessionId } : leaf,
+        leaf.id === src.id ? { ...leaf, entryIds, activeEntryId: entryId } : leaf,
       )
     }
-    const rest = removeNode(node, sessionId)! // dst survives: it's a different pane
+    const rest = removeNode(node, entryId)! // dst survives: it's a different pane
     return addSurface(
       rest,
       dst.id,
-      sessionId,
-      Math.max(0, Math.min(target.index, dst.sessionIds.length)),
+      entryId,
+      Math.max(0, Math.min(target.index, dst.entryIds.length)),
     )
   }
 
   if (target.zone === "center") {
     if (samePane) return node
-    return addSurface(removeNode(node, sessionId)!, dst.id, sessionId)
+    return addSurface(removeNode(node, entryId)!, dst.id, entryId)
   }
   // Edge: a pane's only surface can't be split off beside itself.
-  if (samePane && src.sessionIds.length === 1) return node
-  const rest = removeNode(node, sessionId)! // dst survives: different pane, or it kept others
-  return splitPaneAt(rest, dst.id, target.zone, makeLeaf(ids.paneId, sessionId), ids.splitId)
+  if (samePane && src.entryIds.length === 1) return node
+  const rest = removeNode(node, entryId)! // dst survives: different pane, or it kept others
+  return splitPaneAt(rest, dst.id, target.zone, makeLeaf(ids.paneId, entryId), ids.splitId)
 }
 
 /** Put a surface from another tree at `target` (it becomes visible there); same reference if
  *  the target pane isn't in this tree. */
 export function insertSurface(
   node: PaneNode,
-  sessionId: string,
+  entryId: string,
   target: MoveTarget,
   ids: { splitId: string; paneId: string },
 ): PaneNode {
   const dst = findPaneById(node, target.paneId)
-  if (!dst || findPane(node, sessionId)) return node
+  if (!dst || findPane(node, entryId)) return node
   if ("index" in target) {
     return addSurface(
       node,
       dst.id,
-      sessionId,
-      Math.max(0, Math.min(target.index, dst.sessionIds.length)),
+      entryId,
+      Math.max(0, Math.min(target.index, dst.entryIds.length)),
     )
   }
-  if (target.zone === "center") return addSurface(node, dst.id, sessionId)
-  return splitPaneAt(node, dst.id, target.zone, makeLeaf(ids.paneId, sessionId), ids.splitId)
+  if (target.zone === "center") return addSurface(node, dst.id, entryId)
+  return splitPaneAt(node, dst.id, target.zone, makeLeaf(ids.paneId, entryId), ids.splitId)
 }
 
 /** A surface from another tree joins this one as a new pane on the right of everything. */
 export function joinRight(
   node: PaneNode,
-  sessionId: string,
+  entryId: string,
   ids: { splitId: string; paneId: string },
 ): PaneNode {
-  if (findPane(node, sessionId)) return node
+  if (findPane(node, entryId)) return node
   return {
     type: "split",
     id: ids.splitId,
     direction: "row",
-    children: [node, makeLeaf(ids.paneId, sessionId)],
+    children: [node, makeLeaf(ids.paneId, entryId)],
   }
 }
 
-/** Make `sessionId` the visible surface of whichever pane holds it. */
-export function selectSurface(node: PaneNode, sessionId: string): PaneNode {
+/** Make `entryId` the visible surface of whichever pane holds it. */
+export function selectSurface(node: PaneNode, entryId: string): PaneNode {
   return mapLeaves(node, (leaf) =>
-    leaf.sessionIds.includes(sessionId) && leaf.activeSessionId !== sessionId
-      ? { ...leaf, activeSessionId: sessionId }
+    leaf.entryIds.includes(entryId) && leaf.activeEntryId !== entryId
+      ? { ...leaf, activeEntryId: entryId }
       : leaf,
   )
 }
 
 /** Remove a surface (right, else left, neighbour shows); an emptied pane collapses; null if none left. */
-export function removeNode(node: PaneNode, targetSessionId: string): PaneNode | null {
+export function removeNode(node: PaneNode, targetEntryId: string): PaneNode | null {
   return filterLeaves(node, (leaf) => {
-    const idx = leaf.sessionIds.indexOf(targetSessionId)
+    const idx = leaf.entryIds.indexOf(targetEntryId)
     if (idx === -1) return leaf
-    const sessionIds = leaf.sessionIds.filter((id) => id !== targetSessionId)
-    if (sessionIds.length === 0) return null
-    const activeSessionId =
-      leaf.activeSessionId === targetSessionId
-        ? sessionIds[Math.min(idx, sessionIds.length - 1)]!
-        : leaf.activeSessionId
-    return { ...leaf, sessionIds, activeSessionId }
+    const entryIds = leaf.entryIds.filter((id) => id !== targetEntryId)
+    if (entryIds.length === 0) return null
+    const activeEntryId =
+      leaf.activeEntryId === targetEntryId
+        ? entryIds[Math.min(idx, entryIds.length - 1)]!
+        : leaf.activeEntryId
+    return { ...leaf, entryIds, activeEntryId }
   })
 }
 
@@ -222,11 +224,11 @@ export function removePane(node: PaneNode, paneId: string): PaneNode | null {
   return filterLeaves(node, (leaf) => (leaf.id === paneId ? null : leaf))
 }
 
-/** The pane holding `sessionId`, if any. */
-export const findPane = (node: PaneNode, sessionId: string): PaneLeaf | undefined =>
-  allPanes(node).find((p) => p.sessionIds.includes(sessionId))
+/** The pane holding entry `entryId`, if any. */
+export const findPane = (node: PaneNode, entryId: string): PaneLeaf | undefined =>
+  allPanes(node).find((p) => p.entryIds.includes(entryId))
 
-/** The pane whose PaneLeaf.id is `paneId` (not a session id), if any. */
+/** The pane whose PaneLeaf.id is `paneId` (not an entry id), if any. */
 export const findPaneById = (node: PaneNode, paneId: string): PaneLeaf | undefined =>
   allPanes(node).find((p) => p.id === paneId)
 
@@ -236,21 +238,45 @@ export function allPanes(node: PaneNode): PaneLeaf[] {
   return [...allPanes(node.children[0]), ...allPanes(node.children[1])]
 }
 
-/** Every session id under a node — hidden surfaces included (left-to-right). */
+/** Every entry id under a node, hidden surfaces included (left-to-right). */
+export function allEntryIds(node: PaneNode): string[] {
+  return allPanes(node).flatMap((p) => p.entryIds)
+}
+
+/** A pane's terminals (session ids), in tab order. */
+export const paneSessionIds = (leaf: PaneLeaf): string[] => leaf.entryIds.filter(isTerminalEntry)
+
+/** Every terminal (session id) under a node, hidden surfaces included (left-to-right). */
 export function allSessionIds(node: PaneNode): string[] {
-  return allPanes(node).flatMap((p) => p.sessionIds)
+  return allPanes(node).flatMap(paneSessionIds)
 }
 
-/** Only the on-screen session ids: each pane's active surface. */
+/** The terminal a pane shows: its visible entry when that's a terminal, else none. */
+export const visibleTerminal = (leaf: PaneLeaf): string | undefined =>
+  isTerminalEntry(leaf.activeEntryId) ? leaf.activeEntryId : undefined
+
+/** Only the on-screen terminals: each pane's visible entry, when it's a terminal. */
 export function visibleSessionIds(node: PaneNode): string[] {
-  return allPanes(node).map((p) => p.activeSessionId)
+  return allPanes(node).flatMap((p) => {
+    const id = visibleTerminal(p)
+    return id ? [id] : []
+  })
 }
 
-/** The leftmost pane's visible session — used to pick a new focus after a close. */
-export function firstSessionId(node: PaneNode): string {
+/** The leftmost pane's visible entry: used to pick a new focus after a close. */
+export function firstEntryId(node: PaneNode): string {
   let cur: PaneNode = node
   while (cur.type === "split") cur = cur.children[0]
-  return cur.activeSessionId
+  return cur.activeEntryId
+}
+
+/** The leftmost terminal (its pane's visible one first): a tab's terminal after a close. */
+export function firstSessionId(node: PaneNode): string | undefined {
+  for (const p of allPanes(node)) {
+    const id = visibleTerminal(p) ?? paneSessionIds(p)[0]
+    if (id) return id
+  }
+  return undefined
 }
 
 /** Stable React/panel key for a node. */

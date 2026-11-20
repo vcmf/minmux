@@ -179,6 +179,59 @@ describe("App (integration)", () => {
   })
 })
 
+describe("App — folder tabs (layout.json)", () => {
+  it("restores folder tabs from layout.json, and saves both files on a change", async () => {
+    const sid = "s9"
+    const wsText = JSON.stringify({
+      version: 2,
+      activeTabId: "t",
+      tabs: [
+        {
+          id: "t",
+          title: "",
+          root: { type: "leaf", id: "p", sessionIds: [sid], activeSessionId: sid },
+          activeSessionId: sid,
+        },
+      ],
+      sessions: [{ id: sid, title: "zsh", command: "/bin/zsh", args: [], cwd: "/w" }],
+    })
+    vi.mocked(ipc.readWorkspace).mockResolvedValue(wsText)
+    const { serializeLayout } = await import("./lib/layout-file")
+    const F = "obj-1"
+    vi.mocked(ipc.readLayout).mockResolvedValue(
+      serializeLayout(
+        {
+          tabs: [
+            {
+              id: "t",
+              title: "",
+              root: { type: "leaf", id: "p", entryIds: [sid, F], activeEntryId: sid },
+              activeEntryId: sid,
+              activeSessionId: sid,
+            },
+          ],
+          activeTabId: "t",
+          objects: { [F]: { kind: "folder", path: "/w/rts" } },
+          folderViews: {},
+        },
+        wsText,
+      ),
+    )
+    render(<App />)
+    await waitFor(() => expect(useStore.getState().objects[F]?.path).toBe("/w/rts"))
+    useStore.getState().setFolderView(F, { expanded: ["/w/rts/src"], showAll: [] })
+    await waitFor(
+      () => {
+        const calls = vi.mocked(ipc.writeWorkspace).mock.calls
+        const last = calls[calls.length - 1]
+        expect(last?.[1]).toContain("/w/rts/src")
+        expect(last?.[0]).not.toContain(F)
+      },
+      { timeout: 2000 },
+    )
+  })
+})
+
 describe("App — ssh hosts", () => {
   it("loads the host list and re-fetches it when main says it changed", async () => {
     let changed: (() => void) | undefined

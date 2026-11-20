@@ -19,7 +19,7 @@ electron/                 main process (Node) — see electron/CLAUDE.md
   main.ts                 BrowserWindow + every ipcMain handler + PTY registry + quit guard
   preload.ts              contextBridge → window.minmux (mirrors src/lib/ipc.ts)
   shell-integration.ts    inlined zsh/bash OSC-133/OSC-7 scripts, listShells (WSL), injection
-  git.ts · pane-git.ts    changes panel (status/diff) · per-terminal branch + gh PR (sidebar)
+  git.ts · pane-git.ts    git status/diff (folder + file tabs) · per-terminal branch + gh PR (sidebar)
   agents/                 one adapter per coding agent (claude, codex, opencode + its plugin):
                           arming, normaliser, tokens, names, resume rules (types.ts)
   agent-hooks.ts          per-agent file drops → AgentEvents (hook-writer builds the hooks')
@@ -46,7 +46,8 @@ src/
                           pane-git, terminal-keys, …; ipc.ts = the only backend seam
   settings/               schema (merge/validate) · themes (families × dark/light) · io
   components/             top-bar, sidebar, terminal-pane (surface tabs, drag & drop),
-                          pane-layout, theme-picker, close-pane-dialog, palettes/panels, …
+                          folder-view (a folder entry in a pane: lib/folder-entries,
+                          listing-store, fs-reads), pane-layout, theme-picker, palettes/panels, …
 .claude/skills/run-minmux drive the BUILT app with Playwright (real-app verification)
 ```
 
@@ -88,8 +89,10 @@ Rules the code relies on but can't enforce — most past review findings broke o
   disposed on unmount (only when its session leaves the store). Starting is lazy per tab:
   after a restore/reload only the active tab's terminals start (incl. its hidden surfaces);
   a background tab starts when first shown. → GOTCHAS #hidden-terminals
-- **`Tab.activeSessionId` is the focus.** Focusing a terminal also makes it its pane's visible
-  surface (`focusIn`); keyboard focus follows the store, never "whatever just mounted".
+- **`Tab.activeEntryId` is the focus**; `Tab.activeSessionId` is the tab's terminal (the focus
+  when it's a terminal, else the last one: cwd, git, titles). Change both only via
+  `lib/tab-focus` (`withFocus`), which also makes the focus its pane's visible surface;
+  keyboard focus follows the store, never "whatever just mounted".
 - **Store actions return the same reference when nothing changed** — `tabs`/`sessions`
   subscribers trigger WebGL reconcile and a workspace save (`replaceTab`, `markSeen`, …).
 - **`useShallow` selectors return primitives** (flatten to `[id, value, …]`); new objects per
@@ -97,7 +100,8 @@ Rules the code relies on but can't enforce — most past review findings broke o
 - **Settings change via `store.updateSettings`** (validate + apply + persist); the theme to
   render is `activeTheme(state)` (family × appearance), never `settings.theme` directly.
 - **Persisted files stay readable by older builds** (workspace v2 keeps a legacy `sessionId`
-  per leaf), and a file written by a **newer** build is never overwritten.
+  per leaf and lists terminals only; folder entries live in `layout.json`, lib/layout-file),
+  and a file written by a **newer** build is never overwritten.
 - **Claude hook payloads + transcripts are internal formats** — parse best-effort, never throw,
   read incrementally off the hot path (Codex's and OpenCode's too). → GOTCHAS #claude-transcript
 - **Agent specifics live in `electron/agents/*` and `src/lib/agent-kinds.ts`** (plus icons and

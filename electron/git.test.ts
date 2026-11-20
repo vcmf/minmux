@@ -59,6 +59,7 @@ describe("parseDiff", () => {
       "-old",
       "+new1",
       "+new2",
+      "", // git's output ends with a newline: not a line of the file
     ].join("\n")
     const lines = parseDiff(out)
     expect(lines.map((l) => l.type)).toEqual(["hunk", "context", "del", "add", "add"])
@@ -67,6 +68,33 @@ describe("parseDiff", () => {
     expect(lines[2]).toMatchObject({ type: "del", text: "old", oldNo: 2 })
     expect(lines[3]).toMatchObject({ type: "add", text: "new1", newNo: 2 })
     expect(lines[4]).toMatchObject({ type: "add", text: "new2", newNo: 3 })
+  })
+})
+
+describe("parseDiff headers", () => {
+  it("skips a file's headers before its first hunk (modes, renames), notes a binary one", () => {
+    const del = [
+      "diff --git a/a.ts b/a.ts",
+      "deleted file mode 100644",
+      "index 1..0",
+      "--- a/a.ts",
+      "+++ /dev/null",
+      "@@ -1 +0,0 @@",
+      "-x",
+      "\\ No newline at end of file",
+    ].join("\n")
+    expect(parseDiff(del)).toEqual([
+      { type: "hunk", text: "@@ -1 +0,0 @@" },
+      { type: "del", text: "x", oldNo: 1 },
+    ])
+    const bin = [
+      "diff --git a/p.png b/p.png",
+      "index 1..2 100644",
+      "Binary files a/p.png and b/p.png differ",
+    ].join("\n")
+    expect(parseDiff(bin)).toEqual([
+      { type: "hunk", text: "Binary files a/p.png and b/p.png differ" },
+    ])
   })
 })
 

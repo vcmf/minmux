@@ -2,13 +2,17 @@ import { useCallback, useMemo, useState } from "react"
 import { useTabDrag } from "./use-tab-drag"
 import { SURFACE_DRAG_TYPE } from "../lib/group-move"
 import { useTabRename } from "./use-tab-rename"
-import { refocusActiveTerminal } from "./refocus-terminal"
+import { focusActiveEntry, focusEntry, refocusActiveTerminal } from "./refocus-terminal"
+import { folderChoices, placeOf, type FolderChoice } from "../lib/folder-entries"
+import { isTerminalEntry } from "../lib/entries"
+import { baseName } from "../lib/file-tree"
 import { useShallow } from "zustand/react/shallow"
 import {
   CaretDown,
   CaretRight,
   Columns,
   FileText,
+  Folder,
   GitMerge,
   Globe,
   MagnifyingGlass,
@@ -19,10 +23,10 @@ import {
   Terminal,
   X,
 } from "@phosphor-icons/react"
-import { activeTheme, useStore } from "../store"
+import { activeTheme, canOpenTerminalIn, useStore } from "../store"
 import { sessionColor } from "../lib/session-color"
 import { agentPanes, paneAgents, type AgentKind } from "../lib/agent-graph"
-import { agentWorkFlat, gitKey, inLabel, inLine, samePath } from "../lib/agent-dirs"
+import { agentWorkDirs, agentWorkFlat, gitKey, inLabel, inLine, samePath } from "../lib/agent-dirs"
 import { moreFolders, paneWorkFlat } from "../lib/agent-work"
 import { agentInfo } from "../lib/agent-kinds"
 import { agentIcon } from "./agent-icon"
@@ -38,8 +42,7 @@ import { wslContext } from "../lib/wsl"
 import { messageSnippet, prStateUi, type PaneGitInfo, type PrInfo } from "../lib/pane-git"
 import { ipc } from "../lib/ipc"
 import { openLink } from "../lib/open-link"
-import { TerminalManager } from "../terminal/terminal-manager"
-import { allPanes } from "../lib/pane-tree"
+import { allPanes, findPane } from "../lib/pane-tree"
 import { resolveDefaultShell } from "../lib/shells"
 import { statusUi } from "../lib/status-ui"
 import { detailUser, homeRelative, shortRemoteCwd } from "../lib/remote-cwd"
@@ -64,6 +67,7 @@ import {
   branchLine,
   displaySessionTitle,
   shellType,
+  shortCwd,
 } from "../lib/session-label"
 
 /** Left sidebar: a tree of real sessions (tabs) → panes, with live status dots. */
@@ -72,6 +76,7 @@ export function Sidebar() {
   const tabs = useStore((s) => s.tabs)
   const activeTabId = useStore((s) => s.activeTabId)
   const sessions = useStore((s) => s.sessions)
+  const objects = useStore((s) => s.objects)
   const shells = useStore((s) => s.shells)
   const defaultShellPref = useStore((s) => s.settings.defaultShell)
   const paneGit = useStore((s) => s.paneGit) // branch + PR per terminal (polled in App)
@@ -143,11 +148,46 @@ export function Sidebar() {
       return next
     })
 
-  const focusPane = (tabId: string, sessionId: string) => {
+  const focusPane = (tabId: string, entryId: string) => {
     const store = useStore.getState()
     store.setActiveTab(tabId)
-    store.setActivePane(tabId, sessionId)
-    requestAnimationFrame(() => TerminalManager.focus(sessionId))
+    store.setActivePane(tabId, entryId)
+    requestAnimationFrame(() => focusEntry(entryId))
+  }
+
+  // Right-click a terminal row: "Open folder in…" its from / in / edits folders, as a tab of
+  // its pane (the same choices as its pane's open-folder button).
+  const [openMenu, setOpenMenu] = useState<{
+    x: number
+    y: number
+    tabId: string
+    sessionId: string
+    choices: FolderChoice[]
+  } | null>(null)
+  const openFolderMenu = (e: React.MouseEvent, tabId: string, sessionId: string) => {
+    const s = useStore.getState()
+    const sess = s.sessions[sessionId]
+    if (!sess || sess.remote) return
+    const choices = folderChoices(
+      sess.cwd,
+      agentWorkDirs(s.agents)[sessionId]?.cwd,
+      s.paneWork[sessionId],
+    )
+    if (!choices.length) return
+    e.preventDefault()
+    setOpenMenu({ x: e.clientX, y: e.clientY, tabId, sessionId, choices })
+  }
+  /** A folder as a new tab of the pane holding entry `entryId` (in `tabId`), focused. */
+  const openFolderBeside = (tabId: string, entryId: string, path: string) => {
+    const s = useStore.getState()
+    const tab = s.tabs.find((t) => t.id === tabId)
+    const pane = tab && findPane(tab.root, entryId)
+    if (!pane) return
+    const sess = s.sessions[entryId]
+    const wsl = sess ? wslContext(sess.command, sess.args) : s.objects[entryId]?.wsl
+    s.setActiveTab(tabId)
+    s.openFolder(path, { tabId, paneId: pane.id, wsl })
+    requestAnimationFrame(focusActiveEntry)
   }
 
   // Right-click on a folder line: copy it, open a terminal there, or reveal it.
@@ -155,14 +195,16 @@ export function Sidebar() {
     x: number
     y: number
     path: string
-    sessionId: string
+    sessionId: string // the row's entry: a terminal, or a folder entry
+    tabId: string
     revealHint?: string // why Reveal is unavailable (undefined = available)
   } | null>(null)
-  const openDirMenu = (e: React.MouseEvent, path: string, sessionId: string) => {
+  const openDirMenu = (e: React.MouseEvent, path: string, sessionId: string, tabId: string) => {
     e.preventDefault()
     e.stopPropagation()
-    const s = useStore.getState().sessions[sessionId]
-    const wsl = s ? wslContext(s.command, s.args) : undefined
+    const st = useStore.getState()
+    const s = st.sessions[sessionId]
+    const wsl = s ? wslContext(s.command, s.args) : st.objects[sessionId]?.wsl
     // Reveal needs a path the host OS can open: not a WSL one, nor a POSIX-style path on
     // Windows (Git Bash's /c/…).
     const revealHint = wsl
@@ -170,7 +212,7 @@ export function Sidebar() {
       : !isAbsoluteHostPath(path, platform)
         ? "not a host path"
         : undefined
-    setDirMenu({ x: e.clientX, y: e.clientY, path, sessionId, revealHint })
+    setDirMenu({ x: e.clientX, y: e.clientY, path, sessionId, tabId, revealHint })
   }
   // Closing the menu (Escape, outside click, any action) returns focus to the active terminal
   // — the one you were typing in, or the split "Open terminal here" just made.
@@ -182,7 +224,14 @@ export function Sidebar() {
     if (!dirMenu) return
     if (id === "copyPath") ipc.clipboardWrite(dirMenu.path)
     else if (id === "reveal") ipc.revealPath(dirMenu.path)
-    else if (id === "openHere") {
+    else if (id === "openTab") openFolderBeside(dirMenu.tabId, dirMenu.sessionId, dirMenu.path)
+    else if (id === "openHere" && !isTerminalEntry(dirMenu.sessionId)) {
+      // A folder row: a terminal in it, as a tab of the folder's pane.
+      const s = useStore.getState()
+      s.setActiveTab(dirMenu.tabId)
+      s.setActivePane(dirMenu.tabId, dirMenu.sessionId)
+      s.newSurface()
+    } else if (id === "openHere") {
       // Split beside that terminal, with its shell (a WSL path opens in WSL); the new split
       // takes focus. A pane closed meanwhile → no-op.
       useStore.getState().splitPaneAt(dirMenu.sessionId, dirMenu.path)
@@ -235,9 +284,9 @@ export function Sidebar() {
         )}
         {tabs.map((tab) => {
           const panes = allPanes(tab.root) // one walk → ids, pane count, visible set
-          const ids = panes.flatMap((p) => p.sessionIds)
+          const ids = panes.flatMap((p) => p.entryIds) // terminals and folder tabs, in pane order
           const paneCount = panes.length
-          const visible = new Set(panes.map((p) => p.activeSessionId))
+          const visible = new Set(panes.map((p) => p.activeEntryId))
           const open = !collapsed.has(tab.id)
           const active = tab.id === activeTabId
           const focused = sessions[tab.activeSessionId]
@@ -310,6 +359,63 @@ export function Sidebar() {
 
               {open &&
                 ids.map((id) => {
+                  const folder = objects[id]
+                  if (folder) {
+                    const isActive = active && tab.activeEntryId === id
+                    return (
+                      <div
+                        key={id}
+                        className={`tree-row${isActive ? " active" : ""}${visible.has(id) ? "" : " surface-hidden"}`}
+                        style={{ paddingLeft: 32 }}
+                        title={folder.path}
+                        draggable
+                        onDragStart={(e) => {
+                          e.stopPropagation()
+                          e.dataTransfer.effectAllowed = "move"
+                          e.dataTransfer.setData(SURFACE_DRAG_TYPE, id)
+                          useStore.getState().setDragging({ tabId: tab.id, sessionId: id })
+                        }}
+                        onDragEnd={() => useStore.getState().setDragging(null)}
+                        onClick={(e) =>
+                          e.button === 0 &&
+                          !(e.ctrlKey && platform === "darwin") &&
+                          focusPane(tab.id, id)
+                        }
+                        onContextMenu={(e) => openDirMenu(e, folder.path, id, tab.id)}
+                      >
+                        <span className="tree-icon">
+                          {folder.kind === "file" ? (
+                            <FileText size={14} color={isActive ? "var(--accent)" : "var(--dim)"} />
+                          ) : (
+                            <Folder
+                              size={14}
+                              weight="fill"
+                              color={isActive ? "var(--accent)" : "var(--blue)"}
+                            />
+                          )}
+                        </span>
+                        <div className="tree-labels">
+                          <span className="tree-primary-row">
+                            <span
+                              className="tree-primary"
+                              style={
+                                folder.kind === "file" && folder.peek
+                                  ? { fontStyle: "italic" }
+                                  : undefined
+                              }
+                            >
+                              {baseName(folder.path)}
+                            </span>
+                          </span>
+                          <span className="tree-sub">{shortCwd(placeOf(folder).path, home)}</span>
+                        </div>
+                        <RowClose
+                          title={folder.kind === "file" ? "Close file" : "Close folder"}
+                          onClose={() => useStore.getState().requestCloseEntry(tab.id, id)}
+                        />
+                      </div>
+                    )
+                  }
                   const s = sessions[id]
                   if (!s) return null
                   const ui = s.remote
@@ -323,7 +429,7 @@ export function Sidebar() {
                         remoteDetail[id],
                       )
                     : statusUi(s.status)
-                  const isActive = active && tab.activeSessionId === id
+                  const isActive = active && tab.activeEntryId === id
                   // The host's colour, looked up once for the icon and the host box.
                   const rowColor = s.remote ? hostCss(s.remote.target) : undefined
                   const rowUser = s.remote
@@ -353,6 +459,7 @@ export function Sidebar() {
                         !(e.ctrlKey && platform === "darwin") &&
                         focusPane(tab.id, id)
                       }
+                      onContextMenu={(e) => openFolderMenu(e, tab.id, id)}
                     >
                       <span className="tree-icon">
                         {(() => {
@@ -429,7 +536,7 @@ export function Sidebar() {
                             work={work[id]}
                             edit={edits[id]}
                             editGit={paneGit[gitKey(id, "edit")]}
-                            onMenu={(e, path) => openDirMenu(e, path, id)}
+                            onMenu={(e, path) => openDirMenu(e, path, id, tab.id)}
                             pane={id}
                           />
                         )}
@@ -461,9 +568,37 @@ export function Sidebar() {
         <ContextMenu
           x={dirMenu.x}
           y={dirMenu.y}
-          items={folderMenuItems(revealLabel(platform), dirMenu.revealHint)}
+          items={folderMenuItems(revealLabel(platform), dirMenu.revealHint, {
+            openTab: isTerminalEntry(dirMenu.sessionId),
+            // A folder tab lists host paths, or WSL ones in their distro: not Git Bash's /c/….
+            openTabHint: dirMenu.revealHint === "not a host path" ? dirMenu.revealHint : undefined,
+            openHereHint:
+              !isTerminalEntry(dirMenu.sessionId) &&
+              !canOpenTerminalIn(useStore.getState(), dirMenu.sessionId)
+                ? "no shell for it"
+                : undefined,
+          })}
           onSelect={onDirAction}
           onClose={closeDirMenu}
+        />
+      )}
+      {openMenu && (
+        <ContextMenu
+          x={openMenu.x}
+          y={openMenu.y}
+          items={openMenu.choices.map((c, i) => ({
+            id: String(i),
+            label: `Open folder in a tab · ${c.label} ${shortCwd(c.path, home)}`,
+          }))}
+          onSelect={(i) => {
+            const c = openMenu.choices[Number(i)]
+            setOpenMenu(null)
+            if (c) openFolderBeside(openMenu.tabId, openMenu.sessionId, c.path)
+          }}
+          onClose={() => {
+            setOpenMenu(null)
+            refocusActiveTerminal()
+          }}
         />
       )}
       {sessionMenu && menuTab && (
@@ -644,10 +779,8 @@ function RowClose({ title, onClose }: { title: string; onClose: () => void }) {
         onClose()
         // Closed at once (no dialog): keep typing where you were — or in the terminal that
         // took over if you closed the focused one.
-        const s = useStore.getState()
-        if (s.closeConfirm) return
-        const sid = s.tabs.find((t) => t.id === s.activeTabId)?.activeSessionId
-        if (sid) requestAnimationFrame(() => TerminalManager.focus(sid))
+        if (useStore.getState().closeConfirm) return
+        requestAnimationFrame(focusActiveEntry)
       }}
     >
       <X size={12} />

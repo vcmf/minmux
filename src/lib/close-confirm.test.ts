@@ -101,12 +101,11 @@ describe("closeConfirmText", () => {
 })
 
 describe("confirmStillValid", () => {
-  const leaf = (id: string, sessionIds: string[]) => ({
+  const leaf = (id: string, entryIds: string[]) => ({
     type: "leaf" as const,
     id,
-    sessionIds,
-    activeSessionId: sessionIds[0]!,
-    sessionId: sessionIds[0]!,
+    entryIds,
+    activeEntryId: entryIds[0]!,
   })
   const tabs = [{ id: "t", root: leaf("p", ["a", "b"]) }]
   it("valid while the target is there; not once it's gone or moved to another tab", () => {
@@ -127,5 +126,19 @@ describe("confirmStillValid", () => {
     expect(
       confirmStillValid({ kind: "tab", tabId: "x", title: "", count: 2, agents: [] }, tabs),
     ).toBe(false)
+  })
+})
+
+describe("closeConfirmText: a pane's only terminal beside folders", () => {
+  it("says the folder tabs go too, and the button closes the pane", () => {
+    const t = closeConfirmText({
+      kind: "terminal",
+      tabId: "t",
+      sessionId: "a",
+      title: "x",
+      paneId: "p",
+    })
+    expect(t.body).toMatch(/folder tabs close with it/)
+    expect(t.action).toBe("Close pane")
   })
 })

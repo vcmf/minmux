@@ -1,8 +1,16 @@
 import type { PaneNode, RemoteRef, Session, Tab } from "../types"
+import type { ObjectEntry, FolderView } from "./folder-entries"
 import { parseRemoteRef, sshLabel } from "./ssh-validate"
 import { parseReopen, reopenFor, type ReopenCwd } from "./remote-reports"
 import { clampPanelWidth } from "./right-panel"
-import { findPane, firstSessionId, selectSurface } from "./pane-tree"
+import {
+  findPane,
+  firstEntryId,
+  firstSessionId,
+  paneSessionIds,
+  visibleTerminal,
+} from "./pane-tree"
+import { makeTab, withFocus } from "./tab-focus"
 
 // Persisted workspace (VS Code-style layout restore). We save the layout +
 // enough to respawn each pane's shell in its last directory — NOT live process
@@ -10,7 +18,8 @@ import { findPane, firstSessionId, selectSurface } from "./pane-tree"
 
 // v2: a leaf is a pane with surfaces ({id, sessionIds, activeSessionId}); v1 leaves
 // ({sessionId}) are migrated on read. v2 leaves ALSO carry `sessionId` (= the visible
-// surface) so an older build that reads this file still restores every pane.
+// surface) so an older build that reads this file still restores every pane. In memory a
+// leaf holds entries (lib/entries); the file lists its terminals, as older builds expect.
 const VERSION = 2
 /** Written by a newer build than this one (unreadable here). */
 const isNewer = (w: { version?: unknown }) => typeof w.version === "number" && w.version > VERSION
@@ -28,10 +37,27 @@ interface PersistedSession {
   reopen?: ReopenCwd
 }
 
+/** A leaf as written: its terminals, the visible one, and the legacy `sessionId` mirror. */
+interface PersistedLeaf {
+  type: "leaf"
+  id: string
+  sessionIds: string[]
+  activeSessionId: string
+  sessionId: string
+}
+type PersistedNode =
+  | PersistedLeaf
+  | {
+      type: "split"
+      id: string
+      direction: "row" | "column"
+      children: [PersistedNode, PersistedNode]
+    }
+
 interface PersistedTab {
   id: string
   title: string
-  root: PaneNode
+  root: PersistedNode
   activeSessionId: string
 }
 
@@ -49,25 +75,42 @@ export interface WorkspaceState {
   activeTabId: string | null
   rightPanelWidth?: number
   pruned?: string[] // session records dropped on restore — their PTYs (after a reload) must die
+  // Folder entries and their views (from layout.json, lib/layout-file): not in workspace.json.
+  objects?: Record<string, ObjectEntry>
+  folderViews?: Record<string, FolderView>
 }
 
-/** The tree as written to disk: each leaf gets the legacy `sessionId` mirror for older builds. */
-function persistTree(node: PaneNode): PaneNode {
-  if (node.type === "leaf") return { ...node, sessionId: node.activeSessionId } as PaneNode
-  return { ...node, children: [persistTree(node.children[0]), persistTree(node.children[1])] }
+// A pane with no terminal is left out (older builds would drop it, maybe the whole file): it
+// lives in layout.json only. Null when no pane has a terminal.
+/** The tree as written to disk: each leaf's terminals, plus the legacy `sessionId` mirror. */
+function persistTree(node: PaneNode): PersistedNode | null {
+  if (node.type === "leaf") {
+    const sessionIds = paneSessionIds(node)
+    if (!sessionIds.length) return null
+    // A pane showing a folder: its first terminal stands for it (older builds show that).
+    const shown = visibleTerminal(node) ?? sessionIds[0]!
+    return { type: "leaf", id: node.id, sessionIds, activeSessionId: shown, sessionId: shown }
+  }
+  const a = persistTree(node.children[0])
+  const b = persistTree(node.children[1])
+  if (!a || !b) return a ?? b
+  return { ...node, children: [a, b] }
 }
 
 /** Snapshot the store's layout into the persistable shape (drops runtime status). */
 export function serializeWorkspace(state: WorkspaceState): PersistedWorkspace {
+  // Tabs with no terminal stay out (layout.json has them); so does a focus on one of them.
+  const tabs: PersistedTab[] = state.tabs.flatMap((t) => {
+    const root = persistTree(t.root)
+    return root ? [{ id: t.id, title: t.title, root, activeSessionId: t.activeSessionId }] : []
+  })
+  const activeTabId = tabs.some((t) => t.id === state.activeTabId)
+    ? state.activeTabId
+    : (tabs[0]?.id ?? null)
   return {
     version: VERSION,
-    activeTabId: state.activeTabId,
-    tabs: state.tabs.map((t) => ({
-      id: t.id,
-      title: t.title,
-      root: persistTree(t.root),
-      activeSessionId: t.activeSessionId,
-    })),
+    activeTabId,
+    tabs,
     sessions: Object.values(state.sessions).map((s) => ({
       id: s.id,
       title: s.title,
@@ -126,7 +169,7 @@ export function migratePaneNode(
       typeof n.activeSessionId === "string" && ids.includes(n.activeSessionId)
         ? n.activeSessionId
         : ids[0]!
-    return { type: "leaf", id, sessionIds: ids, activeSessionId: active }
+    return { type: "leaf", id, entryIds: ids, activeEntryId: active }
   }
   if (n.type === "split") {
     if (typeof n.id !== "string" || (n.direction !== "row" && n.direction !== "column")) return null
@@ -196,13 +239,11 @@ export function deserializeWorkspace(input: unknown): WorkspaceState | null {
     if (root === null) return null
     if (!root) continue // no usable pane left in this tab — drop it
     // The focused session must live in this tab; else fall back to its first pane.
-    const focusPane = findPane(root, t.activeSessionId)
-    tabs.push({
-      id: t.id,
-      title: typeof t.title === "string" ? t.title : "shell",
-      root: focusPane ? selectSurface(root, t.activeSessionId) : root,
-      activeSessionId: focusPane ? t.activeSessionId : firstSessionId(root),
-    })
+    const focus = findPane(root, t.activeSessionId)
+      ? t.activeSessionId
+      : (firstSessionId(root) ?? firstEntryId(root))
+    const title = typeof t.title === "string" ? t.title : "shell"
+    tabs.push(withFocus(makeTab(t.id, title, root, focus), focus))
   }
 
   if (tabs.length === 0) return null

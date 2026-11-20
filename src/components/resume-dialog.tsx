@@ -1,6 +1,5 @@
 import { useEffect, useRef } from "react"
-import { useStore } from "../store"
-import { TerminalManager } from "../terminal/terminal-manager"
+import { focusActiveEntry } from "./refocus-terminal"
 import type { AgentKind } from "../lib/agent-graph"
 import { agentInfo } from "../lib/agent-kinds"
 import { agentIcon } from "./agent-icon"
@@ -51,9 +50,7 @@ export function ResumeDialog({
       // Gone (either way): keys go back to the focused terminal if focus was left nowhere.
       requestAnimationFrame(() => {
         if (document.activeElement && document.activeElement !== document.body) return
-        const s = useStore.getState()
-        const sid = s.tabs.find((t) => t.id === s.activeTabId)?.activeSessionId
-        if (sid) TerminalManager.focus(sid)
+        focusActiveEntry()
       })
     }
   }, [])

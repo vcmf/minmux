@@ -15,6 +15,8 @@ import {
   splitNode,
   visibleSessionIds,
 } from "./pane-tree"
+import { allEntryIds, firstEntryId, paneSessionIds, visibleTerminal } from "./pane-tree"
+import { OBJECT_PREFIX } from "./entries"
 import type { PaneNode } from "../types"
 
 // a | (b / c) — three single-surface panes pa, pb, pc.
@@ -33,8 +35,8 @@ describe("paneTree", () => {
     expect(makeLeaf("p", "a")).toEqual({
       type: "leaf",
       id: "p",
-      sessionIds: ["a"],
-      activeSessionId: "a",
+      entryIds: ["a"],
+      activeEntryId: "a",
     })
   })
 
@@ -58,7 +60,7 @@ describe("paneTree", () => {
     it("targets a pane by any of its surfaces and keeps its surfaces together", () => {
       const root = addSurface(makeLeaf("pa", "a"), "pa", "a2")
       const result = splitNode(root, "a2", "row", "b", "s1", "pb")
-      expect(allPanes(result).map((p) => p.sessionIds)).toEqual([["a", "a2"], ["b"]])
+      expect(allPanes(result).map((p) => p.entryIds)).toEqual([["a", "a2"], ["b"]])
     })
 
     it("is a no-op (same reference) when the target is absent", () => {
@@ -70,12 +72,12 @@ describe("paneTree", () => {
   describe("addSurface / selectSurface", () => {
     it("appends a surface and makes it active", () => {
       const root = addSurface(makeLeaf("pa", "a"), "pa", "a2")
-      expect(root).toMatchObject({ sessionIds: ["a", "a2"], activeSessionId: "a2" })
+      expect(root).toMatchObject({ entryIds: ["a", "a2"], activeEntryId: "a2" })
     })
 
     it("only touches the named pane", () => {
       const tree = addSurface(three(), "pc", "c2")
-      expect(allPanes(tree).map((p) => p.sessionIds)).toEqual([["a"], ["b"], ["c", "c2"]])
+      expect(allPanes(tree).map((p) => p.entryIds)).toEqual([["a"], ["b"], ["c", "c2"]])
     })
 
     it("ignores a duplicate or unknown pane (same reference)", () => {
@@ -86,7 +88,7 @@ describe("paneTree", () => {
 
     it("selectSurface switches the visible surface of the pane holding it", () => {
       const root = addSurface(makeLeaf("pa", "a"), "pa", "a2")
-      expect(selectSurface(root, "a")).toMatchObject({ activeSessionId: "a" })
+      expect(selectSurface(root, "a")).toMatchObject({ activeEntryId: "a" })
     })
 
     it("selectSurface is a no-op (same reference) when already active or absent", () => {
@@ -114,7 +116,7 @@ describe("paneTree", () => {
 
     it("removing one of several surfaces keeps the pane", () => {
       const root = addSurface(addSurface(makeLeaf("pa", "a"), "pa", "b"), "pa", "c")
-      expect(removeNode(root, "a")).toMatchObject({ id: "pa", sessionIds: ["b", "c"] })
+      expect(removeNode(root, "a")).toMatchObject({ id: "pa", entryIds: ["b", "c"] })
     })
 
     it("hands visibility to the right neighbour, else the left", () => {
@@ -123,14 +125,14 @@ describe("paneTree", () => {
         addSurface(addSurface(makeLeaf("pa", "a"), "pa", "b"), "pa", "c"),
         "b",
       )
-      expect(removeNode(root, "b")).toMatchObject({ activeSessionId: "c" })
+      expect(removeNode(root, "b")).toMatchObject({ activeEntryId: "c" })
       const lastActive = selectSurface(root, "c")
-      expect(removeNode(lastActive, "c")).toMatchObject({ activeSessionId: "b" })
+      expect(removeNode(lastActive, "c")).toMatchObject({ activeEntryId: "b" })
     })
 
     it("keeps the active surface when a hidden one is removed", () => {
       const root = addSurface(makeLeaf("pa", "a"), "pa", "b") // b active
-      expect(removeNode(root, "a")).toMatchObject({ activeSessionId: "b" })
+      expect(removeNode(root, "a")).toMatchObject({ activeEntryId: "b" })
     })
 
     it("leaves the tree unchanged (same reference) when the target is absent", () => {
@@ -169,7 +171,7 @@ describe("paneTree", () => {
     })
 
     it("findPaneById locates a pane by its id", () => {
-      expect(findPaneById(tree, "pb")?.sessionIds).toEqual(["b", "b2"])
+      expect(findPaneById(tree, "pb")?.entryIds).toEqual(["b", "b2"])
       expect(findPaneById(tree, "zzz")).toBeUndefined()
     })
 
@@ -185,12 +187,36 @@ describe("paneTree", () => {
     })
   })
 
+  describe("non-terminal entries", () => {
+    const f = `${OBJECT_PREFIX}f`
+    // pa: [a, f] with f visible | pb: [b]
+    const tree = splitNode(addSurface(makeLeaf("pa", "a"), "pa", f), f, "row", "b", "s", "pb")
+    const pa = findPaneById(tree, "pa")!
+
+    it("entry lists include them; terminal lists don't", () => {
+      expect(allEntryIds(tree)).toEqual(["a", f, "b"])
+      expect(allSessionIds(tree)).toEqual(["a", "b"])
+      expect(paneSessionIds(pa)).toEqual(["a"])
+    })
+
+    it("a pane showing one has no visible terminal", () => {
+      expect(visibleTerminal(pa)).toBeUndefined()
+      expect(visibleSessionIds(tree)).toEqual(["b"])
+    })
+
+    it("firstEntryId is the visible entry; firstSessionId the first terminal", () => {
+      expect(firstEntryId(tree)).toBe(f)
+      expect(firstSessionId(tree)).toBe("a")
+      expect(firstSessionId(makeLeaf("p", f))).toBeUndefined()
+    })
+  })
+
   describe("moveSurface", () => {
     const ids = { splitId: "ns", paneId: "np" }
     // pa: [a, a2] (a2 visible) | pb: [b]
     const base = (): PaneNode =>
       splitNode(addSurface(makeLeaf("pa", "a"), "pa", "a2"), "a", "row", "b", "s1", "pb")
-    const panes = (n: PaneNode) => allPanes(n).map((p) => [p.id, p.sessionIds, p.activeSessionId])
+    const panes = (n: PaneNode) => allPanes(n).map((p) => [p.id, p.entryIds, p.activeEntryId])
 
     it("centre: joins another pane as its visible surface", () => {
       expect(panes(moveSurface(base(), "a", { paneId: "pb", zone: "center" }, ids))).toEqual([
@@ -204,8 +230,8 @@ describe("paneTree", () => {
       expect(moved).toEqual({
         type: "leaf",
         id: "pa",
-        sessionIds: ["a", "a2", "b"],
-        activeSessionId: "b",
+        entryIds: ["a", "a2", "b"],
+        activeEntryId: "b",
       })
     })
 
@@ -224,7 +250,7 @@ describe("paneTree", () => {
       const top = moveSurface(base(), "a", { paneId: "pb", zone: "top" }, ids)
       if (top.type !== "split" || top.children[1].type !== "split") throw new Error("shape")
       expect(top.children[1]).toMatchObject({ id: "ns", direction: "column" })
-      expect(top.children[1].children[0]).toMatchObject({ id: "np", sessionIds: ["a"] })
+      expect(top.children[1].children[0]).toMatchObject({ id: "np", entryIds: ["a"] })
     })
 
     it("edge: left/top put the new pane first, right/bottom second", () => {
@@ -258,25 +284,25 @@ describe("paneTree", () => {
       const tree = addSurface(base(), "pa", "a3") // pa: [a, a2, a3]
       const toEnd = moveSurface(tree, "a", { paneId: "pa", index: 3 }, ids)
       expect(findPaneById(toEnd, "pa")).toMatchObject({
-        sessionIds: ["a2", "a3", "a"],
-        activeSessionId: "a",
+        entryIds: ["a2", "a3", "a"],
+        activeEntryId: "a",
       })
       const toStart = moveSurface(tree, "a3", { paneId: "pa", index: 0 }, ids)
-      expect(findPaneById(toStart, "pa")?.sessionIds).toEqual(["a3", "a", "a2"])
+      expect(findPaneById(toStart, "pa")?.entryIds).toEqual(["a3", "a", "a2"])
     })
 
     it("index at its own slot only selects it", () => {
       const tree = base() // pa: [a, a2], a2 visible
       const moved = moveSurface(tree, "a", { paneId: "pa", index: 1 }, ids) // just after itself
       expect(findPaneById(moved, "pa")).toMatchObject({
-        sessionIds: ["a", "a2"],
-        activeSessionId: "a",
+        entryIds: ["a", "a2"],
+        activeEntryId: "a",
       })
     })
 
     it("index in another pane's strip inserts there", () => {
       const moved = moveSurface(base(), "b", { paneId: "pa", index: 1 }, ids)
-      expect(moved).toMatchObject({ id: "pa", sessionIds: ["a", "b", "a2"], activeSessionId: "b" })
+      expect(moved).toMatchObject({ id: "pa", entryIds: ["a", "b", "a2"], activeEntryId: "b" })
     })
 
     it("unknown surface or pane is a no-op", () => {

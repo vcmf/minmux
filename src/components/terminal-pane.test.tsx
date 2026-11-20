@@ -15,6 +15,7 @@ vi.mock("../terminal/terminal-manager", () => ({
     detach: vi.fn(),
     ensureRunning: vi.fn(),
     followSize: vi.fn(),
+    sizeHidden: vi.fn(),
     fit: vi.fn(),
     focus: vi.fn(),
     dispose: vi.fn(),
@@ -88,7 +89,7 @@ describe("TerminalPane — surfaces", () => {
     const { tabId } = mountPane()
     const view = renderPane(tabId)
     fireEvent.mouseDown(screen.getByTitle(/New terminal/))
-    expect(leaf().sessionIds).toHaveLength(2)
+    expect(leaf().entryIds).toHaveLength(2)
     view.rerender()
     expect(screen.getAllByRole("tab")).toHaveLength(2)
     expect(screen.getAllByTitle("Close terminal")).toHaveLength(2)
@@ -99,7 +100,7 @@ describe("TerminalPane — surfaces", () => {
     st().newSurface()
     const view = renderPane(tabId)
     fireEvent.mouseDown(screen.getAllByRole("tab")[0]!)
-    expect(leaf().activeSessionId).toBe(first)
+    expect(leaf().activeEntryId).toBe(first)
     expect(st().tabs[0]!.activeSessionId).toBe(first)
     view.rerender()
     expect(screen.getAllByRole("tab")[0]).toHaveAttribute("aria-selected", "true")
@@ -110,7 +111,7 @@ describe("TerminalPane — surfaces", () => {
     st().newSurface()
     renderPane(tabId)
     fireEvent.mouseDown(screen.getAllByTitle("Close terminal")[1]!)
-    expect(leaf().sessionIds).toEqual([first])
+    expect(leaf().entryIds).toEqual([first])
   })
 
   it("closing a multi-terminal pane asks for confirmation instead of closing", () => {
@@ -119,14 +120,14 @@ describe("TerminalPane — surfaces", () => {
     renderPane(tabId)
     fireEvent.mouseDown(screen.getByTitle("Close pane"))
     expect(st().closeConfirm).toMatchObject({ kind: "pane", count: 2 })
-    expect(leaf().sessionIds).toHaveLength(2)
+    expect(leaf().entryIds).toHaveLength(2)
   })
 
   it("switching the visible surface re-attaches: detach old, attach new", async () => {
     const { TerminalManager } = await import("../terminal/terminal-manager")
     const { tabId, id: first } = mountPane()
     st().newSurface()
-    const second = leaf().activeSessionId
+    const second = leaf().activeEntryId
     const view = renderPane(tabId)
     expect(TerminalManager.attach).toHaveBeenLastCalledWith(
       expect.objectContaining({ id: second }),
@@ -147,7 +148,7 @@ describe("TerminalPane — hidden surfaces keep running", () => {
     const { TerminalManager } = await import("../terminal/terminal-manager")
     const { tabId, id: first } = mountPane()
     st().newSurface()
-    const visible = leaf().activeSessionId
+    const visible = leaf().activeEntryId
     renderPane(tabId)
     expect(TerminalManager.ensureRunning).toHaveBeenCalledWith(
       expect.objectContaining({ id: first }),
@@ -174,18 +175,18 @@ describe("TerminalPane — hidden surfaces keep running", () => {
     const close = screen.getAllByTitle("Close terminal")[0]!
     fireEvent.mouseDown(close, { button: 2 })
     fireEvent.mouseDown(close, { button: 1 })
-    expect(leaf().sessionIds).toHaveLength(2)
+    expect(leaf().entryIds).toHaveLength(2)
     fireEvent.mouseDown(close, { button: 0 })
-    expect(leaf().sessionIds).toHaveLength(1)
+    expect(leaf().entryIds).toHaveLength(1)
   })
 
   it("only a left-click on the new-terminal button adds a surface", () => {
     const { tabId } = mountPane()
     renderPane(tabId)
     fireEvent.mouseDown(screen.getByTitle(/New terminal/), { button: 2 })
-    expect(leaf().sessionIds).toHaveLength(1)
+    expect(leaf().entryIds).toHaveLength(1)
     fireEvent.mouseDown(screen.getByTitle(/New terminal/), { button: 0 })
-    expect(leaf().sessionIds).toHaveLength(2)
+    expect(leaf().entryIds).toHaveLength(2)
   })
 })
 
@@ -232,7 +233,7 @@ describe("TerminalPane — drag & drop", () => {
     const root = st().tabs[0]!.root
     expect(root.type).toBe("split")
     if (root.type !== "split") return
-    expect(root.children[1]).toMatchObject({ sessionIds: [first] })
+    expect(root.children[1]).toMatchObject({ entryIds: [first] })
     expect(st().tabs[0]!.activeSessionId).toBe(first)
     expect(st().dragging).toBeNull()
   })
@@ -262,8 +263,8 @@ describe("TerminalPane — drag & drop", () => {
     view.rerender()
     expect(tabs[1]).toHaveClass("insert-after")
     drag("drop", strip, 190)
-    expect(leaf().sessionIds[1]).toBe(first)
-    expect(leaf().activeSessionId).toBe(first)
+    expect(leaf().entryIds[1]).toBe(first)
+    expect(leaf().activeEntryId).toBe(first)
   })
 
   it("dropping before the first tab of its own slot shows no marker", () => {
@@ -456,5 +457,64 @@ describe("TerminalPane — a host colour beats a Claude accent", () => {
     renderPane(tab.id)
     const icon = document.querySelector(".surface-tab svg")!
     expect(icon.getAttribute("color") ?? icon.getAttribute("fill")).toContain("var(--red)")
+  })
+})
+
+describe("TerminalPane — folder entries", () => {
+  it("▤+ opens the terminal's folder as a new tab here when it's the only one", () => {
+    const { tabId, id } = mountPane()
+    st().setSessionCwd(id, "/w/rts")
+    renderPane(tabId)
+    fireEvent.mouseDown(screen.getByTitle("Open folder in a new tab"), { button: 0 })
+    const pane = leaf()
+    expect(pane.entryIds).toHaveLength(2)
+    expect(st().objects[pane.activeEntryId]).toEqual({ kind: "folder", path: "/w/rts" })
+  })
+
+  it("…and a menu of from / in / edits when they differ", () => {
+    const { tabId, id } = mountPane()
+    st().setSessionCwd(id, "/w/rts")
+    useStore.setState({
+      paneWork: {
+        [id]: { session: "c", agent: "claude", dirs: {}, shown: "/w/rts-e", more: [] },
+      },
+    })
+    renderPane(tabId)
+    fireEvent.mouseDown(screen.getByTitle("Open folder in a new tab"), { button: 0 })
+    expect(leaf().entryIds).toHaveLength(1) // nothing opened yet
+    fireEvent.mouseDown(screen.getByText(/^edits · /), { button: 0 })
+    expect(st().objects[leaf().activeEntryId]!.path).toBe("/w/rts-e")
+  })
+
+  it("a folder tab shows the folder view, not the terminal, and closes without asking", async () => {
+    vi.mocked(ipc.readdir).mockResolvedValue({
+      entries: [{ name: "src", isDir: true }],
+      truncated: false,
+    })
+    const { tabId, id } = mountPane()
+    st().setSessionCwd(id, "/w/rts")
+    st().openFolder("/w/rts")
+    const view = renderPane(tabId)
+    expect(await screen.findByText("src")).toBeInTheDocument()
+    expect(TerminalManager.attach).not.toHaveBeenCalled() // the terminal stays parked
+    const folderTab = screen.getAllByRole("tab")[1]!
+    fireEvent.mouseDown(folderTab.querySelector(".surface-close")!, { button: 0 })
+    view.rerender()
+    expect(st().closeConfirm).toBeNull()
+    expect(leaf().entryIds).toEqual([id])
+  })
+})
+
+describe("TerminalPane — file tabs", () => {
+  it("a peek's tab is italic, says how to keep it, and a double-click keeps it", () => {
+    const { tabId } = mountPane()
+    st().openFile("/w/a.ts", { peek: true })
+    const view = renderPane(tabId)
+    const tab = screen.getAllByRole("tab")[1]!
+    expect(tab.className).toContain("peek")
+    expect(tab.getAttribute("title")).toContain("double-click to keep")
+    fireEvent.doubleClick(tab)
+    view.rerender()
+    expect(screen.getAllByRole("tab")[1]!.className).not.toContain("peek")
   })
 })

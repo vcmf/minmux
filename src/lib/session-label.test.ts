@@ -23,11 +23,12 @@ const mk = (over: Partial<Session> = {}): Session => ({
   unread: false,
   ...over,
 })
-const tab = (title: string, activeSessionId = "s"): Tab => ({
+const tab = (title: string, active = "s"): Tab => ({
   id: "t",
   title,
-  root: { type: "leaf", id: "p", sessionIds: [activeSessionId], activeSessionId },
-  activeSessionId,
+  root: { type: "leaf", id: "p", entryIds: [active], activeEntryId: active },
+  activeEntryId: active,
+  activeSessionId: active,
 })
 
 describe("shellType", () => {
@@ -131,8 +132,9 @@ describe("tabTitle — tabs that span hosts", () => {
   const tabOf = (ids: string[], active: string, title = ""): Tab => ({
     id: "t",
     title,
+    activeEntryId: active,
     activeSessionId: active,
-    root: { type: "leaf", id: "p", sessionIds: ids, activeSessionId: active },
+    root: { type: "leaf", id: "p", entryIds: ids, activeEntryId: active },
   })
 
   it("one host: just the host", () => {
@@ -184,8 +186,9 @@ describe("tabTitleParts", () => {
     const tab: Tab = {
       id: "t",
       title: "",
+      activeEntryId: "a",
       activeSessionId: "a",
-      root: { type: "leaf", id: "p", sessionIds: ["a", "b"], activeSessionId: "a" },
+      root: { type: "leaf", id: "p", entryIds: ["a", "b"], activeEntryId: "a" },
     }
     expect(tabTitleParts(tab, sessions, "/h")).toEqual({
       base: "prod-db-replica-eu-west-1",

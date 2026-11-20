@@ -1,13 +1,31 @@
-import { describe, it, expect, beforeEach } from "vitest"
+import { describe, it, expect, beforeEach, afterEach } from "vitest"
 import { reopenFor } from "./lib/remote-reports"
-import { useStore, isVisibleIn, isSessionVisible } from "./store"
-import { allSessionIds, visibleSessionIds } from "./lib/pane-tree"
+import { useStore, isVisibleIn, isSessionVisible, canOpenTerminalIn } from "./store"
+import { allEntryIds, allSessionIds, findPane, visibleSessionIds } from "./lib/pane-tree"
+import { isTerminalEntry } from "./lib/entries"
 import { resetStore, testHost, testShell as shell } from "./test/helpers"
 import { hostShellOption } from "./lib/ssh-hosts-ui"
 import { RIGHT_PANEL_MIN, RIGHT_PANEL_MAX } from "./lib/right-panel"
 import type { ShellOption } from "./types"
 
 const st = () => useStore.getState()
+
+// Every test ends with a consistent focus: the focused entry is in its tab and is its pane's
+// visible one; the tab's terminal is the focus when that's a terminal, else one of the tab's
+// terminals ("" when it has none); and every folder entry in a tab is known to the store.
+afterEach(() => {
+  for (const t of st().tabs) {
+    const pane = findPane(t.root, t.activeEntryId)
+    expect(pane, `tab ${t.id}: focus ${t.activeEntryId} is in no pane`).toBeDefined()
+    expect(pane!.activeEntryId).toBe(t.activeEntryId)
+    const terms = allSessionIds(t.root)
+    if (isTerminalEntry(t.activeEntryId)) expect(t.activeSessionId).toBe(t.activeEntryId)
+    else if (terms.length) expect(terms).toContain(t.activeSessionId)
+    else expect(t.activeSessionId).toBe("")
+    for (const id of allEntryIds(t.root))
+      if (!isTerminalEntry(id)) expect(st().objects[id], `${id} unknown`).toBeDefined()
+  }
+})
 const firstTab = () => st().tabs[0]!
 const wslShell: ShellOption = {
   id: "wsl",
@@ -184,10 +202,8 @@ describe("store — tabs & panes", () => {
 function siblingOfLeaf(node: import("./types").PaneNode, target: string): string | null {
   if (node.type === "leaf") return null
   const [x, y] = node.children
-  if (x.type === "leaf" && x.activeSessionId === target && y.type === "leaf")
-    return y.activeSessionId
-  if (y.type === "leaf" && y.activeSessionId === target && x.type === "leaf")
-    return x.activeSessionId
+  if (x.type === "leaf" && x.activeEntryId === target && y.type === "leaf") return y.activeEntryId
+  if (y.type === "leaf" && y.activeEntryId === target && x.type === "leaf") return x.activeEntryId
   return siblingOfLeaf(x, target) ?? siblingOfLeaf(y, target)
 }
 
@@ -298,10 +314,10 @@ describe("store — cwd & UI toggles", () => {
   it("toggles paletteOpen / settingsOpen / rightView", () => {
     st().setPaletteOpen(true)
     st().setSettingsOpen(true)
-    st().setRightView("changes")
+    st().setRightView("agents")
     expect(st().paletteOpen).toBe(true)
     expect(st().settingsOpen).toBe(true)
-    expect(st().rightView).toBe("changes")
+    expect(st().rightView).toBe("agents")
     st().setRightView(null) // one panel, hidden when null
     expect(st().rightView).toBeNull()
   })
@@ -397,7 +413,8 @@ describe("store — cwd & UI toggles", () => {
         {
           id: "tb",
           title: "t",
-          root: { type: "leaf", id: "px", sessionIds: ["x"], activeSessionId: "x" },
+          root: { type: "leaf", id: "px", entryIds: ["x"], activeEntryId: "x" },
+          activeEntryId: "x",
           activeSessionId: "x",
         },
       ],
@@ -424,53 +441,6 @@ describe("store — right panel width", () => {
   })
 })
 
-describe("store — paneRoot (Files-panel root override)", () => {
-  beforeEach(resetStore)
-  const activeId = () => firstTab().activeSessionId
-
-  it("accepts an absolute host path and normalizes a trailing slash", () => {
-    st().newTab(shell)
-    st().setPaneRoot(activeId(), "/Users/me/proj/")
-    expect(st().paneRoot[activeId()]).toBe("/Users/me/proj")
-  })
-  it("rejects a non-absolute path", () => {
-    st().newTab(shell)
-    st().setPaneRoot(activeId(), "relative/x")
-    expect(st().paneRoot[activeId()]).toBeUndefined()
-  })
-  it("accepts a WSL pane's Linux path (read via the distro's UNC share)", () => {
-    st().newTab(wslShell)
-    st().setPaneRoot(activeId(), "/home/me/proj")
-    expect(st().paneRoot[activeId()]).toBe("/home/me/proj")
-  })
-  it("clearPaneRoot removes the override", () => {
-    st().newTab(shell)
-    const sid = activeId()
-    st().setPaneRoot(sid, "/Users/me/proj")
-    st().clearPaneRoot(sid)
-    expect(st().paneRoot[sid]).toBeUndefined()
-  })
-  it("closeSurface drops the closed pane's override, keeps the sibling's", () => {
-    st().newTab(shell)
-    st().splitActive("row", shell)
-    const tab = firstTab()
-    const [a, b] = allSessionIds(tab.root)
-    st().setPaneRoot(a!, "/Users/me/a")
-    st().setPaneRoot(b!, "/Users/me/b")
-    st().closeSurface(tab.id, a!)
-    expect(st().paneRoot[a!]).toBeUndefined()
-    expect(st().paneRoot[b!]).toBe("/Users/me/b")
-  })
-  it("closeTab drops its panes' overrides", () => {
-    st().newTab(shell)
-    const tab = firstTab()
-    const sid = tab.activeSessionId
-    st().setPaneRoot(sid, "/Users/me/proj")
-    st().closeTab(tab.id)
-    expect(st().paneRoot[sid]).toBeUndefined()
-  })
-})
-
 describe("store — surfaces (terminal tabs inside a pane)", () => {
   beforeEach(resetStore)
 
@@ -486,11 +456,11 @@ describe("store — surfaces (terminal tabs inside a pane)", () => {
     st().setSessionCwd(first, "/proj")
     st().newSurface()
     const p = pane()
-    expect(p.sessionIds).toHaveLength(2)
-    expect(p.activeSessionId).toBe(firstTab().activeSessionId)
+    expect(p.entryIds).toHaveLength(2)
+    expect(p.activeEntryId).toBe(firstTab().activeSessionId)
     expect(firstTab().activeSessionId).not.toBe(first)
     // inherits the source terminal's shell + cwd
-    expect(st().sessions[p.activeSessionId]).toMatchObject({ command: shell.command, cwd: "/proj" })
+    expect(st().sessions[p.activeEntryId]).toMatchObject({ command: shell.command, cwd: "/proj" })
   })
 
   it("newSurface inherits a WSL shell (not the list's first entry)", () => {
@@ -507,8 +477,8 @@ describe("store — surfaces (terminal tabs inside a pane)", () => {
     st().newSurface()
     const root = firstTab().root
     if (root.type !== "split") throw new Error("expected split")
-    expect(root.children[0]).toMatchObject({ sessionIds: [a, firstTab().activeSessionId] })
-    expect(root.children[1]).toMatchObject({ sessionIds: [expect.any(String)] })
+    expect(root.children[0]).toMatchObject({ entryIds: [a, firstTab().activeSessionId] })
+    expect(root.children[1]).toMatchObject({ entryIds: [expect.any(String)] })
   })
 
   it("focusing a hidden surface makes it the pane's visible one", () => {
@@ -516,32 +486,32 @@ describe("store — surfaces (terminal tabs inside a pane)", () => {
     const first = firstTab().activeSessionId
     st().newSurface()
     st().focusSession(first)
-    expect(pane().activeSessionId).toBe(first)
+    expect(pane().activeEntryId).toBe(first)
     st().newSurface()
     st().setActivePane(firstTab().id, first)
-    expect(pane().activeSessionId).toBe(first)
+    expect(pane().activeEntryId).toBe(first)
   })
 
   it("closeSurface of the visible terminal hands focus to its neighbour, keeps the pane", () => {
     st().newTab(shell)
     st().newSurface()
     st().newSurface()
-    const [a, b, c] = pane().sessionIds
+    const [a, b, c] = pane().entryIds
     st().setActivePane(firstTab().id, b!)
     st().closeSurface(firstTab().id, b!)
-    expect(pane().sessionIds).toEqual([a, c])
+    expect(pane().entryIds).toEqual([a, c])
     expect(firstTab().activeSessionId).toBe(c)
-    expect(pane().activeSessionId).toBe(c)
+    expect(pane().activeEntryId).toBe(c)
     expect(st().sessions[b!]).toBeUndefined()
   })
 
   it("closeSurface of a hidden terminal keeps focus where it is", () => {
     st().newTab(shell)
     st().newSurface()
-    const [a, b] = pane().sessionIds
+    const [a, b] = pane().entryIds
     st().closeSurface(firstTab().id, a!)
     expect(firstTab().activeSessionId).toBe(b)
-    expect(pane().sessionIds).toEqual([b])
+    expect(pane().entryIds).toEqual([b])
   })
 
   it("closeSurface of the last terminal of a pane in a split removes the pane", () => {
@@ -574,10 +544,10 @@ describe("store — surfaces (terminal tabs inside a pane)", () => {
       paneId: p.id,
       count: 2,
     })
-    expect(pane().sessionIds).toHaveLength(2) // nothing closed yet
+    expect(pane().entryIds).toHaveLength(2) // nothing closed yet
     st().cancelClose()
     expect(st().closeConfirm).toBeNull()
-    expect(pane().sessionIds).toHaveLength(2)
+    expect(pane().entryIds).toHaveLength(2)
   })
 
   it("confirming closes every terminal in the pane and clears the dialog", () => {
@@ -588,13 +558,11 @@ describe("store — surfaces (terminal tabs inside a pane)", () => {
     if (root.type !== "split") throw new Error("expected split")
     const right = root.children[1]
     if (right.type !== "leaf") throw new Error("expected leaf")
-    st().setPaneRoot(right.sessionIds[0]!, "/Users/me/b")
     st().requestClosePane(firstTab().id, right.id)
     st().confirmClose()
     expect(st().closeConfirm).toBeNull()
     expect(firstTab().root.type).toBe("leaf")
-    for (const id of right.sessionIds) expect(st().sessions[id]).toBeUndefined()
-    expect(st().paneRoot[right.sessionIds[0]!]).toBeUndefined()
+    for (const id of right.entryIds) expect(st().sessions[id]).toBeUndefined()
     expect(allSessionIds(firstTab().root)).toContain(firstTab().activeSessionId)
   })
 
@@ -646,7 +614,7 @@ describe("store — drag & drop surfaces", () => {
     st().newSurface() // pane: [a, b]
     const root = firstTab().root
     if (root.type !== "leaf") throw new Error("expected leaf")
-    const [a] = root.sessionIds
+    const [a] = root.entryIds
     st().setDragging({ tabId: firstTab().id, sessionId: a! })
     st().moveSurface(firstTab().id, a!, { paneId: root.id, zone: "right" })
     const after = firstTab().root
@@ -661,8 +629,8 @@ describe("store — drag & drop surfaces", () => {
     const root = firstTab().root
     if (root.type !== "leaf") throw new Error("expected leaf")
     const tabs = st().tabs
-    st().setDragging({ tabId: firstTab().id, sessionId: root.activeSessionId })
-    st().moveSurface(firstTab().id, root.activeSessionId, { paneId: root.id, zone: "left" })
+    st().setDragging({ tabId: firstTab().id, sessionId: root.activeEntryId })
+    st().moveSurface(firstTab().id, root.activeEntryId, { paneId: root.id, zone: "left" })
     expect(st().tabs).toBe(tabs)
     expect(st().dragging).toBeNull()
   })
@@ -690,7 +658,7 @@ describe("store — stale drops", () => {
     st().moveSurface(firstTab().id, "gone", { paneId: root.id, zone: "center" })
     expect(st().tabs).toBe(tabs) // focus not pointed at a missing session
     expect(st().dragging).toBeNull()
-    st().moveSurface(firstTab().id, root.activeSessionId, { paneId: "gone", zone: "left" })
+    st().moveSurface(firstTab().id, root.activeEntryId, { paneId: "gone", zone: "left" })
     expect(st().tabs).toBe(tabs)
   })
 })
@@ -1064,7 +1032,8 @@ describe("store — remote connection state", () => {
         {
           id: "t",
           title: "",
-          root: { type: "leaf", id: "p", sessionIds: ["r", "l"], activeSessionId: "r" },
+          root: { type: "leaf", id: "p", entryIds: ["r", "l"], activeEntryId: "r" },
+          activeEntryId: "r",
           activeSessionId: "r",
         },
       ],
@@ -1085,7 +1054,8 @@ describe("store — remote connection state", () => {
         {
           id: "t",
           title: "",
-          root: { type: "leaf", id: "p", sessionIds: ["r"], activeSessionId: "r" },
+          root: { type: "leaf", id: "p", entryIds: ["r"], activeEntryId: "r" },
+          activeEntryId: "r",
           activeSessionId: "r",
         },
       ],
@@ -1211,7 +1181,8 @@ describe("store — restore after a renderer reload", () => {
           {
             id: "t",
             title: "",
-            root: { type: "leaf", id: "p", sessionIds: ["r", "l"], activeSessionId: "r" },
+            root: { type: "leaf", id: "p", entryIds: ["r", "l"], activeEntryId: "r" },
+            activeEntryId: "r",
             activeSessionId: "r",
           },
         ],
@@ -1340,7 +1311,7 @@ describe("closing a session / a terminal asks first when it'd kill work", () => 
       throw new Error("expected split")
     const right = root.children[1]
     st().applyAgentEvents([
-      { event: "SessionStart", sessionId: "c", paneId: right.sessionIds[0]!, nested: false },
+      { event: "SessionStart", sessionId: "c", paneId: right.entryIds[0]!, nested: false },
     ])
     st().requestClosePane(firstTab().id, right.id)
     expect(st().closeConfirm).toMatchObject({ kind: "terminal", agent: "claude" })
@@ -1499,5 +1470,303 @@ describe("reordering sessions", () => {
     expect(order()).toEqual([b, a])
     st().moveActiveTab(1)
     expect(order()).toEqual([a, b])
+  })
+})
+
+describe("store — folder entries", () => {
+  beforeEach(resetStore)
+  const tab = () => st().tabs[0]!
+  const leaf = (n = tab().root) => {
+    if (n.type !== "leaf") throw new Error("expected one pane")
+    return n
+  }
+
+  it("opens a folder as a new, focused tab of the focused pane", () => {
+    st().newTab(shell)
+    const term = tab().activeSessionId
+    st().openFolder("/w/rts/")
+    const id = tab().activeEntryId
+    expect(isTerminalEntry(id)).toBe(false)
+    expect(leaf().entryIds).toEqual([term, id])
+    expect(st().objects[id]).toEqual({ kind: "folder", path: "/w/rts" })
+    expect(tab().activeSessionId).toBe(term) // the tab's terminal stays
+    expect(isVisibleIn(st(), term)).toBe(false) // hidden behind the folder now
+  })
+
+  it("closing a folder tab needs no confirm and drops its state", () => {
+    st().newTab(shell)
+    st().openFolder("/w")
+    const id = tab().activeEntryId
+    st().setFolderView(id, { expanded: ["/w/src"], showAll: [] })
+    st().requestCloseEntry(tab().id, id)
+    expect(st().closeConfirm).toBeNull()
+    expect(st().objects[id]).toBeUndefined()
+    expect(st().folderViews[id]).toBeUndefined()
+    expect(leaf().entryIds).toEqual([tab().activeSessionId])
+  })
+
+  it('a tab can lose its last terminal: its terminal becomes ""', () => {
+    st().newTab(shell)
+    const term = tab().activeSessionId
+    st().openFolder("/w")
+    st().closeSurface(tab().id, term)
+    expect(allSessionIds(tab().root)).toEqual([])
+    expect(tab().activeSessionId).toBe("")
+  })
+
+  it("close pane with one idle terminal beside a folder closes the whole pane", () => {
+    st().newTab(shell)
+    st().splitActive("row", shell)
+    st().openFolder("/w")
+    const id = tab().activeEntryId
+    const pane = findPane(tab().root, id)!
+    st().requestClosePane(tab().id, pane.id)
+    expect(st().closeConfirm).toBeNull()
+    expect(findPane(tab().root, id)).toBeUndefined()
+    expect(st().objects[id]).toBeUndefined()
+  })
+
+  it("…and when its terminal is running, asks first, then closes the whole pane", () => {
+    st().newTab(shell)
+    st().splitActive("row", shell)
+    const term = tab().activeSessionId
+    st().signalSession(term, { type: "command-start" })
+    st().openFolder("/w")
+    const id = tab().activeEntryId
+    const pane = findPane(tab().root, id)!
+    st().requestClosePane(tab().id, pane.id)
+    expect(st().closeConfirm).toMatchObject({ kind: "terminal", sessionId: term, paneId: pane.id })
+    st().confirmClose()
+    expect(findPane(tab().root, id)).toBeUndefined()
+  })
+
+  it("closing a tab drops its folder entries", () => {
+    st().newTab(shell)
+    st().openFolder("/w")
+    const id = tab().activeEntryId
+    st().closeTab(tab().id)
+    expect(st().objects[id]).toBeUndefined()
+  })
+
+  it("a split or a new terminal from a focused folder opens in that folder", () => {
+    st().newTab(shell)
+    st().openFolder("/w/rts")
+    st().newSurface()
+    expect(st().sessions[tab().activeSessionId]!.cwd).toBe("/w/rts")
+    st().openFolder("/w/docs")
+    st().splitActive("row", shell)
+    expect(st().sessions[tab().activeSessionId]!.cwd).toBe("/w/docs")
+  })
+
+  it("setFolderView / setFolderRoot keep the same state when nothing changes", () => {
+    st().newTab(shell)
+    st().openFolder("/w")
+    const id = tab().activeEntryId
+    const before = st()
+    st().setFolderRoot(id, "/w/")
+    expect(st()).toBe(before)
+    const v = { expanded: ["/w/a"], showAll: [] }
+    st().setFolderView(id, v)
+    const after = st()
+    st().setFolderView(id, v)
+    expect(st()).toBe(after)
+    st().setFolderRoot(id, "/w/a")
+    expect(st().objects[id]!.path).toBe("/w/a")
+    expect(st().folderViews[id]!.expanded).toEqual([]) // a new root starts collapsed
+  })
+
+  it("a host folder's new terminal is a host shell, even when the default is WSL", () => {
+    const wsl = { id: "wsl", label: "Ubuntu", command: "wsl.exe", args: ["-d", "Ubuntu"] }
+    useStore.setState({
+      shells: [wsl, shell],
+      settings: { ...st().settings, defaultShell: "wsl.exe" },
+    })
+    st().newTab(wsl)
+    st().openFolder("C:\\Users\\me\\proj")
+    st().newSurface()
+    const s = st().sessions[tab().activeSessionId]!
+    expect(s.command).toBe(shell.command) // not wsl.exe: it would start in ~
+    expect(s.cwd).toBe("C:\\Users\\me\\proj")
+  })
+
+  it("a folder dragged out into a new group: a tab with no terminal", () => {
+    st().newTab(shell)
+    st().openFolder("/w")
+    const id = tab().activeEntryId
+    st().moveTerminal(id, { kind: "new", insertAt: 1 })
+    const fresh = st().tabs.find((t) => t.activeEntryId === id)!
+    expect(fresh.activeSessionId).toBe("")
+  })
+
+  it("a WSL folder's new terminal is a WSL shell for its distro, in the folder", () => {
+    const ubuntu = { id: "u", label: "Ubuntu", command: "wsl.exe", args: ["-d", "Ubuntu"] }
+    useStore.setState({ shells: [shell, ubuntu] })
+    st().newTab(shell)
+    st().openFolder("/home/u/proj", { wsl: { distro: "Ubuntu" } })
+    st().newSurface()
+    const s = st().sessions[tab().activeSessionId]!
+    expect(s.command).toBe("wsl.exe")
+    expect(s.args).toEqual(["-d", "Ubuntu"])
+    expect(s.cwd).toBe("/home/u/proj")
+  })
+
+  it("a WSL folder no listed shell matches: no terminal in it, but ⌘T opens one like the tab's", () => {
+    st().newTab(shell)
+    const term = tab().activeSessionId
+    st().setSessionCwd(term, "/w/own")
+    st().openFolder("/home/u/proj", { wsl: { distro: "Gone" } })
+    expect(canOpenTerminalIn(st(), tab().activeEntryId)).toBe(false) // no "New terminal here"
+    st().newSurface(shell)
+    const s = st().sessions[tab().activeSessionId]!
+    expect(s.command).toBe(shell.command) // the tab's own shell, where it is
+    expect(s.cwd).toBe("/w/own") // never a Linux path handed to a host shell
+  })
+
+  it("New terminal here counts the tab's own WSL shell, as the action does", () => {
+    const plain = { id: "w", label: "WSL", command: "wsl.exe", args: [] }
+    useStore.setState({ shells: [shell] }) // plain wsl.exe isn't listed
+    st().newTab(plain)
+    st().openFolder("/home/u/proj", { wsl: {} })
+    expect(canOpenTerminalIn(st(), tab().activeEntryId)).toBe(true)
+  })
+
+  it("setFolderRoots / setFolderGit keep the same state when nothing changes; null drops", () => {
+    st().setFolderRoots({ a: "/r" })
+    const s1 = st()
+    st().setFolderRoots({ a: "/r" })
+    expect(st()).toBe(s1)
+    const g = {
+      isRepo: true,
+      root: "/r",
+      branch: "m",
+      ahead: 0,
+      behind: 0,
+      files: [],
+      add: 0,
+      del: 0,
+    }
+    st().setFolderGit("k", g as never)
+    const s2 = st()
+    st().setFolderGit("k", { ...g } as never) // equal content
+    expect(st()).toBe(s2)
+    st().setFolderGit("k", null)
+    expect(st().folderGit).toEqual({})
+    const s3 = st()
+    st().setFolderGit("k", null)
+    expect(st()).toBe(s3)
+  })
+
+  it("an ssh tab's WSL folder with no shell: the given shell, not the ssh one", () => {
+    const host = hostShellOption(testHost("prod"))
+    useStore.setState({ shells: [shell, host] })
+    st().newTab(host)
+    st().openFolder("/home/u/p", { wsl: { distro: "Gone" } })
+    st().newSurface(shell)
+    const s = st().sessions[tab().activeSessionId]!
+    expect(s.remote).toBeUndefined()
+    expect(s.command).toBe(shell.command)
+  })
+
+  it("a peek replaces the pane's peek; a kept file stays; one already open is focused", () => {
+    st().newTab(shell)
+    st().openFile("/w/a.ts", { peek: true })
+    const a = tab().activeEntryId
+    st().openFile("/w/b.ts", { peek: true })
+    const b = tab().activeEntryId
+    expect(st().objects[a]).toBeUndefined() // replaced
+    expect(leaf().entryIds).toEqual([tab().activeSessionId, b])
+    st().keepEntry(b)
+    expect(st().objects[b]).toEqual({ kind: "file", path: "/w/b.ts" })
+    st().openFile("/w/c.ts", { peek: true })
+    expect(leaf().entryIds).toHaveLength(3) // b was kept: c is a new peek beside it
+    st().openFile("/w/b.ts", { peek: true, line: 40 })
+    expect(tab().activeEntryId).toBe(b) // already open here: focused, at the line
+    expect((st().objects[b] as { line?: number }).line).toBe(40)
+  })
+
+  it("a peek that was all its pane held is replaced in place, the pane kept", () => {
+    st().newTab(shell)
+    st().openFile("/w/a.ts", { peek: true })
+    const a = tab().activeEntryId
+    st().closeSurface(tab().id, tab().activeSessionId) // the terminal goes: the peek is alone
+    st().openFile("/w/b.ts", { peek: true })
+    expect(st().objects[a]).toBeUndefined()
+    expect(leaf().entryIds).toEqual([tab().activeEntryId])
+  })
+
+  it("a file opens on its diff when asked (an open one too); its view switches back", () => {
+    st().newTab(shell)
+    st().openFile("/w/d.ts", { diff: true })
+    const d = tab().activeEntryId
+    expect(st().objects[d]).toEqual({ kind: "file", path: "/w/d.ts", view: "diff" })
+    st().setFileView(d, "source")
+    expect(st().objects[d]).toEqual({ kind: "file", path: "/w/d.ts" })
+    const objects = st().objects
+    st().setFileView(d, "source") // no change: the same state
+    expect(st().objects).toBe(objects)
+    st().openFile("/w/d.ts", { diff: true }) // already open: focused, now on its diff
+    expect(tab().activeEntryId).toBe(d)
+    expect((st().objects[d] as { view?: string }).view).toBe("diff")
+    st().openFile("/w/d.ts", { line: 12 }) // a line is the source's: back to Source
+    expect(st().objects[d]).toEqual({ kind: "file", path: "/w/d.ts", line: 12, seq: 1 })
+    st().setFileView(tab().activeSessionId, "diff") // a terminal has no view
+    expect(st().objects[tab().activeSessionId]).toBeUndefined()
+  })
+
+  it("dragging a peek keeps it", () => {
+    st().newTab(shell)
+    st().splitActive("row", shell)
+    st().openFile("/w/a.ts", { peek: true })
+    const a = tab().activeEntryId
+    const other = allSessionIds(tab().root)[0]!
+    st().moveSurface(tab().id, a, { paneId: findPane(tab().root, other)!.id, zone: "center" })
+    expect((st().objects[a] as { peek?: true }).peek).toBeUndefined()
+  })
+
+  it("a terminal from a focused file opens in its folder", () => {
+    st().newTab(shell)
+    st().openFile("/w/rts/src/a.ts")
+    st().newSurface()
+    expect(st().sessions[tab().activeSessionId]!.cwd).toBe("/w/rts/src")
+  })
+
+  it("opening a folder already open in the pane shows that tab, not a second", () => {
+    st().newTab(shell)
+    st().openFolder("/w/src")
+    const first = tab().activeEntryId
+    st().setActivePane(tab().id, tab().activeSessionId)
+    st().openFolder("/w/src/")
+    expect(tab().activeEntryId).toBe(first)
+    expect(leaf().entryIds).toHaveLength(2)
+  })
+
+  it("asking for the same file at the same line again says go again (seq)", () => {
+    st().newTab(shell)
+    st().openFile("/w/a.ts", { line: 9 })
+    const id = tab().activeEntryId
+    st().openFile("/w/a.ts", { line: 9 })
+    expect((st().objects[id] as { seq?: number }).seq).toBe(1)
+  })
+
+  it("a peek dropped back where it was stays a peek", () => {
+    st().newTab(shell)
+    st().openFile("/w/a.ts", { peek: true })
+    const a = tab().activeEntryId
+    const pane = findPane(tab().root, a)!
+    st().moveSurface(tab().id, a, { paneId: pane.id, index: pane.entryIds.indexOf(a) })
+    expect((st().objects[a] as { peek?: true }).peek).toBe(true)
+  })
+
+  it("on Windows the same file in another case is the same tab; a WSL one with that path isn't", () => {
+    useStore.setState({ platform: "win32" })
+    st().newTab(shell)
+    st().openFile("C:\\x\\A.ts")
+    const a = tab().activeEntryId
+    st().openFile("c:\\x\\a.ts")
+    expect(tab().activeEntryId).toBe(a)
+    st().openFile("/home/u/a.ts", { wsl: { distro: "U" } })
+    const b = tab().activeEntryId
+    st().openFile("/home/u/a.ts")
+    expect(tab().activeEntryId).not.toBe(b)
   })
 })

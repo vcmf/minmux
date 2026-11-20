@@ -30,6 +30,8 @@ export default defineConfig({
       rollupOptions: { input: { index: "index.html" } },
     },
     plugins: [react()],
+    // Web Workers (the highlighter) as ES modules: they load their languages lazily (chunks).
+    worker: { format: "es" },
     server: { port: 1420, strictPort: true },
   },
 })

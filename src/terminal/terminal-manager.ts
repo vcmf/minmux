@@ -6,7 +6,7 @@ import { WebLinksAddon } from "@xterm/addon-web-links"
 import { WebglAddon } from "@xterm/addon-webgl"
 import { SearchAddon, type ISearchOptions } from "@xterm/addon-search"
 import type { PaneLeaf, Session } from "../types"
-import { activeTheme, useStore } from "../store"
+import { activeTheme, focusedTerminal, useStore } from "../store"
 import { openLink } from "../lib/open-link"
 import { notify } from "../lib/notify"
 import { ipc } from "../lib/ipc"
@@ -21,14 +21,23 @@ import {
 } from "../lib/theme-notify"
 import { withAlpha, type Theme } from "../settings/themes"
 import { displaySessionTitle } from "../lib/session-label"
-import { allPanes, allSessionIds, visibleSessionIds } from "../lib/pane-tree"
+import {
+  allPanes,
+  allSessionIds,
+  findPane,
+  paneSessionIds,
+  visibleSessionIds,
+  visibleTerminal,
+} from "../lib/pane-tree"
 import { canRetry, sshFailureKind, type SshFailure } from "../lib/ssh-errors"
 import { parseRemoteReport, reopenFor, MINMUX_OSC } from "../lib/remote-reports"
 import { cwdFromOsc7, cwdFromTitle, sameMachine } from "../lib/remote-cwd"
 import { webglPanes, shouldRebuildAtlas } from "../lib/renderer-policy"
 import { appShortcut, keyAction } from "../lib/terminal-keys"
 import { gridChanged, type Grid } from "../lib/resize"
-import { findFilePaths } from "../lib/file-links"
+import { findFilePaths, resolveLinkPath, type FileLinkMatch } from "../lib/file-links"
+import { opensInTab } from "../lib/file-tab"
+import { wslContext } from "../lib/wsl"
 import { isPosixShell, withCd, withEnv } from "../lib/resume"
 import {
   canType,
@@ -146,6 +155,40 @@ let suppressFocusSignal = false
 const pathExistsCache = new Map<string, { ok: boolean; ts: number }>()
 const PATH_CACHE_TTL_MS = 5000
 const PATH_CACHE_MAX = 1000 // bound memory over long sessions (many distinct paths)
+// A folder: a folder tab of its terminal's pane. A file shown in minmux: a peek tab there, at its
+// line. Anything else (a PDF, a native Windows path, a terminal no pane holds): the editor or
+// the OS app, as before (main never lets that run a file).
+/** Open a path clicked in a terminal's output. */
+export async function openClickedPath(
+  sessionId: string,
+  cwd: string,
+  m: FileLinkMatch,
+): Promise<void> {
+  const st = useStore.getState()
+  const sess = st.sessions[sessionId]
+  const tab = st.tabs.find((t) => !!findPane(t.root, sessionId))
+  const pane = tab && findPane(tab.root, sessionId)
+  const wsl = sess ? wslContext(sess.command, sess.args) : undefined
+  const outside = () => ipc.openFile(cwd, m.path, m.line, m.col)
+  if (!tab || !pane || (st.platform === "win32" && !wsl)) return outside()
+  // A WSL shell's `~` is the distro's home, not known here (main would take this machine's).
+  if (wsl && m.path.startsWith("~")) return
+  const abs = resolveLinkPath(cwd, m.path, wsl ? "" : st.home)
+  if (await ipc.pathIsDir(abs, wsl).catch(() => false)) {
+    useStore.getState().openFolder(abs, { tabId: tab.id, paneId: pane.id, wsl })
+  } else if (opensInTab(abs)) {
+    useStore
+      .getState()
+      .openFile(abs, { tabId: tab.id, paneId: pane.id, wsl, line: m.line, peek: true })
+  } else {
+    return ipc.openPath(abs, wsl) // a PDF, a video: its own app (main never lets one run)
+  }
+  requestAnimationFrame(() => {
+    const id = useStore.getState().tabs.find((t) => t.id === tab.id)?.activeEntryId
+    if (id) document.querySelector<HTMLElement>(`[data-entry="${id}"]`)?.focus()
+  })
+}
+
 function validatePath(cwd: string, p: string): Promise<boolean> {
   const key = `${cwd} ${p}`
   const hit = pathExistsCache.get(key)
@@ -1012,7 +1055,7 @@ function spawn(session: Session, entry: Entry) {
                   // app — require Cmd/Ctrl there so we don't hijack it (VS Code does the same).
                   const mouseMode = term.modes.mouseTrackingMode !== "none"
                   if (mouseMode && !e.metaKey && !e.ctrlKey) return
-                  ipc.openFile(cwd, m.path, m.line, m.col)
+                  void openClickedPath(session.id, cwd, m)
                 },
               }))
             cb(links.length ? links : undefined)
@@ -1215,10 +1258,23 @@ export const TerminalManager = {
   syncHiddenSizes(pane?: PaneLeaf) {
     const panes = pane ? [pane] : useStore.getState().tabs.flatMap((t) => allPanes(t.root))
     for (const p of panes) {
-      for (const id of p.sessionIds) {
-        if (id !== p.activeSessionId) TerminalManager.followSize(id, p.activeSessionId)
+      // A pane showing a folder or file has no terminal to measure (WORKDIR_OBJECTS.md step 2).
+      const shown = visibleTerminal(p)
+      if (!shown) continue
+      for (const id of paneSessionIds(p)) {
+        if (id !== shown) TerminalManager.followSize(id, shown)
       }
     }
+  },
+
+  // Its pane shows a folder, so there's no terminal there to follow. PTY resized only on change.
+  /** A parked terminal takes the grid of a `w`×`h` px mount. */
+  sizeHidden(id: string, w: number, h: number) {
+    const entry = entries.get(id)
+    if (!entry?.opened || entry.host.parentElement !== parking || w <= 0 || h <= 0) return
+    entry.host.style.width = `${Math.floor(w)}px`
+    entry.host.style.height = `${Math.floor(h)}px`
+    syncSize(id, entry)
   },
 
   /** Give a hidden surface its pane's grid (it can't self-fit); PTY resized only on change. */
@@ -1240,6 +1296,8 @@ export const TerminalManager = {
   /** Mount a session's terminal into `container`, creating + spawning on first use. */
   attach(session: Session, container: HTMLElement) {
     const entry = entryFor(session.id)
+    entry.host.style.width = "" // sized by sizeHidden while parked: the mount sizes it now
+    entry.host.style.height = ""
     container.appendChild(entry.host)
     if (!entry.opened) {
       openEntry(session, entry)
@@ -1254,7 +1312,7 @@ export const TerminalManager = {
     // (re)attach — a split/tab-switch mount storm, or a surface revealed in an unfocused
     // pane, must not pull keystrokes away from the pane the user is driving.
     const st = useStore.getState()
-    if (st.tabs.find((t) => t.id === st.activeTabId)?.activeSessionId === session.id) {
+    if (st.tabs.find((t) => t.id === st.activeTabId)?.activeEntryId === session.id) {
       suppressFocusSignal = true
       entry.term.focus()
       suppressFocusSignal = false
@@ -1408,7 +1466,8 @@ export const TerminalManager = {
       if (hostId) byHost.set(hostId, [...(byHost.get(hostId) ?? []), id])
     }
     // Size a not-yet-shown pane like the one on screen, not xterm's default 80x24.
-    const likeId = st.tabs.find((t) => t.id === st.activeTabId)?.activeSessionId
+    const likeId =
+      focusedTerminal(st) ?? st.tabs.find((t) => t.id === st.activeTabId)?.activeSessionId
     const connectOne = (id: string) => {
       const entry = entries.get(id)
       if (entry?.spawned) return connectRemote(id, entry)

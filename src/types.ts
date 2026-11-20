@@ -34,7 +34,7 @@ export interface Session {
   status: SessionStatus
   unread: boolean
   running?: boolean // a command/agent is executing (OSC 133 C..D)
-  cwd?: string // reported by the shell via OSC 7; drives the git diff panel
+  cwd?: string // reported by the shell via OSC 7; drives git (status bar, folder tabs)
   oscTitle?: string // raw window title from OSC 0/2 (a program may set it)
   detail?: string // why it needs attention (OSC-9 message / "needs input")
   remote?: RemoteRef // runs on an ssh host: no local cwd, files or git (splits stay on it)
@@ -48,12 +48,13 @@ export interface Session {
   restored?: boolean // runtime only (never saved): came from workspace.json this launch/reload
 }
 
-/** A pane: terminals ("surfaces") stacked as tabs; stable `id`, only the active one shows. */
+// An entry is a terminal (its id is its session id) or, later, a folder or file (lib/entries).
+/** A pane: entries ("surfaces") stacked as tabs; stable `id`, only the active one shows. */
 export interface PaneLeaf {
   type: "leaf"
   id: string
-  sessionIds: string[]
-  activeSessionId: string
+  entryIds: string[]
+  activeEntryId: string
 }
 
 /** Where a dragged surface lands in a pane: an edge (new split) or the centre (join). */
@@ -73,6 +74,9 @@ export interface Tab {
   id: string
   title: string
   root: PaneNode
+  /** The focus: the entry with keyboard focus (its pane's visible one). */
+  activeEntryId: string
+  /** The tab's terminal (the focus, or the last focused one): cwd, git, titles, the saved focus. */
   activeSessionId: string
 }
 

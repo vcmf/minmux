@@ -84,15 +84,18 @@ describe("Watches (in the fs worker)", () => {
     vi.useRealTimers()
   })
 
-  it("on Linux, content-only changes are ignored", () => {
+  it("on Linux, content-only changes come apart (a listing ignores them, a file tab not)", () => {
     vi.useFakeTimers()
     const out: FsEvent[] = []
     const fw = fakeWatch()
     const w = new Watches((e) => out.push(e), { watchFn: fw.fn, linux: true, idNow: () => "1" })
     w.add("/log")
+    w.add("/src")
     fw.live.get("/log")!.fire("change", "app.log")
+    fw.live.get("/src")!.fire("change", "a.ts")
+    fw.live.get("/src")!.fire("rename", "b.ts") // an entry changed there too
     vi.advanceTimersByTime(WATCH_BATCH_MS)
-    expect(out).toEqual([])
+    expect(out).toEqual([{ event: "changed", dirs: ["/src"], content: ["/log"] }])
     vi.useRealTimers()
   })
 

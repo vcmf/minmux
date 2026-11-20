@@ -4,22 +4,29 @@ import fs from "node:fs"
 import path from "node:path"
 import { readDirListing } from "./read-dir"
 import type { DirListing } from "../src/lib/dir-listing"
+import { readFileForTab } from "./read-file"
+import type { FileData, FileStamp } from "../src/lib/file-tab"
 
 export type FsCall =
   | { op: "readdir" | "stat" | "watch" | "unwatch"; path: string }
   | { op: "gitroots"; paths: string[]; real: boolean } // `real`: resolve symlinks first
+  | { op: "readfile"; path: string; since?: FileStamp } // a file tab's read (electron/read-file)
 export type FsRequest = FsCall & { id: number }
 
 /** Each folder's checkout root (null: in none); a folder whose search failed is left out. */
 export type GitRootsResult = { roots: Record<string, string | null> }
 
-export type FsResult = DirListing | { isDir: boolean } | { watching: boolean } | GitRootsResult
+export type FsResult =
+  DirListing | { isDir: boolean } | { watching: boolean } | GitRootsResult | FileData
 
 export type FsReply =
   { id: number; ok: true; value: FsResult } | { id: number; ok: false; code: string }
 
 /** Sent without a request: folders whose listing may have changed, or whose watcher is gone. */
-export type FsEvent = { event: "changed"; dirs: string[] } | { event: "lost"; dir: string }
+// `content`: folders where only a file's content changed (Linux, inotify tells them apart): a
+// listing doesn't change, a file tab's file may have.
+export type FsEvent =
+  { event: "changed"; dirs: string[]; content?: string[] } | { event: "lost"; dir: string }
 
 export const WATCH_BATCH_MS = 250
 
@@ -73,6 +80,7 @@ export class Watches {
   private watches = new Map<string, Watch>()
   private ids = new Map<string, string | null>() // folder → identity when watched
   private dirty = new Set<string>()
+  private dirtyContent = new Set<string>() // Linux: only a file's content changed there
   private timer: ReturnType<typeof setTimeout> | null = null
   private readonly watchFn: WatchFn
   private readonly linux: boolean
@@ -122,7 +130,7 @@ export class Watches {
     const w = this.watchFn(
       dir,
       (type) => {
-        if (type === "change" && this.linux) return
+        if (type === "change" && this.linux) return this.mark(dir, true)
         if (type === "rename" && this.linux) check() // maybe the folder itself
         this.mark(dir)
       },
@@ -148,14 +156,18 @@ export class Watches {
     if (this.timer) clearTimeout(this.timer)
   }
 
-  private mark(dir: string): void {
-    this.dirty.add(dir)
+  private mark(dir: string, contentOnly = false): void {
+    if (contentOnly) this.dirtyContent.add(dir)
+    else this.dirty.add(dir)
     if (this.timer) return
     this.timer = setTimeout(() => {
       this.timer = null
       const dirs = [...this.dirty]
+      const content = [...this.dirtyContent].filter((d) => !this.dirty.has(d))
       this.dirty.clear()
-      if (dirs.length) this.emit({ event: "changed", dirs })
+      this.dirtyContent.clear()
+      if (dirs.length || content.length)
+        this.emit({ event: "changed", dirs, ...(content.length ? { content } : {}) })
     }, WATCH_BATCH_MS)
   }
 }
@@ -275,6 +287,7 @@ export async function handleFsRequest(req: FsRequest, watches?: Watches): Promis
     if (req.op === "readdir") value = await readDirListing(req.path)
     else if (req.op === "stat") value = { isDir: (await fs.promises.stat(req.path)).isDirectory() }
     else if (req.op === "gitroots") value = { roots: await gitRoots(req.paths, req.real) }
+    else if (req.op === "readfile") value = await readFileForTab(req.path, undefined, req.since)
     else if (req.op === "watch") {
       watches?.add(req.path) // sync: if it hangs (a dead mount), main sees this request hang
       value = { watching: true }

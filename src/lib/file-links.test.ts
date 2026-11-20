@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest"
-import { findFilePaths } from "./file-links"
+import { findFilePaths, resolveLinkPath } from "./file-links"
 
 const paths = (t: string) => findFilePaths(t).map((m) => m.path)
 
@@ -49,5 +49,17 @@ describe("findFilePaths", () => {
     const m = findFilePaths(">> src/a.ts <<")[0]!
     expect(m.start).toBe(3)
     expect(">> src/a.ts <<".slice(m.start, m.start + m.length)).toBe("src/a.ts")
+  })
+})
+
+describe("resolveLinkPath", () => {
+  it("relative to the terminal's folder, with . and .. resolved", () => {
+    expect(resolveLinkPath("/w/rts", "src/a.ts", "/h")).toBe("/w/rts/src/a.ts")
+    expect(resolveLinkPath("/w/rts", "./x/../b.md", "/h")).toBe("/w/rts/b.md")
+  })
+
+  it("absolute stays; ~/ is home", () => {
+    expect(resolveLinkPath("/w", "/etc/hosts", "/h")).toBe("/etc/hosts")
+    expect(resolveLinkPath("/w", "~/notes.md", "/Users/me")).toBe("/Users/me/notes.md")
   })
 })

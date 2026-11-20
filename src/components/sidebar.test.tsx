@@ -1028,3 +1028,85 @@ describe("Sidebar — a session's right-click menu", () => {
     expect(document.querySelector(".ctx-menu")).toBeNull()
   })
 })
+
+describe("Sidebar — folder tabs", () => {
+  it("lists a pane's folder tab under its group; a click focuses it, its x closes it", () => {
+    st().newTab(testShell)
+    st().openFolder("/w/rts")
+    const tab = st().tabs[0]!
+    const folder = tab.activeEntryId
+    st().setActivePane(tab.id, tab.activeSessionId) // back on the terminal
+    render(<Sidebar />)
+    fireEvent.click(screen.getByText("rts"))
+    expect(st().tabs[0]!.activeEntryId).toBe(folder)
+    fireEvent.mouseDown(screen.getByTitle("Close folder"), { button: 0 })
+    fireEvent.click(screen.getByTitle("Close folder"))
+    expect(st().objects[folder]).toBeUndefined()
+  })
+
+  it("right-clicking a terminal row offers its folders, opened as a tab of its pane", () => {
+    st().newTab(testShell)
+    const id = allSessionIds(st().tabs[0]!.root)[0]!
+    st().setSessionCwd(id, "/w/rts")
+    useStore.setState({
+      paneWork: {
+        [id]: { session: "c", agent: "claude", dirs: {}, shown: "/w/rts-e", more: [] },
+      },
+    })
+    render(<Sidebar />)
+    fireEvent.contextMenu(screen.getAllByText("rts")[1]!.closest(".tree-row")!)
+    fireEvent.mouseDown(screen.getByText(/· edits /), { button: 0 })
+    const tab = st().tabs[0]!
+    expect(st().objects[tab.activeEntryId]!.path).toBe("/w/rts-e")
+  })
+
+  it("a folder line's menu opens that folder in a tab", () => {
+    st().newTab(testShell)
+    const id = allSessionIds(st().tabs[0]!.root)[0]!
+    st().setSessionCwd(id, "/w/rts")
+    render(<Sidebar />)
+    fireEvent.contextMenu(
+      screen.getAllByText(/~?\/?w\/rts|rts/).find((el) => el.closest(".tree-dir"))!,
+    )
+    fireEvent.mouseDown(screen.getByText("Open in a tab"), { button: 0 })
+    expect(st().objects[st().tabs[0]!.activeEntryId]!.path).toBe("/w/rts")
+  })
+
+  it("a folder row's menu: a terminal in that folder, no Open in a tab (it is one)", () => {
+    st().newTab(testShell)
+    st().openFolder("/w/docs")
+    render(<Sidebar />)
+    const row = screen.getByTitle("/w/docs")
+    fireEvent.contextMenu(row)
+    expect(screen.queryByText("Open in a tab")).toBeNull()
+    fireEvent.mouseDown(screen.getByText("Open terminal here"), { button: 0 })
+    const tab = st().tabs[0]!
+    expect(st().sessions[tab.activeEntryId]!.cwd).toBe("/w/docs")
+  })
+
+  it("a Git Bash path on Windows can't open as a folder tab", () => {
+    useStore.setState({ platform: "win32" })
+    st().newTab(testShell)
+    const id = allSessionIds(st().tabs[0]!.root)[0]!
+    st().setSessionCwd(id, "/c/Users/me/proj")
+    render(<Sidebar />)
+    const line = screen.getAllByText(/proj/).find((el) => el.closest(".tree-dir"))!
+    fireEvent.contextMenu(line)
+    const item = screen.getByText("Open in a tab").closest("button")!
+    expect(item).toBeDisabled()
+  })
+})
+
+describe("Sidebar — file tabs", () => {
+  it("a file tab's row: its name, its folder below, italic while a peek, closes from its x", () => {
+    st().newTab(testShell)
+    st().openFile("/w/rts/notes.md", { peek: true })
+    const id = st().tabs[0]!.activeEntryId
+    render(<Sidebar />)
+    const name = screen.getByText("notes.md")
+    expect(name.style.fontStyle).toBe("italic")
+    expect(screen.getByTitle("/w/rts/notes.md")).toBeInTheDocument()
+    fireEvent.click(screen.getByTitle("Close file"))
+    expect(st().objects[id]).toBeUndefined()
+  })
+})

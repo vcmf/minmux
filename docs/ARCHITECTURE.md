@@ -209,9 +209,10 @@ Output stream: main → renderer via `webContents.send('pty:data:'+id, Uint8Arra
 - **Stores (Zustand):** `Session { id, title, cwd, shell, status, unread }`, a per-tab binary
   **pane tree**, and `settings`.
 - **Layout model:** each tab holds a binary pane tree — leaf or split (`row`/`column`, two
-  children). A leaf is a **pane** holding one or more terminals (**surfaces**, cmux-style) shown
-  as tabs in its header (`{id, sessionIds, activeSessionId}`); only the active surface is
-  mounted. Resizable dividers; each leaf resize → fit → `pty:resize`. Hidden surfaces keep
+  children). A leaf is a **pane** holding one or more entries (**surfaces**, cmux-style) shown
+  as tabs in its header (`{id, entryIds, activeEntryId}`); only the active surface is
+  mounted. An entry is a terminal (its id is its session id); folder and file entries are
+  planned (`docs/design/WORKDIR_OBJECTS.md`, `lib/entries`). Resizable dividers; each leaf resize → fit → `pty:resize`. Hidden surfaces keep
   running: their xterm is opened in an off-screen, `inert` **parking** element (xterm pauses
   rendering off-viewport, so no paint cost) and takes its pane's grid via `followSize`.
   `workspace.json` v2 persists surfaces (v1 leaves migrate; each v2 leaf also writes a legacy
@@ -326,11 +327,11 @@ CI: GitHub Actions matrix (macos/ubuntu/windows). Auto-update later via `electro
   import Electron.
 - **Renderer → main** (`invoke` for answers, `send` for fire-and-forget), by family: `pty:*`
   (spawn = attach-or-spawn, write, resize, kill) · `shells:list` · `settings:*` / `workspace:*`
-  (read/write the JSON files) · `git:status` / `git:diff` (changes panel) · `pane:git-info`
+  (read/write the JSON files) · `git:status` / `git:diff` (folder and file tabs) · `pane:git-info`
   (sidebar branch + PR) · `agents:meta-snapshot` · `agents:resume-plan` /
   `agents:resume-consume` / `agents:shell-idle` · `agents:hint-wanted` / `agents:hint-dismiss`
   (the Codex approval hint) · `fs:*` / `file:*` / `dialog:pick-directory` /
-  `editor:info` (files panel, links, preview) · `window:*` (frameless controls, native bg) ·
+  `editor:info` (folder tabs, links, preview) · `window:*` (frameless controls, native bg) ·
   `platform:info` · `app:*` (version, update check, metrics) · `open-external` / `open-path` /
   `notify` / `clipboard:*` · `ssh:list-hosts` (invoke) / `ssh:open-config` (send).
 - **Main → renderer** (`webContents.send`): `pty:data:<id>` (coalesced PTY bytes — the hot path;
@@ -352,9 +353,14 @@ non-default profile; a dev build is `minmux-dev` (GOTCHAS #profiles).
   the same file. `mergeSettings` validates everything and maps legacy values.
 - **`workspace.json`** — the layout: tabs, pane trees with their surfaces, focus, right-panel
   width, and enough per session to respawn it (shell, args, cwd). **v2** leaves are
-  `{id, sessionIds, activeSessionId}` plus a legacy `sessionId` mirror so an older build still
-  restores every pane; v1 files migrate on read. A file from a **newer** build is not parsed
-  and not overwritten. Restore de-duplicates / prunes broken entries.
+  `{id, sessionIds, activeSessionId}` (the pane's terminals) plus a legacy `sessionId` mirror so
+  an older build still restores every pane; v1 files migrate on read. A file from a **newer** build is not parsed
+  and not overwritten. Restore de-duplicates / prunes broken entries. Panes and tabs with no
+  terminal are left out of it (an older build would drop them, maybe the whole file).
+- **`layout.json`** — the full layout beside it: folder entries (`obj-` ids), panes and tabs of
+  folders only, and what each folder view has open. Saved with `workspace.json` and stamped with
+  its hash; read back whole only while that stamp matches, else `workspace.json` wins and the
+  folders go back into panes still there (`lib/layout-file`).
 - **`agent-sessions.json`** (Claude) and **`agent-sessions.<agent>.json`** — which agent session
   each terminal is inside, so a relaunch can resume it (GOTCHAS #resume).
 - **`agent-names.json`** (the sessions the user named: their colour survives a resume) and
@@ -383,7 +389,7 @@ Design: `docs/design/SSH_REMOTES.md`; build log: `docs/design/SSH_IMPLEMENTATION
   (`ssh [keepalive] -t -- <alias>`, or `wsl.exe -d <distro> -e ssh …`). An unknown host is
   refused, never run as a bare alias.
 - **Plain ssh.** No connection reuse, no shell integration, no local cwd: OSC 7, file links,
-  git and the Files panel are off for remote panes (their paths are on the host).
+  git and folder tabs are off for remote panes (their paths are on the host).
 - **One spawn per pane** (`pending-spawns.ts`): building the plan is async, so a reload joins
   the pending spawn, a close means it never starts, and keys typed before ssh exists are
   dropped (never echoed ahead of a password prompt).

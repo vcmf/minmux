@@ -6,9 +6,7 @@ import {
   CaretDown,
   MagnifyingGlass,
   GearSix,
-  GitDiff,
   GithubLogo,
-  FolderOpen,
   Bell,
   Minus,
   Square,
@@ -119,7 +117,7 @@ export function TopBar() {
     for (const id of allSessionIds(tab.root)) {
       // Needs you: attention, or an ssh pane at a password / host-key prompt — unless it's the
       // pane you're looking at (the attention rule: never nag the pane you're driving).
-      const driving = windowFocused && tab.id === activeTabId && tab.activeSessionId === id
+      const driving = windowFocused && tab.id === activeTabId && tab.activeEntryId === id
       if (sessions[id]?.status === "attention" || (remotePhase[id] === "prompt" && !driving)) {
         waiting.push({ tabId: tab.id, sessionId: id })
       }
@@ -128,7 +126,7 @@ export function TopBar() {
 
   const jumpToWaiting = () => {
     if (waiting.length === 0) return
-    const cur = tabs.find((t) => t.id === activeTabId)?.activeSessionId
+    const cur = tabs.find((t) => t.id === activeTabId)?.activeEntryId
     const idx = waiting.findIndex((w) => w.tabId === activeTabId && w.sessionId === cur)
     const target = waiting[(idx + 1) % waiting.length]! // idx === -1 → first
     const store = useStore.getState()
@@ -333,25 +331,8 @@ export function TopBar() {
           <span>Search or run</span>
           <span className="kbd">⌘K</span>
         </button>
-        {/* One right-side panel; these icons switch its view (click active → hide). */}
-        <button
-          className={`iconbtn${rightView === "files" ? " on" : ""}`}
-          data-tip="Files"
-          aria-label="Files"
-          onClick={() => useStore.getState().setRightView(rightView === "files" ? null : "files")}
-        >
-          <FolderOpen size={15} />
-        </button>
-        <button
-          className={`iconbtn${rightView === "changes" ? " on" : ""}`}
-          data-tip="Changes (git)"
-          aria-label="Changes"
-          onClick={() =>
-            useStore.getState().setRightView(rightView === "changes" ? null : "changes")
-          }
-        >
-          <GitDiff size={15} />
-        </button>
+        {/* The right-side panel: the agents list (click again → hide). Folders and their git
+            changes are pane tabs now (docs/design/WORKDIR_OBJECTS.md). */}
         <button
           className={`iconbtn${rightView === "agents" ? " on" : ""}`}
           data-tip="Agents"

@@ -16,12 +16,14 @@ runs in normal use). It uses the real Electron renderer (real WebGL) and the rea
 
 ## What it measures
 
-| Scenario     | Path exercised                                     | Metric                       |
-| ------------ | -------------------------------------------------- | ---------------------------- |
-| **renderer** | `term.write` → xterm parse → WebGL (no PTY/IPC)    | MB/s to drain 20 MB          |
-| **e2e**      | shell → node-pty → **main→renderer IPC** → write   | MB/s + **IPC message count** |
-| **idle**     | app sitting still (git poll, clock, status timers) | main/renderer CPU %          |
-| **memory**   | RSS per process after the run                      | main / renderer / GPU MB     |
+| Scenario             | Path exercised                                     | Metric                        |
+| -------------------- | -------------------------------------------------- | ----------------------------- |
+| **renderer**         | `term.write` → xterm parse → WebGL (no PTY/IPC)    | MB/s to drain 20 MB           |
+| **e2e**              | shell → node-pty → **main→renderer IPC** → write   | MB/s + **IPC message count**  |
+| **input**            | key → PTY → shell echo → IPC → xterm parse         | ms p50 / p95 / max (200 keys) |
+| **input under load** | the same, while a second PTY runs a firehose       | ms p50 / p95 / max            |
+| **idle**             | app sitting still (git poll, clock, status timers) | main/renderer CPU %           |
+| **memory**           | RSS per process after the run                      | main / renderer / GPU MB      |
 
 `app.getAppMetrics()` (main) supplies CPU/RSS. The e2e generator is a deterministic
 `yes | head -n N` firehose bracketed by concatenation-built markers (so the shell's echo of the
@@ -48,6 +50,20 @@ Other baselines (2026-07-08):
 | Idle CPU (main / renderer)     | **0% / 0%**            | background timers are effectively free |
 | Memory (main / renderer / GPU) | **~140 / 250 / 80 MB** | ~480 MB total (Electron baseline)      |
 
+**Keystroke latency** (2026-11-20, first baseline, measured before the workdir-objects epic's
+entry-ids refactor and after it, interleaved, three runs each; zsh with shell integration, 200
+keys 15 ms apart, Ctrl-U every 20 keys; "under load" keeps `yes` running in a second PTY for the
+whole loop; a key's echo is matched with escape sequences stripped):
+
+| Metric                     | before                 | after                  |
+| -------------------------- | ---------------------- | ---------------------- |
+| Input p50 / p95            | 5.7–6.0 / 11.9–14.9 ms | 5.8–6.1 / 13.9–15.2 ms |
+| Input under load p50 / p95 | 5.0–5.3 / 9.7–13.0 ms  | 4.9–5.3 / 8.7–10.3 ms  |
+| Keys with no echo in 1 s   | 0                      | 0                      |
+
+p50 is steady; p95 and max swing from run to run on both builds, so compare ranges over several
+interleaved runs, never one run against another.
+
 ## Findings & next steps
 
 1. **IPC coalescing — done ✅.** Batching PTY output in main (`electron/coalescer.ts`, 4 ms / 256 KB
@@ -58,5 +74,5 @@ Other baselines (2026-07-08):
    `write()` callback backlog grows and resume when drained, so the PTY can't outrun the renderer /
    balloon memory. Measure first — may not be worth it now that message overhead is gone.
 3. **Idle is already fine** — no action; keep it that way as features add timers.
-4. **Not yet measured** (add scenarios as needed): input latency, N-busy-panes CPU/RSS scaling,
+4. **Not yet measured** (add scenarios as needed): N-busy-panes CPU/RSS scaling,
    huge-repo git-poll cost, and React re-render counts under high-frequency status updates.

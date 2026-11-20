@@ -3,11 +3,12 @@
 // its session (it re-attaches, never respawns).
 import type { Tab } from "../types"
 import { moveTo } from "./tab-order"
+import { makeTab, withFocus } from "./tab-focus"
 import {
-  allSessionIds,
+  allEntryIds,
   findPane,
   findPaneById,
-  firstSessionId,
+  firstEntryId,
   insertSurface,
   joinRight,
   makeLeaf,
@@ -15,7 +16,7 @@ import {
   type MoveTarget,
 } from "./pane-tree"
 
-/** The drag payload of a terminal (a pane's surface tab, a sidebar row): its session id. */
+/** The drag payload of a pane entry (a pane's surface tab, a sidebar row): its entry id. */
 export const SURFACE_DRAG_TYPE = "application/x-minmux-surface"
 
 /** Where a dragged terminal lands. */
@@ -39,7 +40,7 @@ export function canDrop(tabs: Tab[], sessionId: string, drop: GroupDrop): boolea
   const src = tabOf(tabs, sessionId)
   if (!src) return false
   if (drop.kind === "new") {
-    if (allSessionIds(src.root).length > 1) return true
+    if (allEntryIds(src.root).length > 1) return true
     return moveTo(tabs, src.id, drop.insertAt) !== tabs // its own group: a reorder
   }
   return drop.tabId !== src.id && tabs.some((t) => t.id === drop.tabId)
@@ -60,25 +61,19 @@ export function moveTerminal(
   // surface now shown in its pane takes it (as when closing it), else the first pane.
   const srcPane = findPane(src.root, sessionId)!
   const srcAfter: Tab | null = rest
-    ? {
-        ...src,
-        root: rest,
-        activeSessionId:
-          src.activeSessionId === sessionId
-            ? (findPaneById(rest, srcPane.id)?.activeSessionId ?? firstSessionId(rest))
-            : src.activeSessionId,
-      }
+    ? withFocus(
+        src,
+        src.activeEntryId === sessionId
+          ? (findPaneById(rest, srcPane.id)?.activeEntryId ?? firstEntryId(rest))
+          : src.activeEntryId,
+        rest,
+      )
     : null
 
   if (drop.kind === "new") {
     // Its only terminal: the group itself moves (a reorder).
     if (!srcAfter) return { tabs: moveTo(tabs, src.id, drop.insertAt), activeTabId: src.id }
-    const fresh: Tab = {
-      id: ids.tabId,
-      title: "",
-      root: makeLeaf(ids.paneId, sessionId),
-      activeSessionId: sessionId,
-    }
+    const fresh: Tab = makeTab(ids.tabId, "", makeLeaf(ids.paneId, sessionId), sessionId)
     const out = tabs.map((t) => (t === src ? srcAfter : t))
     out.splice(Math.max(0, Math.min(drop.insertAt, out.length)), 0, fresh)
     return { tabs: out, activeTabId: fresh.id }
@@ -90,7 +85,7 @@ export function moveTerminal(
       ? joinRight(dst.root, sessionId, ids)
       : insertSurface(dst.root, sessionId, drop.target, ids)
   if (root === dst.root) return null // the target pane went away mid-drag
-  const dstAfter: Tab = { ...dst, root, activeSessionId: sessionId }
+  const dstAfter: Tab = withFocus(dst, sessionId, root)
   const out = tabs.flatMap((t) =>
     t === dst ? [dstAfter] : t === src ? (srcAfter ? [srcAfter] : []) : [t],
   )

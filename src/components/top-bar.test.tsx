@@ -47,14 +47,14 @@ describe("TopBar", () => {
     expect(ipc.closeWindow).toHaveBeenCalledOnce()
   })
 
-  it("the right-panel icons switch the shared view (click active → hide)", () => {
+  it("the Agents icon shows the right panel; again hides it (no Files or Changes icons)", () => {
     render(<TopBar />)
-    fireEvent.click(screen.getByRole("button", { name: "Changes" }))
-    expect(st().rightView).toBe("changes")
-    fireEvent.click(screen.getByRole("button", { name: "Files" })) // switch view, not stack
-    expect(st().rightView).toBe("files")
-    fireEvent.click(screen.getByRole("button", { name: "Files" })) // click active → hide
+    fireEvent.click(screen.getByRole("button", { name: "Agents" }))
+    expect(st().rightView).toBe("agents")
+    fireEvent.click(screen.getByRole("button", { name: "Agents" }))
     expect(st().rightView).toBeNull()
+    expect(screen.queryByRole("button", { name: "Files" })).toBeNull()
+    expect(screen.queryByRole("button", { name: "Changes" })).toBeNull()
   })
 
   it("the bell shows a waiting count and jumps to that session", () => {
@@ -285,7 +285,7 @@ describe("TopBar pull requests button", () => {
     const btn = screen.getByRole("button", { name: "Pull requests" })
     await waitFor(() => expect(btn).toHaveClass("muted"))
     expect(btn).toHaveAttribute("data-tip", "Pull requests (GitHub CLI isn't installed)")
-    for (const name of ["Files", "Changes", "Agents", "Settings"])
+    for (const name of ["Agents", "Settings"])
       expect(screen.getByRole("button", { name })).toHaveAttribute("data-tip")
     vi.mocked(ipc.ghInstalled).mockResolvedValue(true)
     window.dispatchEvent(new Event("focus")) // installed it meanwhile

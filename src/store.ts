@@ -5,18 +5,31 @@ import type { Session, ShellOption, SshHost, Tab } from "./types"
 import type { PrRef } from "./lib/pr-detail"
 import {
   addSurface,
+  allEntryIds,
   allSessionIds,
   findPane,
   findPaneById,
-  firstSessionId,
+  firstEntryId,
   makeLeaf,
   moveSurface,
+  paneSessionIds,
   removeNode,
   removePane,
-  selectSurface,
   splitNode,
   visibleSessionIds,
 } from "./lib/pane-tree"
+import { makeTab, withFocus } from "./lib/tab-focus"
+import { files } from "./lib/file-store"
+import {
+  EMPTY_VIEW,
+  objectId,
+  placeOf,
+  type FileEntry,
+  type FolderEntry,
+  type FolderView,
+  type ObjectEntry,
+} from "./lib/folder-entries"
+import { isTerminalEntry } from "./lib/entries"
 import { inheritShell, resolveDefaultShell } from "./lib/shells"
 import { hostShellOption, sameHosts } from "./lib/ssh-hosts-ui"
 import { pushRecent, toggleHidden, togglePinned } from "./lib/ssh-host-list"
@@ -58,10 +71,9 @@ import { saveSettings } from "./settings/io"
 import { resolveTheme, type Theme } from "./settings/themes"
 import type { Settings } from "./settings/schema"
 import type { GitStatus } from "./lib/ipc"
-import { isAbsoluteHostPath } from "./lib/file-actions"
 import type { EditorInfo } from "./lib/file-actions"
 import { normalizeRootPath } from "./lib/breadcrumb"
-import type { WslContext } from "./lib/wsl"
+import { wslContext, type WslContext } from "./lib/wsl"
 import type { WorkspaceState } from "./lib/workspace"
 import type { MoveTarget } from "./lib/pane-tree"
 import type { SessionMeta } from "./lib/session-color"
@@ -95,16 +107,87 @@ function localShellFor(state: AppState, src: Session | undefined): ShellOption |
   return resolveDefaultShell(state.shells, state.settings.defaultShell)
 }
 
-/** The cwd of the currently focused terminal, if known — new panes/tabs inherit it. */
+// The inherited shell, else the default, else the first such one. A WSL shell would start in
+// `~`: main can't hand a host path to `wsl --cd`.
+/** A shell on this machine's own filesystem (not ssh, not WSL), for a host folder. */
+function hostShellFor(state: AppState, src: Session | undefined): ShellOption | undefined {
+  const ok = (s: ShellOption | undefined) => !!s && !s.remote && !wslContext(s.command, s.args)
+  const inherited = inheritShell(state.shells, src)
+  if (ok(inherited)) return inherited
+  const def = resolveDefaultShell(state.shells, state.settings.defaultShell)
+  if (ok(def)) return def
+  return state.shells.find(ok) ?? def
+}
+
+// A WSL folder isn't used: a new tab takes the shell it's given, which may not be WSL.
+/** Where new tabs open: the focused folder entry's path, else the tab's terminal's cwd. */
 function focusedCwd(state: AppState): string | undefined {
   const tab = state.tabs.find((t) => t.id === state.activeTabId)
+  const o = tab ? state.objects[tab.activeEntryId] : undefined
+  const folder = o && placeOf(o)
+  if (folder && !folder.wsl) return folder.path
   const sid = tab?.activeSessionId
   return sid ? state.sessions[sid]?.cwd : undefined
 }
 
-/** The single right-side panel's active view (null = hidden). Files / Changes / Agents
- *  share one panel — the top-bar icons switch it (click the active one to hide). */
-export type RightView = "files" | "changes" | "agents" | null
+/** The folder `tab`'s focus stands in, when it's a folder or file entry. */
+function focusedFolder(state: AppState, tab: Tab): { path: string; wsl?: WslContext } | undefined {
+  const o = state.objects[tab.activeEntryId]
+  return o && placeOf(o)
+}
+
+/** A WSL shell for `distro` (undefined: the default one): the inherited one if it matches. */
+function wslShellFor(
+  state: AppState,
+  src: Session | undefined,
+  distro: string | undefined,
+): ShellOption | undefined {
+  const ok = (s: ShellOption | undefined) => {
+    const w = s && !s.remote ? wslContext(s.command, s.args) : undefined
+    return !!w && w.distro === distro
+  }
+  const inherited = inheritShell(state.shells, src)
+  return ok(inherited) ? inherited : state.shells.find(ok)
+}
+
+/** The shell a terminal opened in folder `f` runs: a WSL one for its distro, else a host one. */
+const folderShell = (state: AppState, src: Session | undefined, f: { wsl?: WslContext }) =>
+  f.wsl ? wslShellFor(state, src, f.wsl.distro) : hostShellFor(state, src)
+
+/** Whether a terminal can open in folder entry `id` (its "New terminal here"). */
+export const canOpenTerminalIn = (state: AppState, id: string): boolean => {
+  const o = state.objects[id]
+  if (!o) return false
+  const f = placeOf(o)
+  // The same shells the action would find: its tab's terminal's included.
+  const tab = state.tabs.find((t) => !!findPane(t.root, id))
+  return !!folderShell(state, tab ? state.sessions[tab.activeSessionId] : undefined, f)
+}
+
+// A focused folder's: a host shell, or a WSL one for its distro. A WSL folder no shell opens:
+// a terminal like the tab's own, where it is (not an ssh one). No folder focused: the tab's
+// terminal's own shell and folder.
+/** The shell and folder a new terminal of `tab` starts with; undefined: none can. */
+function newTerminalSource(
+  state: AppState,
+  tab: Tab,
+  fallback: ShellOption | undefined,
+): { shell: ShellOption; cwd: string | undefined; src: Session | undefined } | undefined {
+  const src = state.sessions[tab.activeSessionId]
+  const folder = focusedFolder(state, tab)
+  if (folder) {
+    const shell = folderShell(state, src, folder) ?? (folder.wsl ? undefined : fallback)
+    if (shell) return { shell, cwd: folder.path, src }
+    // A WSL folder no shell opens: a terminal like the tab's own, where that one is (an ssh
+    // one isn't copied: the folder is on this machine), so ⌘T / ⌘D / + still do something.
+    if (src?.remote) return fallback ? { shell: fallback, cwd: undefined, src } : undefined
+  }
+  const shell = inheritShell(state.shells, src) ?? fallback
+  return shell ? { shell, cwd: src?.cwd, src } : undefined
+}
+
+/** The right-side panel's view (null = hidden): the agents list, from its top-bar icon. */
+export type RightView = "agents" | null
 
 interface AppState {
   sessions: Record<string, Session>
@@ -135,15 +218,16 @@ interface AppState {
   rightPanelWidth: number // px width of the right panel (drag-resizable, persisted)
   sidebarCollapsed: boolean
   git: GitStatus | null
+  folderGit: Record<string, GitStatus> // folder entries' other repos, by repoKey (lib/folder-git)
+  folderRoots: Record<string, string | null> // each shown folder's repo root, by wantKey
   agents: AgentGraph // live tree of agents/sub-agents (M6, fed by hook events)
   home: string
   platform: string // process.platform ("darwin"|"win32"|"linux"); "" until fetched
   profile: string // a non-default profile's name ("dev"), shown by the brand; "" otherwise
   editor: EditorInfo | null // configured editor availability (file context menu)
-  // file open in the preview popup (null = closed); wsl = the pane's distro so a WSL path
-  // is read via its UNC share (captured at open time — the active pane may change after).
-  preview: { abs: string; name: string; wsl?: WslContext } | null
-  paneRoot: Record<string, string> // per-session Files-panel root override (absent = follow cwd)
+  preview: { abs: string; name: string } | null // the file in the preview popup (null = closed)
+  objects: Record<string, ObjectEntry> // pane entries that aren't terminals, by `obj-` id
+  folderViews: Record<string, FolderView> // per folder entry: what its view has open
   closeConfirm: CloseConfirm | null // a close awaiting the "are you sure?" dialog (lib/close-confirm)
   dragging: { tabId: string; sessionId: string } | null // surface being dragged (drop hints on)
   agentMeta: Record<string, SessionMeta> // per pane: the agent session's /color + /rename
@@ -158,11 +242,32 @@ interface AppState {
   setPlatform: (platform: string) => void
   setProfile: (profile: string) => void
   setEditor: (editor: EditorInfo) => void
-  setPreview: (preview: { abs: string; name: string; wsl?: WslContext } | null) => void
-  setPaneRoot: (sessionId: string, root: string) => void
-  clearPaneRoot: (sessionId: string) => void
+  setPreview: (preview: { abs: string; name: string } | null) => void
+  /** Open a folder as a new tab of a pane (default: the active tab's focused pane), focused. */
+  openFolder: (path: string, opts?: { tabId?: string; paneId?: string; wsl?: WslContext }) => void
+  // Default: the active tab's focused pane. A peek replaces the pane's peek; a file already open
+  // there is focused (at `line`) instead.
+  /** Open a file as a tab of a pane, focused. */
+  openFile: (
+    path: string,
+    opts?: {
+      tabId?: string
+      paneId?: string
+      wsl?: WslContext
+      line?: number
+      peek?: boolean
+      diff?: boolean // open on its diff (a changed file from the changes list)
+    },
+  ) => void
+  setFileView: (id: string, view: "source" | "diff") => void
+  keepEntry: (id: string) => void // a peek becomes a kept tab (double-click, drag)
+  setFolderView: (id: string, view: FolderView) => void
+  setFolderRoot: (id: string, path: string) => void // re-root a folder entry (double-click)
+  requestCloseEntry: (tabId: string, entryId: string) => void // a terminal asks; a folder closes
   setSessionOscTitle: (sessionId: string, title: string) => void
   setGit: (git: GitStatus | null) => void
+  setFolderGit: (key: string, git: GitStatus | null) => void // null drops it
+  setFolderRoots: (roots: Record<string, string | null>) => void
   applyAgentEvents: (events: AgentEvent[]) => void
   agentExited: (paneId: string) => void // the pane's shell prompt came back after its agent
   setRightView: (view: RightView) => void
@@ -261,7 +366,7 @@ function terminalStates(state: AppState, ids: string[]): TerminalState[] {
 export function isVisibleIn(state: AppState, sessionId: string): boolean {
   if (!state.windowFocused || !state.activeTabId) return false
   const tab = state.tabs.find((t) => t.id === state.activeTabId)
-  return tab?.activeSessionId === sessionId
+  return tab?.activeEntryId === sessionId
 }
 
 /** Mark a session as seen: drop attention/unread/reason. A still-running agent
@@ -280,6 +385,12 @@ function seen(s: Session): Session {
 export const activeTheme = (s: Pick<AppState, "settings" | "systemDark">): Theme =>
   resolveTheme(s.settings.theme, s.settings.appearance, s.systemDark)
 
+/** The active tab's focus when it's a terminal (keyboard, search, "the pane you're driving"). */
+export function focusedTerminal(state: Pick<AppState, "tabs" | "activeTabId">): string | undefined {
+  const id = state.tabs.find((t) => t.id === state.activeTabId)?.activeEntryId
+  return id && isTerminalEntry(id) ? id : undefined
+}
+
 export const isSessionVisible = (sessionId: string): boolean =>
   isVisibleIn(useStore.getState(), sessionId)
 
@@ -293,19 +404,11 @@ function splitActivePane(
   const tab = state.tabs.find((t) => t.id === state.activeTabId)
   if (!tab) return {}
   const session = makeSession(opts.shell, opts.cwd, opts.reopen)
-  const root = splitNode(
-    tab.root,
-    tab.activeSessionId,
-    opts.direction,
-    session.id,
-    newId(),
-    newId(),
-  )
+  // Beside the focused entry's pane.
+  const root = splitNode(tab.root, tab.activeEntryId, opts.direction, session.id, newId(), newId())
   return {
     sessions: { ...state.sessions, [session.id]: session },
-    tabs: state.tabs.map((t) =>
-      t.id === tab.id ? { ...t, root, activeSessionId: session.id } : t,
-    ),
+    tabs: state.tabs.map((t) => (t.id === tab.id ? withFocus(t, session.id, root) : t)),
   }
 }
 
@@ -329,13 +432,6 @@ function hintFor(state: AppState, shell: ShellOption, next: Partial<AppState>): 
     return {}
   }
   return { integrationHint: { sessionId: tab.activeSessionId, alias, state: "ask" } }
-}
-
-/** Make `sessionId` the tab's focus and its pane's visible surface (same tab if unchanged). */
-function focusIn(tab: Tab, sessionId: string): Tab {
-  const root = selectSurface(tab.root, sessionId)
-  if (root === tab.root && tab.activeSessionId === sessionId) return tab
-  return { ...tab, root, activeSessionId: sessionId }
 }
 
 /** Apply `fn` to one tab; the SAME array when unchanged (keeps `tabs` subscribers quiet). */
@@ -363,7 +459,6 @@ function dropSessions(
 ): Pick<
   AppState,
   | "sessions"
-  | "paneRoot"
   | "agentMeta"
   | "paneGit"
   | "paneWork"
@@ -375,7 +470,6 @@ function dropSessions(
   | "integrationHint"
 > {
   const sessions = { ...state.sessions }
-  const paneRoot = { ...state.paneRoot }
   const agentMeta = { ...state.agentMeta }
   const paneGit = { ...state.paneGit }
   const paneWork = { ...state.paneWork }
@@ -393,15 +487,13 @@ function dropSessions(
     delete paneGit[gitKey(id, "edit")] // …and the checkout it edits in
     delete paneWork[id]
     delete sessions[id]
-    delete paneRoot[id] // don't leak the pane's root override
-    delete agentMeta[id] // …or its Claude accent
+    delete agentMeta[id] // don't leak its Claude accent
   }
   // The hint goes with the pane it was on (closing it isn't an answer: a later split asks again).
   const hint = state.integrationHint
   const integrationHint = hint && ids.includes(hint.sessionId) ? null : hint
   return {
     sessions,
-    paneRoot,
     agentMeta,
     paneGit,
     paneWork,
@@ -412,6 +504,20 @@ function dropSessions(
     remoteDetail,
     integrationHint,
   }
+}
+
+/** Drop folder / file entries from the store maps (terminal ids are ignored). */
+function dropObjects(state: AppState, ids: string[]): Pick<AppState, "objects" | "folderViews"> {
+  const gone = ids.filter((id) => id in state.objects || id in state.folderViews)
+  if (!gone.length) return { objects: state.objects, folderViews: state.folderViews }
+  gone.forEach((id) => files.forget(id)) // a file tab's read and lines go with it
+  const objects = { ...state.objects }
+  const folderViews = { ...state.folderViews }
+  for (const id of gone) {
+    delete objects[id]
+    delete folderViews[id]
+  }
+  return { objects, folderViews }
 }
 
 /** Remove a tab; if it was active, the last remaining tab takes over. */
@@ -478,7 +584,10 @@ export const useStore = create<AppState>((set, get) => ({
   profile: "",
   editor: null,
   preview: null,
-  paneRoot: {},
+  objects: {},
+  folderViews: {},
+  folderGit: {},
+  folderRoots: {},
   closeConfirm: null,
   dragging: null,
   agentMeta: {},
@@ -493,24 +602,150 @@ export const useStore = create<AppState>((set, get) => ({
   setProfile: (profile) => set({ profile }),
   setEditor: (editor) => set({ editor }),
   setPreview: (preview) => set({ preview }),
-  // Central guard for every reroot entry point (double-click, context menu, breadcrumb,
-  // typed path, picker): normalize and require an absolute path. WSL panes are allowed —
-  // their Linux paths (/home/…) are absolute, and readdir/preview read them via the
-  // distro's UNC share (the old WSL rejection predated that translation).
-  setPaneRoot: (sessionId, root) =>
-    set((s) => {
-      if (!s.sessions[sessionId]) return {}
-      const norm = normalizeRootPath(root)
-      if (!isAbsoluteHostPath(norm)) return {}
-      return { paneRoot: { ...s.paneRoot, [sessionId]: norm } }
+  openFile: (path, opts = {}) =>
+    set((state) => {
+      const tab = state.tabs.find((t) => t.id === (opts.tabId ?? state.activeTabId))
+      if (!tab || !path) return {}
+      const pane = opts.paneId
+        ? findPaneById(tab.root, opts.paneId)
+        : findPane(tab.root, tab.activeEntryId)
+      if (!pane) return {}
+      const line = opts.line && opts.line > 0 ? { line: opts.line } : {}
+      // Already open in this pane: show it there (at the line asked for).
+      // The same file: same distro (or both host), same path (any case on Windows).
+      const key = (p: string) => (state.platform === "win32" && !opts.wsl ? p.toLowerCase() : p)
+      const open = pane.entryIds.find((id) => {
+        const o = state.objects[id]
+        return (
+          o?.kind === "file" &&
+          o.wsl?.distro === opts.wsl?.distro &&
+          !o.wsl === !opts.wsl &&
+          key(o.path) === key(path)
+        )
+      })
+      if (open) {
+        const cur = state.objects[open] as FileEntry
+        // At its line again, even the same one (scrolled away since): a new `seq` says "go".
+        let next: FileEntry = opts.line ? { ...cur, line: opts.line, seq: (cur.seq ?? 0) + 1 } : cur
+        if (opts.diff && cur.view !== "diff") next = { ...next, view: "diff" }
+        else if (opts.line && !opts.diff && next.view) {
+          next = { ...next } // a line is the source's: back to Source to show it
+          delete next.view
+        }
+        const objects = next === cur ? state.objects : { ...state.objects, [open]: next }
+        return {
+          objects,
+          tabs: replaceTab(state.tabs, tab.id, (t) => withFocus(t, open)),
+          activeTabId: tab.id,
+        }
+      }
+      const id = objectId(newId())
+      const file: FileEntry = {
+        kind: "file",
+        path,
+        ...(opts.wsl ? { wsl: opts.wsl } : {}),
+        ...line,
+        ...(opts.peek ? { peek: true as const } : {}),
+        ...(opts.diff ? { view: "diff" as const } : {}),
+      }
+      // A peek takes the place of the pane's previous one.
+      const old = opts.peek
+        ? pane.entryIds.find((e) => (state.objects[e] as FileEntry | undefined)?.peek)
+        : undefined
+      // Added right after it first, then it goes: the pane survives even when the peek was all
+      // it held, and the new peek takes its place.
+      const at = old ? pane.entryIds.indexOf(old) + 1 : undefined
+      let root = addSurface(tab.root, pane.id, id, at)
+      if (old) root = removeNode(root, old) ?? root
+      const objects = { ...state.objects, [id]: file }
+      if (old) {
+        delete objects[old]
+        files.forget(old) // the replaced peek's text and lines go now
+      }
+      return {
+        objects,
+        tabs: replaceTab(state.tabs, tab.id, (t) => withFocus(t, id, root)),
+        activeTabId: tab.id,
+      }
     }),
-  clearPaneRoot: (sessionId) =>
-    set((s) => {
-      if (!(sessionId in s.paneRoot)) return {}
-      const next = { ...s.paneRoot }
-      delete next[sessionId]
-      return { paneRoot: next }
+
+  setFileView: (id, view) =>
+    set((state) => {
+      const o = state.objects[id]
+      if (o?.kind !== "file" || (o.view ?? "source") === view) return state
+      const next: FileEntry = { ...o }
+      if (view === "diff") next.view = "diff"
+      else delete next.view
+      return { objects: { ...state.objects, [id]: next } }
     }),
+
+  keepEntry: (id) =>
+    set((state) => {
+      const o = state.objects[id]
+      if (o?.kind !== "file" || !o.peek) return state
+      const kept: FileEntry = { ...o }
+      delete kept.peek
+      return { objects: { ...state.objects, [id]: kept } }
+    }),
+
+  openFolder: (path, opts = {}) =>
+    set((state) => {
+      const tab = state.tabs.find((t) => t.id === (opts.tabId ?? state.activeTabId))
+      if (!tab || !path) return {}
+      const pane = opts.paneId
+        ? findPaneById(tab.root, opts.paneId)
+        : findPane(tab.root, tab.activeEntryId)
+      if (!pane) return {}
+      // Already open in this pane: show that one.
+      const norm = normalizeRootPath(path)
+      const open = pane.entryIds.find((e) => {
+        const o = state.objects[e]
+        return (
+          o?.kind === "folder" &&
+          (state.platform === "win32" && !opts.wsl
+            ? o.path.toLowerCase() === norm.toLowerCase()
+            : o.path === norm) &&
+          !o.wsl === !opts.wsl &&
+          o.wsl?.distro === opts.wsl?.distro
+        )
+      })
+      if (open)
+        return {
+          tabs: replaceTab(state.tabs, tab.id, (t) => withFocus(t, open)),
+          activeTabId: tab.id,
+        }
+      const id = objectId(newId())
+      const folder: FolderEntry = {
+        kind: "folder",
+        path: normalizeRootPath(path),
+        ...(opts.wsl ? { wsl: opts.wsl } : {}),
+      }
+      const root = addSurface(tab.root, pane.id, id)
+      return {
+        objects: { ...state.objects, [id]: folder },
+        tabs: replaceTab(state.tabs, tab.id, (t) => withFocus(t, id, root)),
+        activeTabId: tab.id,
+      }
+    }),
+
+  setFolderView: (id, view) =>
+    set((state) =>
+      !state.objects[id] || state.folderViews[id] === view
+        ? state // same state: nothing notified, nothing saved
+        : { folderViews: { ...state.folderViews, [id]: view } },
+    ),
+
+  setFolderRoot: (id, path) =>
+    set((state) => {
+      const cur = state.objects[id]
+      const norm = normalizeRootPath(path)
+      if (cur?.kind !== "folder" || cur.path === norm) return state
+      return {
+        objects: { ...state.objects, [id]: { ...cur, path: norm } },
+        folderViews: { ...state.folderViews, [id]: EMPTY_VIEW },
+      }
+    }),
+
   setSessionOscTitle: (sessionId, title) =>
     set((state) => {
       const s = state.sessions[sessionId]
@@ -519,6 +754,23 @@ export const useStore = create<AppState>((set, get) => ({
       return { sessions: { ...state.sessions, [sessionId]: { ...s, oscTitle: next } } }
     }),
   setGit: (git) => set({ git }),
+  setFolderRoots: (roots) =>
+    set((state) => {
+      const cur = state.folderRoots
+      const keys = Object.keys(roots)
+      const same = keys.length === Object.keys(cur).length && keys.every((k) => cur[k] === roots[k])
+      return same ? state : { folderRoots: roots }
+    }),
+  setFolderGit: (key, git) =>
+    set((state) => {
+      const cur = state.folderGit[key]
+      if (git && cur && JSON.stringify(cur) === JSON.stringify(git)) return state // no re-render
+      if (!git && !cur) return state
+      const folderGit = { ...state.folderGit }
+      if (git) folderGit[key] = git
+      else delete folderGit[key]
+      return { folderGit }
+    }),
 
   // Fold a coalesced batch of hook events into the agent tree (one re-render per batch).
   applyAgentEvents: (events) =>
@@ -711,6 +963,8 @@ export const useStore = create<AppState>((set, get) => ({
       remoteDetail: {},
       tabs: ws.tabs,
       activeTabId: ws.activeTabId,
+      objects: ws.objects ?? {},
+      folderViews: ws.folderViews ?? {},
       ...(ws.rightPanelWidth !== undefined ? { rightPanelWidth: ws.rightPanelWidth } : {}),
     }),
   setRightPanelWidth: (px, maxAvail) => set({ rightPanelWidth: clampPanelWidth(px, maxAvail) }),
@@ -718,12 +972,8 @@ export const useStore = create<AppState>((set, get) => ({
   newTab: (shell) =>
     set((state) => {
       const session = makeSession(shell, focusedCwd(state))
-      const tab: Tab = {
-        id: newId(),
-        title: "", // unpinned — display derives from the focused pane's live title
-        root: makeLeaf(newId(), session.id),
-        activeSessionId: session.id,
-      }
+      // Title unpinned: the display derives from the focused pane's live title.
+      const tab: Tab = makeTab(newId(), "", makeLeaf(newId(), session.id), session.id)
       return {
         sessions: { ...state.sessions, [session.id]: session },
         tabs: [...state.tabs, tab],
@@ -736,7 +986,11 @@ export const useStore = create<AppState>((set, get) => ({
       closing((state) => {
         const tab = state.tabs.find((t) => t.id === tabId)
         if (!tab) return {}
-        return { ...dropSessions(state, allSessionIds(tab.root)), ...withoutTab(state, tabId) }
+        return {
+          ...dropSessions(state, allSessionIds(tab.root)),
+          ...dropObjects(state, allEntryIds(tab.root)),
+          ...withoutTab(state, tabId),
+        }
       }),
     ),
 
@@ -779,11 +1033,13 @@ export const useStore = create<AppState>((set, get) => ({
       if (!tab) return {}
       // Inherit the source pane's shell + cwd (WSL → WSL), not the list's first entry.
       const src = state.sessions[tab.activeSessionId]
-      const shell = inheritShell(state.shells, src) ?? fallback
-      if (!shell) return {}
+      // A focused folder: a terminal in that folder (newTerminalSource).
+      const from = newTerminalSource(state, tab, fallback)
+      if (!from) return {}
+      const { shell, cwd } = from
       // An ssh pane's split opens where it verifiably is (its host's shell integration).
       const reopen = shell.remote ? reopenFor(src) : undefined
-      const next = splitActivePane(state, { shell, cwd: src?.cwd, direction, reopen })
+      const next = splitActivePane(state, { shell, cwd, direction, reopen })
       return { ...next, ...hintFor(state, shell, next) }
     }),
 
@@ -810,7 +1066,9 @@ export const useStore = create<AppState>((set, get) => ({
       const shell = localShellFor(state, state.sessions[paneId])
       if (!tab || !shell) return {}
       // Split the pane holding it — as shown (no surface swap), not marked seen itself.
-      const tabs = state.tabs.map((t) => (t.id === tab.id ? { ...t, activeSessionId: paneId } : t))
+      const tabs = state.tabs.map((t) =>
+        t.id === tab.id ? withFocus(t, paneId, t.root, false) : t,
+      )
       const at = { ...state, activeTabId: tab.id, tabs }
       return { activeTabId: tab.id, ...splitActivePane(at, { shell, cwd, direction: "row" }) }
     })
@@ -824,16 +1082,17 @@ export const useStore = create<AppState>((set, get) => ({
     set((state) => {
       const tab = state.tabs.find((t) => t.id === state.activeTabId)
       if (!tab) return {}
-      const pane = findPane(tab.root, tab.activeSessionId)
+      const pane = findPane(tab.root, tab.activeEntryId) // the focused pane
       if (!pane) return {}
       const src = state.sessions[tab.activeSessionId]
-      const shell = inheritShell(state.shells, src) ?? fallback
-      if (!shell) return {}
-      const session = makeSession(shell, src?.cwd, shell.remote ? reopenFor(src) : undefined)
+      const from = newTerminalSource(state, tab, fallback) // in the focused folder, if any
+      if (!from) return {}
+      const { shell, cwd } = from
+      const session = makeSession(shell, cwd, shell.remote ? reopenFor(src) : undefined)
       const root = addSurface(tab.root, pane.id, session.id)
       const next = {
         sessions: { ...state.sessions, [session.id]: session },
-        tabs: replaceTab(state.tabs, tab.id, (t) => ({ ...t, root, activeSessionId: session.id })),
+        tabs: replaceTab(state.tabs, tab.id, (t) => withFocus(t, session.id, root)),
       }
       return { ...next, ...hintFor(state, shell, next) }
     }),
@@ -844,21 +1103,21 @@ export const useStore = create<AppState>((set, get) => ({
         const tab = state.tabs.find((t) => t.id === tabId)
         const pane = tab && findPane(tab.root, sessionId)
         if (!tab || !pane) return {}
-        const dropped = dropSessions(state, [sessionId])
+        const dropped = { ...dropSessions(state, [sessionId]), ...dropObjects(state, [sessionId]) }
         const root = removeNode(tab.root, sessionId)
         if (root === null) return { ...dropped, ...withoutTab(state, tabId) }
         // Closing the focused terminal: focus moves to the surface its pane now shows,
         // or (the pane is gone) to the leftmost pane.
         const survivor = findPaneById(root, pane.id)
-        const activeSessionId =
-          tab.activeSessionId === sessionId
-            ? (survivor?.activeSessionId ?? firstSessionId(root))
-            : tab.activeSessionId
+        const focus =
+          tab.activeEntryId === sessionId
+            ? (survivor?.activeEntryId ?? firstEntryId(root))
+            : tab.activeEntryId
         return {
           ...dropped,
           // The surface revealed in its place is now being looked at.
-          sessions: markSeen(dropped.sessions, activeSessionId),
-          tabs: replaceTab(state.tabs, tabId, (t) => ({ ...t, root, activeSessionId })),
+          sessions: markSeen(dropped.sessions, focus),
+          tabs: replaceTab(state.tabs, tabId, (t) => withFocus(t, focus, root)),
         }
       }),
     ),
@@ -869,16 +1128,19 @@ export const useStore = create<AppState>((set, get) => ({
         const tab = state.tabs.find((t) => t.id === tabId)
         const pane = tab && findPaneById(tab.root, paneId)
         if (!tab || !pane) return {}
-        const dropped = dropSessions(state, pane.sessionIds)
+        const dropped = {
+          ...dropSessions(state, paneSessionIds(pane)),
+          ...dropObjects(state, pane.entryIds),
+        }
         const root = removePane(tab.root, paneId)
         if (root === null) return { ...dropped, ...withoutTab(state, tabId) }
-        const activeSessionId = pane.sessionIds.includes(tab.activeSessionId)
-          ? firstSessionId(root)
-          : tab.activeSessionId
+        const focus = pane.entryIds.includes(tab.activeEntryId)
+          ? firstEntryId(root)
+          : tab.activeEntryId
         return {
           ...dropped,
-          sessions: markSeen(dropped.sessions, activeSessionId),
-          tabs: replaceTab(state.tabs, tabId, (t) => ({ ...t, root, activeSessionId })),
+          sessions: markSeen(dropped.sessions, focus),
+          tabs: replaceTab(state.tabs, tabId, (t) => withFocus(t, focus, root)),
         }
       }),
     ),
@@ -887,11 +1149,23 @@ export const useStore = create<AppState>((set, get) => ({
     const tab = get().tabs.find((t) => t.id === tabId)
     const pane = tab && findPaneById(tab.root, paneId)
     if (!pane) return
-    if (pane.sessionIds.length > 1) {
-      set({ closeConfirm: { kind: "pane", tabId, paneId, count: pane.sessionIds.length } })
-    } else {
+    const ids = paneSessionIds(pane)
+    if (ids.length > 1) {
+      set({ closeConfirm: { kind: "pane", tabId, paneId, count: ids.length } })
+    } else if (ids[0] && pane.entryIds.length === 1) {
       // One terminal: the terminal rule (asks while it runs a command or Claude).
-      get().requestCloseTerminal(tabId, pane.sessionIds[0]!)
+      get().requestCloseTerminal(tabId, ids[0])
+    } else if (ids[0]) {
+      // One terminal beside folders: its question, but the whole pane closes.
+      const s = get()
+      const [t] = terminalStates(s, ids)
+      const session = s.sessions[ids[0]]
+      const ask =
+        t && session ? terminalCloseConfirm(tabId, displaySessionTitle(session, s.home), t) : null
+      if (ask?.kind === "terminal") set({ closeConfirm: { ...ask, paneId } })
+      else s.closePane(tabId, paneId)
+    } else {
+      get().closePane(tabId, paneId) // no terminal: nothing to ask about
     }
   },
 
@@ -921,7 +1195,13 @@ export const useStore = create<AppState>((set, get) => ({
     if (!c) return
     if (c.kind === "pane") get().closePane(c.tabId, c.paneId)
     else if (c.kind === "tab") get().closeTab(c.tabId)
+    else if (c.paneId) get().closePane(c.tabId, c.paneId)
     else get().closeSurface(c.tabId, c.sessionId)
+  },
+
+  requestCloseEntry: (tabId, entryId) => {
+    if (isTerminalEntry(entryId)) get().requestCloseTerminal(tabId, entryId)
+    else get().closeSurface(tabId, entryId) // a folder / file: nothing runs, nothing to ask
   },
 
   cancelClose: () => set({ closeConfirm: null }),
@@ -1015,6 +1295,7 @@ export const useStore = create<AppState>((set, get) => ({
     const here = get().tabs.find((t) => t.id === tabId)
     if (here && !findPane(here.root, sessionId))
       return get().moveTerminal(sessionId, { kind: "pane", tabId, target })
+    let moved = false
     set((state) => {
       const tab = state.tabs.find((t) => t.id === tabId)
       // Stale drop (the surface or target pane went away mid-drag): just end the drag.
@@ -1022,16 +1303,14 @@ export const useStore = create<AppState>((set, get) => ({
         return { dragging: null }
       }
       const root = moveSurface(tab.root, sessionId, target, { splitId: newId(), paneId: newId() })
+      moved = root !== tab.root
       return {
         dragging: null,
-        tabs: replaceTab(state.tabs, tabId, (t) =>
-          root === t.root && t.activeSessionId === sessionId
-            ? t
-            : { ...t, root, activeSessionId: sessionId },
-        ),
+        tabs: replaceTab(state.tabs, tabId, (t) => withFocus(t, sessionId, root)),
         sessions: markSeen(state.sessions, sessionId),
       }
     })
+    if (moved) get().keepEntry(sessionId) // a peek dragged somewhere: kept
   },
 
   moveTerminal: (sessionId, drop) => {
@@ -1039,6 +1318,7 @@ export const useStore = create<AppState>((set, get) => ({
     const ids = { splitId: newId(), paneId: newId(), tabId: newId() }
     const r = moveTerminalPure(state.tabs, sessionId, drop, ids)
     if (!r) return set({ dragging: null })
+    get().keepEntry(sessionId) // a peek moved to another group: kept
     // closing(): a pending close confirm naming the emptied group / the moved terminal goes.
     set(
       closing(() => ({
@@ -1053,7 +1333,7 @@ export const useStore = create<AppState>((set, get) => ({
 
   setActivePane: (tabId, sessionId) =>
     set((state) => ({
-      tabs: replaceTab(state.tabs, tabId, (t) => focusIn(t, sessionId)),
+      tabs: replaceTab(state.tabs, tabId, (t) => withFocus(t, sessionId)),
       // Focusing a pane = you've seen it: clear its attention/unread/reason.
       sessions: markSeen(state.sessions, sessionId),
     })),
@@ -1068,7 +1348,7 @@ export const useStore = create<AppState>((set, get) => ({
       if (!tab) return {}
       return {
         activeTabId: tab.id,
-        tabs: replaceTab(state.tabs, tab.id, (t) => focusIn(t, sessionId)),
+        tabs: replaceTab(state.tabs, tab.id, (t) => withFocus(t, sessionId)),
         sessions: markSeen(state.sessions, sessionId),
       }
     }),
