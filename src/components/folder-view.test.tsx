@@ -166,14 +166,14 @@ describe("FolderView", () => {
     vi.mocked(ipc.editorInfo).mockResolvedValue({ available: true, name: "Zed" })
     useStore.setState({ editor: { available: true, name: "Zed" } })
     useStore.setState({ platform: "darwin" })
-    const { tabId, entryId } = open("/fv12")
+    const { tabId, entryId } = open("/fvp1")
     const v = render(<FolderView entryId={entryId} tabId={tabId} />)
     fireEvent.contextMenu(await screen.findByText("n.md"))
     fireEvent.mouseDown(screen.getByText("Preview"), { button: 0 })
-    expect(st().preview).toEqual({ abs: "/fv12/n.md", name: "n.md" })
+    expect(st().preview).toEqual({ abs: "/fvp1/n.md", name: "n.md" })
     fireEvent.contextMenu(screen.getByText("n.md"))
     fireEvent.mouseDown(screen.getByText("Open in Zed"), { button: 0 })
-    expect(ipc.openFile).toHaveBeenCalledWith("", "/fv12/n.md")
+    expect(ipc.openFile).toHaveBeenCalledWith("", "/fvp1/n.md")
     v.unmount()
     st().newTab(testShell)
     st().openFolder("/home/u/w", { wsl: { distro: "Ubuntu" } })
@@ -181,6 +181,24 @@ describe("FolderView", () => {
     render(<FolderView entryId={t.activeEntryId} tabId={t.id} />)
     fireEvent.contextMenu(await screen.findAllByText("n.md").then((x) => x[x.length - 1]!))
     expect(screen.queryByText("Preview")).toBeNull()
+  })
+
+  it("each file menu action reaches the ipc seam", async () => {
+    vi.mocked(ipc.readdir).mockResolvedValue(ls(["m.ts", false]))
+    vi.mocked(ipc.editorInfo).mockResolvedValue({ available: true, name: "Zed" })
+    useStore.setState({ platform: "darwin", editor: { available: true, name: "Zed" } })
+    const { tabId, entryId } = open("/fvm1")
+    render(<FolderView entryId={entryId} tabId={tabId} />)
+    const pick = async (label: string) => {
+      fireEvent.contextMenu(await screen.findByText("m.ts"))
+      fireEvent.mouseDown(screen.getByText(label), { button: 0 })
+    }
+    await pick("Open in Zed")
+    expect(ipc.openFile).toHaveBeenCalledWith("", "/fvm1/m.ts")
+    await pick("Copy path")
+    expect(ipc.clipboardWrite).toHaveBeenLastCalledWith("/fvm1/m.ts")
+    await pick("Copy relative path")
+    expect(ipc.clipboardWrite).toHaveBeenLastCalledWith("m.ts")
   })
 
   it("a folder that can't be read says so", async () => {
