@@ -8,6 +8,7 @@ const tab = (id: string, root: Tab["root"], active?: string): Tab => ({
   id,
   title: "",
   root,
+  activeEntryId: active ?? allSessionIds(root)[0]!,
   activeSessionId: active ?? allSessionIds(root)[0]!,
 })
 const split = (id: string, a: Tab["root"], b: Tab["root"]): Tab["root"] => ({
@@ -40,11 +41,7 @@ describe("moveTerminal — join another group", () => {
   it("focus left behind goes to the surface now shown in its pane, as when closing it", () => {
     // A = [a1 | (x, y)] with x focused; moving x shows y there — y gets A's focus, not a1.
     const t: Tab[] = [
-      tab(
-        "A",
-        split("sA", leaf("pa1", "a1"), { ...leaf("pxy", "x"), sessionIds: ["x", "y"] }),
-        "x",
-      ),
+      tab("A", split("sA", leaf("pa1", "a1"), { ...leaf("pxy", "x"), entryIds: ["x", "y"] }), "x"),
       tab("B", leaf("pb1", "b1")),
     ]
     const r = moveTerminal(t, "x", { kind: "join", tabId: "B" }, ids)!
@@ -69,14 +66,14 @@ describe("moveTerminal — a pane of another group (after spring-loading it open
     expect(r.tabs[2]!.root).toMatchObject({
       type: "split",
       direction: "column",
-      children: [{ id: "pc1" }, { id: "P", sessionIds: ["a1"] }],
+      children: [{ id: "pc1" }, { id: "P", entryIds: ["a1"] }],
     })
   })
 
   it("its tab strip: joins that pane's tabs at the slot", () => {
     const target: MoveTarget = { paneId: "pb1", index: 0 }
     const r = moveTerminal(tabs(), "a1", { kind: "pane", tabId: "B", target }, ids)!
-    expect(r.tabs[1]!.root).toMatchObject({ sessionIds: ["a1", "b1"], activeSessionId: "a1" })
+    expect(r.tabs[1]!.root).toMatchObject({ entryIds: ["a1", "b1"], activeEntryId: "a1" })
   })
 
   it("a pane that went away mid-drag: nothing", () => {

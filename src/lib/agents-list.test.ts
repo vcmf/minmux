@@ -7,17 +7,18 @@ import type { Tab } from "../types"
 const tab = (id: string, ...panes: string[]): Tab => ({
   id,
   title: id,
+  activeEntryId: panes[0]!,
   activeSessionId: panes[0]!,
   root:
     panes.length === 1
-      ? { type: "leaf", id: `l-${id}`, sessionIds: panes, activeSessionId: panes[0]! }
+      ? { type: "leaf", id: `l-${id}`, entryIds: panes, activeEntryId: panes[0]! }
       : {
           type: "split",
           id: `s-${id}`,
           direction: "row",
           children: [
-            { type: "leaf", id: `l1-${id}`, sessionIds: [panes[0]!], activeSessionId: panes[0]! },
-            { type: "leaf", id: `l2-${id}`, sessionIds: [panes[1]!], activeSessionId: panes[1]! },
+            { type: "leaf", id: `l1-${id}`, entryIds: [panes[0]!], activeEntryId: panes[0]! },
+            { type: "leaf", id: `l2-${id}`, entryIds: [panes[1]!], activeEntryId: panes[1]! },
           ],
         },
 })

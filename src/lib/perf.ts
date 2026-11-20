@@ -1,6 +1,7 @@
 import { Terminal } from "@xterm/xterm"
 import { WebglAddon } from "@xterm/addon-webgl"
 import { ipc } from "./ipc"
+import { latencyStats } from "./latency-stats"
 
 // Load-test harness (dev only). Run with `MINMUX_PERF=1 make run`, or call
 // window.__minmuxPerf() from devtools. Measures the two throughput paths that
@@ -101,6 +102,68 @@ async function measureE2E(lines: number) {
   return result
 }
 
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
+
+/** Keystroke latency: a key written to a real shell's PTY until its echo is parsed by xterm
+ *  (renderer → main → pty → main → renderer → xterm). `load` runs a firehose in a second PTY
+ *  meanwhile, as a busy agent pane would. */
+async function measureInput(keys: number, load: boolean) {
+  const { term, dispose } = hiddenTerm()
+  const id = `perf-in-${Math.floor(now())}`
+  await ipc.ptySpawn({ id, cols: 120, rows: 40, shell: "", args: [] })
+  let waiter: { key: string; t0: number; done: (ms: number) => void } | null = null
+  const off = ipc.onPtyData(id, (data) => {
+    const w = waiter
+    if (w && data.includes(w.key)) {
+      waiter = null
+      term.write(data, () => w.done(now() - w.t0))
+    } else term.write(data)
+  })
+  let bg: ReturnType<typeof hiddenTerm> | null = null
+  let bgOff = () => {}
+  const bgId = `perf-bg-${Math.floor(now())}`
+  await sleep(800) // let the shell settle
+  if (load) {
+    bg = hiddenTerm()
+    await ipc.ptySpawn({ id: bgId, cols: 120, rows: 40, shell: "", args: [] })
+    const t = bg.term
+    bgOff = ipc.onPtyData(bgId, (d) => t.write(d))
+    await sleep(800)
+    ipc.ptyWrite(bgId, "yes 0123456789abcdefghijklmnopqrstuvwxyz | head -n 3000000\r")
+    await sleep(300)
+  }
+  const samples: number[] = []
+  const letters = "abcdefghijklmnopqrstuvwxyz"
+  for (let i = 0; i < keys; i++) {
+    const key = letters[i % letters.length]!
+    const ms = await new Promise<number>((resolve) => {
+      waiter = { key, t0: now(), done: resolve }
+      ipc.ptyWrite(id, key)
+      setTimeout(() => {
+        if (waiter?.key === key) {
+          waiter = null
+          resolve(-1) // no echo within 1 s: not counted
+        }
+      }, 1000)
+    })
+    if (ms >= 0) samples.push(ms)
+    if (i % 20 === 19) {
+      ipc.ptyWrite(id, "\x15") // Ctrl-U: keep the line short…
+      await sleep(150) // …and let its redraw land before the next key is timed
+    }
+    await sleep(15) // a fast typist, not a paste
+  }
+  off()
+  ipc.ptyKill(id)
+  dispose()
+  if (bg) {
+    bgOff()
+    ipc.ptyKill(bgId)
+    bg.dispose()
+  }
+  return latencyStats(samples)
+}
+
 async function idleCpu(ms: number) {
   const pick = (arr: { type: string; cpu: number; memoryKB: number }[]) => ({
     main: arr.find((m) => m.type === "Browser"),
@@ -122,6 +185,8 @@ export async function runPerfSuite() {
   const report: Record<string, unknown> = {}
   report.renderer = await measureRenderer(20)
   report.e2e = await measureE2E(400_000)
+  report.input = await measureInput(200, false)
+  report.inputUnderLoad = await measureInput(200, true)
   report.idle = await idleCpu(3000)
   console.log(`[PERF] ${JSON.stringify(report)}`)
   return report

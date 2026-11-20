@@ -48,12 +48,13 @@ export interface Session {
   restored?: boolean // runtime only (never saved): came from workspace.json this launch/reload
 }
 
-/** A pane: terminals ("surfaces") stacked as tabs; stable `id`, only the active one shows. */
+/** A pane: entries ("surfaces") stacked as tabs; stable `id`, only the active one shows. An
+ *  entry is a terminal (its id is its session id) or, later, a folder or file (lib/entries). */
 export interface PaneLeaf {
   type: "leaf"
   id: string
-  sessionIds: string[]
-  activeSessionId: string
+  entryIds: string[]
+  activeEntryId: string
 }
 
 /** Where a dragged surface lands in a pane: an edge (new split) or the centre (join). */
@@ -73,6 +74,10 @@ export interface Tab {
   id: string
   title: string
   root: PaneNode
+  /** The focus: the entry with keyboard focus (its pane's visible one). */
+  activeEntryId: string
+  /** The tab's terminal: the focused entry when it's a terminal, else the last focused
+   *  terminal. Drives cwd, git and titles; saved as the focus older builds read. */
   activeSessionId: string
 }
 

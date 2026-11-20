@@ -21,7 +21,13 @@ import {
 } from "../lib/theme-notify"
 import { withAlpha, type Theme } from "../settings/themes"
 import { displaySessionTitle } from "../lib/session-label"
-import { allPanes, allSessionIds, visibleSessionIds } from "../lib/pane-tree"
+import {
+  allPanes,
+  allSessionIds,
+  paneSessionIds,
+  visibleSessionIds,
+  visibleTerminal,
+} from "../lib/pane-tree"
 import { canRetry, sshFailureKind, type SshFailure } from "../lib/ssh-errors"
 import { parseRemoteReport, reopenFor, MINMUX_OSC } from "../lib/remote-reports"
 import { cwdFromOsc7, cwdFromTitle, sameMachine } from "../lib/remote-cwd"
@@ -1215,8 +1221,11 @@ export const TerminalManager = {
   syncHiddenSizes(pane?: PaneLeaf) {
     const panes = pane ? [pane] : useStore.getState().tabs.flatMap((t) => allPanes(t.root))
     for (const p of panes) {
-      for (const id of p.sessionIds) {
-        if (id !== p.activeSessionId) TerminalManager.followSize(id, p.activeSessionId)
+      // A pane showing a folder or file has no terminal to measure (WORKDIR_OBJECTS.md step 2).
+      const shown = visibleTerminal(p)
+      if (!shown) continue
+      for (const id of paneSessionIds(p)) {
+        if (id !== shown) TerminalManager.followSize(id, shown)
       }
     }
   },
@@ -1254,7 +1263,7 @@ export const TerminalManager = {
     // (re)attach — a split/tab-switch mount storm, or a surface revealed in an unfocused
     // pane, must not pull keystrokes away from the pane the user is driving.
     const st = useStore.getState()
-    if (st.tabs.find((t) => t.id === st.activeTabId)?.activeSessionId === session.id) {
+    if (st.tabs.find((t) => t.id === st.activeTabId)?.activeEntryId === session.id) {
       suppressFocusSignal = true
       entry.term.focus()
       suppressFocusSignal = false

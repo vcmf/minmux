@@ -101,12 +101,11 @@ describe("closeConfirmText", () => {
 })
 
 describe("confirmStillValid", () => {
-  const leaf = (id: string, sessionIds: string[]) => ({
+  const leaf = (id: string, entryIds: string[]) => ({
     type: "leaf" as const,
     id,
-    sessionIds,
-    activeSessionId: sessionIds[0]!,
-    sessionId: sessionIds[0]!,
+    entryIds,
+    activeEntryId: entryIds[0]!,
   })
   const tabs = [{ id: "t", root: leaf("p", ["a", "b"]) }]
   it("valid while the target is there; not once it's gone or moved to another tab", () => {
