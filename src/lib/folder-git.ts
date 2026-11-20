@@ -29,6 +29,21 @@ const key = (scope: string, path: string) => `${scope}\0${pathKey(path)}`
 /** The key a repo's status is stored under. */
 export const repoKey = (wsl: WslContext | undefined, root: string) => key(gitScope(wsl), root)
 
+/** The repo root as `want`'s own spelling: git resolves symlinks (macOS's /var is
+ *  /private/var), so a root that isn't above `want` is matched by its trailing segments. */
+export function logicalRoot(wantPath: string, root: string): string {
+  if (samePath(wantPath, root) || isInside(wantPath, root)) return root
+  const sep = wantPath.includes("\\") && !wantPath.includes("/") ? "\\" : "/"
+  const parts = wantPath.split(sep)
+  for (let n = parts.length; n > 1; n--) {
+    const prefix = parts.slice(0, n).join(sep)
+    const real = pathKey(root)
+    const mine = pathKey(prefix)
+    if (real === mine || real.endsWith(mine.startsWith("/") ? mine : `/${mine}`)) return prefix
+  }
+  return root
+}
+
 /** Record a poll's answer for `want` (and its repo root, so other folders in it are known). */
 export function learn(
   learned: Map<string, Learned>,
@@ -37,7 +52,7 @@ export function learn(
   now: number,
 ): void {
   const scope = gitScope(want.wsl)
-  const root = status.isRepo && status.root ? status.root : null
+  const root = status.isRepo && status.root ? logicalRoot(want.path, status.root) : null
   learned.set(key(scope, want.path), { root, at: now })
   if (root) learned.set(key(scope, root), { root, at: now })
 }

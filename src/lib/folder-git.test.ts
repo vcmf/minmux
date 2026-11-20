@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest"
 import {
   gitTargets,
   learn,
+  logicalRoot,
   NOT_REPO_TTL,
   repoKey,
   rootOf,
@@ -67,5 +68,18 @@ describe("folder git", () => {
     expect(statusFor(g, "/w/y", undefined)!.root).toBe("/w")
     expect(statusFor(g, "/elsewhere", undefined)).toBeUndefined()
     expect(statusFor(g, "/w/y", { distro: "U" })).toBeUndefined()
+  })
+
+  it("logicalRoot maps git's resolved root back onto the folder's own path", () => {
+    expect(logicalRoot("/var/t/proj", "/private/var/t/proj")).toBe("/var/t/proj")
+    expect(logicalRoot("/var/t/proj/src", "/private/var/t/proj")).toBe("/var/t/proj")
+    expect(logicalRoot("/w/rts/src", "/w/rts")).toBe("/w/rts")
+    expect(logicalRoot("/a/b", "/elsewhere/c")).toBe("/elsewhere/c")
+  })
+
+  it("learns the folder's spelling of a symlinked repo", () => {
+    const l = new Map<string, Learned>()
+    learn(l, { path: "/var/t/proj/src" }, repo("/private/var/t/proj"), 0)
+    expect(rootOf(l, { path: "/var/t/proj/docs" })).toBe("/var/t/proj")
   })
 })

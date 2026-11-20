@@ -9,6 +9,7 @@ import {
   FOLDER_GIT_MIN_MS,
   gitTargets,
   learn,
+  logicalRoot,
   repoKey,
   rootOf,
   type GitWant,
@@ -57,7 +58,10 @@ async function loop(): Promise<void> {
         try {
           const g = await ipc.gitStatus(t.path, t.wsl)
           learn(learned, t, g, Date.now())
-          if (g.isRepo) useStore.getState().setFolderGit(repoKey(t.wsl, g.root), g)
+          if (g.isRepo) {
+            const root = logicalRoot(t.path, g.root) // the folder's spelling, symlinks and all
+            useStore.getState().setFolderGit(repoKey(t.wsl, root), { ...g, root })
+          }
         } catch {
           // a failed status: try again next round
         }
