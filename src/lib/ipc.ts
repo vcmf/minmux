@@ -1,3 +1,4 @@
+import type { FileData, FileStamp } from "./file-tab"
 import type { ShellOption, SpawnOpts, SshHost } from "../types"
 import type { WslContext } from "./wsl"
 import type { AgentEvent, AgentKind } from "./agent-graph"
@@ -84,7 +85,7 @@ export interface Ipc {
   shellIdle: (paneId: string) => void // shell prompt returned after a command (resume ledger)
   openExternal: (url: string) => void
   openExternalConfirm: (url: string) => void // asks first, naming the target (main's dialog)
-  openPath: (p: string) => void
+  openPath: (p: string, wsl?: WslContext) => void // OS default app, never one that runs it
   // Does `path` (relative to `cwd`, or absolute) exist? Validates a detected file link.
   pathExists: (cwd: string, path: string) => Promise<boolean>
   // Open a clicked file link in the configured editor (falls back to the OS default).
@@ -100,12 +101,16 @@ export interface Ipc {
   // Each folder's checkout root by a `.git` search (null: none); failed ones left out.
   gitRoots: (reqs: GitRootRequest[]) => Promise<Record<string, string | null>>
   // Watch these folders (the whole set; [] stops); fs:changed names folders that changed.
-  fsWatch: (dirs: string[]) => Promise<void>
+  // `content`: those of `dirs` whose content-only changes (Linux) a file tab wants too.
+  fsWatch: (dirs: string[], content?: string[]) => Promise<void>
   fsWatching: () => Promise<string[]> // what main actually watches (failed / capped ones aren't)
-  onFsChanged: (cb: (dirs: string[]) => void) => () => void
+  // `content`: folders where only a file's content changed (Linux): listings are as they were.
+  onFsChanged: (cb: (dirs: string[], content: string[]) => void) => () => void
 
   // Read a file for the preview popup; `wsl` reads a WSL pane's Linux path via its UNC share.
   readFilePreview: (path: string, wsl?: WslContext) => Promise<PreviewData>
+  // A file tab's read (fs worker); `since`: skip it when the file still matches (`same`).
+  readFile: (path: string, wsl?: WslContext, since?: FileStamp) => Promise<FileData>
   // Native folder picker (Files root); `wsl` opens it at the distro's UNC share and returns
   // a distro-native Linux path.
   pickDirectory: (defaultPath?: string, wsl?: WslContext) => Promise<string | null>

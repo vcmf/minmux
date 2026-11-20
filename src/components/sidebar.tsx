@@ -3,7 +3,7 @@ import { useTabDrag } from "./use-tab-drag"
 import { SURFACE_DRAG_TYPE } from "../lib/group-move"
 import { useTabRename } from "./use-tab-rename"
 import { focusActiveEntry, focusEntry, refocusActiveTerminal } from "./refocus-terminal"
-import { folderChoices, type FolderChoice } from "../lib/folder-entries"
+import { folderChoices, placeOf, type FolderChoice } from "../lib/folder-entries"
 import { isTerminalEntry } from "../lib/entries"
 import { baseName } from "../lib/file-tree"
 import { useShallow } from "zustand/react/shallow"
@@ -384,20 +384,33 @@ export function Sidebar() {
                         onContextMenu={(e) => openDirMenu(e, folder.path, id, tab.id)}
                       >
                         <span className="tree-icon">
-                          <Folder
-                            size={14}
-                            weight="fill"
-                            color={isActive ? "var(--accent)" : "var(--blue)"}
-                          />
+                          {folder.kind === "file" ? (
+                            <FileText size={14} color={isActive ? "var(--accent)" : "var(--dim)"} />
+                          ) : (
+                            <Folder
+                              size={14}
+                              weight="fill"
+                              color={isActive ? "var(--accent)" : "var(--blue)"}
+                            />
+                          )}
                         </span>
                         <div className="tree-labels">
                           <span className="tree-primary-row">
-                            <span className="tree-primary">{baseName(folder.path)}</span>
+                            <span
+                              className="tree-primary"
+                              style={
+                                folder.kind === "file" && folder.peek
+                                  ? { fontStyle: "italic" }
+                                  : undefined
+                              }
+                            >
+                              {baseName(folder.path)}
+                            </span>
                           </span>
-                          <span className="tree-sub">{shortCwd(folder.path, home)}</span>
+                          <span className="tree-sub">{shortCwd(placeOf(folder).path, home)}</span>
                         </div>
                         <RowClose
-                          title="Close folder"
+                          title={folder.kind === "file" ? "Close file" : "Close folder"}
                           onClose={() => useStore.getState().requestCloseEntry(tab.id, id)}
                         />
                       </div>

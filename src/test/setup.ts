@@ -47,6 +47,7 @@ const minmuxStub = {
   fsWatching: vi.fn(async () => [] as string[]),
   onFsChanged: vi.fn(unsub),
   readFilePreview: vi.fn(async () => ({ kind: "text", text: "", truncated: false, size: 0 })),
+  readFile: vi.fn(async () => ({ kind: "text", text: "", truncated: false, size: 0 })),
   pickDirectory: vi.fn(async () => null),
   pathIsDir: vi.fn(async () => true),
   openExternal: vi.fn(),

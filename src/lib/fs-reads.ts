@@ -9,6 +9,6 @@ import { WatchSet } from "./watch-set"
 export const folderReads = new ReadQueue()
 
 export const watches = new WatchSet(
-  (dirs) => void ipc.fsWatch(dirs).catch(() => {}),
+  (dirs, content) => void ipc.fsWatch(dirs, content).catch(() => {}),
   ["files-panel"],
 )

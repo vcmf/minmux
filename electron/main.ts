@@ -114,6 +114,8 @@ import {
   PREVIEW_MAX_SIZE,
   type PreviewData,
 } from "../src/lib/file-preview"
+import type { FileData, FileStamp } from "../src/lib/file-tab"
+import { isBundle, osMayOpen, type Os } from "./open-policy"
 
 // This process's profile (a dev build is `dev`): picked before anything reads a path. An
 // invalid MINMUX_PROFILE stops here, synchronously — before any name, path or lock is set —
@@ -362,7 +364,12 @@ const sessionDirExists = (d: string): Promise<boolean | undefined> =>
     STAT_MS,
   )
 // A watched folder changed: the renderer re-reads it (through its read queue).
-fsWorker.onChanged = (dirs) => mainWindow?.webContents.send("fs:changed", dirs)
+// Content-only changes (Linux) go on only for folders a file tab watches: a listing ignores them.
+let contentWanted = new Set<string>()
+fsWorker.onChanged = (dirs, content) => {
+  const c = (content ?? []).filter((d) => contentWanted.has(d))
+  if (dirs.length || c.length) mainWindow?.webContents.send("fs:changed", dirs, c)
+}
 
 /** Does the folder holding `p` still exist? Then a missing `p` was deleted — not an
  *  unmounted share (/Volumes/NAS gone) or a stopped WSL distro, whose parents are gone too.
@@ -644,6 +651,25 @@ function readWindowBg(): string {
 
 function workspacePath(): string {
   return path.join(configDir(), "workspace.json")
+}
+
+// Never a file it would run (open-policy); anything else, or a failed open, is revealed in the
+// file manager instead. Every `shell.openPath` goes through here.
+/** Open a file in the OS default app. */
+async function safeOpenPath(p: string): Promise<void> {
+  try {
+    const real = await fs.promises.realpath(p) // a symlink is judged by what it points at
+    const st = await fs.promises.stat(real)
+    const os = process.platform as Os
+    if (osMayOpen(real, { isFile: st.isFile() }, os)) {
+      if (!(await shell.openPath(real))) return // "" = opened
+    } else if (st.isDirectory() && !isBundle(real, os)) {
+      if (!(await shell.openPath(real))) return // a folder: Finder / Explorer opens it
+    }
+  } catch {
+    // gone or unreadable: reveal what's there
+  }
+  shell.showItemInFolder(p)
 }
 
 function layoutPath(): string {
@@ -1433,10 +1459,13 @@ function registerIpc() {
 
   // Files browser: watch these folders (the whole set; [] stops). Host paths only: the
   // renderer doesn't send WSL panes' folders (a 9p share can't be watched reliably).
-  ipcMain.handle("fs:watch", (_e, dirs: unknown) => {
+  ipcMain.handle("fs:watch", (_e, dirs: unknown, content: unknown) => {
     const list = Array.isArray(dirs)
       ? dirs.filter((d): d is string => typeof d === "string" && path.isAbsolute(d))
       : []
+    contentWanted = new Set(
+      Array.isArray(content) ? content.filter((d): d is string => typeof d === "string") : [],
+    )
     // Not on Windows: a watched folder's open handle blocks renaming / deleting it and its
     // parents there (focus and Refresh still read).
     fsWorker.setWatched(process.platform === "win32" ? [] : list.slice(0, WATCH_CAP))
@@ -1533,6 +1562,33 @@ function registerIpc() {
     },
   )
 
+  // A file tab's read, in the fs worker (a dead mount hangs it, not main): text up to the cap,
+  // an image as a data URL, else what it is. A WSL path is read through the distro's share.
+  ipcMain.handle(
+    "fs:read-file",
+    async (_e, p: string, wsl?: WslContext, since?: FileStamp): Promise<FileData> => {
+      let last: FileData = { kind: "error", message: "not found" }
+      const ok =
+        since && typeof since.size === "number" && typeof since.mtimeMs === "number"
+          ? {
+              size: since.size,
+              mtimeMs: since.mtimeMs,
+              ...(typeof since.ctimeMs === "number" ? { ctimeMs: since.ctimeMs } : {}),
+              ...(typeof since.ino === "number" ? { ino: since.ino } : {}),
+            }
+          : undefined
+      for (const target of wslTargets(p, wsl)) {
+        try {
+          last = (await fsWorker.call({ op: "readfile", path: target, since: ok })) as FileData
+          if (last.kind !== "error") return last
+        } catch (err) {
+          last = { kind: "error", message: String(err) } // hung or failed: the next share form
+        }
+      }
+      return last
+    },
+  )
+
   // Native folder picker for the Files-panel root; returns null if cancelled.
   ipcMain.handle("dialog:pick-directory", async (_e, defaultPath?: string, wsl?: WslContext) => {
     try {
@@ -1589,7 +1645,21 @@ function registerIpc() {
       .catch(() => {}) // (the window gone meanwhile, no browser for it: nothing to do)
       .finally(() => (confirming = false))
   })
-  ipcMain.on("open-path", (_e, p: string) => void shell.openPath(p))
+  // A WSL path opens through its distro's share (the first form that exists).
+  ipcMain.on("open-path", (_e, p: string, wsl?: WslContext) => {
+    void (async () => {
+      for (const target of wslTargets(p, wsl)) {
+        const there = await fs.promises.stat(target).then(
+          () => true,
+          () => false,
+        )
+        if (there || !wsl) return safeOpenPath(target)
+      }
+      // No share form answers (the distro stopped): the first one, which reveals or says so.
+      const first = wslTargets(p, wsl)[0]
+      if (first) return safeOpenPath(first)
+    })()
+  })
   ipcMain.on("notify", (_e, title: string, body: string) => {
     if (Notification.isSupported()) new Notification({ title, body }).show()
   })
@@ -1683,7 +1753,7 @@ function openFile(cwd: string, file: string, line?: number, col?: number): void 
   const plan = resolveEditor()
   try {
     if (plan.kind === "osDefault") {
-      void shell.openPath(abs)
+      void safeOpenPath(abs)
       return
     }
     if (plan.kind === "none") {

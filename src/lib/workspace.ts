@@ -1,5 +1,5 @@
 import type { PaneNode, RemoteRef, Session, Tab } from "../types"
-import type { FolderEntry, FolderView } from "./folder-entries"
+import type { ObjectEntry, FolderView } from "./folder-entries"
 import { parseRemoteRef, sshLabel } from "./ssh-validate"
 import { parseReopen, reopenFor, type ReopenCwd } from "./remote-reports"
 import { clampPanelWidth } from "./right-panel"
@@ -76,7 +76,7 @@ export interface WorkspaceState {
   rightPanelWidth?: number
   pruned?: string[] // session records dropped on restore — their PTYs (after a reload) must die
   // Folder entries and their views (from layout.json, lib/layout-file): not in workspace.json.
-  objects?: Record<string, FolderEntry>
+  objects?: Record<string, ObjectEntry>
   folderViews?: Record<string, FolderView>
 }
 

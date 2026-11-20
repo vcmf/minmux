@@ -61,4 +61,19 @@ describe("WatchSet", () => {
     tick()
     expect(sent[sent.length - 1]).toEqual(["/p", "/v1"])
   })
+
+  it("content-only changes are asked for just the folders a file tab watches", () => {
+    const got: [string[], string[]][] = []
+    const jobs: (() => void)[] = []
+    const w = new WatchSet(
+      (d, c) => got.push([d, c]),
+      [],
+      32,
+      (fn) => jobs.push(fn),
+    )
+    w.set("panel", ["/a", "/b"])
+    w.set("file:1", ["/b"], true)
+    jobs.splice(0).forEach((f) => f())
+    expect(got).toEqual([[["/a", "/b"], ["/b"]]])
+  })
 })

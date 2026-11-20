@@ -127,7 +127,7 @@ const api = {
   openExternalConfirm: (url: string) => ipcRenderer.send("open-external-confirm", url),
   appVersion: () => ipcRenderer.invoke("app:version") as Promise<string>,
   checkUpdate: () => ipcRenderer.invoke("app:check-update"),
-  openPath: (p: string) => ipcRenderer.send("open-path", p),
+  openPath: (p: string, wsl?: WslContext) => ipcRenderer.send("open-path", p, wsl),
   pathExists: (cwd: string, path: string) =>
     ipcRenderer.invoke("fs:path-exists", cwd, path) as Promise<boolean>,
   openFile: (cwd: string, file: string, line?: number, col?: number) =>
@@ -140,13 +140,15 @@ const api = {
   clipboardRead: () => ipcRenderer.invoke("clipboard:read") as Promise<string>,
   readdir: (dir: string, wsl?: WslContext) => ipcRenderer.invoke("fs:readdir", dir, wsl),
   gitRoots: (reqs: GitRootRequest[]) => ipcRenderer.invoke("fs:git-roots", reqs),
-  fsWatch: (dirs: string[]) => ipcRenderer.invoke("fs:watch", dirs),
+  fsWatch: (dirs: string[], content?: string[]) => ipcRenderer.invoke("fs:watch", dirs, content),
   fsWatching: () => ipcRenderer.invoke("fs:watching") as Promise<string[]>,
-  onFsChanged: (cb: (dirs: string[]) => void) => {
-    const listener = (_e: unknown, dirs: string[]) => cb(dirs)
+  onFsChanged: (cb: (dirs: string[], content: string[]) => void) => {
+    const listener = (_e: unknown, dirs: string[], content?: string[]) => cb(dirs, content ?? [])
     ipcRenderer.on("fs:changed", listener)
     return () => ipcRenderer.removeListener("fs:changed", listener)
   },
+  readFile: (path: string, wsl?: WslContext, since?: unknown) =>
+    ipcRenderer.invoke("fs:read-file", path, wsl, since),
   readFilePreview: (path: string, wsl?: WslContext) =>
     ipcRenderer.invoke("fs:read-preview", path, wsl),
   pickDirectory: (defaultPath?: string, wsl?: WslContext) =>

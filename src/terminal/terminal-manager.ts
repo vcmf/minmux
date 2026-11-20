@@ -24,6 +24,7 @@ import { displaySessionTitle } from "../lib/session-label"
 import {
   allPanes,
   allSessionIds,
+  findPane,
   paneSessionIds,
   visibleSessionIds,
   visibleTerminal,
@@ -34,7 +35,9 @@ import { cwdFromOsc7, cwdFromTitle, sameMachine } from "../lib/remote-cwd"
 import { webglPanes, shouldRebuildAtlas } from "../lib/renderer-policy"
 import { appShortcut, keyAction } from "../lib/terminal-keys"
 import { gridChanged, type Grid } from "../lib/resize"
-import { findFilePaths } from "../lib/file-links"
+import { findFilePaths, resolveLinkPath, type FileLinkMatch } from "../lib/file-links"
+import { opensInTab } from "../lib/file-tab"
+import { wslContext } from "../lib/wsl"
 import { isPosixShell, withCd, withEnv } from "../lib/resume"
 import {
   canType,
@@ -152,6 +155,40 @@ let suppressFocusSignal = false
 const pathExistsCache = new Map<string, { ok: boolean; ts: number }>()
 const PATH_CACHE_TTL_MS = 5000
 const PATH_CACHE_MAX = 1000 // bound memory over long sessions (many distinct paths)
+// A folder: a folder tab of its terminal's pane. A file shown in minmux: a peek tab there, at its
+// line. Anything else (a PDF, a native Windows path, a terminal no pane holds): the editor or
+// the OS app, as before (main never lets that run a file).
+/** Open a path clicked in a terminal's output. */
+export async function openClickedPath(
+  sessionId: string,
+  cwd: string,
+  m: FileLinkMatch,
+): Promise<void> {
+  const st = useStore.getState()
+  const sess = st.sessions[sessionId]
+  const tab = st.tabs.find((t) => !!findPane(t.root, sessionId))
+  const pane = tab && findPane(tab.root, sessionId)
+  const wsl = sess ? wslContext(sess.command, sess.args) : undefined
+  const outside = () => ipc.openFile(cwd, m.path, m.line, m.col)
+  if (!tab || !pane || (st.platform === "win32" && !wsl)) return outside()
+  // A WSL shell's `~` is the distro's home, not known here (main would take this machine's).
+  if (wsl && m.path.startsWith("~")) return
+  const abs = resolveLinkPath(cwd, m.path, wsl ? "" : st.home)
+  if (await ipc.pathIsDir(abs, wsl).catch(() => false)) {
+    useStore.getState().openFolder(abs, { tabId: tab.id, paneId: pane.id, wsl })
+  } else if (opensInTab(abs)) {
+    useStore
+      .getState()
+      .openFile(abs, { tabId: tab.id, paneId: pane.id, wsl, line: m.line, peek: true })
+  } else {
+    return ipc.openPath(abs, wsl) // a PDF, a video: its own app (main never lets one run)
+  }
+  requestAnimationFrame(() => {
+    const id = useStore.getState().tabs.find((t) => t.id === tab.id)?.activeEntryId
+    if (id) document.querySelector<HTMLElement>(`[data-entry="${id}"]`)?.focus()
+  })
+}
+
 function validatePath(cwd: string, p: string): Promise<boolean> {
   const key = `${cwd} ${p}`
   const hit = pathExistsCache.get(key)
@@ -1018,7 +1055,7 @@ function spawn(session: Session, entry: Entry) {
                   // app — require Cmd/Ctrl there so we don't hijack it (VS Code does the same).
                   const mouseMode = term.modes.mouseTrackingMode !== "none"
                   if (mouseMode && !e.metaKey && !e.ctrlKey) return
-                  ipc.openFile(cwd, m.path, m.line, m.col)
+                  void openClickedPath(session.id, cwd, m)
                 },
               }))
             cb(links.length ? links : undefined)

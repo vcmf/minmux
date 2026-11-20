@@ -7,7 +7,7 @@
 // Pure; main only reads and writes the files.
 import type { PaneLeaf, PaneNode, Tab } from "../types"
 import type { WorkspaceState } from "./workspace"
-import type { FolderEntry, FolderView } from "./folder-entries"
+import type { FileEntry, FolderEntry, ObjectEntry, FolderView } from "./folder-entries"
 import { isTerminalEntry } from "./entries"
 import {
   addSurface,
@@ -20,12 +20,15 @@ import {
 } from "./pane-tree"
 import { withFocus } from "./tab-focus"
 
+// Still 1 with file entries (step 3a): an older build drops the kinds it doesn't know (file
+// tabs) and keeps the folders, and if it saves, the file tabs are gone (quick to reopen). A
+// version bump would make it skip the whole file, folder tabs included (WORKDIR_OBJECTS.md).
 const VERSION = 1
 
 export interface LayoutState {
   tabs: Tab[]
   activeTabId: string | null
-  objects: Record<string, FolderEntry>
+  objects: Record<string, ObjectEntry>
   folderViews: Record<string, FolderView>
 }
 
@@ -47,10 +50,15 @@ export function stampOf(text: string): string {
 /** layout.json for `state`, saved alongside `workspaceJson`. Only referenced entries go in. */
 export function serializeLayout(state: LayoutState, workspaceJson: string): string {
   const used = new Set(state.tabs.flatMap((t) => allPanes(t.root).flatMap((p) => p.entryIds)))
-  const objects: Record<string, FolderEntry> = {}
+  const objects: Record<string, ObjectEntry> = {}
   const folderViews: Record<string, FolderView> = {}
   for (const id of used) {
-    if (state.objects[id]) objects[id] = state.objects[id]!
+    const o = state.objects[id]
+    if (o?.kind === "file" && o.seq !== undefined) {
+      const saved: ObjectEntry = { ...o }
+      delete (saved as { seq?: number }).seq // runtime only ("go to the line again")
+      objects[id] = saved
+    } else if (o) objects[id] = o
     if (state.folderViews[id]) folderViews[id] = state.folderViews[id]!
   }
   const file: LayoutFile = {
@@ -67,15 +75,15 @@ export function serializeLayout(state: LayoutState, workspaceJson: string): stri
 const str = (v: unknown): v is string => typeof v === "string"
 const strings = (v: unknown): string[] => (Array.isArray(v) ? v.filter(str) : [])
 
-function parseObject(v: unknown): FolderEntry | undefined {
-  const o = v as Partial<FolderEntry> | null
-  if (!o || o.kind !== "folder" || !str(o.path) || !o.path) return undefined
+function parseObject(v: unknown): ObjectEntry | undefined {
+  const o = v as Partial<FileEntry> | Partial<FolderEntry> | null
+  if (!o || (o.kind !== "folder" && o.kind !== "file") || !str(o.path) || !o.path) return undefined
   const distro = (o.wsl as { distro?: unknown } | undefined)?.distro
-  return {
-    kind: "folder",
-    path: o.path,
-    ...(o.wsl && typeof o.wsl === "object" ? { wsl: str(distro) ? { distro } : {} } : {}),
-  }
+  const wsl = o.wsl && typeof o.wsl === "object" ? { wsl: str(distro) ? { distro } : {} } : {}
+  if (o.kind === "folder") return { kind: "folder", path: o.path, ...wsl }
+  const f = o as Partial<FileEntry>
+  const line = typeof f.line === "number" && f.line > 0 ? { line: Math.floor(f.line) } : {}
+  return { kind: "file", path: o.path, ...wsl, ...line, ...(f.peek === true ? { peek: true } : {}) }
 }
 
 /** A saved tree with only the entries `keep` accepts (each placed once); undefined if none. */
@@ -128,7 +136,7 @@ export function restoreLayout(
     return { state: ws, blocked: true }
   if (!Array.isArray(file.tabs)) return { state: ws, blocked: false }
 
-  const objects: Record<string, FolderEntry> = {}
+  const objects: Record<string, ObjectEntry> = {}
   for (const [id, v] of Object.entries(file.objects ?? {})) {
     const o = !isTerminalEntry(id) ? parseObject(v) : undefined
     if (o) objects[id] = o
@@ -194,7 +202,7 @@ export function restoreLayout(
   if (!tabs.length) return { state: ws, blocked: false }
 
   const used = new Set(tabs.flatMap((t) => allPanes(t.root).flatMap((p: PaneLeaf) => p.entryIds)))
-  const kept: Record<string, FolderEntry> = {}
+  const kept: Record<string, ObjectEntry> = {}
   const folderViews: Record<string, FolderView> = {}
   for (const id of used) {
     if (!objects[id]) continue

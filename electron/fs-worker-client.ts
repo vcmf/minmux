@@ -66,7 +66,7 @@ export class FsWorkerClient {
   private spawnedAt = 0
   private gen = 0 // bumped when the live worker goes: a late watch reply from it doesn't count
   /** Folders whose listing may have changed (from the live worker's watchers). */
-  onChanged: (dirs: string[]) => void = () => {}
+  onChanged: (dirs: string[], content?: string[]) => void = () => {}
 
   constructor(
     private readonly spawn: () => WorkerProc,
@@ -203,7 +203,7 @@ export class FsWorkerClient {
     w.proc.on("message", (msg) => {
       if ("event" in msg) {
         if (this.live !== w) return // a retired worker's watchers are being replaced
-        if (msg.event === "changed") this.onChanged(msg.dirs)
+        if (msg.event === "changed") this.onChanged(msg.dirs, msg.content)
         else {
           this.watching.delete(msg.dir)
           if (this.wanted.has(msg.dir)) {

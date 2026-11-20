@@ -10,6 +10,7 @@ import {
   Rows,
   Folder,
   FolderPlus,
+  FileText,
 } from "@phosphor-icons/react"
 import { TerminalManager } from "../terminal/terminal-manager"
 import { ipc } from "../lib/ipc"
@@ -39,6 +40,7 @@ import { IntegrationHint } from "./integration-hint"
 import { AgentHint } from "./agent-hint"
 import { agentIcon } from "./agent-icon"
 import { FolderView } from "./folder-view"
+import { FileView } from "./file-view"
 import { ContextMenu } from "./context-menu"
 import { focusEntry } from "./refocus-terminal"
 import { isTerminalEntry } from "../lib/entries"
@@ -61,10 +63,22 @@ export function TerminalPane({ pane, tabId }: { pane: PaneLeaf; tabId: string })
   const [menu, setMenu] = useState<{ x: number; y: number; hasSel: boolean } | null>(null)
   const activeId = pane.activeEntryId
   const isTerm = isTerminalEntry(activeId) // else a folder entry shows in place of a terminal
-  // Each entry's folder path ("" for a terminal), flat: the strip re-renders only on a change.
-  const folderPaths = useStore(
-    useShallow((s) => pane.entryIds.map((id) => s.objects[id]?.path ?? "")),
+  // Each entry's kind, path and peek flag ("" for a terminal), flat: the strip re-renders only
+  // on a change.
+  const objFlat = useStore(
+    useShallow((s) =>
+      pane.entryIds.flatMap((id) => {
+        const o = s.objects[id]
+        return [o?.kind ?? "", o?.path ?? "", o?.kind === "file" && o.peek ? "1" : ""]
+      }),
+    ),
   )
+  const objAt = (i: number) => ({
+    kind: objFlat[i * 3] as "" | "folder" | "file",
+    path: objFlat[i * 3 + 1]!,
+    peek: objFlat[i * 3 + 2] === "1",
+  })
+  const activeKind = objAt(pane.entryIds.indexOf(activeId)).kind
   const [folderMenu, setFolderMenu] = useState<{
     x: number
     y: number
@@ -373,13 +387,21 @@ export function TerminalPane({ pane, tabId }: { pane: PaneLeaf; tabId: string })
                 aria-selected={active}
                 className={
                   `surface-tab${active ? " active" : ""}${multi ? " multi" : ""}` +
+                  (objAt(i).peek ? " peek" : "") +
                   (dragging?.sessionId === id ? " dragging" : "") +
                   (stripSlot === i ? " insert-before" : "") +
                   (stripSlot === pane.entryIds.length && i === pane.entryIds.length - 1
                     ? " insert-after"
                     : "")
                 }
-                title={folderPaths[i] || displaySessionTitle(s, home)}
+                title={
+                  objAt(i).path
+                    ? objAt(i).peek
+                      ? `${objAt(i).path} · preview (double-click to keep)`
+                      : objAt(i).path
+                    : displaySessionTitle(s, home)
+                }
+                onDoubleClick={() => objAt(i).peek && useStore.getState().keepEntry(id)}
                 // Drag a surface to another pane's edge (split), centre (join) or strip slot.
                 draggable
                 onDragStart={(e) => {
@@ -402,12 +424,14 @@ export function TerminalPane({ pane, tabId }: { pane: PaneLeaf; tabId: string })
                   if (e.button === 1 && multi) useStore.getState().requestCloseEntry(tabId, id)
                 }}
               >
-                {folderPaths[i] ? (
+                {objAt(i).kind === "folder" ? (
                   <Folder
                     size={13}
                     weight="fill"
                     color={active && focused ? "var(--accent)" : "var(--blue)"}
                   />
+                ) : objAt(i).kind === "file" ? (
+                  <FileText size={13} color={active && focused ? "var(--accent)" : "var(--dim)"} />
                 ) : (
                   (() => {
                     const kind = agentFlags[i] as AgentKind | ""
@@ -428,7 +452,7 @@ export function TerminalPane({ pane, tabId }: { pane: PaneLeaf; tabId: string })
                   })()
                 )}
                 <span className="pane-title">
-                  {folderPaths[i] ? baseName(folderPaths[i]!) : displaySessionTitle(s, home)}
+                  {objAt(i).path ? baseName(objAt(i).path) : displaySessionTitle(s, home)}
                 </span>
                 {/* Hidden surfaces surface their state on the tab (you can't see the pane). */}
                 {/* Static dot (no pulse): don't animate compositing next to a WebGL canvas. */}
@@ -571,7 +595,11 @@ export function TerminalPane({ pane, tabId }: { pane: PaneLeaf; tabId: string })
         </>
       ) : (
         <div className="folder-mount" ref={folderRef}>
-          <FolderView key={activeId} entryId={activeId} tabId={tabId} />
+          {activeKind === "file" ? (
+            <FileView key={activeId} entryId={activeId} tabId={tabId} />
+          ) : (
+            <FolderView key={activeId} entryId={activeId} tabId={tabId} />
+          )}
         </div>
       )}
       {folderMenu && (

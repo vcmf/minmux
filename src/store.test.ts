@@ -1715,4 +1715,88 @@ describe("store — folder entries", () => {
     expect(s.remote).toBeUndefined()
     expect(s.command).toBe(shell.command)
   })
+
+  it("a peek replaces the pane's peek; a kept file stays; one already open is focused", () => {
+    st().newTab(shell)
+    st().openFile("/w/a.ts", { peek: true })
+    const a = tab().activeEntryId
+    st().openFile("/w/b.ts", { peek: true })
+    const b = tab().activeEntryId
+    expect(st().objects[a]).toBeUndefined() // replaced
+    expect(leaf().entryIds).toEqual([tab().activeSessionId, b])
+    st().keepEntry(b)
+    expect(st().objects[b]).toEqual({ kind: "file", path: "/w/b.ts" })
+    st().openFile("/w/c.ts", { peek: true })
+    expect(leaf().entryIds).toHaveLength(3) // b was kept: c is a new peek beside it
+    st().openFile("/w/b.ts", { peek: true, line: 40 })
+    expect(tab().activeEntryId).toBe(b) // already open here: focused, at the line
+    expect((st().objects[b] as { line?: number }).line).toBe(40)
+  })
+
+  it("a peek that was all its pane held is replaced in place, the pane kept", () => {
+    st().newTab(shell)
+    st().openFile("/w/a.ts", { peek: true })
+    const a = tab().activeEntryId
+    st().closeSurface(tab().id, tab().activeSessionId) // the terminal goes: the peek is alone
+    st().openFile("/w/b.ts", { peek: true })
+    expect(st().objects[a]).toBeUndefined()
+    expect(leaf().entryIds).toEqual([tab().activeEntryId])
+  })
+
+  it("dragging a peek keeps it", () => {
+    st().newTab(shell)
+    st().splitActive("row", shell)
+    st().openFile("/w/a.ts", { peek: true })
+    const a = tab().activeEntryId
+    const other = allSessionIds(tab().root)[0]!
+    st().moveSurface(tab().id, a, { paneId: findPane(tab().root, other)!.id, zone: "center" })
+    expect((st().objects[a] as { peek?: true }).peek).toBeUndefined()
+  })
+
+  it("a terminal from a focused file opens in its folder", () => {
+    st().newTab(shell)
+    st().openFile("/w/rts/src/a.ts")
+    st().newSurface()
+    expect(st().sessions[tab().activeSessionId]!.cwd).toBe("/w/rts/src")
+  })
+
+  it("opening a folder already open in the pane shows that tab, not a second", () => {
+    st().newTab(shell)
+    st().openFolder("/w/src")
+    const first = tab().activeEntryId
+    st().setActivePane(tab().id, tab().activeSessionId)
+    st().openFolder("/w/src/")
+    expect(tab().activeEntryId).toBe(first)
+    expect(leaf().entryIds).toHaveLength(2)
+  })
+
+  it("asking for the same file at the same line again says go again (seq)", () => {
+    st().newTab(shell)
+    st().openFile("/w/a.ts", { line: 9 })
+    const id = tab().activeEntryId
+    st().openFile("/w/a.ts", { line: 9 })
+    expect((st().objects[id] as { seq?: number }).seq).toBe(1)
+  })
+
+  it("a peek dropped back where it was stays a peek", () => {
+    st().newTab(shell)
+    st().openFile("/w/a.ts", { peek: true })
+    const a = tab().activeEntryId
+    const pane = findPane(tab().root, a)!
+    st().moveSurface(tab().id, a, { paneId: pane.id, index: pane.entryIds.indexOf(a) })
+    expect((st().objects[a] as { peek?: true }).peek).toBe(true)
+  })
+
+  it("on Windows the same file in another case is the same tab; a WSL one with that path isn't", () => {
+    useStore.setState({ platform: "win32" })
+    st().newTab(shell)
+    st().openFile("C:\\x\\A.ts")
+    const a = tab().activeEntryId
+    st().openFile("c:\\x\\a.ts")
+    expect(tab().activeEntryId).toBe(a)
+    st().openFile("/home/u/a.ts", { wsl: { distro: "U" } })
+    const b = tab().activeEntryId
+    st().openFile("/home/u/a.ts")
+    expect(tab().activeEntryId).not.toBe(b)
+  })
 })

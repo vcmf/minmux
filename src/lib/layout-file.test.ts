@@ -176,10 +176,19 @@ describe("layout.json", () => {
     const { ws, layout } = save(s)
     const file = JSON.parse(layout)
     file.objects[G] = { kind: "folder", path: "/home/u/q", wsl: { distro: 5 } }
-    file.objects[H] = { kind: "file", path: "/x" }
+    file.objects[H] = { kind: "file", path: "/x", line: 3.7, peek: true, junk: 1 }
     const r = restoreLayout(deserializeWorkspace(JSON.parse(ws)), ws, JSON.stringify(file)).state!
     expect(r.objects![F]).toEqual({ kind: "folder", path: "/home/u/p", wsl: { distro: "Ubuntu" } })
     expect(r.objects![G]).toEqual({ kind: "folder", path: "/home/u/q", wsl: {} })
+    expect(r.objects![H]).toEqual({ kind: "file", path: "/x", line: 3, peek: true }) // only these
+  })
+
+  it("an entry of an unknown kind is dropped (a newer build's)", () => {
+    const s = state()
+    const { ws, layout } = save(s)
+    const file = JSON.parse(layout)
+    file.objects[H] = { kind: "terminal-ish", path: "/x" }
+    const r = restoreLayout(deserializeWorkspace(JSON.parse(ws)), ws, JSON.stringify(file)).state!
     expect(r.objects![H]).toBeUndefined()
   })
 
@@ -206,5 +215,18 @@ describe("layout.json", () => {
   it("a mismatched layout with no workspace.json: nothing to restore", () => {
     const { layout } = save(state())
     expect(restoreLayout(null, "different", layout).state).toBeNull()
+  })
+
+  it("a file's runtime seq isn't saved", () => {
+    const s = state()
+    s.objects[F] = { kind: "file", path: "/w/a.ts", line: 3, seq: 4 }
+    const { layout } = save(s)
+    expect(JSON.parse(layout).objects[F]).toEqual({ kind: "file", path: "/w/a.ts", line: 3 })
+  })
+
+  it("stays version 1 with file tabs: an older build keeps the folders, drops the files", () => {
+    const s = state()
+    s.objects[F] = { kind: "file", path: "/w/a.ts" }
+    expect(JSON.parse(save(s).layout).version).toBe(1)
   })
 })

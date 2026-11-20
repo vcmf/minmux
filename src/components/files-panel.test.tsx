@@ -183,9 +183,9 @@ describe("FilesPanel — live refresh", () => {
   })
 
   it("watches the open folders you can see, re-reads one on a change, stops when closed", async () => {
-    let onChanged: (dirs: string[]) => void = () => {}
+    let onChanged: (dirs: string[], content?: string[]) => void = () => {}
     vi.mocked(ipc.onFsChanged).mockImplementation((cb) => {
-      onChanged = cb
+      onChanged = (d, c = []) => cb(d, c)
       return () => {}
     })
     vi.mocked(ipc.readdir).mockImplementation(async (dir: string) =>
@@ -199,7 +199,10 @@ describe("FilesPanel — live refresh", () => {
     fireEvent.mouseDown(screen.getByText("lib"), { button: 0 })
     await waitFor(() => expect(screen.getByText("x.ts")).toBeInTheDocument())
     await waitFor(() =>
-      expect(ipc.fsWatch).toHaveBeenLastCalledWith(["/repo-watch", "/repo-watch/lib"]),
+      expect(ipc.fsWatch).toHaveBeenLastCalledWith(
+        ["/repo-watch", "/repo-watch/lib"],
+        expect.any(Array),
+      ),
     )
     // An agent writes a file: the watcher reports the folder; no click needed.
     vi.mocked(ipc.readdir).mockImplementation(async (dir: string) =>
@@ -209,7 +212,7 @@ describe("FilesPanel — live refresh", () => {
     await waitFor(() => expect(screen.getByText("y.ts")).toBeInTheDocument())
     expect(ipc.readdir).not.toHaveBeenCalledWith("/somewhere/else", undefined)
     unmount()
-    await waitFor(() => expect(ipc.fsWatch).toHaveBeenLastCalledWith([])) // sent at the tick's end
+    await waitFor(() => expect(ipc.fsWatch).toHaveBeenLastCalledWith([], expect.any(Array))) // sent at the tick's end
   })
 })
 

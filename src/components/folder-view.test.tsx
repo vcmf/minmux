@@ -48,15 +48,15 @@ describe("FolderView", () => {
     vi.mocked(ipc.readdir).mockResolvedValue(ls(["a", false]))
     const { tabId, entryId } = open("/fv3")
     const view = render(<FolderView entryId={entryId} tabId={tabId} />)
-    await waitFor(() => expect(ipc.fsWatch).toHaveBeenLastCalledWith(["/fv3"]))
+    await waitFor(() => expect(ipc.fsWatch).toHaveBeenLastCalledWith(["/fv3"], expect.any(Array)))
     view.unmount()
-    await waitFor(() => expect(ipc.fsWatch).toHaveBeenLastCalledWith([]))
+    await waitFor(() => expect(ipc.fsWatch).toHaveBeenLastCalledWith([], expect.any(Array)))
   })
 
   it("re-reads a folder the watcher says changed", async () => {
-    let onChanged: (dirs: string[]) => void = () => {}
+    let onChanged: (dirs: string[], content?: string[]) => void = () => {}
     vi.mocked(ipc.onFsChanged).mockImplementation((cb) => {
-      onChanged = cb
+      onChanged = (d, c = []) => cb(d, c)
       return () => {}
     })
     vi.mocked(ipc.readdir).mockResolvedValue(ls(["old.txt", false]))
@@ -128,12 +128,26 @@ describe("FolderView", () => {
     await waitFor(() => expect(ipc.readdir).toHaveBeenCalledWith("/fv8", undefined))
   })
 
-  it("clicking a file previews it", async () => {
-    vi.mocked(ipc.readdir).mockResolvedValue(ls(["notes.md", false]))
+  it("clicking a file opens it as a peek tab of this pane; ⌘-click keeps it", async () => {
+    vi.mocked(ipc.readdir).mockResolvedValue(ls(["notes.md", false], ["b.ts", false]))
+    useStore.setState({ platform: "darwin" }) // ⌘ keeps on a Mac (Ctrl elsewhere)
     const { tabId, entryId } = open("/fv9")
     render(<FolderView entryId={entryId} tabId={tabId} />)
-    fireEvent.mouseDown(await screen.findByText("notes.md"), { button: 0 })
-    expect(st().preview).toEqual({ abs: "/fv9/notes.md", name: "notes.md", wsl: undefined })
+    fireEvent.click(await screen.findByText("notes.md"), { button: 0 })
+    const peek = st().tabs[0]!.activeEntryId
+    expect(st().objects[peek]).toEqual({ kind: "file", path: "/fv9/notes.md", peek: true })
+    fireEvent.click(screen.getByText("b.ts"), { button: 0, metaKey: true })
+    const kept = st().tabs[0]!.activeEntryId
+    expect(st().objects[kept]).toEqual({ kind: "file", path: "/fv9/b.ts" })
+  })
+
+  it("a PDF opens in its own app, not a tab", async () => {
+    vi.mocked(ipc.readdir).mockResolvedValue(ls(["r.pdf", false]))
+    const { tabId, entryId } = open("/fv13")
+    render(<FolderView entryId={entryId} tabId={tabId} />)
+    fireEvent.click(await screen.findByText("r.pdf"), { button: 0 })
+    expect(ipc.openPath).toHaveBeenCalledWith("/fv13/r.pdf", undefined)
+    expect(st().tabs[0]!.activeEntryId).toBe(entryId)
   })
 
   it("its right-click menu's Set as root re-roots this tab", async () => {
@@ -186,5 +200,14 @@ describe("FolderView", () => {
     await screen.findByText("n000")
     expect(container.querySelectorAll(".file-row").length).toBeLessThan(60)
     expect(screen.queryByText("n479")).toBeNull() // far below: a spacer stands for it
+  })
+
+  it("on a Mac, Ctrl-click (a right-click) opens no tab", async () => {
+    vi.mocked(ipc.readdir).mockResolvedValue(ls(["c.ts", false]))
+    useStore.setState({ platform: "darwin" })
+    const { tabId, entryId } = open("/fv14")
+    render(<FolderView entryId={entryId} tabId={tabId} />)
+    fireEvent.click(await screen.findByText("c.ts"), { button: 0, ctrlKey: true })
+    expect(st().tabs[0]!.activeEntryId).toBe(entryId)
   })
 })

@@ -1096,3 +1096,17 @@ describe("Sidebar — folder tabs", () => {
     expect(item).toBeDisabled()
   })
 })
+
+describe("Sidebar — file tabs", () => {
+  it("a file tab's row: its name, its folder below, italic while a peek, closes from its x", () => {
+    st().newTab(testShell)
+    st().openFile("/w/rts/notes.md", { peek: true })
+    const id = st().tabs[0]!.activeEntryId
+    render(<Sidebar />)
+    const name = screen.getByText("notes.md")
+    expect(name.style.fontStyle).toBe("italic")
+    expect(screen.getByTitle("/w/rts/notes.md")).toBeInTheDocument()
+    fireEvent.click(screen.getByTitle("Close file"))
+    expect(st().objects[id]).toBeUndefined()
+  })
+})

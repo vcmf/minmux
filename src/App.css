@@ -1304,6 +1304,81 @@ body.resizing-col {
 }
 /* A folder entry in a pane (a tab beside its terminals): a lazy tree on a fixed path. Plain
    DOM, never over a WebGL canvas (showing it parks the pane's terminals). */
+/* A file entry in a pane: the file, highlighted, one fixed-height line each (file-view.tsx
+   LINE_H): only the lines in view are rendered. Plain DOM, never over a WebGL canvas. */
+.file-view {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  outline: none;
+}
+.file-view-path {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--dim);
+  font-size: 12px;
+}
+.file-view-lines {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  font-family: var(--code-font);
+  font-size: 12px;
+}
+.file-view-line {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 18px;
+  line-height: 18px;
+  display: flex;
+  white-space: pre;
+}
+.file-view-line.target {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+.file-view-no {
+  flex: 0 0 auto;
+  box-sizing: content-box;
+  padding: 0 12px 0 10px;
+  text-align: right;
+  color: var(--faint);
+  user-select: none;
+}
+.file-view-code {
+  flex: 1 0 auto;
+  padding-right: 16px;
+}
+.file-view-image {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 16px;
+}
+.file-view-image img {
+  max-width: 100%;
+}
+.file-view-note {
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: flex-start;
+  color: var(--dim);
+}
+/* A peek: the next file opened as one replaces it (double-click keeps it). */
+.surface-tab.peek .pane-title {
+  font-style: italic;
+}
+
 .folder-mount {
   flex: 1 1 auto;
   min-height: 0;

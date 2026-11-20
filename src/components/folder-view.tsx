@@ -18,6 +18,8 @@ import { buildGitDecorations, statusColor, statusLetter } from "../lib/git-decor
 import { isAbsoluteHostPath, revealLabel } from "../lib/file-actions"
 import { samePath } from "../lib/agent-dirs"
 import { useFileMenu } from "./use-file-menu"
+import { opensInTab } from "../lib/file-tab"
+import { findPane } from "../lib/pane-tree"
 import { rowWindow } from "../lib/virtual-rows"
 import { RootBreadcrumb } from "./root-breadcrumb"
 import { wantGit } from "../lib/folder-git-poll"
@@ -226,9 +228,20 @@ export function FolderView({ entryId, tabId }: { entryId: string; tabId: string 
     s.setActivePane(tabId, entryId)
     s.newSurface() // in the focused folder (store: focusedFolder)
   }
-  const preview = (abs: string, name: string) => {
+  // A file: a tab of this pane (a peek until kept: the next file opened replaces it); one this
+  // machine opens in its own app (a PDF, a video) goes there instead.
+  const openFile = (abs: string, keep: boolean) => {
     if (!isAbsoluteHostPath(abs, platform) && !wsl) return
-    useStore.getState().setPreview({ abs, name, wsl })
+    const s = useStore.getState()
+    if (!opensInTab(abs)) return ipc.openPath(abs, wsl) // its own app (main: never one that runs it)
+    const tab = s.tabs.find((t) => t.id === tabId)
+    const pane = tab && findPane(tab.root, entryId)
+    if (!pane) return
+    s.openFile(abs, { tabId, paneId: pane.id, wsl, peek: !keep })
+    if (keep) {
+      const id = useStore.getState().tabs.find((t) => t.id === tabId)?.activeEntryId
+      if (id) useStore.getState().keepEntry(id)
+    }
   }
   const relTo = (abs: string) =>
     abs.startsWith(root) ? abs.slice(root.length).replace(/^[\\/]/, "") : abs
@@ -326,8 +339,13 @@ export function FolderView({ entryId, tabId }: { entryId: string; tabId: string 
               key={r.path}
               className="diff-file file-row"
               style={pad}
-              title="Preview file"
-              onMouseDown={(e) => e.button === 0 && preview(r.path, r.name)}
+              title={`Click to preview · ${platform === "darwin" ? "⌘" : "Ctrl"}-click to keep it open`}
+              onClick={(e) => {
+                if (e.button !== 0) return
+                // On a Mac, Ctrl-click is a right-click: its menu, not a kept tab.
+                if (platform === "darwin" && e.ctrlKey) return
+                openFile(r.path, platform === "darwin" ? e.metaKey : e.ctrlKey)
+              }}
               onContextMenu={(e) =>
                 openFileMenu(e, { abs: r.path, rel: relTo(r.path), isDir: false })
               }
