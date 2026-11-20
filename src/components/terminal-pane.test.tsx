@@ -15,6 +15,7 @@ vi.mock("../terminal/terminal-manager", () => ({
     detach: vi.fn(),
     ensureRunning: vi.fn(),
     followSize: vi.fn(),
+    sizeHidden: vi.fn(),
     fit: vi.fn(),
     focus: vi.fn(),
     dispose: vi.fn(),
