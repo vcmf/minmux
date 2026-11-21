@@ -385,7 +385,7 @@ export function TerminalPane({ pane, tabId }: { pane: PaneLeaf; tabId: string })
         }}
       >
         <div
-          className="surface-tabs"
+          className={`surface-tabs${dragging ? " dragging" : ""}`}
           role="tablist"
           ref={stripRef}
           // A plain mouse wheel scrolls vertically; map it onto the horizontal strip.
@@ -403,6 +403,7 @@ export function TerminalPane({ pane, tabId }: { pane: PaneLeaf; tabId: string })
                   remoteFlat[i * 2 + 1] || undefined,
                 )
               : statusUi(s?.status ?? "idle")
+            const label = objAt(i).path ? baseName(objAt(i).path) : displaySessionTitle(s, home)
             return (
               <div
                 key={id}
@@ -424,6 +425,8 @@ export function TerminalPane({ pane, tabId }: { pane: PaneLeaf; tabId: string })
                       : objAt(i).path
                     : displaySessionTitle(s, home)
                 }
+                // The title's length caps the tab's shrink floor (CSS): a short title isn't padded.
+                style={{ "--title-ch": [...label].length } as React.CSSProperties}
                 onDoubleClick={() => objAt(i).peek && useStore.getState().keepEntry(id)}
                 // Drag a surface to another pane's edge (split), centre (join) or strip slot.
                 draggable
@@ -474,9 +477,7 @@ export function TerminalPane({ pane, tabId }: { pane: PaneLeaf; tabId: string })
                     )
                   })()
                 )}
-                <span className="pane-title">
-                  {objAt(i).path ? baseName(objAt(i).path) : displaySessionTitle(s, home)}
-                </span>
+                <span className="pane-title">{label}</span>
                 {/* Hidden surfaces surface their state on the tab (you can't see the pane). */}
                 {/* Static dot (no pulse): don't animate compositing next to a WebGL canvas. */}
                 {!active && s && (ui.dot !== "faint" || s.status !== "idle") && (
