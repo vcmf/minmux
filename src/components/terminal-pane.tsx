@@ -32,6 +32,7 @@ import { hostColor, hostColorCss, remoteWhere } from "../lib/ssh-hosts-ui"
 import { isIdle, remoteStatusUi } from "../lib/remote-connect"
 import { canRetry, type SshFailure } from "../lib/ssh-errors"
 import { statusUi } from "../lib/status-ui"
+import { stripOverflow } from "../lib/strip-overflow"
 import { newSurfaceKey } from "../lib/platform"
 import { resolveDefaultShell } from "../lib/shells"
 import type { DropZone, PaneLeaf } from "../types"
@@ -260,6 +261,28 @@ export function TerminalPane({ pane, tabId }: { pane: PaneLeaf; tabId: string })
       ?.scrollIntoView?.({ block: "nearest", inline: "nearest" })
   }, [activeId, idsKey])
 
+  // Fade the strip's edges where tabs are scrolled out of view (its scrollbar is hidden).
+  // Set on the DOM directly: scrolling must not re-render the pane.
+  useEffect(() => {
+    const strip = stripRef.current
+    if (!strip) return
+    const update = () => {
+      const o = stripOverflow(strip.scrollLeft, strip.scrollWidth, strip.clientWidth)
+      strip.toggleAttribute("data-fade-left", o.left)
+      strip.toggleAttribute("data-fade-right", o.right)
+    }
+    // The strip's own box (pane resize) and each tab's (titles change width) move the overflow.
+    const ro = new ResizeObserver(update)
+    ro.observe(strip)
+    for (const el of strip.children) ro.observe(el)
+    strip.addEventListener("scroll", update, { passive: true })
+    update()
+    return () => {
+      ro.disconnect()
+      strip.removeEventListener("scroll", update)
+    }
+  }, [idsKey])
+
   // Would dropping here change anything? (e.g. a pane's only surface onto its own edge: no.)
   const wouldMove = (target: MoveTarget) => {
     const s = useStore.getState()
@@ -362,7 +385,7 @@ export function TerminalPane({ pane, tabId }: { pane: PaneLeaf; tabId: string })
         }}
       >
         <div
-          className="surface-tabs"
+          className={`surface-tabs${dragging ? " dragging" : ""}`}
           role="tablist"
           ref={stripRef}
           // A plain mouse wheel scrolls vertically; map it onto the horizontal strip.
@@ -380,6 +403,7 @@ export function TerminalPane({ pane, tabId }: { pane: PaneLeaf; tabId: string })
                   remoteFlat[i * 2 + 1] || undefined,
                 )
               : statusUi(s?.status ?? "idle")
+            const label = objAt(i).path ? baseName(objAt(i).path) : displaySessionTitle(s, home)
             return (
               <div
                 key={id}
@@ -401,6 +425,8 @@ export function TerminalPane({ pane, tabId }: { pane: PaneLeaf; tabId: string })
                       : objAt(i).path
                     : displaySessionTitle(s, home)
                 }
+                // The title's length caps the tab's shrink floor (CSS): a short title isn't padded.
+                style={{ "--title-ch": [...label].length } as React.CSSProperties}
                 onDoubleClick={() => objAt(i).peek && useStore.getState().keepEntry(id)}
                 // Drag a surface to another pane's edge (split), centre (join) or strip slot.
                 draggable
@@ -451,9 +477,7 @@ export function TerminalPane({ pane, tabId }: { pane: PaneLeaf; tabId: string })
                     )
                   })()
                 )}
-                <span className="pane-title">
-                  {objAt(i).path ? baseName(objAt(i).path) : displaySessionTitle(s, home)}
-                </span>
+                <span className="pane-title">{label}</span>
                 {/* Hidden surfaces surface their state on the tab (you can't see the pane). */}
                 {/* Static dot (no pulse): don't animate compositing next to a WebGL canvas. */}
                 {!active && s && (ui.dot !== "faint" || s.status !== "idle") && (

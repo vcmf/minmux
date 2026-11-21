@@ -912,10 +912,29 @@ body {
   flex: 0 1 auto;
   /* Scroll (wheel/trackpad) instead of clipping tabs past the pane width. */
   overflow-x: auto;
+  /* A tab scrolled into view (scrollIntoView) stops clear of the edge fades. */
+  scroll-padding-inline: 24px;
   scrollbar-width: none;
 }
 .surface-tabs::-webkit-scrollbar {
   display: none;
+}
+/* Edge fades where tabs are scrolled out of view (set by TerminalPane). Static: no transition.
+   None mid-drag: they'd hide the insert marker at the edge the strip auto-scrolls from. */
+.surface-tabs:not(.dragging)[data-fade-left] {
+  mask-image: linear-gradient(to right, transparent, #000 24px);
+}
+.surface-tabs:not(.dragging)[data-fade-right] {
+  mask-image: linear-gradient(to left, transparent, #000 24px);
+}
+.surface-tabs:not(.dragging)[data-fade-left][data-fade-right] {
+  mask-image: linear-gradient(
+    to right,
+    transparent,
+    #000 24px,
+    #000 calc(100% - 24px),
+    transparent
+  );
 }
 .surface-tab {
   display: flex;
@@ -934,8 +953,17 @@ body {
 }
 .surface-tab.multi {
   flex: 0 1 auto;
-  min-width: 56px;
+  /* Shrink only to a readable width (icon + up to 10 title chars + close), past that the
+     strip scrolls: 53px = padding 12 + icon 13 + close 16 + two 6px gaps. The title's own
+     length (--title-ch, set per tab) caps it so a short title isn't padded, and the strip's
+     width (100%) so one tab still fits a narrow pane. ch = the title's font (same size). */
+  font-size: 11.5px;
+  min-width: min(100%, calc(min(var(--title-ch, 10), 10) * 1ch + 53px));
   color: var(--dim);
+}
+/* A status dot (7px + a 6px gap) needs its own room. */
+.surface-tab.multi:has(> .dot) {
+  min-width: min(100%, calc(min(var(--title-ch, 10), 10) * 1ch + 66px));
 }
 .surface-tab.multi:hover {
   background: var(--elev);
