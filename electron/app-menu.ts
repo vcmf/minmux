@@ -1,13 +1,20 @@
-import type { MenuItemConstructorOptions } from "electron"
+import type { BaseWindow, MenuItemConstructorOptions } from "electron"
 
-/** macOS's application menu: Electron's default, except ⌘W — a plain window close that main
- *  can tell from the red button (that one runs the guarded quit). */
-export function macMenuTemplate(closeWindow: () => void): MenuItemConstructorOptions[] {
+/** macOS app menu: Electron's default, with ⌘W as a plain close (not the guarded quit). */
+export function macMenuTemplate(
+  closeWindow: (focused?: BaseWindow) => void,
+): MenuItemConstructorOptions[] {
   return [
     { role: "appMenu" },
     {
       label: "File",
-      submenu: [{ label: "Close Window", accelerator: "Cmd+W", click: () => closeWindow() }],
+      submenu: [
+        {
+          label: "Close Window",
+          accelerator: "Cmd+W",
+          click: (_i, focused) => closeWindow(focused),
+        },
+      ],
     },
     { role: "editMenu" },
     { role: "viewMenu" },

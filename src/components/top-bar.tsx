@@ -104,19 +104,22 @@ export function TopBar() {
 
   // Window state: the first read, then pushes — a push beats a read still in flight.
   useEffect(() => {
-    let maxPushed = false
+    let maxPushes = 0 // a read started before the latest push is stale
     let fullPushed = false
-    void ipc.isMaximized().then((m) => !maxPushed && setMaximized(m))
+    const readMax = () => {
+      const at = maxPushes
+      void ipc.isMaximized().then((m) => at === maxPushes && setMaximized(m))
+    }
+    readMax()
     void ipc.isFullScreen().then((f) => !fullPushed && setFullScreen(f))
     const offMax = ipc.onMaximizeChange((m) => {
-      maxPushed = true
+      maxPushes++
       setMaximized(m)
     })
     const offFull = ipc.onFullScreenChange((f) => {
       fullPushed = true
       setFullScreen(f)
-      // A full-screen round trip may not report (un)maximize: ask again for the icon.
-      void ipc.isMaximized().then(setMaximized)
+      readMax() // a full-screen round trip may not report (un)maximize: ask again
     })
     return () => {
       offMax()

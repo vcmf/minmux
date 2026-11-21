@@ -38,7 +38,7 @@ import { OutputCoalescer } from "./coalescer"
 import { OutputBuffer } from "./output-buffer"
 import { drainPtys, type Drainable, type DrainOptions } from "./pty-drain"
 import { AgentProcs, noop, posixProcs } from "./agent-procs"
-import { quitStep, type QuitPhase } from "./quit-plan"
+import { closeStep, quitNeedsConfirm, quitStep, type QuitPhase } from "./quit-plan"
 import { appendDiag } from "./diagnostics"
 import { isFullScreenChord } from "./fullscreen-chord"
 import { macMenuTemplate } from "./app-menu"
@@ -459,9 +459,9 @@ function createWindow() {
   win.on("close", (e) => {
     const plain = plainClose
     plainClose = false
-    if (process.platform !== "darwin" || quitThrough || plain) return
+    if (closeStep({ platform: process.platform, quitThrough, plain }) === "close") return
     e.preventDefault()
-    app.quit()
+    setImmediate(() => app.quit()) // after this close returns: the quit closes it again
   })
   win.on("session-end", () => sessionLedger().freeze(60_000)) // Windows logout/shutdown — see onPower
   win.on("closed", () => {
@@ -473,11 +473,14 @@ function createWindow() {
   win.webContents.on("render-process-gone", () => fsWorker.setWatched([]))
 
   // Tell the renderer when maximize state changes (custom controls swap icon).
-  const sendMax = () => win.webContents.send("window:maximize-change", win.isMaximized())
+  // (A window closing out of full screen can report after it's destroyed.)
+  const alive = () => !win.isDestroyed() && !win.webContents.isDestroyed()
+  const sendMax = () => alive() && win.webContents.send("window:maximize-change", win.isMaximized())
   win.on("maximize", sendMax)
   win.on("unmaximize", sendMax)
   // …and full-screen state (the controls hide until the top edge is hovered).
-  const sendFull = () => win.webContents.send("window:fullscreen-change", win.isFullScreen())
+  const sendFull = () =>
+    alive() && win.webContents.send("window:fullscreen-change", win.isFullScreen())
   win.on("enter-full-screen", sendFull)
   win.on("leave-full-screen", sendFull)
   // Full-screen chord — ⌃⌘F (macOS) / F11. Here, not in the renderer: preventDefault also
@@ -1909,7 +1912,8 @@ app.whenReady().then(async () => {
   // (MINMUX_CLAUDE_SETTINGS, MINMUX_AGENT_EVENTS) and the `claude` wrapper never arms (M6).
   await startAgentObservability()
   if (process.platform === "darwin") {
-    const closeWindow = () => {
+    const closeWindow = (focused?: Electron.BaseWindow) => {
+      if (focused && focused !== mainWindow) return focused.close() // e.g. detached DevTools
       if (!mainWindow) return
       plainClose = true
       mainWindow.close()
@@ -2083,7 +2087,13 @@ app.on("before-quit", (e) => {
     phase: quitPhase,
     confirmed: quitConfirmed,
     // Spawns still preparing (an ssh probe) are about to be sessions: count them too.
-    needsConfirm: sessions.size + pendingSpawns.live > 0 && confirmQuitEnabled() && !!mainWindow,
+    needsConfirm: quitNeedsConfirm({
+      live: sessions.size + pendingSpawns.live,
+      enabled: confirmQuitEnabled(),
+      hasWindow: !!mainWindow,
+      platform: process.platform,
+    }),
+    asking: quitAsking,
     livePtys: livePtys.size + closingPanes.size, // a closed pane's agent may still be ending
     osEnding,
   })
@@ -2102,7 +2112,7 @@ app.on("before-quit", (e) => {
     return killNow()
   }
   e.preventDefault()
-  if (step === "hold" || quitAsking) return
+  if (step === "hold") return
   if (step === "drain") {
     // Hold the quit until every PTY has exited (≤ ~2 s; ≤ ~4 s if the agents' ps stalls).
     quitPhase = "draining"
@@ -2115,21 +2125,21 @@ app.on("before-quit", (e) => {
     })
     return
   }
-  if (!mainWindow) return
   const n = sessions.size + pendingSpawns.live
+  const ask: Electron.MessageBoxOptions = {
+    type: "warning",
+    buttons: ["Cancel", "Quit"],
+    defaultId: 1,
+    cancelId: 0,
+    message: `Quit ${displayName(PROFILE_NAMES)}?`,
+    detail: `This closes ${n} running session${n === 1 ? "" : "s"} and their processes.`,
+    checkboxLabel: "Don't warn again",
+    checkboxChecked: false,
+    noLink: true,
+  }
   quitAsking = true
-  void dialog
-    .showMessageBox(mainWindow, {
-      type: "warning",
-      buttons: ["Cancel", "Quit"],
-      defaultId: 1,
-      cancelId: 0,
-      message: `Quit ${displayName(PROFILE_NAMES)}?`,
-      detail: `This closes ${n} running session${n === 1 ? "" : "s"} and their processes.`,
-      checkboxLabel: "Don't warn again",
-      checkboxChecked: false,
-      noLink: true,
-    })
+  // No window (macOS, after ⌘W): an app-modal dialog — the sessions are still running.
+  void (mainWindow ? dialog.showMessageBox(mainWindow, ask) : dialog.showMessageBox(ask))
     .then(({ response, checkboxChecked }) => {
       quitAsking = false
       if (response !== 1) return // Cancel
@@ -2137,5 +2147,5 @@ app.on("before-quit", (e) => {
       quitConfirmed = true
       app.quit()
     })
-    .catch(() => (quitAsking = false)) // no dialog (the window gone): ask again next time
+    .catch(() => (quitAsking = false)) // no dialog: ask again next time
 })

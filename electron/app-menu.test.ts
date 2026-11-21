@@ -11,8 +11,9 @@ describe("macMenuTemplate", () => {
     const all = items(macMenuTemplate(close))
     const cmdW = all.filter((i) => i.accelerator === "Cmd+W")
     expect(cmdW).toHaveLength(1)
-    ;(cmdW[0]!.click as () => void)()
-    expect(close).toHaveBeenCalledOnce()
+    const focused = {}
+    ;(cmdW[0]!.click as (i: unknown, w: unknown) => void)({}, focused)
+    expect(close).toHaveBeenCalledWith(focused) // the focused window, not always the main one
     expect(all.some((i) => i.role === "close")).toBe(false)
   })
 

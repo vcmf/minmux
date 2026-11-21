@@ -88,6 +88,27 @@ describe("TopBar", () => {
     expect(screen.getByTitle("Restore")).toBeInTheDocument()
   })
 
+  it("a maximize push beats the re-read still in flight after full screen", async () => {
+    let pushFull: (full: boolean) => void = () => {}
+    let pushMax: (max: boolean) => void = () => {}
+    let answer: (max: boolean) => void = () => {}
+    vi.mocked(ipc.onFullScreenChange).mockImplementationOnce((cb) => {
+      pushFull = cb
+      return () => {}
+    })
+    vi.mocked(ipc.onMaximizeChange).mockImplementationOnce((cb) => {
+      pushMax = cb
+      return () => {}
+    })
+    render(<TopBar />)
+    await act(async () => {}) // the first reads land
+    vi.mocked(ipc.isMaximized).mockReturnValueOnce(new Promise((r) => (answer = r)))
+    act(() => pushFull(false))
+    act(() => pushMax(true))
+    await act(async () => answer(false)) // the stale re-read
+    expect(screen.getByTitle("Restore")).toBeInTheDocument()
+  })
+
   it("the Agents icon shows the right panel; again hides it (no Files or Changes icons)", () => {
     render(<TopBar />)
     fireEvent.click(screen.getByRole("button", { name: "Agents" }))
