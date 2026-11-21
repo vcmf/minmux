@@ -12,6 +12,7 @@ import {
   Square,
   X,
   Copy,
+  CornersIn,
   SidebarSimple,
   Sun,
   Moon,
@@ -32,6 +33,7 @@ import { envTitle } from "../lib/ssh-hosts-ui"
 import { hostSections, visibleHosts } from "../lib/ssh-host-list"
 import { TerminalManager } from "../terminal/terminal-manager"
 import brandIcon from "../assets/icon.png"
+import { isMac } from "../lib/platform"
 
 /** How many hosts the new-tab menu lists before "All hosts…". */
 const QUICK_HOSTS = 6
@@ -94,14 +96,32 @@ export function TopBar() {
   const scheme = useStore((s) => activeTheme(s).scheme)
   const profile = useStore((s) => s.profile)
   const [maximized, setMaximized] = useState(false)
+  const [fullScreen, setFullScreen] = useState(false)
   const [shellMenu, setShellMenu] = useState(false)
 
   const rename = useTabRename()
   const editingId = rename.editingId
 
+  // Window state: the first read, then pushes — a push beats a read still in flight.
   useEffect(() => {
-    void ipc.isMaximized().then(setMaximized)
-    return ipc.onMaximizeChange(setMaximized)
+    let maxPushed = false
+    let fullPushed = false
+    void ipc.isMaximized().then((m) => !maxPushed && setMaximized(m))
+    void ipc.isFullScreen().then((f) => !fullPushed && setFullScreen(f))
+    const offMax = ipc.onMaximizeChange((m) => {
+      maxPushed = true
+      setMaximized(m)
+    })
+    const offFull = ipc.onFullScreenChange((f) => {
+      fullPushed = true
+      setFullScreen(f)
+      // A full-screen round trip may not report (un)maximize: ask again for the icon.
+      void ipc.isMaximized().then(setMaximized)
+    })
+    return () => {
+      offMax()
+      offFull()
+    }
   }, [])
 
   const defaultShell = resolveDefaultShell(shells, defaultShellPref)
@@ -136,7 +156,8 @@ export function TopBar() {
   }
 
   return (
-    <div className="topbar">
+    // macOS: room for its own window buttons — none in full screen, where they hide
+    <div className={`topbar${isMac && !fullScreen ? " mac-buttons" : ""}`}>
       <button
         className={`iconbtn${sidebarCollapsed ? "" : " on"}`}
         title={sidebarCollapsed ? "Show sidebar" : "Hide sidebar"}
@@ -374,22 +395,37 @@ export function TopBar() {
         >
           <GearSix size={15} />
         </button>
-        <div className="vdivider" />
-        <div className="wincontrols">
-          <button className="winbtn" title="Minimize" onClick={() => ipc.minimizeWindow()}>
-            <Minus size={11} />
-          </button>
-          <button
-            className="winbtn"
-            title={maximized ? "Restore" : "Maximize"}
-            onClick={() => ipc.maximizeWindow()}
-          >
-            {maximized ? <Copy size={11} /> : <Square size={11} />}
-          </button>
-          <button className="winbtn close" title="Close" onClick={() => ipc.closeWindow()}>
-            <X size={12} />
-          </button>
-        </div>
+        {/* macOS draws its own (red / yellow / green) */}
+        {!isMac && (
+          <>
+            <div className="vdivider" />
+            <div className="wincontrols">
+              <button className="winbtn" title="Minimize" onClick={() => ipc.minimizeWindow()}>
+                <Minus size={11} />
+              </button>
+              {fullScreen ? (
+                <button
+                  className="winbtn"
+                  title="Exit full screen"
+                  onClick={() => ipc.toggleFullScreen()}
+                >
+                  <CornersIn size={12} />
+                </button>
+              ) : (
+                <button
+                  className="winbtn"
+                  title={maximized ? "Restore" : "Maximize"}
+                  onClick={() => ipc.maximizeWindow()}
+                >
+                  {maximized ? <Copy size={11} /> : <Square size={11} />}
+                </button>
+              )}
+              <button className="winbtn close" title="Close" onClick={() => ipc.closeWindow()}>
+                <X size={12} />
+              </button>
+            </div>
+          </>
+        )}
       </div>
     </div>
   )

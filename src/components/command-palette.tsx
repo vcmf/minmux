@@ -9,6 +9,7 @@ import {
   SquaresFour,
   Palette,
   GearSix,
+  CornersOut,
   FileText,
   Terminal,
   Sun,
@@ -23,7 +24,7 @@ import { useStore } from "../store"
 import { THEME_FAMILIES } from "../settings/themes"
 import { openSettingsFile } from "../settings/io"
 import { resolveDefaultShell } from "../lib/shells"
-import { newSurfaceKey } from "../lib/platform"
+import { isMac, newSurfaceKey } from "../lib/platform"
 import { ipc } from "../lib/ipc"
 import { hostSubline } from "../lib/ssh-hosts-ui"
 import { visibleHosts } from "../lib/ssh-host-list"
@@ -208,6 +209,13 @@ export function CommandPalette() {
         label: "Pull requests",
         icon: <GitPullRequest size={16} />,
         run: () => store.setPrDialogOpen(true),
+      },
+      {
+        group: "App",
+        label: "Toggle full screen",
+        sub: isMac ? "⌃⌘F" : "F11",
+        icon: <CornersOut size={16} />,
+        run: () => ipc.toggleFullScreen(),
       },
       {
         group: "App",

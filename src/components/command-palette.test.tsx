@@ -103,6 +103,14 @@ describe("CommandPalette — SSH", () => {
     fireEvent.keyDown(screen.getByRole("textbox"), { key: "Enter" })
     expect(ipc.openSshConfig).toHaveBeenCalled()
   })
+
+  it("toggles full screen, its chord shown", () => {
+    render(<CommandPalette />)
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "full screen" } })
+    expect(screen.getByText("· F11")).toBeInTheDocument() // jsdom isn't macOS
+    fireEvent.keyDown(screen.getByRole("textbox"), { key: "Enter" })
+    expect(ipc.toggleFullScreen).toHaveBeenCalledOnce()
+  })
 })
 
 describe("CommandPalette — a host list that changes while it's open", () => {

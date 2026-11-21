@@ -331,7 +331,7 @@ CI: GitHub Actions matrix (macos/ubuntu/windows). Auto-update later via `electro
   (sidebar branch + PR) · `agents:meta-snapshot` · `agents:resume-plan` /
   `agents:resume-consume` / `agents:shell-idle` · `agents:hint-wanted` / `agents:hint-dismiss`
   (the Codex approval hint) · `fs:*` / `file:*` / `dialog:pick-directory` /
-  `editor:info` (folder tabs, links, preview) · `window:*` (frameless controls, native bg) ·
+  `editor:info` (folder tabs, links, preview) · `window:*` (frameless controls, full screen, native bg) ·
   `platform:info` · `app:*` (version, update check, metrics) · `open-external` / `open-path` /
   `notify` / `clipboard:*` · `ssh:list-hosts` (invoke) / `ssh:open-config` (send).
 - **Main → renderer** (`webContents.send`): `pty:data:<id>` (coalesced PTY bytes — the hot path;

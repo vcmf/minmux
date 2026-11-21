@@ -47,6 +47,47 @@ describe("TopBar", () => {
     expect(ipc.closeWindow).toHaveBeenCalledOnce()
   })
 
+  it("full screen swaps maximize for exit full screen (Windows / Linux)", () => {
+    let push: (full: boolean) => void = () => {}
+    vi.mocked(ipc.onFullScreenChange).mockImplementationOnce((cb) => {
+      push = cb
+      return () => {}
+    })
+    render(<TopBar />)
+    act(() => push(true))
+    expect(screen.queryByTitle("Maximize")).toBeNull()
+    fireEvent.click(screen.getByTitle("Exit full screen"))
+    expect(ipc.toggleFullScreen).toHaveBeenCalledOnce()
+    act(() => push(false))
+    expect(screen.getByTitle("Maximize")).toBeInTheDocument()
+  })
+
+  it("a full-screen push isn't undone by the first read landing after it", async () => {
+    let push: (full: boolean) => void = () => {}
+    let answer: (full: boolean) => void = () => {}
+    vi.mocked(ipc.isFullScreen).mockReturnValueOnce(new Promise((r) => (answer = r)))
+    vi.mocked(ipc.onFullScreenChange).mockImplementationOnce((cb) => {
+      push = cb
+      return () => {}
+    })
+    render(<TopBar />)
+    act(() => push(true))
+    await act(async () => answer(false)) // the stale read
+    expect(screen.getByTitle("Exit full screen")).toBeInTheDocument()
+  })
+
+  it("leaving full screen re-reads maximize (its events may not come)", async () => {
+    let push: (full: boolean) => void = () => {}
+    vi.mocked(ipc.onFullScreenChange).mockImplementationOnce((cb) => {
+      push = cb
+      return () => {}
+    })
+    render(<TopBar />)
+    vi.mocked(ipc.isMaximized).mockResolvedValueOnce(true)
+    await act(async () => push(false))
+    expect(screen.getByTitle("Restore")).toBeInTheDocument()
+  })
+
   it("the Agents icon shows the right panel; again hides it (no Files or Changes icons)", () => {
     render(<TopBar />)
     fireEvent.click(screen.getByRole("button", { name: "Agents" }))

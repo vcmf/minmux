@@ -7,7 +7,7 @@ design docs/RFCs in `docs/design/`.
 
 ## Stack
 
-Electron (Chromium, **frameless**) · electron-vite · React + TypeScript · Zustand · xterm.js (WebGL
+Electron (Chromium, **frameless**; macOS keeps its own window buttons) · electron-vite · React + TypeScript · Zustand · xterm.js (WebGL
 renderer) · node-pty · react-resizable-panels · Vitest. UI: `@phosphor-icons/react`, bundled **Geist
 Mono** (chrome) + FiraCode/JetBrains Mono (terminal). Visual design = `mux` (see
 `docs/mux_product_spec.md` + ROADMAP M3.5). (Migrated from Tauri/Rust — see ARCHITECTURE §3.5.)

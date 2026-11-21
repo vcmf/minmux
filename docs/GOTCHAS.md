@@ -108,8 +108,10 @@ daemon) is still **ROADMAP M5** — a full quit kills PTYs (they're children of 
 `shutdownPtys()`). See ARCHITECTURE Appendix A.
 
 **Quit is guarded.** `before-quit` shows a native confirm dialog when PTYs are live
-(unless `settings.confirmQuit` is false); the frameless close button routes through
-`app.quit()` too. The dialog's "don't warn again" writes `confirmQuit:false` to
+(unless `settings.confirmQuit` is false); the drawn close button (Windows/Linux) routes
+through `app.quit()` too, and so does macOS's own red button — the window's `close` is
+cancelled into `app.quit()` until `before-quit` lets the quit through (`quitThrough`), or the
+window would close and leave its sessions running headless. The dialog's "don't warn again" writes `confirmQuit:false` to
 settings.json.
 
 **Closing a terminal ends the coding agent running in it** (`electron/agent-procs.ts`). A quit

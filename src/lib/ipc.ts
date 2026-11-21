@@ -123,6 +123,9 @@ export interface Ipc {
   closeWindow: () => void
   isMaximized: () => Promise<boolean>
   onMaximizeChange: (cb: (max: boolean) => void) => () => void
+  toggleFullScreen: () => void
+  isFullScreen: () => Promise<boolean>
+  onFullScreenChange: (cb: (full: boolean) => void) => () => void
   platformInfo: () => Promise<PlatformInfo>
   gitStatus: (cwd: string, wsl?: WslContext) => Promise<GitStatus>
   paneGitInfo: (reqs: PaneGitRequest[]) => Promise<Record<string, PaneGitInfo>> // sidebar PRs

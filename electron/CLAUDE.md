@@ -1,6 +1,6 @@
 # electron/ — main process
 
-Node/Electron main process: frameless `BrowserWindow`, all `ipcMain` handlers, PTY
+Node/Electron main process: frameless `BrowserWindow` (macOS: hidden title bar + its own buttons), all `ipcMain` handlers, PTY
 ownership, native modules. No DOM, no React here. (Renderer rules: root `CLAUDE.md`.)
 
 ## Files

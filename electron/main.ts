@@ -39,6 +39,7 @@ import { drainPtys, type Drainable, type DrainOptions } from "./pty-drain"
 import { AgentProcs, noop, posixProcs } from "./agent-procs"
 import { quitStep, type QuitPhase } from "./quit-plan"
 import { appendDiag } from "./diagnostics"
+import { isFullScreenChord } from "./fullscreen-chord"
 import { applyLoginShellEnv } from "./shell-env"
 import { buildEditorCommand, winQuote } from "./editor-command"
 import { orderMacEditors, planEditor, type EditorPlan, type EditorInfo } from "./editor-detect"
@@ -262,6 +263,11 @@ let quitConfirmed = false
 let quitPhase: QuitPhase = "running" // running → draining (PTYs ending) → drained (quit through)
 let osEnding = false // the OS is logging out / restarting — don't hold its quit
 const draining = () => quitPhase !== "running"
+/** before-quit let the quit through: the window may close now (macOS red button — see createWindow). */
+let quitThrough = false
+let quitAsking = false // the quit dialog is up: another close / ⌘Q mustn't stack a second
+/** When ⌘W last went down (macOS): its close keeps the old meaning — see createWindow. */
+let closeKeyAt = 0
 // Remote spawns in flight (the ssh probe is async): a second pty:spawn for the same id waits,
 // and resizes / input / a close that arrive meanwhile are held for it (pending-spawns.ts).
 const pendingSpawns = new PendingSpawns<Electron.WebContents>()
@@ -427,7 +433,11 @@ function createWindow() {
     minHeight: 420,
     title: displayName(PROFILE_NAMES),
     backgroundColor: readWindowBg(), // last theme's bg — a light theme mustn't open dark
-    frame: false, // frameless — the app draws its own top bar + window controls
+    // Frameless: the app draws its own top bar. macOS keeps its own window buttons, inset into
+    // that bar (and shown on a top-edge hover in full screen); elsewhere the app draws them.
+    ...(process.platform === "darwin"
+      ? { titleBarStyle: "hidden" as const, trafficLightPosition: { x: 16, y: 16 } }
+      : { frame: false }),
     ...(icon ? { icon } : {}), // window/taskbar icon (win/linux; macOS uses the dock icon)
     webPreferences: {
       preload: path.join(dir, "../preload/preload.mjs"),
@@ -440,6 +450,16 @@ function createWindow() {
   mainWindow = win
   // Main owns the title ("minmux (dev)"): index.html's <title> would reset it on load.
   win.on("page-title-updated", (e) => e.preventDefault())
+  // macOS's red button closes the window itself: make it the guarded quit, as the drawn close
+  // button is elsewhere (a single-window app; its sessions mustn't run on headless).
+  // ⌘W (the default menu's Close Window) stays a plain close: the sessions run on and the dock
+  // reopens a window that reattaches them.
+  win.on("close", (e) => {
+    if (process.platform !== "darwin" || quitThrough) return
+    if (Date.now() - closeKeyAt < 500) return
+    e.preventDefault()
+    app.quit()
+  })
   win.on("session-end", () => sessionLedger().freeze(60_000)) // Windows logout/shutdown — see onPower
   win.on("closed", () => {
     mainWindow = null
@@ -453,6 +473,20 @@ function createWindow() {
   const sendMax = () => win.webContents.send("window:maximize-change", win.isMaximized())
   win.on("maximize", sendMax)
   win.on("unmaximize", sendMax)
+  // …and full-screen state (the controls hide until the top edge is hovered).
+  const sendFull = () => win.webContents.send("window:fullscreen-change", win.isFullScreen())
+  win.on("enter-full-screen", sendFull)
+  win.on("leave-full-screen", sendFull)
+  // Full-screen chord — ⌃⌘F (macOS) / F11. Here, not in the renderer: preventDefault also
+  // stops the default menu's own accelerator, so it never toggles twice.
+  win.webContents.on("before-input-event", (e, input) => {
+    if (input.type === "keyDown" && input.meta && input.key.toLowerCase() === "w") {
+      closeKeyAt = Date.now()
+    }
+    if (input.type !== "keyDown" || !isFullScreenChord(input, process.platform)) return
+    e.preventDefault()
+    if (!input.isAutoRepeat) win.setFullScreen(!win.isFullScreen())
+  })
 
   // Load-test mode: surface the renderer's [PERF] report lines on stdout.
   if (process.env.MINMUX_PERF === "1") {
@@ -1104,6 +1138,7 @@ function registerIpc() {
     if (mainWindow.isMaximized()) mainWindow.unmaximize()
     else mainWindow.maximize()
   })
+  ipcMain.on("window:fullscreen", () => mainWindow?.setFullScreen(!mainWindow.isFullScreen()))
   ipcMain.on("window:close", () => app.quit()) // single-window app: close ⇒ quit (guarded)
   ipcMain.on("window:set-background", (_e, color: unknown) => {
     if (!isHexColor(color)) return
@@ -1286,6 +1321,7 @@ function registerIpc() {
     [...metaTrackers.values()].flatMap((t) => t.snapshot()),
   )
   ipcMain.handle("window:is-maximized", async () => mainWindow?.isMaximized() ?? false)
+  ipcMain.handle("window:is-fullscreen", async () => mainWindow?.isFullScreen() ?? false)
 
   // Git — working-tree status + per-file diff for folder and file tabs.
   // Branch + PR per terminal for the sidebar (cached/deduped; gh = the user's own login).
@@ -1891,7 +1927,10 @@ app.whenReady().then(async () => {
   onPower("shutdown", () => {
     sessionLedger().freeze(60_000) // thaws if the shutdown is cancelled
     osEnding = true // its quit mustn't be held (see quit-plan.ts)…
-    setTimeout(() => (osEnding = false), 60_000) // …unless it was cancelled
+    setTimeout(() => {
+      osEnding = false // …unless it was cancelled
+      quitThrough = false // and the red button guards again
+    }, 60_000)
   })
   app.on("activate", () => {
     if (draining()) return // quitting: a fresh window's panes couldn't spawn
@@ -2045,19 +2084,23 @@ app.on("before-quit", (e) => {
   // one resolving after this must not start an ssh in an exiting app. (No global flag: a
   // cancelled logout leaves new panes free to start.)
   if (step === "proceed") {
+    quitThrough = true
     pendingSpawns.killAll()
     return
   }
   if (step === "killNow") {
+    quitThrough = true
     pendingSpawns.killAll()
     return killNow()
   }
   e.preventDefault()
-  if (step === "hold") return
+  if (step === "hold" || quitAsking) return
   if (step === "drain") {
     // Hold the quit until every PTY has exited (≤ ~2 s; ≤ ~4 s if the agents' ps stalls).
     quitPhase = "draining"
-    mainWindow?.hide() // feels instant while the shells wind down
+    // feels instant while the shells wind down (not from native full screen: that hide
+    // leaves an empty black Space behind)
+    if (!mainWindow?.isFullScreen()) mainWindow?.hide()
     void shutdownPtys().finally(() => {
       quitPhase = "drained"
       app.quit()
@@ -2066,6 +2109,7 @@ app.on("before-quit", (e) => {
   }
   if (!mainWindow) return
   const n = sessions.size + pendingSpawns.live
+  quitAsking = true
   void dialog
     .showMessageBox(mainWindow, {
       type: "warning",
@@ -2079,9 +2123,11 @@ app.on("before-quit", (e) => {
       noLink: true,
     })
     .then(({ response, checkboxChecked }) => {
+      quitAsking = false
       if (response !== 1) return // Cancel
       if (checkboxChecked) disableConfirmQuit()
       quitConfirmed = true
       app.quit()
     })
+    .catch(() => (quitAsking = false)) // no dialog (the window gone): ask again next time
 })
