@@ -3,6 +3,19 @@
 What changed in each minmux release, newest first. Generated from the pull request titles by
 [git-cliff](https://git-cliff.org): edit `cliff.toml`, not this file.
 
+## [0.1.62](https://github.com/vcmf/minmux/releases/tag/v0.1.62) - 2026-11-21
+
+### Added
+
+- Git in folder and file tabs: repo bar, changes only, source and diff ([#193](https://github.com/vcmf/minmux/pull/193))
+- Open files as tabs, from paths and folders, never running them ([#192](https://github.com/vcmf/minmux/pull/192))
+- Folder tabs in the sidebar, git marks for every repo, editable breadcrumb ([#189](https://github.com/vcmf/minmux/pull/189))
+- Open folders as tabs beside a pane's terminals ([#188](https://github.com/vcmf/minmux/pull/188))
+
+### Fixed
+
+- Keep recorded session names when one is set before the file loads ([#190](https://github.com/vcmf/minmux/pull/190))
+
 ## [0.1.61](https://github.com/vcmf/minmux/releases/tag/v0.1.61) - 2026-11-08
 
 ### Fixed
