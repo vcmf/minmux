@@ -113,7 +113,8 @@ through `app.quit()` too, and so does macOS's own red button — the window's `c
 cancelled into `app.quit()` until `before-quit` lets the quit through (`quitThrough`), or the
 window would close and leave its sessions running headless. ⌘W is the exception, on purpose:
 the app's own macOS menu (`electron/app-menu.ts`) makes it a plain close (`plainClose`) — the
-sessions run on and a dock click reopens a window that reattaches them. The dialog's "don't warn again" writes `confirmQuit:false` to
+sessions run on and a dock click reopens a window that reattaches them. A ⌘Q from there still asks (an app-modal dialog, no window). The
+decisions live in `quit-plan.ts` (`quitStep`, `quitNeedsConfirm`, `closeStep`). The dialog's "don't warn again" writes `confirmQuit:false` to
 settings.json.
 
 **Closing a terminal ends the coding agent running in it** (`electron/agent-procs.ts`). A quit
