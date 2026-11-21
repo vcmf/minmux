@@ -9,6 +9,7 @@ import {
   clipboard,
   nativeImage,
   utilityProcess,
+  Menu,
 } from "electron"
 import { fileURLToPath } from "node:url"
 import path from "node:path"
@@ -40,6 +41,7 @@ import { AgentProcs, noop, posixProcs } from "./agent-procs"
 import { quitStep, type QuitPhase } from "./quit-plan"
 import { appendDiag } from "./diagnostics"
 import { isFullScreenChord } from "./fullscreen-chord"
+import { macMenuTemplate } from "./app-menu"
 import { applyLoginShellEnv } from "./shell-env"
 import { buildEditorCommand, winQuote } from "./editor-command"
 import { orderMacEditors, planEditor, type EditorPlan, type EditorInfo } from "./editor-detect"
@@ -266,8 +268,8 @@ const draining = () => quitPhase !== "running"
 /** before-quit let the quit through: the window may close now (macOS red button — see createWindow). */
 let quitThrough = false
 let quitAsking = false // the quit dialog is up: another close / ⌘Q mustn't stack a second
-/** When ⌘W last went down (macOS): its close keeps the old meaning — see createWindow. */
-let closeKeyAt = 0
+/** The next window close is the menu's ⌘W (a plain close), not the red button — see createWindow. */
+let plainClose = false
 // Remote spawns in flight (the ssh probe is async): a second pty:spawn for the same id waits,
 // and resizes / input / a close that arrive meanwhile are held for it (pending-spawns.ts).
 const pendingSpawns = new PendingSpawns<Electron.WebContents>()
@@ -452,11 +454,12 @@ function createWindow() {
   win.on("page-title-updated", (e) => e.preventDefault())
   // macOS's red button closes the window itself: make it the guarded quit, as the drawn close
   // button is elsewhere (a single-window app; its sessions mustn't run on headless).
-  // ⌘W (the default menu's Close Window) stays a plain close: the sessions run on and the dock
+  // ⌘W (the app menu's Close Window) stays a plain close: the sessions run on and the dock
   // reopens a window that reattaches them.
   win.on("close", (e) => {
-    if (process.platform !== "darwin" || quitThrough) return
-    if (Date.now() - closeKeyAt < 500) return
+    const plain = plainClose
+    plainClose = false
+    if (process.platform !== "darwin" || quitThrough || plain) return
     e.preventDefault()
     app.quit()
   })
@@ -480,9 +483,6 @@ function createWindow() {
   // Full-screen chord — ⌃⌘F (macOS) / F11. Here, not in the renderer: preventDefault also
   // stops the default menu's own accelerator, so it never toggles twice.
   win.webContents.on("before-input-event", (e, input) => {
-    if (input.type === "keyDown" && input.meta && input.key.toLowerCase() === "w") {
-      closeKeyAt = Date.now()
-    }
     if (input.type !== "keyDown" || !isFullScreenChord(input, process.platform)) return
     e.preventDefault()
     if (!input.isAutoRepeat) win.setFullScreen(!win.isFullScreen())
@@ -1908,6 +1908,14 @@ app.whenReady().then(async () => {
   // can request the first pty:spawn — otherwise the initial pane launches without their env
   // (MINMUX_CLAUDE_SETTINGS, MINMUX_AGENT_EVENTS) and the `claude` wrapper never arms (M6).
   await startAgentObservability()
+  if (process.platform === "darwin") {
+    const closeWindow = () => {
+      if (!mainWindow) return
+      plainClose = true
+      mainWindow.close()
+    }
+    Menu.setApplicationMenu(Menu.buildFromTemplate(macMenuTemplate(closeWindow)))
+  }
   createWindow()
   startSettingsWatcher()
   diag("boot", { pid: process.pid, version: app.getVersion() })

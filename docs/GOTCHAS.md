@@ -111,7 +111,9 @@ daemon) is still **ROADMAP M5** — a full quit kills PTYs (they're children of 
 (unless `settings.confirmQuit` is false); the drawn close button (Windows/Linux) routes
 through `app.quit()` too, and so does macOS's own red button — the window's `close` is
 cancelled into `app.quit()` until `before-quit` lets the quit through (`quitThrough`), or the
-window would close and leave its sessions running headless. The dialog's "don't warn again" writes `confirmQuit:false` to
+window would close and leave its sessions running headless. ⌘W is the exception, on purpose:
+the app's own macOS menu (`electron/app-menu.ts`) makes it a plain close (`plainClose`) — the
+sessions run on and a dock click reopens a window that reattaches them. The dialog's "don't warn again" writes `confirmQuit:false` to
 settings.json.
 
 **Closing a terminal ends the coding agent running in it** (`electron/agent-procs.ts`). A quit
