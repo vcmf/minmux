@@ -165,6 +165,13 @@ const api = {
     ipcRenderer.on("window:maximize-change", listener)
     return () => ipcRenderer.removeListener("window:maximize-change", listener)
   },
+  toggleFullScreen: () => ipcRenderer.send("window:fullscreen"),
+  isFullScreen: () => ipcRenderer.invoke("window:is-fullscreen") as Promise<boolean>,
+  onFullScreenChange: (cb: (full: boolean) => void) => {
+    const listener = (_e: unknown, full: boolean) => cb(full)
+    ipcRenderer.on("window:fullscreen-change", listener)
+    return () => ipcRenderer.removeListener("window:fullscreen-change", listener)
+  },
 
   platformInfo: () =>
     ipcRenderer.invoke("platform:info") as Promise<{

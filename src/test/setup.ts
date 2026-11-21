@@ -64,6 +64,9 @@ const minmuxStub = {
   closeWindow: vi.fn(),
   isMaximized: vi.fn(async () => false),
   onMaximizeChange: vi.fn(unsub),
+  toggleFullScreen: vi.fn(),
+  isFullScreen: vi.fn(async () => false),
+  onFullScreenChange: vi.fn(unsub),
   platformInfo: vi.fn(async () => ({
     platform: "darwin",
     label: "macOS",

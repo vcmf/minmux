@@ -449,7 +449,12 @@ body {
   color: var(--faint);
 }
 
-/* Frameless window controls */
+/* macOS window buttons (inset at x 16, ~52px wide): the bar starts after them. */
+.topbar.mac-buttons {
+  padding-left: 84px;
+}
+
+/* Frameless window controls (Windows / Linux) */
 .wincontrols {
   display: flex;
   align-items: center;
