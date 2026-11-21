@@ -917,6 +917,22 @@ body {
 .surface-tabs::-webkit-scrollbar {
   display: none;
 }
+/* Edge fades where tabs are scrolled out of view (set by TerminalPane). Static: no transition. */
+.surface-tabs[data-fade-left] {
+  mask-image: linear-gradient(to right, transparent, #000 24px);
+}
+.surface-tabs[data-fade-right] {
+  mask-image: linear-gradient(to left, transparent, #000 24px);
+}
+.surface-tabs[data-fade-left][data-fade-right] {
+  mask-image: linear-gradient(
+    to right,
+    transparent,
+    #000 24px,
+    #000 calc(100% - 24px),
+    transparent
+  );
+}
 .surface-tab {
   display: flex;
   align-items: center;
@@ -934,7 +950,8 @@ body {
 }
 .surface-tab.multi {
   flex: 0 1 auto;
-  min-width: 56px;
+  /* Shrink only to a readable width (icon + ~10 chars + dot); past that the strip scrolls. */
+  min-width: 116px;
   color: var(--dim);
 }
 .surface-tab.multi:hover {

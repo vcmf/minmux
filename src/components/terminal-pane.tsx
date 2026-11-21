@@ -32,6 +32,7 @@ import { hostColor, hostColorCss, remoteWhere } from "../lib/ssh-hosts-ui"
 import { isIdle, remoteStatusUi } from "../lib/remote-connect"
 import { canRetry, type SshFailure } from "../lib/ssh-errors"
 import { statusUi } from "../lib/status-ui"
+import { stripOverflow } from "../lib/strip-overflow"
 import { newSurfaceKey } from "../lib/platform"
 import { resolveDefaultShell } from "../lib/shells"
 import type { DropZone, PaneLeaf } from "../types"
@@ -259,6 +260,28 @@ export function TerminalPane({ pane, tabId }: { pane: PaneLeaf; tabId: string })
       ?.querySelector(".surface-tab.active")
       ?.scrollIntoView?.({ block: "nearest", inline: "nearest" })
   }, [activeId, idsKey])
+
+  // Fade the strip's edges where tabs are scrolled out of view (its scrollbar is hidden).
+  // Set on the DOM directly: scrolling must not re-render the pane.
+  useEffect(() => {
+    const strip = stripRef.current
+    if (!strip) return
+    const update = () => {
+      const o = stripOverflow(strip.scrollLeft, strip.scrollWidth, strip.clientWidth)
+      strip.toggleAttribute("data-fade-left", o.left)
+      strip.toggleAttribute("data-fade-right", o.right)
+    }
+    // The strip's own box (pane resize) and each tab's (titles change width) move the overflow.
+    const ro = new ResizeObserver(update)
+    ro.observe(strip)
+    for (const el of strip.children) ro.observe(el)
+    strip.addEventListener("scroll", update, { passive: true })
+    update()
+    return () => {
+      ro.disconnect()
+      strip.removeEventListener("scroll", update)
+    }
+  }, [idsKey])
 
   // Would dropping here change anything? (e.g. a pane's only surface onto its own edge: no.)
   const wouldMove = (target: MoveTarget) => {
