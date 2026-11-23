@@ -3,6 +3,13 @@
 What changed in each minmux release, newest first. Generated from the pull request titles by
 [git-cliff](https://git-cliff.org): edit `cliff.toml`, not this file.
 
+## [0.1.63](https://github.com/vcmf/minmux/releases/tag/v0.1.63) - 2026-11-21
+
+### Added
+
+- Full screen, with macOS's own window buttons ([#196](https://github.com/vcmf/minmux/pull/196))
+- Keep pane tabs readable and scroll the strip past them ([#195](https://github.com/vcmf/minmux/pull/195))
+
 ## [0.1.62](https://github.com/vcmf/minmux/releases/tag/v0.1.62) - 2026-11-21
 
 ### Added
