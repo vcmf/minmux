@@ -111,6 +111,8 @@ onclick=…>`), entity-encoded schemes, nested and unclosed tags, and `<img>`, `
   already reads files and WSL paths for file tabs. Each becomes a blob URL, capped at 5 MB, and is
   read when it scrolls into view.
 - Until this step lands, an image shows as a link to it (its alt text), loading nothing.
+- A remote image is fetched by main and handed to the page as a `blob:` URL: the renderer's
+  Content-Security-Policy (step 2) refuses remote images, and stays that way.
 - **Remote images** don't load on their own. They can be tracking pixels, and GitHub attachments
   in private repos need a login we don't send. One shows as a placeholder with its alt text, and a
   click loads it. A setting `markdown.remoteImages: "click" | "always"` turns that off.

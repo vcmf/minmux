@@ -1,5 +1,6 @@
 import { defineConfig, externalizeDepsPlugin } from "electron-vite"
 import react from "@vitejs/plugin-react"
+import { cspPlugin } from "./electron/csp"
 
 export default defineConfig({
   main: {
@@ -29,7 +30,7 @@ export default defineConfig({
       outDir: "out/renderer",
       rollupOptions: { input: { index: "index.html" } },
     },
-    plugins: [react()],
+    plugins: [react(), cspPlugin()],
     // Web Workers (the highlighter) as ES modules: they load their languages lazily (chunks).
     worker: { format: "es" },
     server: { port: 1420, strictPort: true },
