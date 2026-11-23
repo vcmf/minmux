@@ -125,10 +125,11 @@ onclick=…>`), entity-encoded schemes, nested and unclosed tags, and `<img>`, `
   `data-line` on every top-level block. Switching between Preview and Source keeps the same lines
   in view, through the same map.
 - A file an agent is writing re-renders as it changes, at the rate file tabs already re-read
-  (`RELOAD_MS`). The view stays anchored on the top block's `data-line`, so the text being read stays put
-  when blocks above it grow.
-- Big documents: top-level blocks get `content-visibility: auto`, so blocks off screen skip
-  layout. Above 1 MB the tab shows Source with a note. The fs worker already caps what a file tab
+  (`RELOAD_MS`). The view stays on the block at its top, found again by its text (the match nearest
+  its old `data-line`; lines move when an agent inserts above it), so the text being read stays put.
+- Big documents: past 50 KB of HTML, top-level blocks get `content-visibility: auto`, so blocks
+  off screen skip layout (measured: a 100 KB document re-renders in 3 ms instead of 35 ms, and
+  900 KB in 33 ms, at most every 2 s). Above 1 MB the tab shows Source with a note. The fs worker already caps what a file tab
   reads at about 2 MB.
 
 ### In the PR dialog
