@@ -1128,14 +1128,14 @@ function armResumeTimer(id: string, entry: Entry) {
   )
 }
 
-/** Once we know whether the shell is integrated: a pending launch waits for its first prompt
- *  (given up if none comes: never typed into the unknown); without integration there's no
- *  prompt mark, so it's typed after a short grace period. */
+/** Once integration is known: arm the pending launch's fallback (give up / type after a grace). */
 function armLaunchTimer(id: string, entry: Entry) {
   if (!entry.launch || !entry.flow.launchPending) return // already typed (the prompt came first)
   clearTimeout(entry.launch.timer)
+  // An integrated shell that shows no prompt is never typed into (its rc may be asking
+  // something): say so instead. Without integration there's no prompt mark to wait for.
   entry.launch.timer = setTimeout(
-    () => (entry.flow.integrated ? dropLaunch(entry) : typeLaunch(id, entry)),
+    () => (entry.flow.integrated ? giveUpLaunch(entry) : typeLaunch(id, entry)),
     entry.flow.integrated ? RESUME_PROMPT_WAIT_MS : RESUME_PROMPT_GRACE_MS,
   )
 }
@@ -1148,6 +1148,14 @@ function typeLaunch(id: string, entry: Entry) {
   // ^U first (POSIX line editors): keystrokes typed ahead of the prompt don't get glued on.
   const posix = isPosixShell(useStore.getState().sessions[id]?.command ?? "")
   ipc.ptyWrite(id, `${posix ? "\x15" : ""}${launch.command}\r`)
+}
+
+/** No prompt came: drop the launch, and tell the user what wasn't started. */
+function giveUpLaunch(entry: Entry) {
+  const command = entry.launch?.command
+  dropLaunch(entry)
+  if (command)
+    entry.term.write(`\r\n\x1b[2m[minmux] no shell prompt yet: run ${command} yourself\x1b[0m\r\n`)
 }
 
 function dropLaunch(entry: Entry) {

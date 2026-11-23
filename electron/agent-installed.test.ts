@@ -20,12 +20,20 @@ function deps(over: Partial<InstalledDeps> & { path?: Set<string>; files?: Set<s
 describe("agentInstallLookup", () => {
   it("lists the agents on PATH, in the registry's order", async () => {
     const { d } = deps({ path: new Set(["opencode", "claude"]) })
-    expect(await agentInstallLookup(d)()).toEqual(["claude", "opencode"])
+    expect(await agentInstallLookup(d)()).toEqual([{ kind: "claude" }, { kind: "opencode" }])
   })
 
-  it("finds Claude's old local install off PATH", async () => {
+  it("finds Claude's old local install off PATH, by its full path", async () => {
     const { d } = deps({ files: new Set(["/home/u/.claude/local/claude"]) })
-    expect(await agentInstallLookup(d)()).toEqual(["claude"])
+    expect(await agentInstallLookup(d)()).toEqual([
+      { kind: "claude", path: "/home/u/.claude/local/claude" },
+    ])
+  })
+
+  it("prefers PATH over the local install (no path to type)", async () => {
+    const files = new Set(["/home/u/.claude/local/claude"])
+    const { d } = deps({ path: new Set(["claude"]), files })
+    expect(await agentInstallLookup(d)()).toEqual([{ kind: "claude" }])
   })
 
   it("looks nothing up on Windows", async () => {
@@ -34,7 +42,7 @@ describe("agentInstallLookup", () => {
     expect(calls).toEqual([])
   })
 
-  it("keeps a hit, and looks a miss up again after a minute", async () => {
+  it("keeps an answer a minute, then looks again (installed or removed meanwhile)", async () => {
     let now = 0
     const path = new Set(["claude"])
     const { d, calls } = deps({ path, now: () => now })
@@ -43,11 +51,11 @@ describe("agentInstallLookup", () => {
     expect(calls).toEqual(["claude", "codex", "opencode"])
     calls.length = 0
     path.add("codex")
+    path.delete("claude")
     now = 30_000
-    expect(await lookup()).toEqual(["claude"]) // the miss is still cached
+    expect(await lookup()).toEqual([{ kind: "claude" }]) // still cached
     expect(calls).toEqual([])
     now = 61_000
-    expect(await lookup()).toEqual(["claude", "codex"])
-    expect(calls).toEqual(["codex", "opencode"]) // the hit wasn't looked up again
+    expect(await lookup()).toEqual([{ kind: "codex" }])
   })
 })

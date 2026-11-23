@@ -1373,9 +1373,9 @@ function registerIpc() {
         : undefined,
     ),
   )
-  // Is gh on the host's PATH (a file lookup, no process): the pull requests button is muted.
   // The new-tab menu's "Agents" group: which agents are installed (stats, cached).
   ipcMain.handle("agents:installed", async () => installedAgents())
+  // Is gh on the host's PATH (a file lookup, no process): the pull requests button is muted.
   ipcMain.handle("prs:gh-installed", async () => (await findOnPathAsync("gh")) !== null)
   ipcMain.handle("prs:checks", async (_e, req: unknown) => {
     const t = prTarget(req)

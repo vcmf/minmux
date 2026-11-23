@@ -23,8 +23,7 @@ import { activeTheme, useStore } from "../store"
 import { ipc } from "../lib/ipc"
 import { AgentsIcon } from "./agent-marks"
 import { agentIcon } from "./agent-icon"
-import { AGENT_KINDS, agentColor } from "../lib/agent-kinds"
-import type { AgentKind } from "../lib/agent-graph"
+import { AGENT_KINDS, agentColor, launchCommand, type InstalledAgent } from "../lib/agent-kinds"
 import { wslContext } from "../lib/wsl"
 import { allSessionIds } from "../lib/pane-tree"
 import { aggregateBadge } from "../lib/session-status"
@@ -102,7 +101,7 @@ export function TopBar() {
   const [fullScreen, setFullScreen] = useState(false)
   const [shellMenu, setShellMenu] = useState(false)
   // The menu's "Agents" group: the agents installed here, asked again per open (main caches).
-  const [installed, setInstalled] = useState<AgentKind[]>([])
+  const [installed, setInstalled] = useState<InstalledAgent[]>([])
   useEffect(() => {
     if (!shellMenu) return
     let live = true
@@ -151,14 +150,14 @@ export function TopBar() {
   }
 
   // A new tab (default shell) that starts the agent at its first prompt.
-  const openAgent = (kind: AgentKind) => {
+  const openAgent = (agent: InstalledAgent) => {
     setShellMenu(false)
     if (!defaultShell) return
     const store = useStore.getState()
     store.newTab(defaultShell)
     const { tabs, activeTabId } = useStore.getState()
     const id = tabs.find((t) => t.id === activeTabId)?.activeSessionId
-    if (id) TerminalManager.launchOnStart(id, AGENT_KINDS[kind].command)
+    if (id) TerminalManager.launchOnStart(id, launchCommand(agent))
   }
 
   // Sessions awaiting the user, in tab order — drives the bell count + jump.
@@ -322,14 +321,15 @@ export function TopBar() {
                   <div className="shell-menu-group">Agents</div>
                 )}
                 {defaultShell &&
-                  installed.map((kind) => {
+                  installed.map((agent) => {
+                    const kind = agent.kind
                     const Icon = agentIcon(kind)
                     return (
                       <button
                         key={kind}
                         className="shell-menu-item"
-                        title={`New tab running ${AGENT_KINDS[kind].command}`}
-                        onMouseDown={() => openAgent(kind)}
+                        title={`New tab running ${launchCommand(agent)}`}
+                        onMouseDown={() => openAgent(agent)}
                       >
                         <span className="shell-menu-host">
                           <Icon size={12} color={agentColor(kind, scheme)} />

@@ -2,6 +2,7 @@
 // The renderer side of the agent registry (main's is electron/agents); pure data.
 
 import type { AgentKind } from "./agent-graph"
+import { posixQuote } from "./shell-quote"
 
 export interface AgentKindInfo {
   label: string // "Claude"
@@ -65,6 +66,16 @@ export const agentsOn = (platform: string): AgentKind[] =>
 /** An agent's icon colour for this scheme (undefined: the text colour). */
 export const agentColor = (kind: AgentKind, scheme: "dark" | "light"): string | undefined =>
   AGENT_KINDS[kind].color?.[scheme]
+
+/** An agent found on this machine; `path` only when it's off PATH (type that instead). */
+export interface InstalledAgent {
+  kind: AgentKind
+  path?: string
+}
+
+/** What the new-tab menu types to start an installed agent (an odd path quoted, POSIX-style). */
+export const launchCommand = (a: InstalledAgent): string =>
+  !a.path ? AGENT_KINDS[a.kind].command : /^[\w./+-]+$/.test(a.path) ? a.path : posixQuote(a.path)
 
 /** The UI info for an agent (absent = Claude). */
 export const agentInfo = (kind?: AgentKind): AgentKindInfo => AGENT_KINDS[kind ?? "claude"]
