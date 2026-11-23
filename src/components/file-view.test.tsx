@@ -115,6 +115,22 @@ describe("FileView", () => {
     expect(st().objects[tab.activeEntryId]).toEqual({ kind: "folder", path: "/w/rts" })
   })
 
+  it("an HTML file has Open in browser; other files don't", async () => {
+    vi.mocked(ipc.readFile).mockResolvedValue({ kind: "text", text: "", truncated: false, size: 0 })
+    useStore.setState({ platform: "darwin" })
+    const page = open("/w/site/index.html")
+    const { unmount } = render(<FileView entryId={page.entryId} tabId={page.tabId} />)
+    fireEvent.click(screen.getByTitle("Open in browser"))
+    expect(ipc.openInBrowser).toHaveBeenCalledWith("/w/site/index.html", undefined)
+    expect(ipc.openPath).not.toHaveBeenCalled()
+    unmount()
+    st().openFile("/w/site/app.ts")
+    const tab = st().tabs[0]!
+    render(<FileView entryId={tab.activeEntryId} tabId={tab.id} />)
+    expect(screen.getByTitle("Open in editor")).toBeInTheDocument()
+    expect(screen.queryByTitle("Open in browser")).toBeNull()
+  })
+
   it("a re-read that finds the file unchanged keeps it highlighted", async () => {
     let onChanged: (dirs: string[], content?: string[]) => void = () => {}
     vi.mocked(ipc.onFsChanged).mockImplementation((cb) => {

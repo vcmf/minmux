@@ -87,6 +87,7 @@ export interface Ipc {
   openExternal: (url: string) => void
   openExternalConfirm: (url: string) => void // asks first, naming the target (main's dialog)
   openPath: (p: string, wsl?: WslContext) => void // OS default app, never one that runs it
+  openInBrowser: (p: string, wsl?: WslContext) => void // an HTML file: the default web browser
   // Does `path` (relative to `cwd`, or absolute) exist? Validates a detected file link.
   pathExists: (cwd: string, path: string) => Promise<boolean>
   // Open a clicked file link in the configured editor (falls back to the OS default).

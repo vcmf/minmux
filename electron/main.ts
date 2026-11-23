@@ -121,6 +121,8 @@ import {
 } from "../src/lib/file-preview"
 import type { FileData, FileStamp } from "../src/lib/file-tab"
 import { isBundle, osMayOpen, type Os } from "./open-policy"
+import { browserLaunch, type BrowserLaunch } from "./open-in-browser"
+import { isHtmlPath } from "../src/lib/file-actions"
 
 // This process's profile (a dev build is `dev`): picked before anything reads a path. An
 // invalid MINMUX_PROFILE stops here, synchronously — before any name, path or lock is set —
@@ -718,6 +720,59 @@ async function safeOpenPath(p: string): Promise<void> {
     // gone or unreadable: reveal what's there
   }
   shell.showItemInFolder(p)
+}
+
+// A launcher (`open -a`) that hasn't exited by then is taken as handing over, so an open
+// never hangs on an app that doesn't answer.
+const LAUNCHER_MS = 5000
+
+// Did the browser take it? A launcher by its exit code; the browser itself (Windows) by
+// starting: it may run until closed, and one handing over to a running copy exits non-zero.
+function launch(plan: BrowserLaunch): Promise<boolean> {
+  return new Promise((resolve) => {
+    let settled = false
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const done = (ok: boolean) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      resolve(ok)
+    }
+    try {
+      const child = spawn(plan.cmd, plan.args, { detached: !plan.wait, stdio: "ignore" })
+      child.once("error", () => done(false))
+      if (plan.wait) {
+        child.once("exit", (code) => done(code === 0))
+        timer = setTimeout(() => (child.unref(), done(true)), LAUNCHER_MS)
+      } else child.once("spawn", () => (child.unref(), done(true)))
+    } catch {
+      done(false)
+    }
+  })
+}
+
+// A page is both the name clicked (what the button showed for) and what it really is (a
+// symlink named .html to anything else isn't one). The browser gets the clicked path, so
+// relative CSS/images resolve next to it. No browser plan (Linux: its .html default is the browser), or one that
+// fails, goes safeOpenPath's way: the default app, or a reveal.
+/** Open an HTML file in the default web browser. */
+async function openInBrowser(p: string): Promise<void> {
+  try {
+    if (path.isAbsolute(p) && isHtmlPath(p) && process.platform !== "linux") {
+      const real = await fs.promises.realpath(p)
+      if ((await fs.promises.stat(real)).isFile() && isHtmlPath(real)) {
+        const handler = await app.getApplicationInfoForProtocol("https://").then(
+          (i) => i.path,
+          () => "",
+        )
+        const plan = browserLaunch(process.platform as Os, p, handler)
+        if (plan && (await launch(plan))) return
+      }
+    }
+  } catch {
+    // gone or unreadable: safeOpenPath reveals what's there
+  }
+  return safeOpenPath(p)
 }
 
 function layoutPath(): string {
@@ -1721,20 +1776,23 @@ function registerIpc() {
       .finally(() => (confirming = false))
   })
   // A WSL path opens through its distro's share (the first form that exists).
-  ipcMain.on("open-path", (_e, p: string, wsl?: WslContext) => {
-    void (async () => {
-      for (const target of wslTargets(p, wsl)) {
-        const there = await fs.promises.stat(target).then(
-          () => true,
-          () => false,
-        )
-        if (there || !wsl) return safeOpenPath(target)
-      }
-      // No share form answers (the distro stopped): the first one, which reveals or says so.
-      const first = wslTargets(p, wsl)[0]
-      if (first) return safeOpenPath(first)
-    })()
-  })
+  const openVia =
+    (open: (p: string) => Promise<void>) => (_e: unknown, p: string, wsl?: WslContext) => {
+      void (async () => {
+        for (const target of wslTargets(p, wsl)) {
+          const there = await fs.promises.stat(target).then(
+            () => true,
+            () => false,
+          )
+          if (there || !wsl) return open(target)
+        }
+        // No share form answers (the distro stopped): the first one, which reveals or says so.
+        const first = wslTargets(p, wsl)[0]
+        if (first) return open(first)
+      })()
+    }
+  ipcMain.on("open-path", openVia(safeOpenPath))
+  ipcMain.on("open-in-browser", openVia(openInBrowser))
   ipcMain.on("notify", (_e, title: string, body: string) => {
     if (Notification.isSupported()) new Notification({ title, body }).show()
   })
