@@ -425,4 +425,18 @@ describe("FileView: markdown places", () => {
     await waitFor(() => expect(container.querySelector(".file-view-lines")).not.toBeNull())
     expect(container.querySelector<HTMLElement>(".file-view-lines")!.scrollTop).toBe(20 * 18)
   })
+
+  it("a web image loads on a click, through main", async () => {
+    md("![shot](https://img.test/a.png)\n")
+    vi.mocked(ipc.fetchImage).mockResolvedValue({ ok: true, dataUrl: "data:image/png;base64,AQ==" })
+    const { tabId, entryId } = open("/w/IMG.md")
+    const { container } = render(<FileView entryId={entryId} tabId={tabId} />)
+    await waitFor(() =>
+      expect(container.querySelector('.md-img[data-state="click"]')).not.toBeNull(),
+    )
+    fireEvent.click(container.querySelector(".md-img")!)
+    expect(ipc.openExternal).not.toHaveBeenCalled()
+    await waitFor(() => expect(container.querySelector(".md-img img")).not.toBeNull())
+    expect(ipc.fetchImage).toHaveBeenCalledWith("https://img.test/a.png")
+  })
 })

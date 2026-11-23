@@ -196,4 +196,46 @@ describe("hydrateImages", () => {
     expect(ph.dataset.state).toBe("loading")
     expect(clickImage(ph, { dir: "/w", remote: "click" })).toBe(false)
   })
+
+  it("loads images as they come near the view, relative to what scrolls it", async () => {
+    const seen: { root: Element | null; observed: Element[] } = { root: null, observed: [] }
+    class FakeIO {
+      constructor(
+        private cb: (e: { isIntersecting: boolean; target: Element }[]) => void,
+        opts: { root: Element | null },
+      ) {
+        seen.root = opts.root
+      }
+      observe(el: Element) {
+        seen.observed.push(el)
+        this.cb([{ isIntersecting: false, target: el }]) // not yet
+        this.cb([{ isIntersecting: true, target: el }])
+      }
+      unobserve() {}
+      disconnect() {}
+    }
+    vi.stubGlobal("IntersectionObserver", FakeIO)
+    try {
+      const { hydrateImages } = await fresh()
+      vi.mocked(ipc.fetchImage).mockResolvedValue({
+        ok: true,
+        dataUrl: "data:image/png;base64,AQ==",
+      })
+      const scroller = document.createElement("div")
+      scroller.style.overflowY = "auto"
+      const body = view(img("https://img.test/z.png"))
+      scroller.appendChild(body)
+      document.body.appendChild(scroller)
+      const dispose = hydrateImages(body, { remote: "always" })
+      expect(seen.root).toBe(scroller)
+      expect(seen.observed).toHaveLength(1)
+      await settle()
+      await settle()
+      expect(body.querySelector("img")).not.toBeNull()
+      dispose()
+      scroller.remove()
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
 })

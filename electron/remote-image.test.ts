@@ -134,7 +134,42 @@ describe("privateIp / privateHost", () => {
   })
 })
 
+describe("fetchImage: odd answers", () => {
+  it("not a URL, no body, or too slow", async () => {
+    expect(await fetchImage("::nope", respond("", png))).toEqual({ ok: false, error: "Not a URL" })
+    expect(await fetchImage("https://a.test/", respond(null, png))).toEqual({
+      ok: false,
+      error: "No body",
+    })
+    vi.useFakeTimers()
+    try {
+      const never = vi.fn<Fetch>(
+        (_u, signal) =>
+          new Promise((_r, reject) =>
+            signal.addEventListener("abort", () => reject(new Error("aborted"))),
+          ),
+      )
+      const r = fetchImage("https://a.test/", never)
+      await vi.advanceTimersByTimeAsync(15_000)
+      expect(await r).toEqual({ ok: false, error: "Timed out" })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})
+
 describe("guardedLookup", () => {
+  it("passes a resolver's error on", () => {
+    const fail = ((_h: string, _o: unknown, cb: (e: Error | null, a: unknown[]) => void) =>
+      cb(
+        Object.assign(new Error("ENOTFOUND"), { code: "ENOTFOUND" }),
+        [],
+      )) as unknown as typeof dns.lookup
+    const cb = vi.fn()
+    guardedLookup(fail)("nowhere.test", {}, cb)
+    expect(cb.mock.calls[0]![0]).toMatchObject({ code: "ENOTFOUND" })
+  })
+
   const resolver = (addrs: dns.LookupAddress[]) =>
     ((_h: string, _o: unknown, cb: (e: Error | null, a: dns.LookupAddress[]) => void) =>
       cb(null, addrs)) as unknown as typeof dns.lookup
