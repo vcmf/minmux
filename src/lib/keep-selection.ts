@@ -50,14 +50,12 @@ function nodeAt(root: HTMLElement, p: RowPoint): [Node, number] | null {
   const code = root.querySelector(`[data-row="${CSS.escape(p.row)}"] ${CODE}`)
   if (!code || code.textContent !== p.text) return null
   const walk = document.createTreeWalker(code, NodeFilter.SHOW_TEXT)
-  let left = p.off
-  let last: Text | null = null
+  let left = p.off // within its text: the text is the one saved
   for (let t = walk.nextNode() as Text | null; t; t = walk.nextNode() as Text | null) {
     if (left <= t.length) return [t, left]
     left -= t.length
-    last = t
   }
-  return last ? [last, last.length] : [code, code.childNodes.length] // an empty line
+  return [code, 0] // an empty line
 }
 
 /** Puts a saved selection back (skipped when one of its rows is gone or its text changed). */

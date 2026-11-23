@@ -86,4 +86,30 @@ describe("keep-selection", () => {
     restoreSelection(root, saved)
     expect(window.getSelection()!.rangeCount).toBe(0)
   })
+
+  it("an end on the gutter keeps to its code's edge; an empty line keeps its end", () => {
+    const root = mount(row("s1", "abc") + row("s2", "def"))
+    const no1 = root.querySelector('[data-row="s1"] .file-view-no')!
+    const s2 = root.querySelector('[data-row="s2"]')!
+    window.getSelection()!.setBaseAndExtent(no1.firstChild!, 0, s2, s2.childNodes.length)
+    const saved = saveSelection(root)!
+    expect(saved.anchor).toEqual({ row: "s1", off: 0, text: "abc" })
+    expect(saved.focus).toEqual({ row: "s2", off: 3, text: "def" })
+
+    const empty = mount(row("s9", ""))
+    const code9 = code(empty, "s9")
+    restoreSelection(empty, {
+      anchor: { row: "s9", off: 0, text: "" },
+      focus: { row: "s9", off: 0, text: "" },
+    })
+    expect(window.getSelection()!.anchorNode).toBe(code9)
+    restoreSelection(null, saved) // no view: nothing to do
+  })
+
+  it("has nothing to keep when an end isn't on a row", () => {
+    const root = mount(row("s1", "abc") + "<p>below</p>")
+    const p = root.querySelector("p")!.firstChild!
+    window.getSelection()!.setBaseAndExtent(code(root, "s1").firstChild!, 1, p, 2)
+    expect(saveSelection(root)).toBeNull()
+  })
 })

@@ -6,6 +6,19 @@ import { ipc } from "../lib/ipc"
 import { resetStore, testShell } from "../test/helpers"
 import { wantKey } from "../lib/folder-git"
 
+// Highlighting passes through, unless a test holds it back (to act on the plain lines first).
+const gate = vi.hoisted(() => ({ hold: null as Promise<void> | null }))
+vi.mock("../lib/highlight-client", async (load) => {
+  const real = await load<typeof import("../lib/highlight-client")>()
+  return {
+    ...real,
+    highlightLines: async (code: string, lang: string | null) => {
+      if (gate.hold) await gate.hold
+      return real.highlightLines(code, lang)
+    },
+  }
+})
+
 const st = () => useStore.getState()
 const open = (path: string, line?: number) => {
   st().newTab(testShell)
@@ -124,6 +137,34 @@ describe("FileView", () => {
     await waitFor(() => expect(ipc.readFile).toHaveBeenCalledTimes(2))
     expect(vi.mocked(ipc.readFile).mock.calls[1]![2]).toEqual({ size: 11, mtimeMs: 1 })
     expect(container.querySelector(".hljs-keyword")).not.toBeNull()
+  })
+
+  it("keeps a selection when the highlighted lines replace the plain ones", async () => {
+    let release = () => {}
+    gate.hold = new Promise((r) => (release = r))
+    vi.mocked(ipc.readFile).mockResolvedValue({
+      kind: "text",
+      text: "const answer = 42\nreturn answer\n",
+      truncated: false,
+      size: 32,
+    })
+    const { tabId, entryId } = open("/w/sel.ts")
+    const { container } = render(<FileView entryId={entryId} tabId={tabId} />)
+    const codeOf = (n: number) =>
+      container.querySelector(`[data-row="s${n}"] .file-view-code`) as HTMLElement | null
+    await waitFor(() => expect(codeOf(2)).not.toBeNull())
+    expect(container.querySelector(".hljs-keyword")).toBeNull() // still plain
+    window.getSelection()!.setBaseAndExtent(codeOf(1)!.firstChild!, 6, codeOf(2)!.firstChild!, 6)
+    const before = window.getSelection()!.toString()
+    expect(before).toContain("answer = 42")
+    gate.hold = null
+    release()
+    await waitFor(() => expect(container.querySelector(".hljs-keyword")).not.toBeNull())
+    const sel = window.getSelection()!
+    expect(codeOf(1)!.contains(sel.anchorNode)).toBe(true)
+    expect(codeOf(2)!.contains(sel.focusNode)).toBe(true)
+    expect(sel.toString()).toBe(before) // the same text, not widened to the rows' edges
+    sel.removeAllRanges()
   })
 
   // The focused terminal's repo is /gr: its status says which files changed.
