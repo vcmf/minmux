@@ -1123,6 +1123,90 @@ describe("TerminalManager — typing a resume", () => {
   })
 })
 
+describe("TerminalManager — an agent launch from the new-tab menu", () => {
+  const writes = (id: string) =>
+    vi
+      .mocked(ipc.ptyWrite)
+      .mock.calls.filter((c) => c[0] === id)
+      .map((c) => c[1])
+  /** A new tab of `shell` with a launch queued, started; `integrated` = our marks come. */
+  const launched = async (integrated: boolean, shell = "/bin/zsh", remote = false) => {
+    vi.mocked(ipc.ptySpawn).mockResolvedValue({ reattached: false, integrated })
+    st().newTab(
+      remote ? hostShellOption(testHost("web")) : { ...testShell, id: shell, command: shell },
+    )
+    const id = st().tabs[st().tabs.length - 1]!.activeSessionId
+    TerminalManager.launchOnStart(id, "claude")
+    TerminalManager.ensureRunning(st().sessions[id] as Session)
+    await vi.advanceTimersByTimeAsync(0)
+    return { id, term: terms[terms.length - 1]! }
+  }
+  beforeEach(() => vi.useFakeTimers())
+  afterEach(() => vi.useRealTimers())
+
+  it("is typed at the first prompt, once (a POSIX shell's line cleared first)", async () => {
+    const { id, term } = await launched(true)
+    expect(writes(id)).toEqual([])
+    term.osc[133]!("D")
+    term.osc[133]!("C")
+    term.osc[133]!("D;0")
+    await vi.advanceTimersByTimeAsync(30_000)
+    expect(writes(id)).toEqual(["\x15claude\r"])
+  })
+
+  it("an integrated shell with no prompt in time gets nothing typed, and says so", async () => {
+    const { id, term } = await launched(true)
+    await vi.advanceTimersByTimeAsync(21_000)
+    expect(writes(id)).toEqual([])
+    expect(term.written).toContain("run claude yourself")
+    term.osc[133]!("D") // a late prompt doesn't type it either
+    expect(writes(id)).toEqual([])
+  })
+
+  it("a shell without integration gets it after a grace period (no ^U outside POSIX)", async () => {
+    const { id } = await launched(false, "pwsh")
+    await vi.advanceTimersByTimeAsync(2_000)
+    expect(writes(id)).toEqual([])
+    await vi.advanceTimersByTimeAsync(2_000)
+    expect(writes(id)).toEqual(["claude\r"])
+  })
+
+  it("a spawn error drops it", async () => {
+    vi.mocked(ipc.ptySpawn).mockRejectedValue(new Error("no shell"))
+    st().newTab(testShell)
+    const id = st().tabs[st().tabs.length - 1]!.activeSessionId
+    TerminalManager.launchOnStart(id, "claude")
+    TerminalManager.ensureRunning(st().sessions[id] as Session)
+    await vi.advanceTimersByTimeAsync(30_000)
+    terms[terms.length - 1]!.osc[133]?.("D")
+    expect(writes(id)).toEqual([])
+  })
+
+  it("is never queued for a terminal already started, nor typed into an ssh pane", async () => {
+    const { id, term } = await launched(true)
+    term.osc[133]!("D")
+    vi.mocked(ipc.ptyWrite).mockClear()
+    TerminalManager.launchOnStart(id, "codex") // already started: ignored
+    term.osc[133]!("D")
+    expect(writes(id)).toEqual([])
+    const remote = await launched(true, "", true)
+    await vi.advanceTimersByTimeAsync(30_000)
+    expect(writes(remote.id).filter((w) => w.includes("claude"))).toEqual([])
+  })
+
+  it("a tab closed before it started forgets it", async () => {
+    st().newTab(testShell)
+    const id = st().tabs[st().tabs.length - 1]!.activeSessionId
+    TerminalManager.launchOnStart(id, "claude")
+    TerminalManager.dispose(id)
+    vi.mocked(ipc.ptySpawn).mockResolvedValue({ reattached: false, integrated: true })
+    TerminalManager.ensureRunning(st().sessions[id] as Session)
+    await vi.advanceTimersByTimeAsync(0)
+    terms[terms.length - 1]!.osc[133]!("D")
+    expect(writes(id)).toEqual([])
+  })
+})
+
 describe("TerminalManager — palette changes for programs that ask (mode 2031)", () => {
   const writes = (id: string) =>
     vi

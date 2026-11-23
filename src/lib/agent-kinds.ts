@@ -2,10 +2,12 @@
 // The renderer side of the agent registry (main's is electron/agents); pure data.
 
 import type { AgentKind } from "./agent-graph"
+import { posixQuote } from "./shell-quote"
 
 export interface AgentKindInfo {
   label: string // "Claude"
-  command: string // what starts it in a shell
+  command: string // what starts it in a shell (and the binary the new-tab menu looks for)
+  installPaths?: string[] // where else it may be installed, off PATH (relative to home)
   resumePicker: string // opens the agent's own session picker
   resumePickerLabel?: string // its button, when that isn't a picker of its own ("Pick a session…")
   worktreeMarkers: string[] // path parts of worktrees the agent lays out inside a repo
@@ -20,6 +22,8 @@ export const AGENT_KINDS: Record<AgentKind, AgentKindInfo> = {
   claude: {
     label: "Claude",
     command: "claude",
+    // The old local installer: a shell alias to this file, not a PATH entry.
+    installPaths: [".claude/local/claude"],
     resumePicker: "claude --resume",
     worktreeMarkers: ["/.claude/worktrees/"],
     history: true,
@@ -62,6 +66,16 @@ export const agentsOn = (platform: string): AgentKind[] =>
 /** An agent's icon colour for this scheme (undefined: the text colour). */
 export const agentColor = (kind: AgentKind, scheme: "dark" | "light"): string | undefined =>
   AGENT_KINDS[kind].color?.[scheme]
+
+/** An agent found on this machine; `path` only when it's off PATH (type that instead). */
+export interface InstalledAgent {
+  kind: AgentKind
+  path?: string
+}
+
+/** What the new-tab menu types to start an installed agent (an odd path quoted, POSIX-style). */
+export const launchCommand = (a: InstalledAgent): string =>
+  !a.path ? AGENT_KINDS[a.kind].command : /^[\w./+-]+$/.test(a.path) ? a.path : posixQuote(a.path)
 
 /** The UI info for an agent (absent = Claude). */
 export const agentInfo = (kind?: AgentKind): AgentKindInfo => AGENT_KINDS[kind ?? "claude"]
