@@ -2,7 +2,7 @@
 // on the FIRST preview open via dynamic import() — a separate vite chunk, so nothing
 // here touches the startup bundle or the terminal hot path. Returns escaped HTML
 // ready for dangerouslySetInnerHTML; falls back to escaped plain text on any miss.
-import { escapeHtml } from "./file-preview"
+import { escapeHtml, languageForPath } from "./file-preview"
 
 type Hljs = import("highlight.js").HLJSApi
 let hljsPromise: Promise<Hljs> | null = null
@@ -60,5 +60,25 @@ export async function highlightToHtml(code: string, lang: string | null): Promis
     return hljs.highlight(code, { language: lang, ignoreIllegals: true }).value
   } catch {
     return escapeHtml(code)
+  }
+}
+
+/** A synchronous highlighter once highlight.js has loaded (markdown's fences need one): `code`
+ *  as `lang` (a language id or one of file-preview's extensions) → escaped HTML. */
+export async function syncHighlighter(): Promise<(code: string, lang: string) => string> {
+  let hljs: Hljs | null = null
+  try {
+    hljs = await loadHljs()
+  } catch {
+    hljs = null
+  }
+  return (code, lang) => {
+    const name = hljs && (hljs.getLanguage(lang) ? lang : languageForPath(`x.${lang}`))
+    if (!hljs || !name || !hljs.getLanguage(name)) return escapeHtml(code)
+    try {
+      return hljs.highlight(code, { language: name, ignoreIllegals: true }).value
+    } catch {
+      return escapeHtml(code)
+    }
   }
 }

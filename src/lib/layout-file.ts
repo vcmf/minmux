@@ -54,9 +54,10 @@ export function serializeLayout(state: LayoutState, workspaceJson: string): stri
   const folderViews: Record<string, FolderView> = {}
   for (const id of used) {
     const o = state.objects[id]
-    if (o?.kind === "file" && o.seq !== undefined) {
-      const saved: ObjectEntry = { ...o }
-      delete (saved as { seq?: number }).seq // runtime only ("go to the line again")
+    if (o?.kind === "file" && (o.seq !== undefined || o.anchor !== undefined)) {
+      const saved: FileEntry = { ...o }
+      delete saved.seq // runtime only ("go to the line again")
+      delete saved.anchor // …and so is the heading it opened at
       objects[id] = saved
     } else if (o) objects[id] = o
     if (state.folderViews[id]) folderViews[id] = state.folderViews[id]!
@@ -89,7 +90,7 @@ function parseObject(v: unknown): ObjectEntry | undefined {
     ...wsl,
     ...line,
     ...(f.peek === true ? { peek: true } : {}),
-    ...(f.view === "diff" ? { view: "diff" } : {}),
+    ...(f.view === "diff" || f.view === "source" ? { view: f.view } : {}),
   }
 }
 

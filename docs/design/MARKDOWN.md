@@ -110,6 +110,7 @@ onclick=…>`), entity-encoded schemes, nested and unclosed tags, and `<img>`, `
 - **Relative images in a file tab** (`![](docs/shot.png)`) are read through the fs worker, which
   already reads files and WSL paths for file tabs. Each becomes a blob URL, capped at 5 MB, and is
   read when it scrolls into view.
+- Until this step lands, an image shows as a link to it (its alt text), loading nothing.
 - **Remote images** don't load on their own. They can be tracking pixels, and GitHub attachments
   in private repos need a login we don't send. One shows as a placeholder with its alt text, and a
   click loads it. A setting `markdown.remoteImages: "click" | "always"` turns that off.
@@ -140,8 +141,9 @@ title when the dialog knows it), and links open through `ipc.openExternal`. GitH
 ### Look
 
 The view uses the theme tokens, so it follows every theme family in dark and light. Code blocks
-use the file tab's highlight colours. Headings, tables and quotes follow GitHub's spacing, in the
-UI font with code in the terminal font.
+use the file tab's highlight colours. Headings, tables and quotes follow GitHub's spacing. Prose is
+in the system's UI font (the chrome's mono font reads poorly in paragraphs), code in the terminal
+font.
 
 ### Performance
 

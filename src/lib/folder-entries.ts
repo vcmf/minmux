@@ -21,8 +21,18 @@ export interface FileEntry {
   line?: number // where to scroll when it opens (a path click's `:line`)
   seq?: number // bumped when it's asked to go to `line` again (runtime: not saved)
   peek?: true
-  view?: "diff" // a changed file shown as its diff (absent: its source)
+  // How it shows when not the default (absent: a markdown file's Preview, any other's source).
+  // An older build reads only "diff"; it shows a "source" one as source anyway.
+  view?: "diff" | "source"
+  anchor?: string // a markdown heading to scroll to when it opens (runtime: not saved)
 }
+
+/** Whether a path is markdown (its file tab renders it, Preview by default). */
+export const isMarkdownPath = (p: string) => /\.(?:md|markdown)$/i.test(p)
+
+/** What a file entry shows, its default filled in. */
+export const viewOf = (f: FileEntry): "source" | "diff" | "preview" =>
+  f.view ?? (isMarkdownPath(f.path) ? "preview" : "source")
 
 /** A pane entry that isn't a terminal. */
 export type ObjectEntry = FolderEntry | FileEntry

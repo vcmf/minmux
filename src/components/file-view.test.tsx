@@ -275,3 +275,62 @@ describe("FileView", () => {
     expect(screen.queryByText("Diff")).toBeNull()
   })
 })
+
+describe("FileView: markdown", () => {
+  const md = (text: string) =>
+    vi
+      .mocked(ipc.readFile)
+      .mockResolvedValue({ kind: "text", text, truncated: false, size: text.length })
+
+  it("opens on its Preview, rendered; Source shows the text", async () => {
+    md("# Plan\n\n- [x] step one\n\ninline $x^2$\n")
+    const { tabId, entryId } = open("/w/PLAN.md")
+    const { container } = render(<FileView entryId={entryId} tabId={tabId} />)
+    await waitFor(() => expect(container.querySelector(".md-view h1")).not.toBeNull())
+    expect(container.querySelector(".md-view h1")!.textContent).toBe("Plan")
+    expect(container.querySelector('.md-view input[type="checkbox"]')).not.toBeNull()
+    expect(container.querySelector(".md-view .katex")).not.toBeNull()
+    expect(screen.getByText("Preview").className).toContain("on")
+    fireEvent.click(screen.getByText("Source"))
+    await waitFor(() => expect(container.querySelector(".file-view-line")).not.toBeNull())
+    expect(container.querySelector(".md-view")).toBeNull()
+    expect(st().objects[entryId]).toMatchObject({ view: "source" })
+  })
+
+  it("opens web links outside and relative ones as a tab in the same pane", async () => {
+    md("[site](https://example.com) [gotchas](GOTCHAS.md#fonts) [bad](javascript:alert(1))\n")
+    const { tabId, entryId } = open("/w/docs/README.md")
+    const { container } = render(<FileView entryId={entryId} tabId={tabId} />)
+    await waitFor(() => expect(container.querySelector(".md-view a")).not.toBeNull())
+    fireEvent.click(screen.getByText("site"))
+    expect(ipc.openExternal).toHaveBeenCalledWith("https://example.com")
+    expect(container.querySelector('.md-view a[href^="javascript"]')).toBeNull()
+    fireEvent.click(screen.getByText("gotchas"))
+    const tab = st().tabs[0]!
+    const opened = st().objects[tab.activeEntryId]
+    expect(opened).toMatchObject({ kind: "file", path: "/w/docs/GOTCHAS.md", anchor: "fonts" })
+  })
+
+  it("shows raw HTML outside the allowlist as text", async () => {
+    md('<img src=x onerror="alert(1)">\n\n<kbd>⌘K</kbd>\n')
+    const { tabId, entryId } = open("/w/x.md")
+    const { container } = render(<FileView entryId={entryId} tabId={tabId} />)
+    await waitFor(() => expect(container.querySelector(".md-view kbd")).not.toBeNull())
+    expect(container.querySelector(".md-view img")).toBeNull()
+    expect(container.querySelector(".md-view")!.textContent).toContain("<img src=x")
+  })
+
+  it("a markdown file too big to render shows its source, saying so", async () => {
+    vi.mocked(ipc.readFile).mockResolvedValue({
+      kind: "text",
+      text: "# big\n",
+      truncated: false,
+      size: 2 * 1024 * 1024,
+    })
+    const { tabId, entryId } = open("/w/huge.md")
+    const { container } = render(<FileView entryId={entryId} tabId={tabId} />)
+    expect(await screen.findByText(/Too large to preview/)).toBeInTheDocument()
+    expect(container.querySelector(".md-view")).toBeNull()
+    expect(screen.queryByText("Preview")).toBeNull()
+  })
+})

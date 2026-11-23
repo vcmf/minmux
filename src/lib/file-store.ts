@@ -22,12 +22,16 @@ export interface FileDiff {
   bars: Map<number, "add" | "mod" | "del"> // the Source view's change bars, by line number
 }
 
+/** What a file tab shows: its text, its diff, or (markdown) the text rendered. */
+export type FileView = "source" | "diff" | "preview"
+
 /** One file tab's state. */
 export interface FileShown {
   data: Exclude<FileData, { kind: "same" }> | null
   lines: string[] // highlighted (or plain while it's highlighted) HTML, one per line
   scrollTop: number
   diffTop: number // where its Diff view was scrolled (each view keeps its own)
+  previewTop: number // …and its markdown Preview
   went: string // the `line:seq` it last scrolled to (a remount doesn't jump again)
   diff: FileDiff | null
 }
@@ -91,6 +95,7 @@ export class FileStore {
         lines: [],
         scrollTop: 0,
         diffTop: 0,
+        previewTop: 0,
         went: "",
         diff: null,
         diffKey: "",
@@ -129,10 +134,12 @@ export class FileStore {
 
   // Kept for when it shows again; nothing re-renders.
   /** Where its view (Source, or Diff) is scrolled. */
-  setScroll(id: string, top: number, diff = false): void {
+  setScroll(id: string, top: number, view: FileView = "source"): void {
     const e = this.files.get(id)
-    if (e && diff) e.diffTop = top
-    else if (e) e.scrollTop = top
+    if (!e) return
+    if (view === "diff") e.diffTop = top
+    else if (view === "preview") e.previewTop = top
+    else e.scrollTop = top
   }
 
   // `key` says what the diff is of (the file's git status and its stamp): the same key keeps the
@@ -211,9 +218,9 @@ export class FileStore {
   }
 
   /** Where its view was last scrolled (live: not the snapshot, which only changes on a read). */
-  scrollOf(id: string, diff = false): number {
+  scrollOf(id: string, view: FileView = "source"): number {
     const e = this.files.get(id)
-    return (diff ? e?.diffTop : e?.scrollTop) ?? 0
+    return (view === "diff" ? e?.diffTop : view === "preview" ? e?.previewTop : e?.scrollTop) ?? 0
   }
 
   /** The `line:seq` it last scrolled to. */
@@ -282,6 +289,7 @@ export class FileStore {
       lines: e.lines,
       scrollTop: e.scrollTop,
       diffTop: e.diffTop,
+      previewTop: e.previewTop,
       went: e.went,
       diff: e.diff,
     })
