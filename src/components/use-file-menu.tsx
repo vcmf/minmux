@@ -57,8 +57,7 @@ export function useFileMenu(
       useStore.getState().setPreview({ abs: menu.abs, name: baseName(menu.abs) })
     else if (id === "setRoot") opts.onSetRoot(menu.abs)
     else if (id === "open") ipc.openFile("", menu.abs)
-    else if (id === "browser")
-      ipc.openPath(menu.abs) // the OS default app: its browser
+    else if (id === "browser") ipc.openInBrowser(menu.abs)
     else if (id === "reveal") ipc.revealPath(menu.abs)
     else if (id === "copyPath") ipc.clipboardWrite(menu.abs)
     else if (id === "copyRel") ipc.clipboardWrite(menu.rel)

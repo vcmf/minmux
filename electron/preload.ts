@@ -128,6 +128,7 @@ const api = {
   appVersion: () => ipcRenderer.invoke("app:version") as Promise<string>,
   checkUpdate: () => ipcRenderer.invoke("app:check-update"),
   openPath: (p: string, wsl?: WslContext) => ipcRenderer.send("open-path", p, wsl),
+  openInBrowser: (p: string, wsl?: WslContext) => ipcRenderer.send("open-in-browser", p, wsl),
   pathExists: (cwd: string, path: string) =>
     ipcRenderer.invoke("fs:path-exists", cwd, path) as Promise<boolean>,
   openFile: (cwd: string, file: string, line?: number, col?: number) =>

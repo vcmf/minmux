@@ -240,7 +240,8 @@ export function FileView({ entryId, tabId }: { entryId: string; tabId: string })
     if (pane) s.openFolder(dir, { tabId, paneId: pane.id, wsl })
   }
   const canReveal = !wsl && isAbsoluteHostPath(path, platform)
-  const canBrowse = canReveal && isHtmlPath(path) // its default app: the OS browser
+  // A WSL file too: main opens it through the distro's share.
+  const canBrowse = isHtmlPath(path) && (!!wsl || isAbsoluteHostPath(path, platform))
 
   if (!file) return null
   return (
@@ -286,7 +287,7 @@ export function FileView({ entryId, tabId }: { entryId: string; tabId: string })
               className="iconbtn"
               style={btn}
               title="Open in browser"
-              onClick={() => ipc.openPath(path)}
+              onClick={() => ipc.openInBrowser(path, wsl)}
             >
               <Browser size={13} />
             </button>
