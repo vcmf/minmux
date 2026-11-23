@@ -45,7 +45,11 @@ for (const [a, n] of [
 
 /** Whether an IP address is this machine's or a private network's (IPv4 inside IPv6 too). */
 export function privateIp(address: string): boolean {
-  const a = address.replace(/^\[|\]$/g, "").toLowerCase()
+  // A scoped address (fe80::1%en0) is link-local whatever its zone: the zone is dropped first.
+  const a = address
+    .replace(/^\[|\]$/g, "")
+    .replace(/%.*$/, "")
+    .toLowerCase()
   const kind = net.isIP(a)
   if (kind === 4) return LOCAL.check(a, "ipv4")
   if (kind !== 6) return false
@@ -79,7 +83,13 @@ export function guardedLookup(resolve: Lookup = dns.lookup) {
     resolve(host, { ...opts, all: true }, (err, addrs) => {
       if (err) return cb(err, "")
       const list = addrs as dns.LookupAddress[]
-      if (!list.length || list.some((a) => privateIp(a.address))) {
+      let local = !list.length
+      try {
+        local ||= list.some((a) => privateIp(a.address))
+      } catch {
+        local = true // an address it can't read: not asked
+      }
+      if (local) {
         return cb(Object.assign(new Error("A local address"), { code: "ELOCAL" }), "")
       }
       if (opts.all) cb(null, list)
@@ -95,16 +105,25 @@ export const nodeFetch: Fetch = (url, signal) =>
     const get = u.protocol === "https:" ? https.get : http.get
     const req = get(u, { signal, lookup: guardedLookup() as never, headers: { accept: "image/*" } })
     req.on("error", reject)
+    // Never throws out of this listener (that would be an uncaught error in main): a status a
+    // Response can't hold, or a header it refuses, rejects instead.
     req.on("response", (res) => {
-      const headers = new Headers()
-      for (const [k, v] of Object.entries(res.headers)) {
-        if (v !== undefined) headers.set(k, Array.isArray(v) ? v.join(", ") : v)
+      try {
+        const status = res.statusCode ?? 0
+        if (status < 200 || status > 599) throw new Error(`HTTP ${status}`)
+        const headers = new Headers()
+        for (const [k, v] of Object.entries(res.headers)) {
+          if (v !== undefined) headers.set(k, Array.isArray(v) ? v.join(", ") : v)
+        }
+        const empty = status === 204 || status === 205 || status === 304
+        if (empty) res.resume()
+        resolve(
+          new Response(empty ? null : (Readable.toWeb(res) as ReadableStream), { status, headers }),
+        )
+      } catch (e) {
+        res.destroy()
+        reject(e instanceof Error ? e : new Error(String(e)))
       }
-      const status = res.statusCode ?? 0
-      const body = status === 204 || status === 304 ? null : (Readable.toWeb(res) as ReadableStream)
-      if (!body) res.resume()
-      resolve(new Response(body, { status: Math.max(200, status), headers }))
-      // (Response refuses 1xx; a 1xx never ends a GET here anyway.)
     })
   })
 

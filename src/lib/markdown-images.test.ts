@@ -149,4 +149,51 @@ describe("hydrateImages", () => {
     await settle()
     expect(a.querySelector("img")).not.toBeNull()
   })
+
+  it("shows a relative SVG; never reads a path that can't be an image", async () => {
+    const { hydrateImages } = await fresh()
+    vi.mocked(ipc.readFile).mockResolvedValue({
+      kind: "text",
+      text: "<svg xmlns='http://www.w3.org/2000/svg'/>",
+      truncated: false,
+      size: 40,
+    })
+    const a = view(img("logo.svg") + img("notes.md"))
+    hydrateImages(a, { dir: "/w", remote: "click" })
+    await settle()
+    await settle()
+    expect(ipc.readFile).toHaveBeenCalledTimes(1)
+    expect(a.querySelector("img")!.getAttribute("src")).toMatch(/^data:image\/svg\+xml;base64,/)
+  })
+
+  it("a file image gone since isn't shown again on the next re-render", async () => {
+    const { hydrateImages } = await fresh()
+    vi.mocked(ipc.readFile).mockResolvedValue({
+      kind: "image",
+      dataUrl: "data:image/png;base64,AA==",
+      size: 1,
+      stamp: { size: 1, mtimeMs: 1 },
+    })
+    const ctx = { dir: "/w", remote: "click" as const }
+    hydrateImages(view(img("a.png")), ctx)
+    await settle()
+    await settle()
+    vi.mocked(ipc.readFile).mockResolvedValue({ kind: "error", message: "This file is gone" })
+    hydrateImages(view(img("a.png")), ctx)
+    await settle()
+    await settle()
+    const next = view(img("a.png"))
+    hydrateImages(next, ctx)
+    expect(next.querySelector("img")).toBeNull() // no flash of the old picture
+  })
+
+  it("a click on a file image that's loading follows its link", async () => {
+    const { hydrateImages, clickImage } = await fresh()
+    vi.mocked(ipc.readFile).mockImplementation(() => new Promise(() => {})) // a dead mount
+    const a = view(img("a.png"))
+    hydrateImages(a, { dir: "/w", remote: "click" })
+    const ph = a.querySelector<HTMLElement>(".md-img")!
+    expect(ph.dataset.state).toBe("loading")
+    expect(clickImage(ph, { dir: "/w", remote: "click" })).toBe(false)
+  })
 })

@@ -116,6 +116,7 @@ describe("privateIp / privateHost", () => {
       "::ffff:7f00:1",
       "::ffff:c0a8:101",
       "64:ff9b::7f00:1",
+      "fe80::1%en0",
     ])
       expect(privateIp(a), a).toBe(true)
     for (const a of ["8.8.8.8", "172.32.0.1", "140.82.112.3", "2606:4700::1111", "::ffff:808:808"])
@@ -157,5 +158,35 @@ describe("guardedLookup", () => {
     const all = vi.fn()
     guardedLookup(ok)("a.test", { all: true }, all)
     expect(all).toHaveBeenCalledWith(null, [{ address: "93.184.216.34", family: 4 }])
+  })
+})
+
+describe("nodeFetch", () => {
+  it("rejects a status a Response can't hold, never throwing in main", async () => {
+    const http = await import("node:http")
+    const { nodeFetch } = await import("./remote-image")
+    const server = http.createServer((req, res) => {
+      res.statusCode = req.url === "/205" ? 205 : 999
+      res.end("x")
+    })
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", r))
+    const port = (server.address() as { port: number }).port
+    try {
+      // (127.0.0.1 itself: fetchImage refuses it before asking; nodeFetch is the raw GET)
+      const ok = await nodeFetch(
+        `http://127.0.0.1:${port}/205`,
+        new AbortController().signal,
+      ).catch((e: Error) => e)
+      expect(ok).toBeInstanceOf(Response)
+      expect((ok as Response).status).toBe(205)
+      const bad = await nodeFetch(
+        `http://127.0.0.1:${port}/999`,
+        new AbortController().signal,
+      ).catch((e: Error) => e)
+      expect(bad).toBeInstanceOf(Error)
+      expect((bad as Error).message).toBe("HTTP 999")
+    } finally {
+      server.close()
+    }
   })
 })
