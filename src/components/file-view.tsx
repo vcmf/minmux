@@ -9,7 +9,11 @@ import { gitFileFor, hasDiffToggle } from "../lib/git-file"
 import { wantGit } from "../lib/folder-git-poll"
 import { repoKey, wantKey } from "../lib/folder-git"
 import { samePath } from "../lib/agent-dirs"
-import { placeOf, type FileEntry } from "../lib/folder-entries"
+import { isMarkdownPath, placeOf, viewOf, type FileEntry } from "../lib/folder-entries"
+import { MARKDOWN_MAX } from "../lib/markdown-client"
+import { MarkdownView } from "./markdown-view"
+import { topBlock } from "../lib/markdown-scroll"
+import type { FileView as ViewName } from "../lib/file-store"
 import { isAbsoluteHostPath, revealLabel } from "../lib/file-actions"
 import { findPane } from "../lib/pane-tree"
 import { rowWindow } from "../lib/virtual-rows"
@@ -24,6 +28,7 @@ const EMPTY: FileShown = {
   lines: [],
   scrollTop: 0,
   diffTop: 0,
+  previewTop: 0,
   went: "",
   diff: null,
 }
@@ -85,7 +90,15 @@ export function FileView({ entryId, tabId }: { entryId: string; tabId: string })
   // deleted one; a diff with no rows (it failed, or there's none to show) falls back to Source.
   const isText = data?.kind === "text"
   const canDiff = hasDiffToggle(gf?.status) && isText
-  const showDiff = !!diff?.lines.length && (deleted || (canDiff && file?.view === "diff"))
+  const asked = file ? viewOf(file) : "source"
+  const showDiff = !!diff?.lines.length && (deleted || (canDiff && asked === "diff"))
+  // A markdown file renders (Preview, its default) unless it's too big to put in the DOM.
+  const markdown = isMarkdownPath(path) && data?.kind === "text"
+  const canPreview = markdown && data.size <= MARKDOWN_MAX
+  const tooBigToPreview = markdown && !canPreview && asked === "preview"
+  // A diff with nothing to show falls back to the file's default: the Preview for markdown.
+  const showPreview = !showDiff && canPreview && asked !== "source"
+  const view: ViewName = showDiff ? "diff" : showPreview ? "preview" : "source"
   const lines = showDiff ? diff!.html : shown.lines
   const big = (data && "size" in data ? data.size : 0) > HIGHLIGHT_MAX
   useEffect(() => {
@@ -120,7 +133,7 @@ export function FileView({ entryId, tabId }: { entryId: string; tabId: string })
   const [port, setPort] = useState({ top: 0, h: 0 })
   useEffect(() => {
     const el = scrollRef.current
-    if (!el) return
+    if (!el || view === "preview") return // no rows there: the Preview keeps its own scroll
     let raf = 0
     const read = () => {
       raf = 0
@@ -134,7 +147,7 @@ export function FileView({ entryId, tabId }: { entryId: string; tabId: string })
       if (!raf) raf = requestAnimationFrame(read)
     }
     const onScroll = () => {
-      files.setScroll(entryId, el.scrollTop, showDiff)
+      files.setScroll(entryId, el.scrollTop, view)
       onChange()
     }
     el.addEventListener("scroll", onScroll, { passive: true })
@@ -146,29 +159,56 @@ export function FileView({ entryId, tabId }: { entryId: string; tabId: string })
       ro.disconnect()
       cancelAnimationFrame(raf)
     }
-  }, [data?.kind, entryId, showDiff])
+  }, [data?.kind, entryId, view])
   const { start, end } = rowWindow(lines.length, LINE_H, port.top, port.h, 0)
 
   // Shown again (a tab switch, or Source / Diff): back where that view was scrolled, once its
   // lines are in.
-  const restored = useRef<boolean | null>(null) // the view restored (showDiff), null: none yet
+  const restored = useRef<ViewName | null>(null) // the view restored, null: none yet
   useLayoutEffect(() => {
     const el = scrollRef.current
-    if (restored.current === showDiff || !el || !lines.length) return
-    restored.current = showDiff
-    el.scrollTop = files.scrollOf(entryId, showDiff)
-  }, [lines.length, entryId, showDiff])
+    if (view === "preview") restored.current = view // the Preview places itself
+    if (restored.current === view || !el || !lines.length) return
+    restored.current = view
+    el.scrollTop = files.scrollOf(entryId, view)
+  }, [lines.length, entryId, view])
 
   // Opened at a line (a path click's `:12`): scrolled there once the text is in.
   // Asked again (the same link clicked after scrolling away): its `seq` changed, so it goes.
   const line = file?.line
-  const goKey = `${line}:${file?.seq ?? 0}`
+  const goKey = `${line}:${file?.anchor ?? ""}:${file?.seq ?? 0}`
   useEffect(() => {
     const el = scrollRef.current
-    if (!el || !line || showDiff || !lines.length || files.wentOf(entryId) === goKey) return
+    if (!el || !line || view !== "source" || !lines.length || files.wentOf(entryId) === goKey)
+      return
     files.setWent(entryId, goKey) // the store remembers: a tab switch doesn't jump back
     el.scrollTop = Math.max(0, (line - 1) * LINE_H - el.clientHeight / 3)
-  }, [line, goKey, lines.length, entryId, showDiff])
+  }, [line, goKey, lines.length, entryId, view])
+
+  // Switching between Preview and Source keeps the same lines in view.
+  const startLine = useRef<number | null>(null) // for the Preview, from the Source's top line
+  // Handed to the Preview once (its first placement): a remount later uses its saved scroll.
+  useLayoutEffect(() => {
+    if (showPreview) startLine.current = null
+  })
+  const switchTo = (to: ViewName) => {
+    const el = scrollRef.current
+    startLine.current = null
+    if (el && view === "source" && to === "preview") {
+      startLine.current = Math.floor(el.scrollTop / LINE_H) + 1
+    }
+    const body = el?.firstElementChild as HTMLElement | null
+    if (el && body && view === "preview" && to === "source") {
+      const top = topBlock(el, body)
+      files.setScroll(entryId, (top.line - 1) * LINE_H, "source")
+    }
+    useStore.getState().setFileView(entryId, to)
+  }
+  const choices: ViewName[] = [
+    ...(canPreview ? (["preview"] as const) : []),
+    "source",
+    ...(canDiff && diff?.lines.length ? (["diff"] as const) : []),
+  ]
 
   // Wide enough for its biggest line number (the diff's are the file's, not its rows').
   const gutter = useMemo(() => {
@@ -199,20 +239,17 @@ export function FileView({ entryId, tabId }: { entryId: string; tabId: string })
           {shortCwd(path, home)}
         </span>
         <div className="rootbar-actions">
-          {canDiff && !!diff?.lines.length && (
+          {choices.length > 1 && (
             <span className="seg" role="group" aria-label="View">
-              <button
-                className={`seg-btn${!showDiff ? " on" : ""}`}
-                onClick={() => useStore.getState().setFileView(entryId, "source")}
-              >
-                Source
-              </button>
-              <button
-                className={`seg-btn${showDiff ? " on" : ""}`}
-                onClick={() => useStore.getState().setFileView(entryId, "diff")}
-              >
-                Diff
-              </button>
+              {choices.map((c) => (
+                <button
+                  key={c}
+                  className={`seg-btn${view === c ? " on" : ""}`}
+                  onClick={() => view !== c && switchTo(c)}
+                >
+                  {VIEW_LABEL[c]}
+                </button>
+              ))}
             </span>
           )}
           <button className="iconbtn" style={btn} title="Open its folder" onClick={openFolder}>
@@ -264,7 +301,28 @@ export function FileView({ entryId, tabId }: { entryId: string; tabId: string })
           </div>
         </div>
       )}
-      {!showDiff && data?.kind === "text" && (
+      {tooBigToPreview && (
+        <div className="file-view-banner">
+          Too large to preview ({formatSize(data.size)}): showing its source.
+        </div>
+      )}
+      {showPreview && (
+        <MarkdownView
+          entryId={entryId}
+          tabId={tabId}
+          path={path}
+          text={data.text}
+          dir={dir}
+          root={repo?.root}
+          wsl={wsl}
+          line={line}
+          anchor={file.anchor}
+          goKey={goKey}
+          startLine={startLine.current}
+          scrollRef={scrollRef}
+        />
+      )}
+      {!showDiff && !showPreview && data?.kind === "text" && (
         <div className="file-view-lines" ref={scrollRef} data-entry={entryId} tabIndex={-1}>
           <div style={{ height: lines.length * LINE_H, position: "relative" }}>
             {lines.slice(start, end).map((html, k) => {
@@ -316,3 +374,4 @@ export function FileView({ entryId, tabId }: { entryId: string; tabId: string })
 }
 
 const btn = { width: 22, height: 22 }
+const VIEW_LABEL: Record<ViewName, string> = { preview: "Preview", source: "Source", diff: "Diff" }

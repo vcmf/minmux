@@ -498,6 +498,15 @@ function createWindow() {
     })
   }
 
+  // The page never opens a window or navigates away: links go out through ipc.openExternal. A
+  // stray one (a middle-click on a link in a rendered markdown file) is refused here, so no remote
+  // page ever loads with the preload (window.minmux spawns processes).
+  win.webContents.setWindowOpenHandler(() => ({ action: "deny" }))
+  win.webContents.on("will-navigate", (e, url) => {
+    const page = (u: string) => u.replace(/#.*$/, "")
+    if (page(url) !== page(win.webContents.getURL())) e.preventDefault()
+  })
+
   if (DEV_RENDERER_URL) {
     void win.loadURL(DEV_RENDERER_URL)
   } else {

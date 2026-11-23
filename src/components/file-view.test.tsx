@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from "vitest"
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest"
 import { render, screen, fireEvent, waitFor } from "@testing-library/react"
 import { FileView } from "./file-view"
 import { useStore } from "../store"
@@ -273,5 +273,156 @@ describe("FileView", () => {
     await waitFor(() => expect(container.querySelector(".file-view-line")).not.toBeNull())
     expect(ipc.gitDiff).not.toHaveBeenCalled()
     expect(screen.queryByText("Diff")).toBeNull()
+  })
+})
+
+describe("FileView: markdown", () => {
+  const md = (text: string) =>
+    vi
+      .mocked(ipc.readFile)
+      .mockResolvedValue({ kind: "text", text, truncated: false, size: text.length })
+
+  it("opens on its Preview, rendered; Source shows the text", async () => {
+    md("# Plan\n\n- [x] step one\n\ninline $x^2$\n")
+    const { tabId, entryId } = open("/w/PLAN.md")
+    const { container } = render(<FileView entryId={entryId} tabId={tabId} />)
+    await waitFor(() => expect(container.querySelector(".md-view h1")).not.toBeNull())
+    expect(container.querySelector(".md-view h1")!.textContent).toBe("Plan")
+    expect(container.querySelector('.md-view input[type="checkbox"]')).not.toBeNull()
+    expect(container.querySelector(".md-view .katex")).not.toBeNull()
+    expect(screen.getByText("Preview").className).toContain("on")
+    fireEvent.click(screen.getByText("Source"))
+    await waitFor(() => expect(container.querySelector(".file-view-line")).not.toBeNull())
+    expect(container.querySelector(".md-view")).toBeNull()
+    expect(st().objects[entryId]).toMatchObject({ view: "source" })
+  })
+
+  it("opens web links outside and relative ones as a tab in the same pane", async () => {
+    md("[site](https://example.com) [gotchas](GOTCHAS.md#fonts) [bad](javascript:alert(1))\n")
+    const { tabId, entryId } = open("/w/docs/README.md")
+    const { container } = render(<FileView entryId={entryId} tabId={tabId} />)
+    await waitFor(() => expect(container.querySelector(".md-view a")).not.toBeNull())
+    fireEvent.click(screen.getByText("site"))
+    expect(ipc.openExternal).toHaveBeenCalledWith("https://example.com")
+    vi.mocked(ipc.openExternal).mockClear()
+    const middle = new MouseEvent("auxclick", { bubbles: true, cancelable: true, button: 1 })
+    screen.getByText("site").dispatchEvent(middle)
+    expect(middle.defaultPrevented).toBe(true) // never Chromium's new window
+    expect(ipc.openExternal).toHaveBeenCalledWith("https://example.com")
+    expect(container.querySelector('.md-view a[href^="javascript"]')).toBeNull()
+    fireEvent.click(screen.getByText("gotchas"))
+    const tab = st().tabs[0]!
+    const opened = st().objects[tab.activeEntryId]
+    expect(opened).toMatchObject({ kind: "file", path: "/w/docs/GOTCHAS.md", anchor: "fonts" })
+  })
+
+  it("shows raw HTML outside the allowlist as text", async () => {
+    md('<img src=x onerror="alert(1)">\n\n<kbd>⌘K</kbd>\n')
+    const { tabId, entryId } = open("/w/x.md")
+    const { container } = render(<FileView entryId={entryId} tabId={tabId} />)
+    await waitFor(() => expect(container.querySelector(".md-view kbd")).not.toBeNull())
+    expect(container.querySelector(".md-view img")).toBeNull()
+    expect(container.querySelector(".md-view")!.textContent).toContain("<img src=x")
+  })
+
+  it("a markdown file too big to render shows its source, saying so", async () => {
+    vi.mocked(ipc.readFile).mockResolvedValue({
+      kind: "text",
+      text: "# big\n",
+      truncated: false,
+      size: 2 * 1024 * 1024,
+    })
+    const { tabId, entryId } = open("/w/huge.md")
+    const { container } = render(<FileView entryId={entryId} tabId={tabId} />)
+    expect(await screen.findByText(/Too large to preview/)).toBeInTheDocument()
+    expect(container.querySelector(".md-view")).toBeNull()
+    expect(screen.queryByText("Preview")).toBeNull()
+  })
+})
+
+describe("FileView: markdown places", () => {
+  // jsdom has no layout: a block sits at 100px per source line, 100px tall.
+  const line = (el: HTMLElement) =>
+    Number(el.dataset?.line ?? el.closest?.("[data-line]")?.getAttribute("data-line") ?? 0)
+  const saved = ["offsetTop", "offsetHeight"].map(
+    (k) => [k, Object.getOwnPropertyDescriptor(HTMLElement.prototype, k)] as const,
+  )
+  beforeEach(() => {
+    Object.defineProperty(HTMLElement.prototype, "offsetTop", {
+      configurable: true,
+      get(this: HTMLElement) {
+        return line(this) * 100
+      },
+    })
+    Object.defineProperty(HTMLElement.prototype, "offsetHeight", {
+      configurable: true,
+      get: () => 100,
+    })
+  })
+  afterEach(() => {
+    for (const [k, d] of saved) if (d) Object.defineProperty(HTMLElement.prototype, k, d)
+  })
+  const doc = Array.from({ length: 20 }, (_, i) => `## Part ${i}\n`).join("\n") // part i on line 2i+1
+  const md = (text: string) =>
+    vi
+      .mocked(ipc.readFile)
+      .mockResolvedValue({ kind: "text", text, truncated: false, size: text.length })
+  const scroller = (c: HTMLElement) => c.querySelector<HTMLElement>(".md-scroll")!
+
+  it("goes to a heading in the view, and to one in this same file by its name", async () => {
+    md(`[go](#part-5) [same](PLAN.md#part-9) [sub](sub/)\n\n${doc}`)
+    const { tabId, entryId } = open("/w/PLAN.md")
+    const { container } = render(<FileView entryId={entryId} tabId={tabId} />)
+    await waitFor(() => expect(container.querySelector('[data-anchor="part-5"]')).not.toBeNull())
+    fireEvent.click(screen.getByText("go"))
+    expect(scroller(container).scrollTop).toBe(
+      line(container.querySelector('[data-anchor="part-5"]')!) * 100 - 8,
+    )
+    fireEvent.click(screen.getByText("same"))
+    expect(scroller(container).scrollTop).toBe(
+      line(container.querySelector('[data-anchor="part-9"]')!) * 100 - 8,
+    )
+    fireEvent.click(screen.getByText("sub")) // a folder link: a folder tab in this pane
+    expect(st().objects[st().tabs[0]!.activeEntryId]).toEqual({ kind: "folder", path: "/w/sub" })
+  })
+
+  it("opens at a line on the block holding it", async () => {
+    md(doc)
+    const { tabId, entryId } = open("/w/PLAN.md", 12)
+    const { container } = render(<FileView entryId={entryId} tabId={tabId} />)
+    await waitFor(() => expect(scroller(container).scrollTop).toBeGreaterThan(0))
+    expect(scroller(container).scrollTop).toBe(11 * 100) // part 5, on line 11 (clientHeight 0)
+  })
+
+  it("keeps the block in view by its text when lines are added above", async () => {
+    let onChanged: (dirs: string[]) => void = () => {}
+    vi.mocked(ipc.onFsChanged).mockImplementation((cb) => {
+      onChanged = (d) => cb(d, [])
+      return () => {}
+    })
+    useStore.setState({ platform: "darwin" })
+    md(doc)
+    const { tabId, entryId } = open("/w/PLAN.md")
+    const { container } = render(<FileView entryId={entryId} tabId={tabId} />)
+    await waitFor(() => expect(container.querySelector('[data-anchor="part-7"]')).not.toBeNull())
+    scroller(container).scrollTop = 15 * 100 + 30 // into part 7 (line 15)
+    md(`# New\n\nadded\n\n${doc}`) // four lines above
+    onChanged(["/w"])
+    await waitFor(() => expect(container.querySelector('[data-anchor="new"]')).not.toBeNull())
+    await waitFor(() => expect(scroller(container).scrollTop).toBe(19 * 100 + 30)) // part 7, now line 19
+  })
+
+  it("switching from Source shows the block at Source's top line", async () => {
+    md(doc)
+    const { tabId, entryId } = open("/w/PLAN.md")
+    st().setFileView(entryId, "source")
+    const { container } = render(<FileView entryId={entryId} tabId={tabId} />)
+    await waitFor(() => expect(container.querySelector(".file-view-line")).not.toBeNull())
+    container.querySelector<HTMLElement>(".file-view-lines")!.scrollTop = 20 * 18 // line 21
+    fireEvent.click(screen.getByText("Preview"))
+    await waitFor(() => expect(scroller(container).scrollTop).toBe(21 * 100)) // part 10, line 21
+    fireEvent.click(screen.getByText("Source")) // and back: the Preview's top block's line
+    await waitFor(() => expect(container.querySelector(".file-view-lines")).not.toBeNull())
+    expect(container.querySelector<HTMLElement>(".file-view-lines")!.scrollTop).toBe(20 * 18)
   })
 })

@@ -240,9 +240,9 @@ describe("FileStore", () => {
     const s = new FileStore(reads().read, hl)
     s.show("s1", "/w/a.ts")
     s.setScroll("s1", 500)
-    s.setScroll("s1", 90, true)
+    s.setScroll("s1", 90, "diff")
     expect(s.scrollOf("s1")).toBe(500)
-    expect(s.scrollOf("s1", true)).toBe(90)
+    expect(s.scrollOf("s1", "diff")).toBe(90)
   })
 
   it("a highlight that fails keeps the plain diff", async () => {

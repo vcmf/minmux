@@ -110,6 +110,7 @@ onclick=…>`), entity-encoded schemes, nested and unclosed tags, and `<img>`, `
 - **Relative images in a file tab** (`![](docs/shot.png)`) are read through the fs worker, which
   already reads files and WSL paths for file tabs. Each becomes a blob URL, capped at 5 MB, and is
   read when it scrolls into view.
+- Until this step lands, an image shows as a link to it (its alt text), loading nothing.
 - **Remote images** don't load on their own. They can be tracking pixels, and GitHub attachments
   in private repos need a login we don't send. One shows as a placeholder with its alt text, and a
   click loads it. A setting `markdown.remoteImages: "click" | "always"` turns that off.
@@ -124,10 +125,11 @@ onclick=…>`), entity-encoded schemes, nested and unclosed tags, and `<img>`, `
   `data-line` on every top-level block. Switching between Preview and Source keeps the same lines
   in view, through the same map.
 - A file an agent is writing re-renders as it changes, at the rate file tabs already re-read
-  (`RELOAD_MS`). The view stays anchored on the top block's `data-line`, so the text being read stays put
-  when blocks above it grow.
-- Big documents: top-level blocks get `content-visibility: auto`, so blocks off screen skip
-  layout. Above 1 MB the tab shows Source with a note. The fs worker already caps what a file tab
+  (`RELOAD_MS`). The view stays on the block at its top, found again by its text (the match nearest
+  its old `data-line`; lines move when an agent inserts above it), so the text being read stays put.
+- Big documents: past 50 KB of HTML, top-level blocks get `content-visibility: auto`, so blocks
+  off screen skip layout (measured: a 100 KB document re-renders in 3 ms instead of 35 ms, and
+  900 KB in 33 ms, at most every 2 s). Above 1 MB the tab shows Source with a note. The fs worker already caps what a file tab
   reads at about 2 MB.
 
 ### In the PR dialog
@@ -140,8 +142,9 @@ title when the dialog knows it), and links open through `ipc.openExternal`. GitH
 ### Look
 
 The view uses the theme tokens, so it follows every theme family in dark and light. Code blocks
-use the file tab's highlight colours. Headings, tables and quotes follow GitHub's spacing, in the
-UI font with code in the terminal font.
+use the file tab's highlight colours. Headings, tables and quotes follow GitHub's spacing. Prose is
+in the system's UI font (the chrome's mono font reads poorly in paragraphs), code in the terminal
+font.
 
 ### Performance
 

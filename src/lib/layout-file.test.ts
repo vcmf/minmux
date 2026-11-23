@@ -224,6 +224,15 @@ describe("layout.json", () => {
     expect(JSON.parse(layout).objects[F]).toEqual({ kind: "file", path: "/w/a.ts", line: 3 })
   })
 
+  it("a markdown file's Source choice is saved; the heading it opened at isn't", () => {
+    const s = state()
+    s.objects[F] = { kind: "file", path: "/w/a.md", view: "source", anchor: "fonts", seq: 1 }
+    const { ws, layout } = save(s)
+    expect(JSON.parse(layout).objects[F]).toEqual({ kind: "file", path: "/w/a.md", view: "source" })
+    const back = restoreLayout(deserializeWorkspace(JSON.parse(ws)), ws, layout).state!
+    expect(back.objects?.[F]).toEqual({ kind: "file", path: "/w/a.md", view: "source" })
+  })
+
   it("stays version 1 with file tabs: an older build keeps the folders, drops the files", () => {
     const s = state()
     s.objects[F] = { kind: "file", path: "/w/a.ts" }

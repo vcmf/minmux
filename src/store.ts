@@ -19,11 +19,13 @@ import {
   visibleSessionIds,
 } from "./lib/pane-tree"
 import { makeTab, withFocus } from "./lib/tab-focus"
-import { files } from "./lib/file-store"
+import { files, type FileView } from "./lib/file-store"
 import {
   EMPTY_VIEW,
+  isMarkdownPath,
   objectId,
   placeOf,
+  viewOf,
   type FileEntry,
   type FolderEntry,
   type FolderView,
@@ -257,9 +259,10 @@ interface AppState {
       line?: number
       peek?: boolean
       diff?: boolean // open on its diff (a changed file from the changes list)
+      anchor?: string // a markdown heading to open at (a link in a rendered file)
     },
   ) => void
-  setFileView: (id: string, view: "source" | "diff") => void
+  setFileView: (id: string, view: FileView) => void
   keepEntry: (id: string) => void // a peek becomes a kept tab (double-click, drag)
   setFolderView: (id: string, view: FolderView) => void
   setFolderRoot: (id: string, path: string) => void // re-root a folder entry (double-click)
@@ -602,8 +605,14 @@ export const useStore = create<AppState>((set, get) => ({
   setProfile: (profile) => set({ profile }),
   setEditor: (editor) => set({ editor }),
   setPreview: (preview) => set({ preview }),
-  openFile: (path, opts = {}) =>
+  openFile: (path, given = {}) =>
     set((state) => {
+      // A heading is only a markdown file's; another file takes GitHub's `#L12` as its line.
+      let opts = given
+      if (opts.anchor && !isMarkdownPath(path)) {
+        const n = /^L(\d+)/.exec(opts.anchor)
+        opts = { ...opts, anchor: undefined, ...(n ? { line: Number(n[1]) } : {}) }
+      }
       const tab = state.tabs.find((t) => t.id === (opts.tabId ?? state.activeTabId))
       if (!tab || !path) return {}
       const pane = opts.paneId
@@ -626,10 +635,19 @@ export const useStore = create<AppState>((set, get) => ({
       if (open) {
         const cur = state.objects[open] as FileEntry
         // At its line again, even the same one (scrolled away since): a new `seq` says "go".
-        let next: FileEntry = opts.line ? { ...cur, line: opts.line, seq: (cur.seq ?? 0) + 1 } : cur
+        // The latest target only: a line drops the heading asked before, and the other way round.
+        let next: FileEntry = cur
+        if (opts.line) {
+          next = { ...cur, line: opts.line, seq: (cur.seq ?? 0) + 1 }
+          delete next.anchor
+        } else if (opts.anchor) {
+          next = { ...cur, anchor: opts.anchor, seq: (cur.seq ?? 0) + 1 }
+          delete next.line
+          delete next.view // a heading is the Preview's
+        }
         if (opts.diff && cur.view !== "diff") next = { ...next, view: "diff" }
-        else if (opts.line && !opts.diff && next.view) {
-          next = { ...next } // a line is the source's: back to Source to show it
+        else if (opts.line && !opts.diff && next.view === "diff") {
+          next = { ...next } // a line is the text's: off the diff to show it
           delete next.view
         }
         const objects = next === cur ? state.objects : { ...state.objects, [open]: next }
@@ -647,6 +665,7 @@ export const useStore = create<AppState>((set, get) => ({
         ...line,
         ...(opts.peek ? { peek: true as const } : {}),
         ...(opts.diff ? { view: "diff" as const } : {}),
+        ...(opts.anchor ? { anchor: opts.anchor } : {}),
       }
       // A peek takes the place of the pane's previous one.
       const old = opts.peek
@@ -672,10 +691,11 @@ export const useStore = create<AppState>((set, get) => ({
   setFileView: (id, view) =>
     set((state) => {
       const o = state.objects[id]
-      if (o?.kind !== "file" || (o.view ?? "source") === view) return state
+      if (o?.kind !== "file" || viewOf(o) === view) return state
+      if (view === "preview" && !isMarkdownPath(o.path)) return state
       const next: FileEntry = { ...o }
-      if (view === "diff") next.view = "diff"
-      else delete next.view
+      delete next.view // its default…
+      if (viewOf(next) !== view) next.view = view as "source" | "diff" // …or the one asked for
       return { objects: { ...state.objects, [id]: next } }
     }),
 

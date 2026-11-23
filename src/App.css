@@ -1465,6 +1465,164 @@ body.resizing-col {
   align-items: flex-start;
   color: var(--dim);
 }
+.file-view-banner {
+  padding: 4px 12px;
+  font-size: 11px;
+  color: var(--dim);
+  border-bottom: 1px solid var(--border);
+}
+/* A markdown file's Preview (markdown-view.tsx): lib/markdown's HTML, in the theme's colours.
+   Prose in the system's UI font (easier to read than the chrome's mono), code in the terminal's. */
+.md-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  outline: none;
+}
+.md-view {
+  position: relative; /* blocks' offsetTop is from here (lib/markdown-scroll) */
+  max-width: 860px;
+  margin: 0 auto;
+  padding: 16px 24px 48px;
+  font-family:
+    system-ui,
+    -apple-system,
+    "Segoe UI",
+    sans-serif;
+  font-size: 14px;
+  line-height: 1.6;
+  color: var(--text);
+  overflow-wrap: break-word;
+}
+.md-view.big > * {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 40px;
+}
+.md-view > :first-child {
+  margin-top: 0;
+}
+.md-view :is(p, ul, ol, pre, table, blockquote, details) {
+  margin: 0 0 12px;
+}
+.md-view :is(h1, h2, h3, h4, h5, h6) {
+  margin: 24px 0 12px;
+  line-height: 1.25;
+  font-weight: 600;
+}
+.md-view h1 {
+  font-size: 1.8em;
+}
+.md-view h2 {
+  font-size: 1.4em;
+}
+.md-view :is(h1, h2) {
+  padding-bottom: 0.3em;
+  border-bottom: 1px solid var(--border);
+}
+.md-view h3 {
+  font-size: 1.2em;
+}
+.md-view h4 {
+  font-size: 1em;
+}
+.md-view :is(h5, h6) {
+  font-size: 0.9em;
+  color: var(--dim);
+}
+.md-view :is(ul, ol) {
+  padding-left: 2em;
+}
+.md-view li + li {
+  margin-top: 0.25em;
+}
+.md-view li > :is(ul, ol, p) {
+  margin: 0.25em 0 0;
+}
+.md-view .task-list-container {
+  list-style: none;
+  padding-left: 0.4em;
+}
+.md-view .task-list-item input {
+  margin: 0 0.5em 0 0;
+  vertical-align: middle;
+}
+.md-view a {
+  color: var(--blue);
+  text-decoration: none;
+  cursor: pointer;
+}
+.md-view a:hover {
+  text-decoration: underline;
+}
+.md-view a.md-img::before {
+  content: "🖼 ";
+}
+.md-view :is(code, kbd) {
+  font-family: var(--code-font);
+  font-size: 0.86em;
+}
+.md-view :not(pre) > code {
+  padding: 0.15em 0.35em;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--text) 9%, transparent);
+}
+.md-view kbd {
+  padding: 0.1em 0.4em;
+  border: 1px solid var(--border2);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  background: var(--elev);
+}
+.md-view pre {
+  padding: 10px 12px;
+  overflow: auto;
+  border-radius: 6px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  line-height: 1.45;
+}
+.md-view pre code {
+  font-size: 12px;
+}
+.md-view blockquote {
+  padding: 0 1em;
+  color: var(--dim);
+  border-left: 3px solid var(--border2);
+}
+.md-view hr {
+  height: 1px;
+  border: 0;
+  background: var(--border2);
+  margin: 20px 0;
+}
+.md-view table {
+  display: block;
+  width: max-content;
+  max-width: 100%;
+  overflow: auto;
+  border-collapse: collapse;
+}
+.md-view :is(th, td) {
+  padding: 5px 12px;
+  border: 1px solid var(--border2);
+}
+.md-view th {
+  font-weight: 600;
+}
+.md-view tr:nth-child(2n) td {
+  background: color-mix(in srgb, var(--text) 3%, transparent);
+}
+.md-view summary {
+  cursor: pointer;
+}
+.md-view .katex-block {
+  overflow-x: auto;
+  overflow-y: hidden;
+  text-align: center;
+}
+.md-view .katex-error {
+  color: var(--red) !important;
+}
 /* A changed file's Source / Diff switch, in its tab's header. */
 .seg {
   display: inline-flex;
