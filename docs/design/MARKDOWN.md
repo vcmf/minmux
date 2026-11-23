@@ -114,9 +114,13 @@ and stays that way.
 - **Relative images in a file tab** (`![](docs/shot.png)`) are read through the fs worker (the file
   tab's own read, 5 MB at most) as they come near the view. A PR body's relative image stays a
   link: its repo's files aren't on this machine.
-- **Web images** are fetched by main (`electron/remote-image.ts`): http(s) only, never a private or
-  loopback address (each redirect hop is checked before it's asked for), in a session without
-  cookies, an image type, 5 MB, 15 s, four at a time.
+- **Web images** are fetched by main (`electron/remote-image.ts`) through Node's http(s): http(s)
+  only, and never a private or loopback address. A name is checked by every address it resolves
+  to, and the connection goes to the address checked, so DNS can't point it home or rebind it. A
+  literal address is checked in any notation, IPv4 inside IPv6 included. Each redirect hop is
+  checked before it's asked for. Node's client keeps no cookies. The response must be an image
+  type, at most 5 MB, within 15 s, four at a time. Node doesn't use the system proxy, so behind a
+  proxy-only network web images fail.
 - They don't load on their own: they can be tracking pixels. One shows as a placeholder with its
   alt text, and a click loads it. The setting `remoteImages: "click" | "always"` (Settings,
   Markdown, "Web images") loads them as they're shown instead. GitHub attachments in private

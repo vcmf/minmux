@@ -59,12 +59,19 @@ function sourceOf(src: string, ctx: ImageContext): { key: string; path?: string 
     : null
 }
 
+// The placeholder's alt text is kept on it (`data-alt`): a re-render shows the image at once,
+// and a failure later puts the text back.
+const altOf = (el: HTMLElement) => (el.dataset.alt ??= el.textContent ?? "")
+
 function show(el: HTMLElement, k: Kept): void {
   const img = document.createElement("img")
-  img.alt = el.textContent ?? ""
-  if (k.w && k.h) {
-    img.width = k.w
-    img.height = k.h
+  img.alt = altOf(el)
+  // A width the document asked for (GitHub's <img width>: a retina screenshot at half size);
+  // else its own. Either way the height follows, so the space is reserved before it decodes.
+  const w = Number(el.dataset.width) || k.w
+  if (w && k.w && k.h) {
+    img.width = w
+    img.height = Math.round((w * k.h) / k.w)
   }
   img.src = k.dataUrl
   el.replaceChildren(img)
@@ -73,6 +80,7 @@ function show(el: HTMLElement, k: Kept): void {
 }
 
 function failed(el: HTMLElement, why: string): void {
+  el.replaceChildren(altOf(el)) // its text again, if an image was shown
   el.dataset.state = "failed"
   el.title = `Couldn't load this image: ${why}`
 }
@@ -89,30 +97,51 @@ async function sized(dataUrl: string): Promise<{ w: number; h: number }> {
   return { w: img.naturalWidth, h: img.naturalHeight }
 }
 
+type Got = Kept | { error: string }
+const inflight = new Map<string, Promise<Got>>() // one read or fetch per image at a time
+
+/** An image's data: kept, or read / fetched (shared by every placeholder asking meanwhile). */
+function get(key: string, path: string | undefined, src: string, ctx: ImageContext): Promise<Got> {
+  const running = inflight.get(key)
+  if (running) return running
+  const had = kept.get(key)
+  const p = (async (): Promise<Got> => {
+    if (path) {
+      const r = await ipc.readFile(path, ctx.wsl, had?.stamp)
+      if (r.kind === "same" && had) return had
+      if (r.kind !== "image") {
+        return {
+          error:
+            r.kind === "error" ? r.message : r.kind === "too-large" ? "too large" : "not an image",
+        }
+      }
+      const k = { dataUrl: r.dataUrl, ...(await sized(r.dataUrl)), stamp: r.stamp }
+      keep(key, k)
+      return k
+    }
+    if (had) return had // a web image: once loaded, kept
+    const r = await ipc.fetchImage(src)
+    if (!r.ok) return { error: r.error }
+    const k = { dataUrl: r.dataUrl, ...(await sized(r.dataUrl)) }
+    keep(key, k)
+    return k
+  })()
+  inflight.set(key, p)
+  void p.finally(() => inflight.delete(key))
+  return p
+}
+
 /** Load one image into its placeholder (or say why not). */
 async function load(el: HTMLElement, ctx: ImageContext): Promise<void> {
-  const from = sourceOf(el.dataset.src ?? "", ctx)
+  const src = el.dataset.src ?? ""
+  const from = sourceOf(src, ctx)
   if (!from) return
-  el.dataset.state = "loading"
-  const had = kept.get(from.key)
-  if (from.path) {
-    const r = await ipc.readFile(from.path, ctx.wsl, had?.stamp)
-    if (r.kind === "same" && had) return show(el, had)
-    if (r.kind !== "image") {
-      return failed(
-        el,
-        r.kind === "error" ? r.message : r.kind === "too-large" ? "too large" : "not an image",
-      )
-    }
-    const k = { dataUrl: r.dataUrl, ...(await sized(r.dataUrl)), stamp: r.stamp }
-    keep(from.key, k)
-    return show(el, k)
-  }
-  const r = await ipc.fetchImage(el.dataset.src!)
-  if (!r.ok) return failed(el, r.error)
-  const k = { dataUrl: r.dataUrl, ...(await sized(r.dataUrl)) }
-  keep(from.key, k)
-  show(el, k)
+  altOf(el)
+  if (el.dataset.state !== "loaded") el.dataset.state = "loading" // a loaded one stays as it is
+  const got = await get(from.key, from.path, src, ctx)
+  if ("error" in got) return failed(el, got.error)
+  if (el.querySelector("img")?.getAttribute("src") !== got.dataUrl) show(el, got)
+  else el.dataset.state = "loaded"
 }
 
 // One observer per write: images load as they come near the view. Returns its disposer (the
@@ -124,10 +153,13 @@ export function hydrateImages(root: HTMLElement, ctx: ImageContext): () => void 
     const src = el.dataset.src ?? ""
     const from = sourceOf(src, ctx)
     if (!from) continue
+    altOf(el)
     const had = kept.get(from.key)
     if (had) {
       show(el, had) // at once: no layout shift on a re-render
       if (from.path) lazy.push(el) // a file may have changed: checked by its stamp
+    } else if (inflight.has(from.key)) {
+      lazy.push(el) // clicked, or loading, before this re-render: it joins that load
     } else if (isWeb(src) && ctx.remote === "click") {
       el.dataset.state = "click"
       el.title = `Click to load this image (${hostOf(src)})`
@@ -152,10 +184,12 @@ export function hydrateImages(root: HTMLElement, ctx: ImageContext): () => void 
   return () => io.disconnect()
 }
 
-/** A click on a web image waiting for one loads it (true); other clicks aren't ours. */
+/** A click on a web image waiting for one loads it (true); one loading takes the click too. */
 export function clickImage(target: Element, ctx: ImageContext): boolean {
-  const el = target.closest<HTMLElement>('.md-img[data-state="click"]')
+  const el = target.closest<HTMLElement>(
+    '.md-img[data-state="click"], .md-img[data-state="loading"]',
+  )
   if (!el) return false
-  void load(el, ctx)
+  if (el.dataset.state === "click") void load(el, ctx) // a second click while loading: nothing
   return true
 }

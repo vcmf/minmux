@@ -55,6 +55,13 @@ export function MarkdownView({
   images.current = { dir, root, wsl, remote }
   const unhydrate = useRef<() => void>(() => {})
   useEffect(() => () => unhydrate.current(), [])
+  // The Web images setting changed: what's shown now follows it.
+  useEffect(() => {
+    const body = bodyRef.current
+    if (!placed.current || !body) return
+    unhydrate.current()
+    unhydrate.current = hydrateImages(body, images.current)
+  }, [remote])
   const placed = useRef(false) // the first HTML is in and the view placed
   // Read when HTML lands (maybe renders later): the target asked for most recently.
   const target = useRef({ line, anchor, goKey })

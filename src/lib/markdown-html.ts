@@ -46,7 +46,9 @@ function tag(closing: boolean, name: string, attrs: string): string | null {
     if (!src || !safeLink(src)) return null
     const alt = attr(attrs, "alt") || src
     const s = escapeHtml(src)
-    return `<a class="md-img" href="${s}" data-src="${s}">${escapeHtml(alt)}</a>`
+    const w = /^\d{1,5}$/.exec(attr(attrs, "width").trim())?.[0] // pixels only (not "50%")
+    const width = w ? ` data-width="${w}"` : ""
+    return `<a class="md-img" href="${s}" data-src="${s}"${width}>${escapeHtml(alt)}</a>`
   }
   if (!ALLOWED.has(n)) return null
   const a = attrs.trim().replace(/\/$/, "").trim()

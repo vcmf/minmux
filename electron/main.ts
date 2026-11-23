@@ -10,7 +10,6 @@ import {
   nativeImage,
   utilityProcess,
   Menu,
-  session,
 } from "electron"
 import { fileURLToPath } from "node:url"
 import path from "node:path"
@@ -1613,8 +1612,7 @@ function registerIpc() {
   )
 
   // A remote image for a rendered markdown view, as a data: URL (the renderer's policy refuses
-  // remote images): its own cookie-less session, a few at a time. → electron/remote-image.ts
-  const images = session.fromPartition("minmux-images")
+  // remote images): never a local address, no cookies, a few at a time. → electron/remote-image.ts
   let fetching = 0
   const queued: (() => void)[] = []
   ipcMain.handle("image:fetch", async (_e, url: unknown): Promise<RemoteImage> => {
@@ -1622,7 +1620,7 @@ function registerIpc() {
     if (fetching >= 4) await new Promise<void>((go) => queued.push(go))
     fetching++
     try {
-      return await fetchImage(url, (u, init) => images.fetch(u, init))
+      return await fetchImage(url)
     } finally {
       fetching--
       queued.shift()?.()

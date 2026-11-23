@@ -88,4 +88,65 @@ describe("hydrateImages", () => {
     expect(ipc.readFile).not.toHaveBeenCalled()
     expect(a.querySelector<HTMLElement>(".md-img")!.dataset.state).toBeUndefined()
   })
+
+  it("a re-render keeps the alt text, undimmed; a file gone since puts the text back", async () => {
+    const { hydrateImages } = await fresh()
+    vi.mocked(ipc.readFile).mockResolvedValue({
+      kind: "image",
+      dataUrl: "data:image/png;base64,AA==",
+      size: 1,
+      stamp: { size: 1, mtimeMs: 1 },
+    })
+    const ctx = { dir: "/w", remote: "click" as const }
+    hydrateImages(view(img("a.png", "Architecture")), ctx)
+    await settle()
+    await settle()
+    vi.mocked(ipc.readFile).mockResolvedValue({ kind: "same" })
+    const b = view(img("a.png", "Architecture"))
+    hydrateImages(b, ctx)
+    const ph = b.querySelector<HTMLElement>(".md-img")!
+    expect(ph.dataset.state).toBe("loaded") // not "loading" while it's checked
+    await settle()
+    expect(b.querySelector("img")!.alt).toBe("Architecture")
+    vi.mocked(ipc.readFile).mockResolvedValue({ kind: "error", message: "This file is gone" })
+    const c = view(img("a.png", "Architecture"))
+    hydrateImages(c, ctx)
+    await settle()
+    await settle()
+    expect(c.querySelector("img")).toBeNull()
+    expect(c.textContent).toBe("Architecture")
+    expect(c.querySelector<HTMLElement>(".md-img")!.title).toContain("gone")
+  })
+
+  it("one fetch per image: a second click while loading, or a re-render, joins it", async () => {
+    const { hydrateImages, clickImage } = await fresh()
+    let answer: (v: { ok: true; dataUrl: string }) => void = () => {}
+    vi.mocked(ipc.fetchImage).mockImplementation(() => new Promise((r) => (answer = r)))
+    const ctx = { remote: "click" as const }
+    const a = view(img("https://img.test/x.png"))
+    hydrateImages(a, ctx)
+    const ph = a.querySelector<HTMLElement>(".md-img")!
+    expect(clickImage(ph, ctx)).toBe(true)
+    expect(clickImage(ph, ctx)).toBe(true) // taken: no browser tab for the second click
+    const b = view(img("https://img.test/x.png")) // re-rendered meanwhile
+    hydrateImages(b, ctx)
+    answer({ ok: true, dataUrl: "data:image/png;base64,AQ==" })
+    await settle()
+    await settle()
+    await settle()
+    expect(ipc.fetchImage).toHaveBeenCalledTimes(1)
+    expect(b.querySelector("img")).not.toBeNull()
+  })
+
+  it("shows a screenshot at the width its <img> asked for", async () => {
+    const { hydrateImages } = await fresh()
+    const { cleanHtml } = await import("./markdown-html")
+    vi.mocked(ipc.fetchImage).mockResolvedValue({ ok: true, dataUrl: "data:image/png;base64,AQ==" })
+    const a = view(cleanHtml('<img width="400" src="https://img.test/s.png">'))
+    expect(a.querySelector<HTMLElement>(".md-img")!.dataset.width).toBe("400")
+    hydrateImages(a, { remote: "always" })
+    await settle()
+    await settle()
+    expect(a.querySelector("img")).not.toBeNull()
+  })
 })

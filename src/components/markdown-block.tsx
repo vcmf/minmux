@@ -37,20 +37,29 @@ export function MarkdownBlock({
     if (ref.current) onRendered?.(ref.current)
   }, [onRendered])
 
+  const unhydrate = useRef(() => {})
+  // The Web images setting changed: what's shown now follows it.
+  const remote = images?.remote
+  useLayoutEffect(() => {
+    const el = ref.current
+    if (!el || !imageCtx.current) return
+    unhydrate.current()
+    unhydrate.current = hydrateImages(el, imageCtx.current)
+  }, [remote])
+
   useLayoutEffect(() => {
     const el = ref.current
     if (!el) return
-    let unhydrate = () => {}
     const put = (html: string) => {
-      unhydrate()
+      unhydrate.current()
       el.innerHTML = html
-      if (imageCtx.current) unhydrate = hydrateImages(el, imageCtx.current)
+      if (imageCtx.current) unhydrate.current = hydrateImages(el, imageCtx.current)
       after.current?.(el)
     }
     const now = renderedNow(text, repo)
     if (now && (!now.math || mathStyleReady())) {
       put(now.html)
-      return () => unhydrate()
+      return () => unhydrate.current()
     }
     put(`<p class="md-pending">${escapeHtml(text)}</p>`)
     let live = true
@@ -62,7 +71,7 @@ export function MarkdownBlock({
     })()
     return () => {
       live = false
-      unhydrate()
+      unhydrate.current()
     }
   }, [text, repo])
 

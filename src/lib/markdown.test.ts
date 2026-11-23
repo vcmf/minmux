@@ -166,7 +166,7 @@ describe("safety", () => {
 
   it("turns a raw <img> (GitHub's drag-and-drop) into a link to the image", () => {
     expect(cleanHtml('<img width="800" alt="Shot" src="https://a.test/i.png?x=1&amp;y=2">')).toBe(
-      '<a class="md-img" href="https://a.test/i.png?x=1&amp;y=2" data-src="https://a.test/i.png?x=1&amp;y=2">Shot</a>',
+      '<a class="md-img" href="https://a.test/i.png?x=1&amp;y=2" data-src="https://a.test/i.png?x=1&amp;y=2" data-width="800">Shot</a>',
     )
     expect(cleanHtml("<img src='javascript:alert(1)'>")).toBe(
       "&lt;img src=&#39;javascript:alert(1)&#39;&gt;",
