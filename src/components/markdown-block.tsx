@@ -1,5 +1,6 @@
 import { useLayoutEffect, useRef } from "react"
 import { escapeHtml } from "../lib/file-preview"
+import { clickImage, hydrateImages, type ImageContext } from "../lib/markdown-images"
 import {
   loadMathStyle,
   mathStyleReady,
@@ -15,18 +16,22 @@ export function MarkdownBlock({
   text,
   repo,
   className,
+  images,
   onLink,
   onRendered,
 }: {
   text: string
   repo?: string
   className?: string
+  images?: ImageContext // none: images stay links
   onLink: (href: string, a: HTMLAnchorElement) => void
   onRendered?: (el: HTMLElement) => void // after each write (decorate links, say)
 }) {
   const ref = useRef<HTMLDivElement>(null)
   const after = useRef(onRendered)
   after.current = onRendered
+  const imageCtx = useRef(images)
+  imageCtx.current = images
   // A new decorator (the titles it adds changed) runs on what's shown now.
   useLayoutEffect(() => {
     if (ref.current) onRendered?.(ref.current)
@@ -35,12 +40,18 @@ export function MarkdownBlock({
   useLayoutEffect(() => {
     const el = ref.current
     if (!el) return
+    let unhydrate = () => {}
     const put = (html: string) => {
+      unhydrate()
       el.innerHTML = html
+      if (imageCtx.current) unhydrate = hydrateImages(el, imageCtx.current)
       after.current?.(el)
     }
     const now = renderedNow(text, repo)
-    if (now && (!now.math || mathStyleReady())) return put(now.html)
+    if (now && (!now.math || mathStyleReady())) {
+      put(now.html)
+      return () => unhydrate()
+    }
     put(`<p class="md-pending">${escapeHtml(text)}</p>`)
     let live = true
     void (async () => {
@@ -51,6 +62,7 @@ export function MarkdownBlock({
     })()
     return () => {
       live = false
+      unhydrate()
     }
   }, [text, repo])
 
@@ -58,7 +70,15 @@ export function MarkdownBlock({
     const a = (e.target as Element).closest("a")
     if (!a || !ref.current?.contains(a)) return
     e.preventDefault()
-    if (e.type !== "mousedown") onLink(a.getAttribute("href") ?? "", a)
+    if (e.type === "mousedown") return
+    if (
+      e.type === "click" &&
+      imageCtx.current &&
+      clickImage(e.target as Element, imageCtx.current)
+    ) {
+      return
+    }
+    onLink(a.getAttribute("href") ?? "", a)
   }
   const middle = (e: React.MouseEvent) => e.button === 1 && follow(e)
   return (

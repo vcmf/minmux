@@ -156,6 +156,25 @@ export function SettingsPanel() {
           </label>
         ))}
 
+        <h3 className="settings-section">Markdown</h3>
+        <label className="settings-row">
+          <span title="Images from the web in markdown files and PR bodies. They can track you, so by default each loads when you click it.">
+            Web images
+          </span>
+          <select
+            value={settings.remoteImages}
+            onChange={(e) =>
+              update({
+                ...settings,
+                remoteImages: e.target.value as Settings["remoteImages"],
+              })
+            }
+          >
+            <option value="click">Load on click</option>
+            <option value="always">Load as shown</option>
+          </select>
+        </label>
+
         <h3 className="settings-section">SSH</h3>
         <label className="settings-row">
           <span>Reconnect on launch</span>

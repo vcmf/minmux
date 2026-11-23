@@ -24,6 +24,7 @@ export interface Settings {
   shiftEnterNewline: boolean // Shift+Enter sends CSI-u (newline in Claude Code etc.); off = normal submit
   defaultShell: string // command path of the preferred shell; "" = system $SHELL
   fileLinks: boolean // click file paths in output to open them
+  remoteImages: "click" | "always" // markdown's web images: loaded on a click (default), or as shown
   openPath: string // editor command for clicked paths; "" = OS default. {file}/{line}/{col}
   resumeAgents: "auto" | "ask" | "off" // on relaunch, resume the agent session each pane was in
   resumeBypassPermissions: boolean // Claude: also restore --permission-mode bypassPermissions
@@ -49,6 +50,7 @@ export const defaultSettings: Settings = {
   shiftEnterNewline: true,
   defaultShell: "",
   fileLinks: true,
+  remoteImages: "click",
   openPath: "code -g {file}:{line}:{col}",
   resumeAgents: "auto",
   resumeBypassPermissions: false,
@@ -94,6 +96,7 @@ export function mergeSettings(input: unknown): Settings {
     shiftEnterNewline: bool(o.shiftEnterNewline, d.shiftEnterNewline),
     defaultShell: typeof o.defaultShell === "string" ? o.defaultShell : d.defaultShell,
     fileLinks: bool(o.fileLinks, d.fileLinks),
+    remoteImages: o.remoteImages === "always" ? "always" : "click",
     // Allow "" (OS default), so don't use str() which rejects empty strings.
     openPath: typeof o.openPath === "string" ? o.openPath : d.openPath,
     resumeAgents:

@@ -107,15 +107,24 @@ onclick=…>`), entity-encoded schemes, nested and unclosed tags, and `<img>`, `
 
 ### Images
 
-- **Relative images in a file tab** (`![](docs/shot.png)`) are read through the fs worker, which
-  already reads files and WSL paths for file tabs. Each becomes a blob URL, capped at 5 MB, and is
-  read when it scrolls into view.
-- Until this step lands, an image shows as a link to it (its alt text), loading nothing.
-- A remote image is fetched by main and handed to the page as a `blob:` URL: the renderer's
-  Content-Security-Policy (step 2) refuses remote images, and stays that way.
-- **Remote images** don't load on their own. They can be tracking pixels, and GitHub attachments
-  in private repos need a login we don't send. One shows as a placeholder with its alt text, and a
-  click loads it. A setting `markdown.remoteImages: "click" | "always"` turns that off.
+`lib/markdown-images.ts` turns each image the renderer wrote (a link to it, with `data-src`) into
+the image, as a `data:` URL: the renderer's Content-Security-Policy (step 2) refuses anything else,
+and stays that way.
+
+- **Relative images in a file tab** (`![](docs/shot.png)`) are read through the fs worker (the file
+  tab's own read, 5 MB at most) as they come near the view. A PR body's relative image stays a
+  link: its repo's files aren't on this machine.
+- **Web images** are fetched by main (`electron/remote-image.ts`): http(s) only, never a private or
+  loopback address (each redirect hop is checked before it's asked for), in a session without
+  cookies, an image type, 5 MB, 15 s, four at a time.
+- They don't load on their own: they can be tracking pixels. One shows as a placeholder with its
+  alt text, and a click loads it. The setting `remoteImages: "click" | "always"` (Settings,
+  Markdown, "Web images") loads them as they're shown instead. GitHub attachments in private
+  repos need a login that isn't sent, so they fail with the reason in the tooltip.
+- An image inside a link (a README badge) loads the same way; once loaded, a click follows the link.
+- Loaded images are kept (32 MB) with their size, so a re-render shows them at once, without the
+  layout moving; a file's image is checked again by its stamp.
+- A raw `<img src>` (GitHub's screenshot drag-and-drop) is treated as an image too.
 
 ### In a file tab
 

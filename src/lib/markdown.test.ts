@@ -39,13 +39,17 @@ describe("renderMarkdown", () => {
   it("shows an image as a link to it, loading nothing", async () => {
     const out = await html("![a shot](docs/shot.png) ![](https://x.test/p.png)")
     expect(out).not.toContain("<img")
-    expect(out).toContain('<a class="md-img" href="docs/shot.png">a shot</a>')
-    expect(out).toContain('href="https://x.test/p.png">https://x.test/p.png</a>')
+    expect(out).toContain(
+      '<a class="md-img" href="docs/shot.png" data-src="docs/shot.png">a shot</a>',
+    )
+    expect(out).toContain('data-src="https://x.test/p.png">https://x.test/p.png</a>')
   })
 
   it("a linked image (a badge) is its link's text, the link kept", async () => {
     const out = await html("[![build](https://img.test/x.svg)](https://ci.test/run)")
-    expect(out).toContain('<a href="https://ci.test/run"><span class="md-img">build</span></a>')
+    expect(out).toContain(
+      '<a href="https://ci.test/run"><span class="md-img" data-src="https://img.test/x.svg">build</span></a>',
+    )
   })
 
   it("links bare URLs", async () => {
@@ -146,7 +150,7 @@ describe("safety", () => {
     expect(out).not.toMatch(/<(script|img|iframe|style|svg|div|math)\b/i)
     // the only links: ones we wrote (an image's), with a checked href and nothing else on them
     for (const a of out.match(/<a\b[^>]*>/gi) ?? [])
-      expect(a).toMatch(/^<a class="md-img" href="[^"]*">$/)
+      expect(a).toMatch(/^<a class="md-img" href="([^"]*)" data-src="\1">$/)
     expect(out).not.toMatch(/<[a-z][^>]*\son[a-z]+\s*=/i) // no event handler on any tag
     expect(out).not.toMatch(/href="(javascript|vbscript|file|data):/i)
   })
@@ -162,7 +166,7 @@ describe("safety", () => {
 
   it("turns a raw <img> (GitHub's drag-and-drop) into a link to the image", () => {
     expect(cleanHtml('<img width="800" alt="Shot" src="https://a.test/i.png?x=1&amp;y=2">')).toBe(
-      '<a class="md-img" href="https://a.test/i.png?x=1&amp;y=2">Shot</a>',
+      '<a class="md-img" href="https://a.test/i.png?x=1&amp;y=2" data-src="https://a.test/i.png?x=1&amp;y=2">Shot</a>',
     )
     expect(cleanHtml("<img src='javascript:alert(1)'>")).toBe(
       "&lt;img src=&#39;javascript:alert(1)&#39;&gt;",
