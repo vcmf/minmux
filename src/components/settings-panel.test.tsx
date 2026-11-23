@@ -104,4 +104,11 @@ describe("SettingsPanel — auto-reconnect", () => {
     fireEvent.click(box)
     expect(st().settings.ssh.autoReconnect).toBe(false)
   })
+
+  it("web images in markdown: load on click, or as shown", () => {
+    render(<SettingsPanel />)
+    const select = screen.getByDisplayValue("Load on click")
+    fireEvent.change(select, { target: { value: "always" } })
+    expect(st().settings.remoteImages).toBe("always")
+  })
 })

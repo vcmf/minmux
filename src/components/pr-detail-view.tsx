@@ -1,10 +1,9 @@
-import { memo, useEffect, useMemo, useState } from "react"
+import { createContext, memo, useCallback, useContext, useEffect, useMemo, useState } from "react"
 import { ArrowSquareOut, Check, PencilSimple } from "@phosphor-icons/react"
 import { ipc } from "../lib/ipc"
+import { useStore } from "../store"
 import {
-  bodyBlocks,
   hunkTail,
-  linkify,
   threadsByFile,
   when,
   type PrDetail,
@@ -21,6 +20,8 @@ import { PrReply } from "./pr-reply"
 import { PrChecksView } from "./pr-checks-view"
 import { usePrWriteSeq } from "./pr-edits"
 import { Who } from "./pr-who"
+import { MarkdownBlock } from "./markdown-block"
+import { prLinkTarget } from "../lib/markdown-links"
 
 // Details already fetched, by PR url: shown at once, and trusted without asking again while
 // the PR is unchanged and the answer is under FRESH_MS old (resolving a thread or editing a
@@ -32,47 +33,56 @@ const FRESH_MS = 60_000
 const cacheKey = (r: PrRow) => `${r.url}\0${r.account ?? ""}`
 const DEBOUNCE_MS = 250 // j/k through the list: only the PR it stops on is asked for
 
-/** Text with its links clickable; markdown shown as text, never as HTML. */
-function Text({ text }: { text: string }) {
-  return (
-    <>
-      {linkify(text).map((p, i) =>
-        p.url ? (
-          <a
-            key={i}
-            href={p.url}
-            onClick={(e) => {
-              e.preventDefault()
-              ipc.openExternal(p.url!)
-            }}
-          >
-            {p.text}
-          </a>
-        ) : (
-          <span key={i}>{p.text}</span>
-        ),
-      )}
-    </>
-  )
-}
+// What a body's links need: its repo (for `#12` and relative paths), the dialog's own PRs (a
+// reference to one selects it there) and the titles it knows (a reference's tooltip).
+const BodyContext = createContext<{
+  repo: string
+  onGo: (pr: PrRef) => boolean
+  titles: Map<string, string>
+}>({ repo: "", onGo: () => false, titles: new Map() })
 
+/** A PR's body or comment, rendered as GitHub would (lib/markdown, in a worker). */
 function Body({ body }: { body: string }) {
-  const blocks = useMemo(() => bodyBlocks(body), [body])
-  if (!blocks.length) return <div className="pr-faint">No description.</div>
+  const { repo, onGo, titles } = useContext(BodyContext)
+  const remote = useStore((s) => s.settings.remoteImages)
+  const images = useMemo(() => ({ remote }), [remote]) // web images only: no files here
+  const decorate = useCallback(
+    (el: HTMLElement) => {
+      for (const a of el.querySelectorAll<HTMLAnchorElement>("a[data-ref]")) {
+        const m = /^([\w.-]+\/[\w.-]+)#(\d+)$/.exec(a.dataset.ref ?? "")
+        const title = m && titles.get(refKey({ repo: m[1]!, number: Number(m[2]) }))
+        if (title) a.title = title
+      }
+    },
+    [titles],
+  )
+  // An untouched template is only comments, which don't show.
+  if (!body.replace(/<!--[\s\S]*?(?:-->|$)/g, "").trim()) {
+    return <div className="pr-faint">No description.</div>
+  }
+  const onLink = (href: string, a: HTMLAnchorElement) => {
+    const ref = /^([\w.-]+\/[\w.-]+)#(\d+)$/.exec(a.dataset.ref ?? "")
+    if (ref && onGo({ repo: ref[1]!, number: Number(ref[2]) })) return
+    const t = prLinkTarget(href, repo)
+    if (t?.kind === "external") ipc.openExternal(t.url)
+    else if (t?.kind === "anchor") {
+      const want = t.anchor.toLowerCase()
+      const root = a.closest(".pr-md")
+      const h = [...(root?.querySelectorAll<HTMLElement>("[data-anchor]") ?? [])].find(
+        (x) => x.dataset.anchor === want,
+      )
+      h?.scrollIntoView({ block: "start" })
+    }
+  }
   return (
-    <div className="pr-md">
-      {blocks.map((b, i) =>
-        b.code ? (
-          <pre key={i} className="pr-code">
-            {b.text}
-          </pre>
-        ) : (
-          <p key={i}>
-            <Text text={b.text} />
-          </p>
-        ),
-      )}
-    </div>
+    <MarkdownBlock
+      className="pr-md md-view md-compact"
+      text={body}
+      repo={repo || undefined}
+      onLink={onLink}
+      onRendered={decorate}
+      images={images}
+    />
   )
 }
 
@@ -347,56 +357,67 @@ function DetailBody(props: {
   const { detail, row, error, missing, onOpen, listed, onGo, reply } = props
   const files = useMemo(() => threadsByFile(detail.threads), [detail])
   const openThreads = files.reduce((n, f) => n + f.open, 0)
+  const bodies = useMemo(() => {
+    const { closes, mentions, mentionedBy } = detail.links
+    const titles = new Map<string, string>()
+    for (const r of listed) if (r.title) titles.set(refKey(r), r.title) // the dialog's own PRs
+    for (const l of [...closes, ...mentions, ...mentionedBy]) {
+      if (l.title) titles.set(refKey(l), l.title)
+    }
+    return { repo: row.repo, onGo, titles }
+  }, [detail.links, listed, row.repo, onGo])
   return (
-    <div className="pr-detail-body">
-      {error && <div className="pr-error stale">{error} Showing the last answer.</div>}
-      <h4>Description</h4>
-      <Body body={detail.body} />
-      <Links links={detail.links} repo={row.repo} listed={listed} onGo={onGo} />
-      {files.length > 0 && (
-        <>
-          <h4>
-            Review threads ({detail.threads.length}
-            {openThreads ? `, ${openThreads} open` : ""})
-          </h4>
-          {missing && <div className="pr-faint">{missing} isn't in this checkout.</div>}
-          {files.map((f) => (
-            <div key={f.path} className="pr-file">
-              <div className="pr-file-path">
-                <code>{f.path}</code>
+    <BodyContext.Provider value={bodies}>
+      <div className="pr-detail-body">
+        {error && <div className="pr-error stale">{error} Showing the last answer.</div>}
+        <h4>Description</h4>
+        <Body body={detail.body} />
+        <Links links={detail.links} repo={row.repo} listed={listed} onGo={onGo} />
+        {files.length > 0 && (
+          <>
+            <h4>
+              Review threads ({detail.threads.length}
+              {openThreads ? `, ${openThreads} open` : ""})
+            </h4>
+            {missing && <div className="pr-faint">{missing} isn't in this checkout.</div>}
+            {files.map((f) => (
+              <div key={f.path} className="pr-file">
+                <div className="pr-file-path">
+                  <code>{f.path}</code>
+                </div>
+                {f.threads.map((t, i) => (
+                  <Thread
+                    key={t.comments[0]?.url || i}
+                    t={t}
+                    onOpen={onOpen && !t.removed ? () => onOpen(f.path, t.line) : undefined}
+                  />
+                ))}
               </div>
-              {f.threads.map((t, i) => (
-                <Thread
-                  key={t.comments[0]?.url || i}
-                  t={t}
-                  onOpen={onOpen && !t.removed ? () => onOpen(f.path, t.line) : undefined}
-                />
-              ))}
-            </div>
-          ))}
-        </>
-      )}
-      <h4>Conversation ({detail.conversation.length})</h4>
-      {detail.conversation.length === 0 ? (
-        <div className="pr-faint">No comments yet.</div>
-      ) : (
-        detail.conversation.map((e, i) => <Entry key={e.url || i} e={e} />)
-      )}
-      {detail.more && (
-        <div className="pr-faint">
-          Some comments aren't shown here.{" "}
-          <a
-            href={row.url}
-            onClick={(e) => {
-              e.preventDefault()
-              ipc.openExternal(row.url)
-            }}
-          >
-            See them all on GitHub
-          </a>
-        </div>
-      )}
-      {reply}
-    </div>
+            ))}
+          </>
+        )}
+        <h4>Conversation ({detail.conversation.length})</h4>
+        {detail.conversation.length === 0 ? (
+          <div className="pr-faint">No comments yet.</div>
+        ) : (
+          detail.conversation.map((e, i) => <Entry key={e.url || i} e={e} />)
+        )}
+        {detail.more && (
+          <div className="pr-faint">
+            Some comments aren't shown here.{" "}
+            <a
+              href={row.url}
+              onClick={(e) => {
+                e.preventDefault()
+                ipc.openExternal(row.url)
+              }}
+            >
+              See them all on GitHub
+            </a>
+          </div>
+        )}
+        {reply}
+      </div>
+    </BodyContext.Provider>
   )
 }

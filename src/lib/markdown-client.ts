@@ -1,0 +1,115 @@
+// A markdown file tab's Preview: rendered in a Web Worker (lib/markdown.worker); where there's no
+// Worker (tests), on this thread, the renderer then loading as its own chunk. The last few results
+// are kept by text, so a tab shown again gets its HTML at once.
+import type { Rendered } from "./markdown"
+
+const sizeOf = (r: Rendered) => r.blocks.reduce((n, b) => n + b.html.length, 0)
+
+/** A rendered document's HTML, whole (a PR body; a Preview patches block by block). */
+export const htmlOf = (r: Rendered) => r.blocks.map((b) => b.html).join("")
+
+export const MARKDOWN_MAX = 1024 * 1024 // past this a file tab shows its source (DOM cost)
+const KEPT = 64 // a PR's body and comments each take one…
+const KEPT_CHARS = 4 * 1024 * 1024 // …and big documents only a few
+
+let worker: Worker | null = null
+let failures = 0 // the worker crashed or failed to load: respawned up to MAX_FAILURES times
+const MAX_FAILURES = 3
+let seq = 0
+const waiting = new Map<number, (out: Rendered | null | undefined) => void>() // undefined: failed
+const kept = new Map<string, Rendered>() // insertion order = least → most recent
+// A watchdog, not a per-request timeout: a PR queues its body and every comment at once, and the
+// queue may take long. Only a worker that answers nothing at all for this long is replaced.
+const SILENT_MS = 10_000
+let watchdog: ReturnType<typeof setTimeout> | undefined
+function watch(): void {
+  clearTimeout(watchdog)
+  watchdog = waiting.size ? setTimeout(fail, SILENT_MS) : undefined
+}
+
+function fail(): void {
+  failures++
+  worker?.terminate()
+  worker = null
+  waiting.forEach((done) => done(undefined))
+  waiting.clear()
+  watch()
+}
+
+function getWorker(): Worker | null {
+  if (worker || failures >= MAX_FAILURES || typeof Worker === "undefined") return worker
+  try {
+    worker = new Worker(new URL("./markdown.worker.ts", import.meta.url), { type: "module" })
+    worker.onmessage = (e: MessageEvent<{ id: number; out: Rendered | null }>) => {
+      waiting.get(e.data.id)?.(e.data.out)
+      waiting.delete(e.data.id)
+      watch() // it answered: alive (the next one gets its own SILENT_MS)
+    }
+    worker.onerror = fail
+    worker.onmessageerror = fail
+  } catch {
+    fail()
+  }
+  return worker
+}
+
+const keyOf = (text: string, repo?: string) => (repo ? `${repo}\0${text}` : text)
+
+/** `text`'s rendering from the last few, if it's there. */
+export function renderedNow(text: string, repo?: string): Rendered | undefined {
+  return kept.get(keyOf(text, repo))
+}
+
+let keptChars = 0
+function keep(key: string, r: Rendered): void {
+  const old = kept.get(key)
+  if (old) keptChars -= sizeOf(old)
+  kept.delete(key)
+  kept.set(key, r)
+  keptChars += sizeOf(r)
+  while (kept.size > 1 && (kept.size > KEPT || keptChars > KEPT_CHARS)) {
+    const [k, v] = kept.entries().next().value!
+    kept.delete(k)
+    keptChars -= sizeOf(v)
+  }
+}
+
+/** `text` rendered as markdown (as a comment in `repo`, when given); null when it couldn't be. */
+export async function renderMarkdownText(text: string, repo?: string): Promise<Rendered | null> {
+  const key = keyOf(text, repo)
+  const now = kept.get(key)
+  if (now) return now
+  // Never on this thread where there are workers (xterm draws here): a broken worker shows the
+  // source instead. Only tests (no Worker) render here.
+  let out: Rendered | null | undefined
+  if (typeof Worker === "undefined") {
+    out = await import("./markdown").then((m) => m.renderMarkdown(text, { repo })).catch(() => null)
+  } else {
+    const w = getWorker()
+    out = w
+      ? await new Promise<Rendered | null | undefined>((resolve) => {
+          const id = ++seq
+          waiting.set(id, resolve)
+          if (!watchdog) watch()
+          w.postMessage({ id, text, repo })
+        })
+      : null
+  }
+  out ??= null
+  if (out) keep(key, out)
+  return out
+}
+
+let mathStyle: Promise<unknown> | null = null
+let mathStyled = false
+/** KaTeX's stylesheet and fonts, added to the page once (the first document with math). */
+export function loadMathStyle(): Promise<unknown> {
+  mathStyle ??= import("katex/dist/katex.min.css").then(
+    () => (mathStyled = true),
+    () => (mathStyle = null),
+  )
+  return mathStyle
+}
+
+/** Whether KaTeX's stylesheet is in. */
+export const mathStyleReady = () => mathStyled

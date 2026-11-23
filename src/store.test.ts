@@ -1713,6 +1713,36 @@ describe("store — folder entries", () => {
     expect(st().objects[tab().activeSessionId]).toBeUndefined()
   })
 
+  it("a markdown file opens on its Preview; Source is kept as a choice, Preview as the default", () => {
+    st().newTab(shell)
+    st().openFile("/w/README.md")
+    const m = tab().activeEntryId
+    expect(st().objects[m]).toEqual({ kind: "file", path: "/w/README.md" })
+    st().setFileView(m, "source")
+    expect(st().objects[m]).toEqual({ kind: "file", path: "/w/README.md", view: "source" })
+    st().openFile("/w/README.md", { line: 4 }) // a line shows in the view it's on
+    expect((st().objects[m] as { view?: string }).view).toBe("source")
+    st().openFile("/w/README.md", { anchor: "usage" }) // a heading is the Preview's
+    expect(st().objects[m]).toMatchObject({ anchor: "usage", seq: 2 })
+    expect(st().objects[m]).not.toHaveProperty("line") // only the latest target
+    expect((st().objects[m] as { view?: string }).view).toBeUndefined()
+    st().openFile("/w/README.md", { line: 9 })
+    expect(st().objects[m]).toMatchObject({ line: 9, seq: 3 })
+    expect(st().objects[m]).not.toHaveProperty("anchor")
+    st().setFileView(m, "source")
+    st().setFileView(m, "preview")
+    expect((st().objects[m] as { view?: string }).view).toBeUndefined()
+    st().openFile("/w/a.ts", { diff: true })
+    const code = tab().activeEntryId
+    st().openFile("/w/a.ts", { anchor: "L40" }) // GitHub's line anchor: a line, off the diff
+    expect(st().objects[code]).toEqual({ kind: "file", path: "/w/a.ts", line: 40, seq: 1 })
+    st().openFile("/w/a.ts", { anchor: "intro" }) // a heading means nothing here: no change
+    expect(st().objects[code]).toEqual({ kind: "file", path: "/w/a.ts", line: 40, seq: 1 })
+    const objects = st().objects
+    st().setFileView(tab().activeEntryId, "preview") // only markdown has one
+    expect(st().objects).toBe(objects)
+  })
+
   it("dragging a peek keeps it", () => {
     st().newTab(shell)
     st().splitActive("row", shell)

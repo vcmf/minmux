@@ -151,6 +151,7 @@ const api = {
     ipcRenderer.invoke("fs:read-file", path, wsl, since),
   readFilePreview: (path: string, wsl?: WslContext) =>
     ipcRenderer.invoke("fs:read-preview", path, wsl),
+  fetchImage: (url: string) => ipcRenderer.invoke("image:fetch", url),
   pickDirectory: (defaultPath?: string, wsl?: WslContext) =>
     ipcRenderer.invoke("dialog:pick-directory", defaultPath, wsl),
   pathIsDir: (p: string, wsl?: WslContext) => ipcRenderer.invoke("fs:is-dir", p, wsl),

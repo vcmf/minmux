@@ -37,6 +37,8 @@ ownership, native modules. No DOM, no React here. (Renderer rules: root `CLAUDE.
   main. Every per-instance path uses `configDir()` / the profile name, never a literal "minmux".
 - `legacy-migrate.ts` — first launch after the smterm → minmux rename copies the old config /
   user-data dirs over (at ready, never from a running smterm). → `../docs/GOTCHAS.md#profiles`
+- `csp.ts` — build time, not main: the renderer's Content-Security-Policy, added to the built
+  `index.html` by `electron.vite.config.ts` (inline scripts allowed by their hash).
 - `shell-env.ts` — import the login-shell PATH/env at startup (packaged GUI launches get
   a bare launchd PATH). → `../docs/GOTCHAS.md#shell-env`
 
