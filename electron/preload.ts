@@ -188,6 +188,7 @@ const api = {
   prDetail: (req: PrDetailRequest) => ipcRenderer.invoke("prs:detail", req),
   prChecks: (req: PrChecksRequest) => ipcRenderer.invoke("prs:checks", req),
   prFind: (req: PrFindRequest) => ipcRenderer.invoke("prs:find", req),
+  agentsInstalled: () => ipcRenderer.invoke("agents:installed") as Promise<AgentKind[]>,
   ghInstalled: () => ipcRenderer.invoke("prs:gh-installed") as Promise<boolean>,
   prWrite: (req: PrWriteRequest) => ipcRenderer.invoke("prs:write", req),
   prMerge: (req: PrMergeRequest) => ipcRenderer.invoke("prs:merge", req),

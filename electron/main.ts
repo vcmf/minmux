@@ -68,6 +68,7 @@ import { SessionsWorkerClient, type SessionsProc } from "./sessions-worker-clien
 import type { PaneRoots } from "./proc-snapshot"
 import type { AgentProcsResult } from "../src/lib/agent-processes"
 import { AGENT_KINDS, agentsOn } from "../src/lib/agent-kinds"
+import { agentInstallLookup } from "./agent-installed"
 import {
   MAX_QUERY,
   MIN_QUERY,
@@ -990,6 +991,13 @@ async function findOnPathAsync(cmd: string): Promise<string | null> {
   for (const candidate of pathCandidates(cmd)) if (await isFileAsync(candidate)) return candidate
   return null
 }
+const installedAgents = agentInstallLookup({
+  platform: process.platform,
+  home: os.homedir(),
+  onPath: findOnPathAsync,
+  isFile: isFileAsync,
+  now: Date.now,
+})
 async function resolveNativeSsh(): Promise<string | null> {
   if (process.platform !== "win32") return findOnPathAsync("ssh")
   const builtIn = path.join(
@@ -1366,6 +1374,8 @@ function registerIpc() {
     ),
   )
   // Is gh on the host's PATH (a file lookup, no process): the pull requests button is muted.
+  // The new-tab menu's "Agents" group: which agents are installed (stats, cached).
+  ipcMain.handle("agents:installed", async () => installedAgents())
   ipcMain.handle("prs:gh-installed", async () => (await findOnPathAsync("gh")) !== null)
   ipcMain.handle("prs:checks", async (_e, req: unknown) => {
     const t = prTarget(req)

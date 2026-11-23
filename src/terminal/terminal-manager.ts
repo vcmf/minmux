@@ -129,6 +129,7 @@ interface Entry {
   lastOutputSignal?: number
   lastGrid?: Grid // last cols/rows sent to the PTY — skip no-op resizes (spurious SIGWINCH)
   resumeTimer?: ReturnType<typeof setTimeout> // pending-resume fallback / confirm timeout
+  launch?: { command: string; timer?: ReturnType<typeof setTimeout> } // new-tab agent launch
   flow: ShellFlow // shell marks + resume stage (pure rules: lib/resume-flow.ts)
   webgl?: WebglAddon // present only while this terminal is rendering via WebGL
   webglFailed?: boolean // context was lost — stay on DOM, don't re-acquire
@@ -144,6 +145,8 @@ const OUTPUT_SIGNAL_THROTTLE_MS = 150
 // xterm.js lives here, keyed by session id — OUTSIDE the React tree, so splitting
 // a pane or switching tabs re-attaches instead of respawning the shell.
 const entries = new Map<string, Entry>()
+/** Agent launches (new-tab menu) for terminals not started yet: their command, taken at start. */
+const pendingLaunches = new Map<string, string>()
 
 // Set while WE call term.focus() programmatically (attach/mount/reparent) so the
 // textarea focus listener ignores it — only genuine user focus should change the
@@ -536,6 +539,7 @@ function requestPty(id: string, entry: Entry, attachOnly: boolean, given?: Sessi
       // unrecognised bash may run plain) — never guess from the shell's name.
       entry.flow.integrated = integrated === true
       armResumeTimer(id, entry)
+      armLaunchTimer(id, entry)
     })
     .catch((e) => {
       // Closed while the spawn was still preparing (e.g. an ssh probe): nothing to report to.
@@ -543,6 +547,7 @@ function requestPty(id: string, entry: Entry, attachOnly: boolean, given?: Sessi
       entry.flow.replaying = false
       if (entry.remote) return setIdle(id, entry, "failed", { error: cleanError(e) })
       term.write(`\r\n\x1b[31m[spawn error] ${e}\x1b[0m\r\n`)
+      dropLaunch(entry)
       const r = useStore.getState().resume[id]
       if (r?.phase === "pending") {
         entry.flow.resumeStage = undefined
@@ -849,6 +854,13 @@ function spawn(session: Session, entry: Entry) {
   if (!session.remote && useStore.getState().resume[session.id]?.phase === "pending") {
     entry.flow.resumeStage = "await-prompt" // a first prompt typing it can arrive any time now
   }
+  // An agent picked in the new-tab menu: typed at the first prompt, like a resume (never blind).
+  const launch = pendingLaunches.get(session.id)
+  pendingLaunches.delete(session.id)
+  if (launch && !session.remote) {
+    entry.launch = { command: launch }
+    entry.flow.launchPending = true
+  }
 
   term.onData((data) => {
     // An ssh pane that isn't connected: Enter connects, Esc twice closes, the rest goes nowhere.
@@ -1021,6 +1033,7 @@ function spawn(session: Session, entry: Entry) {
           ipc.shellIdle(session.id)
           useStore.getState().agentExited(session.id)
         } else if (a.type === "type-resume") typeResume(session.id, entry)
+        else if (a.type === "type-launch") typeLaunch(session.id, entry)
         else failResume(session.id, entry, a.exitCode)
       }
     }
@@ -1113,6 +1126,34 @@ function armResumeTimer(id: string, entry: Entry) {
     () => (entry.flow.integrated ? offerResume(id, entry) : typeResume(id, entry)),
     entry.flow.integrated ? RESUME_PROMPT_WAIT_MS : RESUME_PROMPT_GRACE_MS,
   )
+}
+
+/** Once we know whether the shell is integrated: a pending launch waits for its first prompt
+ *  (given up if none comes: never typed into the unknown); without integration there's no
+ *  prompt mark, so it's typed after a short grace period. */
+function armLaunchTimer(id: string, entry: Entry) {
+  if (!entry.launch || !entry.flow.launchPending) return // already typed (the prompt came first)
+  clearTimeout(entry.launch.timer)
+  entry.launch.timer = setTimeout(
+    () => (entry.flow.integrated ? dropLaunch(entry) : typeLaunch(id, entry)),
+    entry.flow.integrated ? RESUME_PROMPT_WAIT_MS : RESUME_PROMPT_GRACE_MS,
+  )
+}
+
+/** Type the pending agent launch (one shot). */
+function typeLaunch(id: string, entry: Entry) {
+  const launch = entry.launch
+  dropLaunch(entry)
+  if (!launch) return
+  // ^U first (POSIX line editors): keystrokes typed ahead of the prompt don't get glued on.
+  const posix = isPosixShell(useStore.getState().sessions[id]?.command ?? "")
+  ipc.ptyWrite(id, `${posix ? "\x15" : ""}${launch.command}\r`)
+}
+
+function dropLaunch(entry: Entry) {
+  clearTimeout(entry.launch?.timer)
+  entry.launch = undefined
+  entry.flow.launchPending = false
 }
 
 /** The integrated shell never showed a prompt: don't type into the unknown — offer it. */
@@ -1358,6 +1399,11 @@ export const TerminalManager = {
     entry.flow.resumeStage = undefined
   },
 
+  /** Start `command` in a terminal not started yet (a new tab's): typed at its first prompt. */
+  launchOnStart(id: string, command: string) {
+    if (!entries.has(id)) pendingLaunches.set(id, command)
+  },
+
   /** Type a command into a terminal's shell (banner actions: pick a session, start Claude) —
    *  only at a prompt; returns whether it typed. */
   runCommand(id: string, command: string): boolean {
@@ -1487,7 +1533,9 @@ export const TerminalManager = {
   dispose(id: string) {
     const entry = entries.get(id)
     connectNow.delete(id)
+    pendingLaunches.delete(id)
     if (entry) clearTimeout(entry.resumeTimer)
+    if (entry) clearTimeout(entry.launch?.timer)
     if (entry) clearTimeout(entry.retryTimer)
     if (entry) clearTimeout(entry.reopenTimer)
     if (entry) clearTimeout(entry.hintTimer)

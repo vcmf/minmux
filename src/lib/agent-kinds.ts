@@ -5,7 +5,8 @@ import type { AgentKind } from "./agent-graph"
 
 export interface AgentKindInfo {
   label: string // "Claude"
-  command: string // what starts it in a shell
+  command: string // what starts it in a shell (and the binary the new-tab menu looks for)
+  installPaths?: string[] // where else it may be installed, off PATH (relative to home)
   resumePicker: string // opens the agent's own session picker
   resumePickerLabel?: string // its button, when that isn't a picker of its own ("Pick a session…")
   worktreeMarkers: string[] // path parts of worktrees the agent lays out inside a repo
@@ -20,6 +21,8 @@ export const AGENT_KINDS: Record<AgentKind, AgentKindInfo> = {
   claude: {
     label: "Claude",
     command: "claude",
+    // The old local installer: a shell alias to this file, not a PATH entry.
+    installPaths: [".claude/local/claude"],
     resumePicker: "claude --resume",
     worktreeMarkers: ["/.claude/worktrees/"],
     history: true,

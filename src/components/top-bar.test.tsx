@@ -183,6 +183,32 @@ describe("TopBar — SSH hosts in the new-tab picker", () => {
   })
 })
 
+describe("TopBar — agents in the new-tab picker", () => {
+  it("lists the installed agents and opens one in a new tab that starts it", async () => {
+    vi.mocked(ipc.agentsInstalled).mockResolvedValueOnce(["claude", "opencode"])
+    const spy = vi.spyOn(TerminalManager, "launchOnStart").mockImplementation(() => {})
+    render(<TopBar />)
+    fireEvent.click(screen.getByTitle("New tab in…"))
+    await screen.findByText("Agents")
+    expect(screen.getByText("Claude")).toBeInTheDocument()
+    expect(screen.queryByText("Codex")).not.toBeInTheDocument()
+    fireEvent.mouseDown(screen.getByText("OpenCode"))
+    expect(st().tabs).toHaveLength(1)
+    const id = st().tabs[0]!.activeSessionId
+    expect(st().sessions[id]!.command).toBe(testShell.command) // the default shell
+    expect(spy).toHaveBeenCalledWith(id, "opencode")
+    expect(screen.queryByText("Agents")).not.toBeInTheDocument() // the menu closed
+    spy.mockRestore()
+  })
+
+  it("has no Agents group when none is installed", async () => {
+    render(<TopBar />)
+    fireEvent.click(screen.getByTitle("New tab in…"))
+    await waitFor(() => expect(ipc.agentsInstalled).toHaveBeenCalled())
+    expect(screen.queryByText("Agents")).not.toBeInTheDocument()
+  })
+})
+
 describe("TopBar — picker with hosts but no local shells", () => {
   it("the caret stays usable so the hosts can still be opened", () => {
     useStore.setState({ shells: [] })

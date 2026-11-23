@@ -136,6 +136,7 @@ export interface Ipc {
   prDetail: (req: PrDetailRequest) => Promise<PrDetailResult> // one PR's comments
   prChecks: (req: PrChecksRequest) => Promise<PrChecksResult> // its checks and commits
   prFind: (req: PrFindRequest) => Promise<PrFindResult> // a PR link's PR, as an account that sees it
+  agentsInstalled: () => Promise<AgentKind[]> // the agents on the host's PATH (new-tab menu)
   ghInstalled: () => Promise<boolean> // gh on the host's PATH (the PR button is muted if not)
   prWrite: (req: PrWriteRequest) => Promise<PrWriteResult> // a comment, or a review
   prMerge: (req: PrMergeRequest) => Promise<PrMergeResult> // merge, squash or rebase

@@ -87,6 +87,17 @@ describe("onMark — resume flow", () => {
   })
 })
 
+describe("onMark — agent launch (new-tab menu)", () => {
+  it("the first prompt types the launch, once", () => {
+    const r = run(live({ launchPending: true }), [D(0), C, D(0)])
+    expect(r.actions).toEqual(["type-launch"])
+    expect(r.s.launchPending).toBe(false)
+  })
+  it("a C (an rc's command) doesn't type it: only a prompt does", () => {
+    expect(run(live({ launchPending: true }), [C]).actions).toEqual([])
+  })
+})
+
 describe("canType", () => {
   it("never while the spawn hasn't said whether integration is there", () => {
     expect(canType(live({ integrated: undefined }))).toBe(false)

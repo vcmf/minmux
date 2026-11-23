@@ -22,6 +22,9 @@ import {
 import { activeTheme, useStore } from "../store"
 import { ipc } from "../lib/ipc"
 import { AgentsIcon } from "./agent-marks"
+import { agentIcon } from "./agent-icon"
+import { AGENT_KINDS, agentColor } from "../lib/agent-kinds"
+import type { AgentKind } from "../lib/agent-graph"
 import { wslContext } from "../lib/wsl"
 import { allSessionIds } from "../lib/pane-tree"
 import { aggregateBadge } from "../lib/session-status"
@@ -98,6 +101,19 @@ export function TopBar() {
   const [maximized, setMaximized] = useState(false)
   const [fullScreen, setFullScreen] = useState(false)
   const [shellMenu, setShellMenu] = useState(false)
+  // The menu's "Agents" group: the agents installed here, asked again per open (main caches).
+  const [installed, setInstalled] = useState<AgentKind[]>([])
+  useEffect(() => {
+    if (!shellMenu) return
+    let live = true
+    ipc
+      .agentsInstalled()
+      .then((kinds) => live && setInstalled(kinds))
+      .catch(() => {})
+    return () => {
+      live = false
+    }
+  }, [shellMenu])
 
   const rename = useTabRename()
   const editingId = rename.editingId
@@ -132,6 +148,17 @@ export function TopBar() {
   const openTab = (shell = defaultShell) => {
     if (shell) useStore.getState().newTab(shell)
     setShellMenu(false)
+  }
+
+  // A new tab (default shell) that starts the agent at its first prompt.
+  const openAgent = (kind: AgentKind) => {
+    setShellMenu(false)
+    if (!defaultShell) return
+    const store = useStore.getState()
+    store.newTab(defaultShell)
+    const { tabs, activeTabId } = useStore.getState()
+    const id = tabs.find((t) => t.id === activeTabId)?.activeSessionId
+    if (id) TerminalManager.launchOnStart(id, AGENT_KINDS[kind].command)
   }
 
   // Sessions awaiting the user, in tab order — drives the bell count + jump.
@@ -291,6 +318,26 @@ export function TopBar() {
                     {sh.id === defaultShell?.id && <span className="shell-menu-def">default</span>}
                   </button>
                 ))}
+                {defaultShell && installed.length > 0 && (
+                  <div className="shell-menu-group">Agents</div>
+                )}
+                {defaultShell &&
+                  installed.map((kind) => {
+                    const Icon = agentIcon(kind)
+                    return (
+                      <button
+                        key={kind}
+                        className="shell-menu-item"
+                        title={`New tab running ${AGENT_KINDS[kind].command}`}
+                        onMouseDown={() => openAgent(kind)}
+                      >
+                        <span className="shell-menu-host">
+                          <Icon size={12} color={agentColor(kind, scheme)} />
+                          <span>{AGENT_KINDS[kind].label}</span>
+                        </span>
+                      </button>
+                    )
+                  })}
                 {quickHosts.length > 0 && <div className="shell-menu-group">SSH</div>}
                 {quickHosts.map((h) => (
                   <button
