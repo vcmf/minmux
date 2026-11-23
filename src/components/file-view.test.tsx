@@ -322,7 +322,7 @@ describe("FileView: markdown", () => {
     const { container } = render(<FileView entryId={entryId} tabId={tabId} />)
     await waitFor(() => expect(container.querySelector(".md-view kbd")).not.toBeNull())
     expect(container.querySelector(".md-view img")).toBeNull()
-    expect(container.querySelector(".md-view")!.textContent).toContain("<img src=x")
+    expect(container.querySelector(".md-view a.md-img")!.getAttribute("onerror")).toBeNull()
   })
 
   it("a markdown file too big to render shows its source, saying so", async () => {

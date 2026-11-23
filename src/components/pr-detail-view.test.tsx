@@ -164,8 +164,30 @@ describe("PrDetailView: markdown bodies", () => {
     const { container } = render(<PrDetailView row={row(20)} />)
     await waitFor(() => expect(container.querySelector(".pr-md h2")).not.toBeNull())
     expect(container.querySelector('.pr-md input[type="checkbox"]')).not.toBeNull()
-    expect(container.querySelector(".pr-md img")).toBeNull()
-    expect(container.querySelector(".pr-md")!.textContent).toContain("<img src=x")
+    expect(container.querySelector(".pr-md img")).toBeNull() // a link to it, no handler
+    expect(container.querySelector(".pr-md a.md-img")!.getAttribute("onerror")).toBeNull()
+  })
+
+  it("an untouched template (only comments) has no description", async () => {
+    const tpl = "<!-- Describe your change -->\n<!-- and why -->"
+    vi.mocked(ipc.prDetail).mockResolvedValue({ ok: true, detail: detail(22, { body: tpl }) })
+    render(<PrDetailView row={row(22)} />)
+    expect(await screen.findByText("No description.")).toBeInTheDocument()
+  })
+
+  it("a listed PR's title is its reference's tooltip", async () => {
+    vi.mocked(ipc.prDetail).mockResolvedValue({
+      ok: true,
+      detail: detail(23, { body: "After #7" }),
+    })
+    const listed = [{ ...row(7), title: "The listed one" }]
+    const { container } = render(<PrDetailView row={row(23)} listed={listed} />)
+    await waitFor(() =>
+      expect(container.querySelector('.pr-md a[data-ref="o/r#7"]')).not.toBeNull(),
+    )
+    expect(container.querySelector('.pr-md a[data-ref="o/r#7"]')!.getAttribute("title")).toBe(
+      "The listed one",
+    )
   })
 
   it("a reference selects a listed PR, else opens on GitHub with its title as tooltip", async () => {

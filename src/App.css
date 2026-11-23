@@ -3629,8 +3629,10 @@ body.resizing-col {
 .md-compact pre code {
   font-size: 11.5px;
 }
-.md-compact .md-pending {
+.md-compact :is(.md-pending, .md-plain) {
   white-space: pre-wrap;
+}
+.md-compact .md-pending {
   color: var(--dim);
 }
 .pr-faint a {

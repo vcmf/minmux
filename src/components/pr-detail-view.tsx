@@ -1,4 +1,4 @@
-import { createContext, memo, useContext, useEffect, useMemo, useState } from "react"
+import { createContext, memo, useCallback, useContext, useEffect, useMemo, useState } from "react"
 import { ArrowSquareOut, Check, PencilSimple } from "@phosphor-icons/react"
 import { ipc } from "../lib/ipc"
 import {
@@ -43,7 +43,20 @@ const BodyContext = createContext<{
 /** A PR's body or comment, rendered as GitHub would (lib/markdown, in a worker). */
 function Body({ body }: { body: string }) {
   const { repo, onGo, titles } = useContext(BodyContext)
-  if (!body.trim()) return <div className="pr-faint">No description.</div>
+  const decorate = useCallback(
+    (el: HTMLElement) => {
+      for (const a of el.querySelectorAll<HTMLAnchorElement>("a[data-ref]")) {
+        const m = /^([\w.-]+\/[\w.-]+)#(\d+)$/.exec(a.dataset.ref ?? "")
+        const title = m && titles.get(refKey({ repo: m[1]!, number: Number(m[2]) }))
+        if (title) a.title = title
+      }
+    },
+    [titles],
+  )
+  // An untouched template is only comments, which don't show.
+  if (!body.replace(/<!--[\s\S]*?(?:-->|$)/g, "").trim()) {
+    return <div className="pr-faint">No description.</div>
+  }
   const onLink = (href: string, a: HTMLAnchorElement) => {
     const ref = /^([\w.-]+\/[\w.-]+)#(\d+)$/.exec(a.dataset.ref ?? "")
     if (ref && onGo({ repo: ref[1]!, number: Number(ref[2]) })) return
@@ -56,13 +69,6 @@ function Body({ body }: { body: string }) {
         (x) => x.dataset.anchor === want,
       )
       h?.scrollIntoView({ block: "start" })
-    }
-  }
-  const decorate = (el: HTMLElement) => {
-    for (const a of el.querySelectorAll<HTMLAnchorElement>("a[data-ref]")) {
-      const m = /^([\w.-]+\/[\w.-]+)#(\d+)$/.exec(a.dataset.ref ?? "")
-      const title = m && titles.get(refKey({ repo: m[1]!, number: Number(m[2]) }))
-      if (title) a.title = title
     }
   }
   return (
@@ -349,13 +355,13 @@ function DetailBody(props: {
   const openThreads = files.reduce((n, f) => n + f.open, 0)
   const bodies = useMemo(() => {
     const { closes, mentions, mentionedBy } = detail.links
-    const titles = new Map(
-      [...closes, ...mentions, ...mentionedBy]
-        .filter((l) => l.title)
-        .map((l) => [refKey(l), l.title]),
-    )
+    const titles = new Map<string, string>()
+    for (const r of listed) if (r.title) titles.set(refKey(r), r.title) // the dialog's own PRs
+    for (const l of [...closes, ...mentions, ...mentionedBy]) {
+      if (l.title) titles.set(refKey(l), l.title)
+    }
     return { repo: row.repo, onGo, titles }
-  }, [detail.links, row.repo, onGo])
+  }, [detail.links, listed, row.repo, onGo])
   return (
     <BodyContext.Provider value={bodies}>
       <div className="pr-detail-body">

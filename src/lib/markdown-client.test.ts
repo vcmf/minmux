@@ -1,7 +1,8 @@
 import { describe, it, expect, vi, afterEach } from "vitest"
 
 // A worker that renders (through the real renderer), or crashes, or never answers.
-let mode: "ok" | "crash" | "hang" = "ok"
+let mode: "ok" | "crash" | "hang" | "slow" = "ok"
+let slowAt = 0 // "slow": answers one at a time, 6 s apart
 let spawned = 0
 class FakeWorker {
   onmessage: ((e: MessageEvent) => void) | null = null
@@ -13,10 +14,13 @@ class FakeWorker {
   postMessage(m: { id: number; text: string; repo?: string }) {
     if (mode === "crash") return void setTimeout(() => this.onerror?.(), 0)
     if (mode === "hang") return
-    void import("./markdown").then(async ({ renderMarkdown }) => {
-      const out = await renderMarkdown(m.text, { repo: m.repo })
-      this.onmessage?.({ data: { id: m.id, out } } as MessageEvent)
-    })
+    const answer = () =>
+      void import("./markdown").then(async ({ renderMarkdown }) => {
+        const out = await renderMarkdown(m.text, { repo: m.repo })
+        this.onmessage?.({ data: { id: m.id, out } } as MessageEvent)
+      })
+    if (mode === "slow") setTimeout(answer, (slowAt += 6_000))
+    else answer()
   }
   terminate() {}
 }
@@ -33,6 +37,7 @@ describe("renderMarkdownText", () => {
     vi.useRealTimers()
     mode = "ok"
     spawned = 0
+    slowAt = 0
   })
 
   it("renders in the worker and keeps the result for the same text", async () => {
@@ -62,6 +67,17 @@ describe("renderMarkdownText", () => {
     const c = await client()
     for (let i = 0; i < 5; i++) expect(await c.renderMarkdownText(`# ${i}`)).toBeNull()
     expect(spawned).toBe(3)
+  })
+
+  it("a long queue the worker keeps answering never times out", async () => {
+    vi.useFakeTimers()
+    mode = "slow"
+    const c = await client()
+    const all = Array.from({ length: 5 }, (_, i) => c.renderMarkdownText(`# ${i}`))
+    await vi.advanceTimersByTimeAsync(5 * 6_000) // one answer every 6 s: 30 s for the last
+    const out = await Promise.all(all)
+    expect(out.every((r) => r?.html.includes("<h1"))).toBe(true)
+    expect(spawned).toBe(1)
   })
 
   it("a render stuck in the worker times out", async () => {

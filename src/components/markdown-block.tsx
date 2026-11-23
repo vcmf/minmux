@@ -27,6 +27,10 @@ export function MarkdownBlock({
   const ref = useRef<HTMLDivElement>(null)
   const after = useRef(onRendered)
   after.current = onRendered
+  // A new decorator (the titles it adds changed) runs on what's shown now.
+  useLayoutEffect(() => {
+    if (ref.current) onRendered?.(ref.current)
+  }, [onRendered])
 
   useLayoutEffect(() => {
     const el = ref.current
@@ -42,7 +46,8 @@ export function MarkdownBlock({
     void (async () => {
       const r = now ?? (await renderMarkdownText(text, repo))
       if (r?.math) await loadMathStyle()
-      if (live && r) put(r.html)
+      // Couldn't render (the worker failed): the text, plainly, as a final state.
+      if (live) put(r ? r.html : `<p class="md-plain">${escapeHtml(text)}</p>`)
     })()
     return () => {
       live = false

@@ -10,10 +10,17 @@ const KEPT_CHARS = 4 * 1024 * 1024 // …and big documents only a few
 let worker: Worker | null = null
 let failures = 0 // the worker crashed or failed to load: respawned up to MAX_FAILURES times
 const MAX_FAILURES = 3
-const RENDER_TIMEOUT_MS = 10_000 // a render stuck this long: the worker is replaced
 let seq = 0
 const waiting = new Map<number, (out: Rendered | null | undefined) => void>() // undefined: failed
 const kept = new Map<string, Rendered>() // insertion order = least → most recent
+// A watchdog, not a per-request timeout: a PR queues its body and every comment at once, and the
+// queue may take long. Only a worker that answers nothing at all for this long is replaced.
+const SILENT_MS = 10_000
+let watchdog: ReturnType<typeof setTimeout> | undefined
+function watch(): void {
+  clearTimeout(watchdog)
+  watchdog = waiting.size ? setTimeout(fail, SILENT_MS) : undefined
+}
 
 function fail(): void {
   failures++
@@ -21,6 +28,7 @@ function fail(): void {
   worker = null
   waiting.forEach((done) => done(undefined))
   waiting.clear()
+  watch()
 }
 
 function getWorker(): Worker | null {
@@ -30,6 +38,7 @@ function getWorker(): Worker | null {
     worker.onmessage = (e: MessageEvent<{ id: number; out: Rendered | null }>) => {
       waiting.get(e.data.id)?.(e.data.out)
       waiting.delete(e.data.id)
+      watch() // it answered: alive (the next one gets its own SILENT_MS)
     }
     worker.onerror = fail
     worker.onmessageerror = fail
@@ -75,11 +84,8 @@ export async function renderMarkdownText(text: string, repo?: string): Promise<R
     out = w
       ? await new Promise<Rendered | null | undefined>((resolve) => {
           const id = ++seq
-          const timer = setTimeout(fail, RENDER_TIMEOUT_MS) // every waiting one: the source
-          waiting.set(id, (out) => {
-            clearTimeout(timer)
-            resolve(out)
-          })
+          waiting.set(id, resolve)
+          if (!watchdog) watch()
           w.postMessage({ id, text, repo })
         })
       : null

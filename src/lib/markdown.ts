@@ -8,6 +8,9 @@ import { tasklist } from "@mdit/plugin-tasklist"
 import { escapeHtml, HIGHLIGHT_MAX } from "./file-preview"
 import { syncHighlighter } from "./highlighter"
 import { cleanHtml } from "./markdown-html"
+import { safeLink } from "./markdown-links"
+
+export { safeLink }
 
 /** How to render: `repo` (owner/name) for a PR's body or comment, GitHub's comment rules. */
 export interface RenderOptions {
@@ -26,14 +29,6 @@ const MATH_HINT = /\$\$|\$`|^\s*(?:```|~~~)\s*math\b|\$[^\s$][^$\n]*\$/m
 
 /** Whether `text` may hold math (KaTeX loads for it). */
 export const mayHaveMath = (text: string) => MATH_HINT.test(text)
-
-const SCHEME = /^([a-z][a-z0-9+.-]*):/i
-
-/** A link markdown may write: http(s), mailto, or no scheme (relative, or `#heading`). */
-export function safeLink(url: string): boolean {
-  const scheme = SCHEME.exec(url.trim())
-  return !scheme || /^(?:https?|mailto)$/i.test(scheme[1]!)
-}
 
 /** A heading's anchor as GitHub makes it: lowercase, punctuation gone, spaces to `-`. */
 export function slugOf(text: string): string {
@@ -93,6 +88,9 @@ function refs(state: StateCore): void {
     for (const t of block.children) {
       if (t.type === "link_open") inLink++
       else if (t.type === "link_close") inLink--
+      else if (t.type === "html_inline" && /^<(code|kbd)\b/i.test(t.content))
+        inLink++ // code
+      else if (t.type === "html_inline" && /^<\/(code|kbd)\b/i.test(t.content)) inLink--
       if (t.type !== "text" || inLink > 0 || !t.content.includes("#")) {
         out.push(t)
         continue

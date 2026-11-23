@@ -55,7 +55,15 @@ describe("prLinkTarget", () => {
     })
     expect(prLinkTarget("./src/", "o/r")).toEqual({
       kind: "external",
-      url: "https://github.com/o/r/blob/HEAD/src/",
+      url: "https://github.com/o/r/blob/HEAD/src",
+    })
+    expect(prLinkTarget("../README.md", "o/r")).toEqual({
+      kind: "external",
+      url: "https://github.com/o/r/blob/HEAD/README.md",
+    })
+    expect(prLinkTarget("docs/../a b.md", "o/r")).toEqual({
+      kind: "external",
+      url: "https://github.com/o/r/blob/HEAD/a%20b.md",
     })
     expect(prLinkTarget("https://a.test", "o/r")).toEqual({
       kind: "external",
