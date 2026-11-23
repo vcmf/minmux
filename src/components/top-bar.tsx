@@ -36,6 +36,7 @@ import { hostSections, visibleHosts } from "../lib/ssh-host-list"
 import { TerminalManager } from "../terminal/terminal-manager"
 import brandIcon from "../assets/icon.png"
 import { isMac } from "../lib/platform"
+import type { ShellOption } from "../types"
 
 /** How many hosts the new-tab menu lists before "All hosts…". */
 const QUICK_HOSTS = 6
@@ -150,11 +151,9 @@ export function TopBar() {
   }
 
   // A new tab (default shell) that starts the agent at its first prompt.
-  const openAgent = (agent: InstalledAgent) => {
+  const openAgent = (shell: ShellOption, agent: InstalledAgent) => {
     setShellMenu(false)
-    if (!defaultShell) return
-    const store = useStore.getState()
-    store.newTab(defaultShell)
+    useStore.getState().newTab(shell)
     const { tabs, activeTabId } = useStore.getState()
     const id = tabs.find((t) => t.id === activeTabId)?.activeSessionId
     if (id) TerminalManager.launchOnStart(id, launchCommand(agent))
@@ -329,7 +328,7 @@ export function TopBar() {
                         key={kind}
                         className="shell-menu-item"
                         title={`New tab running ${launchCommand(agent)}`}
-                        onMouseDown={() => openAgent(agent)}
+                        onMouseDown={() => openAgent(defaultShell, agent)}
                       >
                         <span className="shell-menu-host">
                           <Icon size={12} color={agentColor(kind, scheme)} />
