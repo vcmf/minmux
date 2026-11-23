@@ -1,11 +1,13 @@
 // A file tab replaces a line's HTML when its highlighted version lands (plain first) or the file
-// is re-read: the browser then drops the selection's ends to the line's edges. The text is the
-// same, so the selection is kept as (row, character offset) and put back after the update.
+// is re-read: the browser then drops the selection's ends to the line's edges. The selection is
+// kept as (row, character offset) and put back after the update, only on rows whose text didn't
+// change (a re-read that moved lines would otherwise land it on other code).
 
-/** One end of a selection: its row (`data-row`) and the offset in that row's code text. */
+/** One end of a selection: its row (`data-row`), the offset in that row's code, and that code. */
 export interface RowPoint {
   row: string
   off: number
+  text: string
 }
 
 /** A selection inside a file view, by row and offset (anchor and focus keep its direction). */
@@ -16,19 +18,21 @@ export interface SavedSelection {
 
 const CODE = ".file-view-code"
 
+/** A DOM point as (row, offset in its code); a point on the gutter clamps to the code's edge. */
 function pointOf(node: Node | null, offset: number): RowPoint | null {
   const el = node instanceof Element ? node : node?.parentElement
   const rowEl = el?.closest<HTMLElement>("[data-row]")
   const code = rowEl?.querySelector(CODE)
   if (!rowEl || !code || !node) return null
   const row = rowEl.dataset.row!
+  const text = code.textContent ?? ""
   const r = document.createRange()
   r.selectNodeContents(code)
   // Before or after its code (on the gutter, or the row's edge): the code's start or end.
-  if (r.comparePoint(node, offset) < 0) return { row, off: 0 }
-  if (r.comparePoint(node, offset) > 0) return { row, off: code.textContent?.length ?? 0 }
+  if (r.comparePoint(node, offset) < 0) return { row, off: 0, text }
+  if (r.comparePoint(node, offset) > 0) return { row, off: text.length, text }
   r.setEnd(node, offset)
-  return { row, off: r.toString().length }
+  return { row, off: r.toString().length, text }
 }
 
 /** The selection, when both its ends are on rows inside `root` (else null: nothing to keep). */
@@ -41,9 +45,10 @@ export function saveSelection(root: HTMLElement | null): SavedSelection | null {
   return anchor && focus ? { anchor, focus } : null
 }
 
+/** The text node + offset at a saved point (null: its row is gone or its text changed). */
 function nodeAt(root: HTMLElement, p: RowPoint): [Node, number] | null {
   const code = root.querySelector(`[data-row="${CSS.escape(p.row)}"] ${CODE}`)
-  if (!code) return null
+  if (!code || code.textContent !== p.text) return null
   const walk = document.createTreeWalker(code, NodeFilter.SHOW_TEXT)
   let left = p.off
   let last: Text | null = null
@@ -52,10 +57,10 @@ function nodeAt(root: HTMLElement, p: RowPoint): [Node, number] | null {
     left -= t.length
     last = t
   }
-  return last ? [last, last.length] : [code, code.childNodes.length] // shorter now: its end
+  return last ? [last, last.length] : [code, code.childNodes.length] // an empty line
 }
 
-/** Puts a saved selection back (skipped when one of its rows isn't rendered any more). */
+/** Puts a saved selection back (skipped when one of its rows is gone or its text changed). */
 export function restoreSelection(root: HTMLElement | null, saved: SavedSelection): void {
   if (!root) return
   const a = nodeAt(root, saved.anchor)

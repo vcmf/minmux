@@ -164,14 +164,14 @@ export function FileView({ entryId, tabId }: { entryId: string; tabId: string })
   const { start, end } = rowWindow(lines.length, LINE_H, port.top, port.h, 0)
 
   // New lines (the highlighted ones landing, a re-read) replace each row's HTML, which moves a
-  // selection's ends: it's read before the commit (the DOM still has the old rows) and put back.
-  const shownLines = useRef(lines)
+  // selection's ends: it's read before the commit (the DOM still has the committed rows) and
+  // put back after it. Each render that changes the lines saves afresh (a discarded render's
+  // save is overwritten, never carried over).
+  const committedLines = useRef(lines)
   const keptSel = useRef<SavedSelection | null>(null)
-  if (shownLines.current !== lines) {
-    shownLines.current = lines
-    keptSel.current ??= saveSelection(scrollRef.current)
-  }
+  keptSel.current = committedLines.current !== lines ? saveSelection(scrollRef.current) : null
   useLayoutEffect(() => {
+    committedLines.current = lines
     const saved = keptSel.current
     keptSel.current = null
     if (saved) restoreSelection(scrollRef.current, saved)

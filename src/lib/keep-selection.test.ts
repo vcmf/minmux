@@ -25,7 +25,10 @@ describe("keep-selection", () => {
     const t2 = code(root, "s2").firstChild!
     window.getSelection()!.setBaseAndExtent(t1, 6, t2, 6) // "answer = 42\nreturn"
     const saved = saveSelection(root)!
-    expect(saved).toEqual({ anchor: { row: "s1", off: 6 }, focus: { row: "s2", off: 6 } })
+    expect(saved).toEqual({
+      anchor: { row: "s1", off: 6, text: "const answer = 42" },
+      focus: { row: "s2", off: 6, text: "return answer" },
+    })
 
     code(root, "s1").innerHTML = '<span class="k">const</span> answer = <span class="n">42</span>'
     code(root, "s2").innerHTML = '<span class="k">return</span> answer'
@@ -67,6 +70,18 @@ describe("keep-selection", () => {
       .setBaseAndExtent(code(root, "s1").firstChild!, 1, code(root, "s2").firstChild!, 2)
     const saved = saveSelection(root)!
     root.querySelector('[data-row="s2"]')!.remove()
+    window.getSelection()!.removeAllRanges()
+    restoreSelection(root, saved)
+    expect(window.getSelection()!.rangeCount).toBe(0)
+  })
+
+  it("skips a row whose text changed (a re-read moved the lines)", () => {
+    const root = mount(row("s1", "abc") + row("s2", "def"))
+    window
+      .getSelection()!
+      .setBaseAndExtent(code(root, "s1").firstChild!, 1, code(root, "s2").firstChild!, 2)
+    const saved = saveSelection(root)!
+    code(root, "s1").innerHTML = "inserted above"
     window.getSelection()!.removeAllRanges()
     restoreSelection(root, saved)
     expect(window.getSelection()!.rangeCount).toBe(0)
