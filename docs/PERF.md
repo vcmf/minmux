@@ -16,14 +16,15 @@ runs in normal use). It uses the real Electron renderer (real WebGL) and the rea
 
 ## What it measures
 
-| Scenario             | Path exercised                                     | Metric                        |
-| -------------------- | -------------------------------------------------- | ----------------------------- |
-| **renderer**         | `term.write` → xterm parse → WebGL (no PTY/IPC)    | MB/s to drain 20 MB           |
-| **e2e**              | shell → node-pty → **main→renderer IPC** → write   | MB/s + **IPC message count**  |
-| **input**            | key → PTY → shell echo → IPC → xterm parse         | ms p50 / p95 / max (200 keys) |
-| **input under load** | the same, while a second PTY runs a firehose       | ms p50 / p95 / max            |
-| **idle**             | app sitting still (git poll, clock, status timers) | main/renderer CPU %           |
-| **memory**           | RSS per process after the run                      | main / renderer / GPU MB      |
+| Scenario                  | Path exercised                                                                                                        | Metric                                               |
+| ------------------------- | --------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------- |
+| **renderer**              | `term.write` → xterm parse → WebGL (no PTY/IPC)                                                                       | MB/s to drain 20 MB                                  |
+| **e2e**                   | shell → node-pty → **main→renderer IPC** → write                                                                      | MB/s + **IPC message count**                         |
+| **input**                 | key → PTY → shell echo → IPC → xterm parse                                                                            | ms p50 / p95 / max (200 keys)                        |
+| **input under load**      | the same, while a second PTY runs a firehose                                                                          | ms p50 / p95 / max                                   |
+| **input beside markdown** | the same, while a markdown Preview re-renders (worker render + block patch), 100 KB every 200 ms and 900 KB every 2 s | ms p50 / p95 / max + the Preview's write / render ms |
+| **idle**                  | app sitting still (git poll, clock, status timers)                                                                    | main/renderer CPU %                                  |
+| **memory**                | RSS per process after the run                                                                                         | main / renderer / GPU MB                             |
 
 `app.getAppMetrics()` (main) supplies CPU/RSS. The e2e generator is a deterministic
 `yes | head -n N` firehose bracketed by concatenation-built markers (so the shell's echo of the
@@ -63,6 +64,22 @@ whole loop; a key's echo is matched with escape sequences stripped):
 
 p50 is steady; p95 and max swing from run to run on both builds, so compare ranges over several
 interleaved runs, never one run against another.
+
+**Typing beside a markdown Preview** (2026-11-23, markdown epic). A synthetic plan (sections with
+prose, a task list, a table, highlighted code and inline math; 100 KB is about 470 KB of HTML,
+900 KB about 4.2 MB) gains a section at the top on each re-render, the Preview scrolled to its
+middle, at the fastest each size re-reads. "whole" wrote the full HTML each time; "patched"
+replaces only the changed blocks (`lib/markdown-patch.ts`). Two or three runs each:
+
+| Metric                             | terminal alone   | 100 KB, whole | 100 KB, patched | 900 KB, whole | 900 KB, patched |
+| ---------------------------------- | ---------------- | ------------- | --------------- | ------------- | --------------- |
+| Input p50 / p95                    | 5.0–6.0 / 5.3–10 | 5.1 / 6.3     | 5.1 / 5.5–6.4   | 5.1 / 6.2     | 5.0 / 5.4–5.7   |
+| Input max                          | 10–29            | 27            | 9.5–40          | **213**       | 13–40           |
+| Preview write, per update (p50)    |                  | 14.5          | **2.4–3.3**     | 145           | **19–29**       |
+| Preview write, first (file opened) |                  |               | ~14             |               | ~110            |
+
+The worker's render (text in, blocks back) takes 20–30 ms for 100 KB and ~160 ms for 900 KB, off
+the main thread.
 
 ## Findings & next steps
 

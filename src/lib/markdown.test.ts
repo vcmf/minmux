@@ -2,7 +2,8 @@ import { describe, expect, it } from "vitest"
 import { mayHaveMath, renderMarkdown, safeLink, slugOf } from "./markdown"
 import { cleanHtml } from "./markdown-html"
 
-const html = async (md: string) => (await renderMarkdown(md)).html
+const joined = (r: { blocks: { html: string }[] }) => r.blocks.map((b) => b.html).join("")
+const html = async (md: string) => joined(await renderMarkdown(md))
 
 describe("renderMarkdown", () => {
   it("renders GitHub's blocks: tables, task lists, strikethrough", async () => {
@@ -13,13 +14,22 @@ describe("renderMarkdown", () => {
     expect(out).toContain("<s>gone</s>")
   })
 
-  it("marks each top-level block with its source line", async () => {
-    const out = await html("# Title\n\npara one\n\n- a\n- b\n\n```\ncode\n```\n")
-    expect(out).toContain('<h1 data-line="1"')
-    expect(out).toContain('<p data-line="3">')
-    expect(out).toContain('<ul data-line="5">')
-    expect(out).toContain('<pre data-line="8">')
-    expect(out).not.toMatch(/<li[^>]*data-line/) // only top-level blocks
+  it("is one block per top-level element, each with its source line apart from its HTML", async () => {
+    const r = await renderMarkdown("# Title\n\npara one\n\n- a\n- b\n\n```\ncode\n```\n\n$$x$$\n")
+    expect(r.blocks.map((b) => [b.html.slice(0, 4), b.line])).toEqual([
+      ["<h1 ", 1],
+      ["<p>p", 3],
+      ["<ul>", 5],
+      ["<pre", 8],
+      ["<p c", 12], // display math has its line too
+    ])
+    expect(joined(r)).not.toContain("data-line") // lines move; the HTML compared mustn't
+  })
+
+  it("text added above leaves the blocks below with the same HTML", async () => {
+    const a = await renderMarkdown("para\n\n## Part\n")
+    const b = await renderMarkdown("## New\n\nadded\n\npara\n\n## Part\n")
+    expect(b.blocks.slice(2).map((x) => x.html)).toEqual(a.blocks.map((x) => x.html))
   })
 
   it("gives headings GitHub's anchors, numbered when repeated", async () => {
@@ -58,7 +68,7 @@ describe("renderMarkdown", () => {
 })
 
 describe("a PR's body (repo given)", () => {
-  const pr = async (md: string) => (await renderMarkdown(md, { repo: "o/r" })).html
+  const pr = async (md: string) => joined(await renderMarkdown(md, { repo: "o/r" }))
 
   it("links #12 and owner/name#12, never in code, a link, a URL or a word", async () => {
     const out = await pr("Fixes #12 and x/y#3. `#4` [#5](https://a.test) a#6 https://h.test/#7")
@@ -102,15 +112,15 @@ describe("math", () => {
     ]) {
       const r = await renderMarkdown(s)
       expect(r.math, s).toBe(false)
-      expect(r.html, s).toContain(s.replace(/</g, "&lt;"))
+      expect(joined(r), s).toContain(s.replace(/</g, "&lt;"))
     }
   })
 
   it("shows a bad formula as an error, and never \\href", async () => {
     const r = await renderMarkdown("$\\frac{$ and $\\href{javascript:alert(1)}{x}$")
-    expect(r.html).toContain("katex-error")
-    expect(r.html).not.toMatch(/href=/) // the TeX stays only as text (KaTeX's annotation)
-    expect(r.html).not.toContain("<a ")
+    expect(joined(r)).toContain("katex-error")
+    expect(joined(r)).not.toMatch(/href=/) // the TeX stays only as text (KaTeX's annotation)
+    expect(joined(r)).not.toContain("<a ")
   })
 
   it("only loads KaTeX for text that may have math", () => {

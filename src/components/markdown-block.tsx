@@ -2,6 +2,7 @@ import { useLayoutEffect, useRef } from "react"
 import { escapeHtml } from "../lib/file-preview"
 import { clickImage, hydrateImages, type ImageContext } from "../lib/markdown-images"
 import {
+  htmlOf,
   loadMathStyle,
   mathStyleReady,
   renderedNow,
@@ -58,7 +59,7 @@ export function MarkdownBlock({
     }
     const now = renderedNow(text, repo)
     if (now && (!now.math || mathStyleReady())) {
-      put(now.html)
+      put(htmlOf(now))
       return () => unhydrate.current()
     }
     put(`<p class="md-pending">${escapeHtml(text)}</p>`)
@@ -67,7 +68,7 @@ export function MarkdownBlock({
       const r = now ?? (await renderMarkdownText(text, repo))
       if (r?.math) await loadMathStyle()
       // Couldn't render (the worker failed): the text, plainly, as a final state.
-      if (live) put(r ? r.html : `<p class="md-plain">${escapeHtml(text)}</p>`)
+      if (live) put(r ? htmlOf(r) : `<p class="md-plain">${escapeHtml(text)}</p>`)
     })()
     return () => {
       live = false

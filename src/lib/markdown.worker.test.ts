@@ -9,7 +9,8 @@ describe("markdown worker", () => {
     const handle = (self as unknown as { onmessage: (e: MessageEvent) => Promise<void> }).onmessage
     await handle({ data: { id: 7, text: "# Hi" } } as MessageEvent)
     expect(posted[0]).toMatchObject({ id: 7, out: { math: false } })
-    expect((posted[0] as { out: { html: string } }).out.html).toContain("<h1")
+    const out = (posted[0] as { out: { blocks: { html: string; line: number }[] } }).out
+    expect(out.blocks).toEqual([{ html: expect.stringContaining("<h1") as string, line: 1 }])
     vi.unstubAllGlobals()
   })
 })

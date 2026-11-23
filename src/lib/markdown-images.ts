@@ -179,10 +179,20 @@ async function load(el: HTMLElement, ctx: ImageContext): Promise<void> {
 
 // One observer per write: images load as they come near the view. Returns its disposer (the
 // next write replaces every placeholder).
-/** Turn a view's image placeholders into images, per `ctx`. */
-export function hydrateImages(root: HTMLElement, ctx: ImageContext): () => void {
+/** Turn a view's image placeholders into images, per `ctx` (only within `nodes`, when given). */
+export function hydrateImages(root: HTMLElement, ctx: ImageContext, nodes?: Node[]): () => void {
   const lazy: HTMLElement[] = []
-  for (const el of root.querySelectorAll<HTMLElement>(".md-img[data-src]")) {
+  const found = nodes
+    ? nodes.flatMap((n) =>
+        n instanceof HTMLElement
+          ? [
+              ...(n.matches(".md-img[data-src]") ? [n] : []),
+              ...n.querySelectorAll<HTMLElement>(".md-img[data-src]"),
+            ]
+          : [],
+      )
+    : [...root.querySelectorAll<HTMLElement>(".md-img[data-src]")]
+  for (const el of found) {
     const src = el.dataset.src ?? ""
     const from = sourceOf(src, ctx)
     if (!from) continue

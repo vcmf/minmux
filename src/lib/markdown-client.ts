@@ -3,6 +3,11 @@
 // are kept by text, so a tab shown again gets its HTML at once.
 import type { Rendered } from "./markdown"
 
+const sizeOf = (r: Rendered) => r.blocks.reduce((n, b) => n + b.html.length, 0)
+
+/** A rendered document's HTML, whole (a PR body; a Preview patches block by block). */
+export const htmlOf = (r: Rendered) => r.blocks.map((b) => b.html).join("")
+
 export const MARKDOWN_MAX = 1024 * 1024 // past this a file tab shows its source (DOM cost)
 const KEPT = 64 // a PR's body and comments each take one…
 const KEPT_CHARS = 4 * 1024 * 1024 // …and big documents only a few
@@ -58,14 +63,14 @@ export function renderedNow(text: string, repo?: string): Rendered | undefined {
 let keptChars = 0
 function keep(key: string, r: Rendered): void {
   const old = kept.get(key)
-  if (old) keptChars -= old.html.length
+  if (old) keptChars -= sizeOf(old)
   kept.delete(key)
   kept.set(key, r)
-  keptChars += r.html.length
+  keptChars += sizeOf(r)
   while (kept.size > 1 && (kept.size > KEPT || keptChars > KEPT_CHARS)) {
     const [k, v] = kept.entries().next().value!
     kept.delete(k)
-    keptChars -= v.html.length
+    keptChars -= sizeOf(v)
   }
 }
 

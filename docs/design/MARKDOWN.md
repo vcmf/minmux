@@ -174,9 +174,19 @@ font.
 ### Performance
 
 The renderer stays off the terminal hot path: parsing and math run in a worker, chunks load only
-when a markdown view shows, and a re-render happens at most once per `RELOAD_MS`, for a view that
-is on screen. Each render result goes in with one `innerHTML` write. The `MINMUX_PERF=1` harness
-gets a case with a markdown tab re-rendering beside a busy terminal.
+when a markdown view shows, and a re-render happens at most once per `RELOAD_MS` (`BIG_RELOAD_MS`
+past 100 KB), for a view that is on screen.
+
+The worker returns a document as its top-level blocks, each block's source line kept apart from
+its HTML. A Preview replaces only the blocks whose HTML changed (`lib/markdown-patch.ts`): an agent
+adding a section to a long plan costs that section, and untouched blocks keep their nodes (loaded
+images, an open `<details>`, the scroll position). A whole write happens once, when the file
+opens. Past 50 KB of HTML, off-screen blocks skip layout (`content-visibility`).
+
+The `MINMUX_PERF=1` harness types into a real shell while a Preview re-renders beside it
+(`docs/PERF.md`): with a 100 KB plan every 200 ms, keystrokes are as fast as with the terminal
+alone; with a 900 KB one every 2 s, each update costs about 20 ms on the main thread and opening it
+about 110 ms, once.
 
 ## Challenges
 

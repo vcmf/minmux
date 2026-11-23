@@ -43,7 +43,7 @@ describe("renderMarkdownText", () => {
   it("renders in the worker and keeps the result for the same text", async () => {
     const c = await client()
     const r = await c.renderMarkdownText("# One")
-    expect(r!.html).toContain("<h1")
+    expect(c.htmlOf(r!)).toContain("<h1")
     expect(c.renderedNow("# One")).toBe(r)
     expect(await c.renderMarkdownText("# One")).toBe(r) // from what's kept
     for (let i = 0; i < 64; i++) await c.renderMarkdownText(`text ${i}`)
@@ -57,8 +57,8 @@ describe("renderMarkdownText", () => {
     const c = await client()
     const file = await c.renderMarkdownText("see #12")
     const pr = await c.renderMarkdownText("see #12", "o/r")
-    expect(file!.html).not.toContain("data-ref")
-    expect(pr!.html).toContain('data-ref="o/r#12"')
+    expect(c.htmlOf(file!)).not.toContain("data-ref")
+    expect(c.htmlOf(pr!)).toContain('data-ref="o/r#12"')
     expect(c.renderedNow("see #12", "o/r")).toBe(pr)
   })
 
@@ -76,7 +76,7 @@ describe("renderMarkdownText", () => {
     const all = Array.from({ length: 5 }, (_, i) => c.renderMarkdownText(`# ${i}`))
     await vi.advanceTimersByTimeAsync(5 * 6_000) // one answer every 6 s: 30 s for the last
     const out = await Promise.all(all)
-    expect(out.every((r) => r?.html.includes("<h1"))).toBe(true)
+    expect(out.every((r) => !!r && c.htmlOf(r).includes("<h1"))).toBe(true)
     expect(spawned).toBe(1)
   })
 

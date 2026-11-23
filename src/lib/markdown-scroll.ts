@@ -16,6 +16,7 @@ export interface Place {
   line: number
   off: number
   text: string
+  el?: HTMLElement // the block's node (kept by a patch that didn't change it)
 }
 
 /** The first block in view. */
@@ -33,13 +34,16 @@ export function topBlock(scroller: HTMLElement, body: HTMLElement): Place {
     line: Number(last.dataset.line),
     off: top - last.offsetTop,
     text: last.textContent ?? "",
+    el: last,
   }
 }
 
-// Lines move when text is added above (an agent inserting a section), so the block is found by
-// its text first: the match nearest its old line. A block that changed falls back to the line.
+// The same node when the patch kept it (it didn't change: the usual case, and no scan). Else, as
+// lines move when text is added above, by its text: the match nearest its old line. A block that
+// changed falls back to the line.
 /** The block a place was on, after a re-render. */
 export function blockOf(body: HTMLElement, at: Place): HTMLElement | null {
+  if (at.el?.parentElement === body) return at.el
   let best: HTMLElement | null = null
   let gap = Infinity
   if (at.text) {
