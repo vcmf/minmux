@@ -14,12 +14,20 @@ import { samePath } from "../lib/agent-dirs"
 import { findPane } from "../lib/pane-tree"
 import type { WslContext } from "../lib/wsl"
 import { blockAt, blockOf, topBlock } from "../lib/markdown-scroll"
-import { clickImage, hydrateImages, type ImageContext } from "../lib/markdown-images"
+import { emptyShown, patchBlocks, type Shown } from "../lib/markdown-patch"
+import type { Block } from "../lib/markdown"
+import {
+  clickImage,
+  imageLoader,
+  type ImageContext,
+  type ImageLoader,
+} from "../lib/markdown-images"
 
 const BIG_HTML = 50 * 1024 // past this, off-screen blocks skip layout (content-visibility)
 
-// Rendered in a worker (lib/markdown-client); the HTML goes in with one innerHTML write, out of
-// React. A re-render (an agent rewriting the file) keeps the block at the top where it was.
+// Rendered in a worker (lib/markdown-client) as blocks; only the blocks that changed are replaced
+// (lib/markdown-patch), out of React. A re-render (an agent rewriting the file) keeps the block at
+// the top where it was.
 /** A markdown file tab's Preview. */
 export function MarkdownView({
   entryId,
@@ -53,14 +61,17 @@ export function MarkdownView({
   const remote = useStore((s) => s.settings.remoteImages)
   const images = useRef<ImageContext>({ remote })
   images.current = { dir, root, wsl, remote }
-  const unhydrate = useRef<() => void>(() => {})
-  useEffect(() => () => unhydrate.current(), [])
+  const blocks = useRef<Shown>(emptyShown()) // the blocks the body shows (lib/markdown-patch)
+  // The view's images (lib/markdown-images): blocks a write adds are hydrated, the ones it removes
+  // forgotten, the file images it keeps checked again by their stamp.
+  const loader = useRef<ImageLoader | null>(null)
+  const loaderFor = (body: HTMLElement) =>
+    (loader.current ??= imageLoader(body, () => images.current))
+  useEffect(() => () => loader.current?.dispose(), [])
   // The Web images setting changed: what's shown now follows it.
   useEffect(() => {
     const body = bodyRef.current
-    if (!placed.current || !body) return
-    unhydrate.current()
-    unhydrate.current = hydrateImages(body, images.current)
+    if (placed.current && body) loaderFor(body).hydrate()
   }, [remote])
   const placed = useRef(false) // the first HTML is in and the view placed
   // Read when HTML lands (maybe renders later): the target asked for most recently.
@@ -98,15 +109,18 @@ export function MarkdownView({
     } else el.scrollTop = files.scrollOf(entryId, "preview")
   }
 
-  const write = (html: string) => {
+  // Only the blocks whose HTML changed are replaced: the rest keep their nodes (an agent adding a
+  // section to a 4 MB document costs that section). New images: kept ones show at once, sized.
+  const write = (next: Block[]) => {
     const el = scrollRef.current
     const body = bodyRef.current
     if (!el || !body) return
     const keep = placed.current && el.scrollTop > 0 ? topBlock(el, body) : null
-    body.classList.toggle("big", html.length > BIG_HTML)
-    unhydrate.current()
-    body.innerHTML = html
-    unhydrate.current = hydrateImages(body, images.current) // kept ones at once: sizes are set
+    body.classList.toggle("big", next.reduce((n, b) => n + b.html.length, 0) > BIG_HTML)
+    const pics = loaderFor(body)
+    const added = patchBlocks(body, blocks.current, next, (gone) => pics.forget(gone))
+    pics.hydrate(added)
+    pics.recheck()
     if (!placed.current) {
       placed.current = true
       return place(true)
@@ -133,7 +147,7 @@ export function MarkdownView({
     const now = renderedNow(text)
     if (now && (!now.math || mathStyleReady())) {
       shown.current = text
-      return write(now.html)
+      return write(now.blocks)
     }
     let live = true
     void (async () => {
@@ -142,7 +156,7 @@ export function MarkdownView({
       if (!live) return
       shown.current = text
       // Failed to render: the source as text, so the tab still shows the file.
-      write(r ? r.html : `<pre>${escapeHtml(text)}</pre>`)
+      write(r ? r.blocks : [{ html: `<pre>${escapeHtml(text)}</pre>`, line: 0 }])
     })()
     return () => {
       live = false

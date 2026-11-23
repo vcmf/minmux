@@ -2,6 +2,10 @@ import { Terminal } from "@xterm/xterm"
 import { WebglAddon } from "@xterm/addon-webgl"
 import { ipc } from "./ipc"
 import { latencyStats } from "./latency-stats"
+import { renderMarkdownText } from "./markdown-client"
+import { blockOf, topBlock } from "./markdown-scroll"
+import { emptyShown, patchBlocks } from "./markdown-patch"
+import type { Block } from "./markdown"
 
 // Load-test harness (dev only). Run with `MINMUX_PERF=1 make run`, or call
 // window.__minmuxPerf() from devtools. Measures the two throughput paths that
@@ -114,8 +118,14 @@ const stripEscapes = (s: string) => s.replace(CSI, "").replace(OSC, "")
 // Keystroke latency: a key written to a real shell's PTY until its echo is parsed by xterm
 // (renderer → main → pty → main → renderer → xterm). `load` keeps a firehose running in a
 // second PTY for the whole loop, as a busy agent pane would.
+/** Something running beside the keystroke loop (a busy view), with its own report. */
+interface Beside {
+  start(): void
+  stop(): Promise<Record<string, unknown>>
+}
+
 /** Keystroke latency p50 / p95 / max over `keys` keys, optionally under load. */
-async function measureInput(keys: number, load: boolean) {
+async function measureInput(keys: number, load: boolean, beside?: Beside) {
   const { term, dispose } = hiddenTerm()
   const id = `perf-in-${Math.floor(now())}`
   await ipc.ptySpawn({ id, cols: 120, rows: 40, shell: "", args: [] })
@@ -141,6 +151,7 @@ async function measureInput(keys: number, load: boolean) {
     ipc.ptyWrite(bgId, "yes 0123456789abcdefghijklmnopqrstuvwxyz\r") // until ptyKill below
     await sleep(300)
   }
+  beside?.start()
   const samples: number[] = []
   let timeouts = 0
   const letters = "abcdefghijklmnopqrstuvwxyz"
@@ -172,6 +183,7 @@ async function measureInput(keys: number, load: boolean) {
     }
     await sleep(15) // a fast typist, not a paste
   }
+  const besideReport = beside ? await beside.stop() : undefined
   off()
   ipc.ptyKill(id)
   dispose()
@@ -180,7 +192,103 @@ async function measureInput(keys: number, load: boolean) {
     ipc.ptyKill(bgId)
     bg.dispose()
   }
-  return { ...latencyStats(samples), timeouts } // a stall over 1 s shows here, not in p95
+  // A stall over 1 s shows in `timeouts`, not in p95.
+  return { ...latencyStats(samples), timeouts, ...(besideReport ? { beside: besideReport } : {}) }
+}
+
+/** A markdown document of about `kb` KB: headings, prose, lists, tables, code and some math. */
+function markdownDoc(kb: number): string {
+  const part = (i: number) =>
+    [
+      `## Section ${i}`,
+      "",
+      `Agents write plans like this one, paragraph ${i}: **bold**, \`code\`, a [link](https://example.com/${i}) and a reference to #${i}. `.repeat(
+        3,
+      ),
+      "",
+      `- [x] step ${i}.1 done`,
+      `- [ ] step ${i}.2 with \`inline\` code`,
+      `- a plain item with $x_${i}^2$ math`,
+      "",
+      "| column | value | note |",
+      "| ------ | ----: | ---- |",
+      `| a${i} | ${i * 3} | first |`,
+      `| b${i} | ${i * 7} | second |`,
+      "",
+      "```ts",
+      `export function step${i}(n: number): number {`,
+      `  return n * ${i} // a comment`,
+      "}",
+      "```",
+      "",
+    ].join("\n")
+  let out = "# A long plan\n\n"
+  for (let i = 1; out.length < kb * 1024; i++) out += part(i)
+  return out
+}
+
+// What a markdown file tab's Preview does while an agent rewrites the file (markdown-view.tsx):
+// the text changes, the worker renders it, and only the blocks that changed are replaced
+// (lib/markdown-patch), keeping the block in view. A section is added at the top each time (the hard case for keeping place).
+// On screen, scrolled to the middle, so its layout and content-visibility are the real ones.
+/** A markdown Preview re-rendering every `everyMs` beside the keystroke loop. */
+function markdownBeside(kb: number, everyMs: number): Beside {
+  const scroller = document.createElement("div")
+  scroller.style.cssText = "position:fixed;inset:0;overflow:auto;z-index:-1;background:var(--bg)"
+  const body = document.createElement("div")
+  body.className = "md-view"
+  scroller.appendChild(body)
+  let text = markdownDoc(kb)
+  let running = false
+  let loop: Promise<void> = Promise.resolve()
+  const writes: number[] = []
+  const renders: number[] = []
+  let htmlKB = 0
+  const shown = emptyShown()
+  const write = (blocks: Block[]) => {
+    const t0 = now()
+    const size = blocks.reduce((n, b) => n + b.html.length, 0)
+    const keep = scroller.scrollTop > 0 ? topBlock(scroller, body) : null
+    body.classList.toggle("big", size > 50 * 1024) // markdown-view's BIG_HTML
+    patchBlocks(body, shown, blocks)
+    if (keep) {
+      const b = blockOf(body, keep)
+      if (b) scroller.scrollTop = b.offsetTop + keep.off // reads layout: its cost is counted
+    }
+    writes.push(now() - t0)
+    htmlKB = Math.round(size / 1024)
+  }
+  return {
+    start() {
+      document.body.appendChild(scroller)
+      running = true
+      loop = (async () => {
+        let n = 0
+        while (running) {
+          const t0 = now()
+          text = `## Added ${++n}\n\nA new section at the top.\n\n${text}`
+          const r = await renderMarkdownText(text)
+          renders.push(now() - t0)
+          if (r) write(r.blocks)
+          if (n === 1) scroller.scrollTop = scroller.scrollHeight / 2
+          await sleep(Math.max(0, everyMs - (now() - t0)))
+        }
+      })()
+    },
+    async stop() {
+      running = false
+      await loop
+      scroller.remove()
+      return {
+        kb,
+        everyMs,
+        htmlKB,
+        rerenders: writes.length,
+        writeMs: latencyStats(writes),
+        renderMs: latencyStats(renders), // worker round trip, text in to HTML back
+      }
+    },
+  }
 }
 
 async function idleCpu(ms: number) {
@@ -206,6 +314,10 @@ export async function runPerfSuite() {
   report.e2e = await measureE2E(400_000)
   report.input = await measureInput(200, false)
   report.inputUnderLoad = await measureInput(200, true)
+  // A markdown file tab an agent is rewriting, at the fastest each size re-reads (file-view.tsx:
+  // RELOAD_MS under 100 KB, BIG_RELOAD_MS above).
+  report.inputBesideMarkdown100k = await measureInput(200, false, markdownBeside(100, 200))
+  report.inputBesideMarkdown900k = await measureInput(200, false, markdownBeside(900, 2000))
   report.idle = await idleCpu(3000)
   console.log(`[PERF] ${JSON.stringify(report)}`)
   return report

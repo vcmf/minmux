@@ -17,9 +17,18 @@ export interface RenderOptions {
   repo?: string
 }
 
-/** What a rendered document is: its HTML, and whether that has math (KaTeX's CSS then). */
-export interface Rendered {
+/** One top-level block: its HTML, and the source line it starts on (1-based; 0: none). */
+export interface Block {
   html: string
+  line: number
+}
+
+// Blocks, not one string: a Preview re-rendered while an agent writes replaces only the blocks
+// whose HTML changed (lib/markdown-patch). A block's line is kept apart from its HTML, so text
+// added above doesn't make every block below look changed.
+/** A rendered document: its blocks, and whether they have math (KaTeX's CSS then). */
+export interface Rendered {
+  blocks: Block[]
   math: boolean
 }
 
@@ -29,6 +38,8 @@ const MATH_HINT = /\$\$|\$`|^\s*(?:```|~~~)\s*math\b|\$[^\s$][^$\n]*\$/m
 
 /** Whether `text` may hold math (KaTeX loads for it). */
 export const mayHaveMath = (text: string) => MATH_HINT.test(text)
+
+const count = (s: string, re: RegExp) => s.match(re)?.length ?? 0
 
 /** A heading's anchor as GitHub makes it: lowercase, punctuation gone, spaces to `-`. */
 export function slugOf(text: string): string {
@@ -48,14 +59,11 @@ const loadHighlight = () =>
     () => void (highlighting = null), // plain this time; the next document tries again
   ))
 
-// `data-anchor`, never `id`: a heading can't clobber the page's names. `data-line` is 1-based.
-/** Heading anchors and each top-level block's source line. */
+// `data-anchor`, never `id`: a heading can't clobber the page's names.
+/** Heading anchors, as GitHub makes them (a repeat numbered). */
 function marks(state: StateCore): void {
   const seen = new Map<string, number>()
   state.tokens.forEach((t, i) => {
-    if (t.level === 0 && t.block && t.nesting !== -1 && t.map) {
-      t.attrSet("data-line", String(t.map[0] + 1))
-    }
     if (t.type !== "heading_open") return
     const words = (state.tokens[i + 1]?.children ?? [])
       .filter((c) => c.type === "text" || c.type === "code_inline")
@@ -187,6 +195,27 @@ export async function renderMarkdown(text: string, opts: RenderOptions = {}): Pr
   let md = (plain ??= base())
   if (mayHaveMath(text)) md = await mathMd().catch(() => md)
   md.set({ breaks: !!opts.repo }) // GitHub's comments: a newline is a line break
-  const html = md.render(text, { repo: opts.repo })
-  return { html, math: html.includes('class="katex') }
+  const env = { repo: opts.repo }
+  const tokens = md.parse(text, env)
+  const blocks: Block[] = []
+  let math = false
+  // Each top-level token run (its open to its matching close, or a lone block) is one block. A raw
+  // <details> left open (GitHub's fold: <details><summary>…, markdown, then </details>) takes in
+  // the blocks up to its close, so it folds them as on GitHub (a block is parsed on its own).
+  let open = 0 // raw <details> still open, in the block being built
+  for (let i = 0, start = 0, depth = 0; i < tokens.length; i++) {
+    depth += tokens[i]!.nesting
+    if (depth !== 0) continue
+    const html = md.renderer.render(tokens.slice(start, i + 1), md.options, env)
+    if (html) {
+      math ||= html.includes('class="katex')
+      const into = open > 0 ? blocks[blocks.length - 1] : undefined
+      if (into) into.html += html
+      else blocks.push({ html, line: (tokens[start]!.map?.[0] ?? -1) + 1 })
+      // Our own tags only (cleanHtml writes them; a user's text is escaped): exact counts.
+      open = Math.max(0, open + count(html, /<details[ >]/g) - count(html, /<\/details>/g))
+    }
+    start = i + 1
+  }
+  return { blocks, math }
 }

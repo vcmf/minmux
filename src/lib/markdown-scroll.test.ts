@@ -71,4 +71,10 @@ describe("blockOf", () => {
     expect(blockOf(body, { line: 5, off: 0, text: "reading this" })!.dataset.line).toBe("47")
     expect(blockOf(body, { line: 44, off: 0, text: "changed" })!.dataset.line).toBe("43")
   })
+
+  it("is the same node when it's still there (a patch kept it)", () => {
+    const { body } = view([{ line: 9, top: 0, h: 1, text: "same" }], 0)
+    const el = body.children[0] as HTMLElement
+    expect(blockOf(body, { line: 1, off: 0, text: "other", el })).toBe(el)
+  })
 })

@@ -238,4 +238,57 @@ describe("hydrateImages", () => {
       vi.unstubAllGlobals()
     }
   })
+
+  it("a loader forgets removed blocks and checks kept file images again, throttled", async () => {
+    const { imageLoader, RECHECK_MS } = await fresh()
+    const observed = new Set<Element>()
+    class FakeIO {
+      observe(el: Element) {
+        observed.add(el)
+      }
+      unobserve(el: Element) {
+        observed.delete(el)
+      }
+      disconnect() {
+        observed.clear()
+      }
+    }
+    vi.stubGlobal("IntersectionObserver", FakeIO)
+    const nowSpy = vi.spyOn(Date, "now")
+    try {
+      const body = view(img("a.png") + img("b.png"))
+      const loader = imageLoader(body, () => ({ dir: "/w", remote: "click" }))
+      loader.hydrate()
+      expect(observed.size).toBe(2)
+      loader.forget([body.children[1]!]) // its block left the view
+      expect(observed.size).toBe(1)
+
+      // a kept image, loaded; its file changes: the recheck shows the new one
+      vi.mocked(ipc.readFile).mockResolvedValue({
+        kind: "image",
+        dataUrl: "data:image/png;base64,Ag==",
+        size: 1,
+        stamp: { size: 1, mtimeMs: 2 },
+      })
+      const a = body.children[0] as HTMLElement
+      a.dataset.state = "failed" // it hadn't loaded (the file didn't exist yet)
+      nowSpy.mockReturnValue(10_000)
+      loader.recheck()
+      await settle()
+      await settle()
+      expect(a.querySelector("img")!.getAttribute("src")).toBe("data:image/png;base64,Ag==")
+      vi.mocked(ipc.readFile).mockClear()
+      nowSpy.mockReturnValue(10_000 + RECHECK_MS - 1)
+      loader.recheck() // too soon
+      expect(ipc.readFile).not.toHaveBeenCalled()
+      nowSpy.mockReturnValue(10_000 + RECHECK_MS)
+      loader.recheck()
+      expect(ipc.readFile).toHaveBeenCalledTimes(1)
+      loader.dispose()
+      expect(observed.size).toBe(0)
+    } finally {
+      nowSpy.mockRestore()
+      vi.unstubAllGlobals()
+    }
+  })
 })
