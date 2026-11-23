@@ -3,6 +3,23 @@
 What changed in each minmux release, newest first. Generated from the pull request titles by
 [git-cliff](https://git-cliff.org): edit `cliff.toml`, not this file.
 
+## [0.1.64](https://github.com/vcmf/minmux/releases/tag/v0.1.64) - 2026-11-23
+
+### Added
+
+- Show images in rendered markdown ([#206](https://github.com/vcmf/minmux/pull/206))
+- Render PR bodies and comments as markdown ([#205](https://github.com/vcmf/minmux/pull/205))
+- A content-security-policy for the built renderer ([#204](https://github.com/vcmf/minmux/pull/204))
+- Render markdown files, with a Preview beside Source ([#203](https://github.com/vcmf/minmux/pull/203))
+
+### Fixed
+
+- Keep a selection when a file tab's lines are replaced ([#208](https://github.com/vcmf/minmux/pull/208))
+
+### Faster
+
+- Patch only the changed blocks of a Preview ([#207](https://github.com/vcmf/minmux/pull/207))
+
 ## [0.1.63](https://github.com/vcmf/minmux/releases/tag/v0.1.63) - 2026-11-21
 
 ### Added
