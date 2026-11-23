@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from "vitest"
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest"
 import { render, screen, fireEvent, waitFor } from "@testing-library/react"
 import { FileView } from "./file-view"
 import { useStore } from "../store"
@@ -337,5 +337,92 @@ describe("FileView: markdown", () => {
     expect(await screen.findByText(/Too large to preview/)).toBeInTheDocument()
     expect(container.querySelector(".md-view")).toBeNull()
     expect(screen.queryByText("Preview")).toBeNull()
+  })
+})
+
+describe("FileView: markdown places", () => {
+  // jsdom has no layout: a block sits at 100px per source line, 100px tall.
+  const line = (el: HTMLElement) =>
+    Number(el.dataset?.line ?? el.closest?.("[data-line]")?.getAttribute("data-line") ?? 0)
+  const saved = ["offsetTop", "offsetHeight"].map(
+    (k) => [k, Object.getOwnPropertyDescriptor(HTMLElement.prototype, k)] as const,
+  )
+  beforeEach(() => {
+    Object.defineProperty(HTMLElement.prototype, "offsetTop", {
+      configurable: true,
+      get(this: HTMLElement) {
+        return line(this) * 100
+      },
+    })
+    Object.defineProperty(HTMLElement.prototype, "offsetHeight", {
+      configurable: true,
+      get: () => 100,
+    })
+  })
+  afterEach(() => {
+    for (const [k, d] of saved) if (d) Object.defineProperty(HTMLElement.prototype, k, d)
+  })
+  const doc = Array.from({ length: 20 }, (_, i) => `## Part ${i}\n`).join("\n") // part i on line 2i+1
+  const md = (text: string) =>
+    vi
+      .mocked(ipc.readFile)
+      .mockResolvedValue({ kind: "text", text, truncated: false, size: text.length })
+  const scroller = (c: HTMLElement) => c.querySelector<HTMLElement>(".md-scroll")!
+
+  it("goes to a heading in the view, and to one in this same file by its name", async () => {
+    md(`[go](#part-5) [same](PLAN.md#part-9) [sub](sub/)\n\n${doc}`)
+    const { tabId, entryId } = open("/w/PLAN.md")
+    const { container } = render(<FileView entryId={entryId} tabId={tabId} />)
+    await waitFor(() => expect(container.querySelector('[data-anchor="part-5"]')).not.toBeNull())
+    fireEvent.click(screen.getByText("go"))
+    expect(scroller(container).scrollTop).toBe(
+      line(container.querySelector('[data-anchor="part-5"]')!) * 100 - 8,
+    )
+    fireEvent.click(screen.getByText("same"))
+    expect(scroller(container).scrollTop).toBe(
+      line(container.querySelector('[data-anchor="part-9"]')!) * 100 - 8,
+    )
+    fireEvent.click(screen.getByText("sub")) // a folder link: a folder tab in this pane
+    expect(st().objects[st().tabs[0]!.activeEntryId]).toEqual({ kind: "folder", path: "/w/sub" })
+  })
+
+  it("opens at a line on the block holding it", async () => {
+    md(doc)
+    const { tabId, entryId } = open("/w/PLAN.md", 12)
+    const { container } = render(<FileView entryId={entryId} tabId={tabId} />)
+    await waitFor(() => expect(scroller(container).scrollTop).toBeGreaterThan(0))
+    expect(scroller(container).scrollTop).toBe(11 * 100) // part 5, on line 11 (clientHeight 0)
+  })
+
+  it("keeps the block in view by its text when lines are added above", async () => {
+    let onChanged: (dirs: string[]) => void = () => {}
+    vi.mocked(ipc.onFsChanged).mockImplementation((cb) => {
+      onChanged = (d) => cb(d, [])
+      return () => {}
+    })
+    useStore.setState({ platform: "darwin" })
+    md(doc)
+    const { tabId, entryId } = open("/w/PLAN.md")
+    const { container } = render(<FileView entryId={entryId} tabId={tabId} />)
+    await waitFor(() => expect(container.querySelector('[data-anchor="part-7"]')).not.toBeNull())
+    scroller(container).scrollTop = 15 * 100 + 30 // into part 7 (line 15)
+    md(`# New\n\nadded\n\n${doc}`) // four lines above
+    onChanged(["/w"])
+    await waitFor(() => expect(container.querySelector('[data-anchor="new"]')).not.toBeNull())
+    await waitFor(() => expect(scroller(container).scrollTop).toBe(19 * 100 + 30)) // part 7, now line 19
+  })
+
+  it("switching from Source shows the block at Source's top line", async () => {
+    md(doc)
+    const { tabId, entryId } = open("/w/PLAN.md")
+    st().setFileView(entryId, "source")
+    const { container } = render(<FileView entryId={entryId} tabId={tabId} />)
+    await waitFor(() => expect(container.querySelector(".file-view-line")).not.toBeNull())
+    container.querySelector<HTMLElement>(".file-view-lines")!.scrollTop = 20 * 18 // line 21
+    fireEvent.click(screen.getByText("Preview"))
+    await waitFor(() => expect(scroller(container).scrollTop).toBe(21 * 100)) // part 10, line 21
+    fireEvent.click(screen.getByText("Source")) // and back: the Preview's top block's line
+    await waitFor(() => expect(container.querySelector(".file-view-lines")).not.toBeNull())
+    expect(container.querySelector<HTMLElement>(".file-view-lines")!.scrollTop).toBe(20 * 18)
   })
 })
