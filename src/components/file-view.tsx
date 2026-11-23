@@ -18,6 +18,7 @@ import { isAbsoluteHostPath, revealLabel } from "../lib/file-actions"
 import { findPane } from "../lib/pane-tree"
 import { rowWindow } from "../lib/virtual-rows"
 import { shortCwd } from "../lib/session-label"
+import { restoreSelection, saveSelection, type SavedSelection } from "../lib/keep-selection"
 
 const LINE_H = 18 // every line of a file tab (App.css .file-view-line): the window needs it
 const RELOAD_MS = 200 // a live file (an agent writing it) re-reads at most this often
@@ -162,6 +163,20 @@ export function FileView({ entryId, tabId }: { entryId: string; tabId: string })
   }, [data?.kind, entryId, view])
   const { start, end } = rowWindow(lines.length, LINE_H, port.top, port.h, 0)
 
+  // New lines (the highlighted ones landing, a re-read) replace each row's HTML, which moves a
+  // selection's ends: it's read before the commit (the DOM still has the committed rows) and
+  // put back after it. Each render that changes the lines saves afresh (a discarded render's
+  // save is overwritten, never carried over).
+  const committedLines = useRef(lines)
+  const keptSel = useRef<SavedSelection | null>(null)
+  keptSel.current = committedLines.current !== lines ? saveSelection(scrollRef.current) : null
+  useLayoutEffect(() => {
+    committedLines.current = lines
+    const saved = keptSel.current
+    keptSel.current = null
+    if (saved) restoreSelection(scrollRef.current, saved)
+  }, [lines])
+
   // Shown again (a tab switch, or Source / Diff): back where that view was scrolled, once its
   // lines are in.
   const restored = useRef<ViewName | null>(null) // the view restored, null: none yet
@@ -281,6 +296,7 @@ export function FileView({ entryId, tabId }: { entryId: string; tabId: string })
               return (
                 <div
                   key={i}
+                  data-row={`d${i}`}
                   className={`file-view-line diff-line ${d.type}`}
                   style={{ top: i * LINE_H }}
                 >
@@ -331,6 +347,7 @@ export function FileView({ entryId, tabId }: { entryId: string; tabId: string })
               return (
                 <div
                   key={n}
+                  data-row={`s${n}`}
                   className={`file-view-line${n === line ? " target" : ""}`}
                   style={{ top: (n - 1) * LINE_H }}
                 >
