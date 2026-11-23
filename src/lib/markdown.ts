@@ -43,9 +43,10 @@ export function slugOf(text: string): string {
 let highlight: (code: string, lang: string) => string = (code) => escapeHtml(code)
 let highlighting: Promise<void> | null = null
 const loadHighlight = () =>
-  (highlighting ??= syncHighlighter().then((fn) => {
-    highlight = fn
-  }))
+  (highlighting ??= syncHighlighter().then(
+    (fn) => void (highlight = fn),
+    () => void (highlighting = null), // plain this time; the next document tries again
+  ))
 
 // `data-anchor`, never `id`: a heading can't clobber the page's names. `data-line` is 1-based.
 /** Heading anchors and each top-level block's source line. */
@@ -98,11 +99,16 @@ function base(): Md {
     return `<pre${self.renderAttrs(t)}><code${cls}>${code}</code></pre>\n`
   }
   // An image stays a link to it until images load (step 4 of the design): no remote request.
+  // Inside a link (a README badge) it is that link's text: anchors can't nest.
   md.renderer.rules.image = (tokens, i, opts, env, self) => {
     const t = tokens[i]!
     const src = String(t.attrGet("src") ?? "")
-    const alt = self.renderInlineAsText(t.children ?? [], opts, env) || src
-    return `<a class="md-img" href="${escapeHtml(src)}">${escapeHtml(alt)}</a>`
+    const alt = escapeHtml(self.renderInlineAsText(t.children ?? [], opts, env) || src)
+    let depth = 0
+    for (let k = 0; k < i; k++)
+      depth += tokens[k]!.type === "link_open" ? 1 : tokens[k]!.type === "link_close" ? -1 : 0
+    if (depth > 0) return `<span class="md-img">${alt}</span>`
+    return `<a class="md-img" href="${escapeHtml(src)}">${alt}</a>`
   }
   md.core.ruler.push("minmux_marks", marks)
   return md

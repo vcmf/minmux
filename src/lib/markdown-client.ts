@@ -9,6 +9,7 @@ const KEPT = 8
 let worker: Worker | null = null
 let failures = 0 // the worker crashed or failed to load: respawned up to MAX_FAILURES times
 const MAX_FAILURES = 3
+const RENDER_TIMEOUT_MS = 10_000 // a render stuck this long: the worker is replaced
 let seq = 0
 const waiting = new Map<number, (out: Rendered | null | undefined) => void>() // undefined: failed
 const kept = new Map<string, Rendered>() // insertion order = least → most recent
@@ -62,7 +63,11 @@ export async function renderMarkdownText(text: string): Promise<Rendered | null>
     out = w
       ? await new Promise<Rendered | null | undefined>((resolve) => {
           const id = ++seq
-          waiting.set(id, resolve)
+          const timer = setTimeout(fail, RENDER_TIMEOUT_MS) // every waiting one: the source
+          waiting.set(id, (out) => {
+            clearTimeout(timer)
+            resolve(out)
+          })
           w.postMessage({ id, text })
         })
       : null

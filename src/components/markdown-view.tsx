@@ -13,9 +13,9 @@ import { linkTarget } from "../lib/markdown-links"
 import { samePath } from "../lib/agent-dirs"
 import { findPane } from "../lib/pane-tree"
 import type { WslContext } from "../lib/wsl"
-import { blockAt, topBlock } from "../lib/markdown-scroll"
+import { blockAt, blockOf, topBlock } from "../lib/markdown-scroll"
 
-const BIG_HTML = 200 * 1024 // past this, off-screen blocks skip layout (content-visibility)
+const BIG_HTML = 50 * 1024 // past this, off-screen blocks skip layout (content-visibility)
 
 // Rendered in a worker (lib/markdown-client); the HTML goes in with one innerHTML write, out of
 // React. A re-render (an agent rewriting the file) keeps the block at the top where it was.
@@ -97,8 +97,16 @@ export function MarkdownView({
       return place(true)
     }
     if (keep) {
-      const b = blockAt(body, keep.line)
-      if (b) el.scrollTop = b.offsetTop + keep.off
+      const b = blockOf(body, keep)
+      if (!b) return
+      // Off-screen blocks have estimated heights (content-visibility) until laid out: the ones
+      // near the view get their real ones over the next frames, so the block is pinned again.
+      const pin = (n: number) => {
+        if (!b.isConnected) return
+        el.scrollTop = b.offsetTop + keep.off
+        if (n > 0) requestAnimationFrame(() => pin(n - 1))
+      }
+      pin(2)
     }
   }
 

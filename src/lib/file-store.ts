@@ -32,7 +32,7 @@ export interface FileShown {
   scrollTop: number
   diffTop: number // where its Diff view was scrolled (each view keeps its own)
   previewTop: number // …and its markdown Preview
-  went: string // the `line:seq` it last scrolled to (a remount doesn't jump again)
+  went: string // the `line:anchor:seq` it last went to (a remount doesn't jump again)
   diff: FileDiff | null
 }
 
@@ -133,7 +133,7 @@ export class FileStore {
   }
 
   // Kept for when it shows again; nothing re-renders.
-  /** Where its view (Source, or Diff) is scrolled. */
+  /** Where one of its views (Source, Diff, Preview) is scrolled. */
   setScroll(id: string, top: number, view: FileView = "source"): void {
     const e = this.files.get(id)
     if (!e) return

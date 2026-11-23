@@ -96,7 +96,8 @@ export function FileView({ entryId, tabId }: { entryId: string; tabId: string })
   const markdown = isMarkdownPath(path) && data?.kind === "text"
   const canPreview = markdown && data.size <= MARKDOWN_MAX
   const tooBigToPreview = markdown && !canPreview && asked === "preview"
-  const showPreview = !showDiff && canPreview && asked === "preview"
+  // A diff with nothing to show falls back to the file's default: the Preview for markdown.
+  const showPreview = !showDiff && canPreview && asked !== "source"
   const view: ViewName = showDiff ? "diff" : showPreview ? "preview" : "source"
   const lines = showDiff ? diff!.html : shown.lines
   const big = (data && "size" in data ? data.size : 0) > HIGHLIGHT_MAX
@@ -186,6 +187,10 @@ export function FileView({ entryId, tabId }: { entryId: string; tabId: string })
 
   // Switching between Preview and Source keeps the same lines in view.
   const startLine = useRef<number | null>(null) // for the Preview, from the Source's top line
+  // Handed to the Preview once (its first placement): a remount later uses its saved scroll.
+  useLayoutEffect(() => {
+    if (showPreview) startLine.current = null
+  })
   const switchTo = (to: ViewName) => {
     const el = scrollRef.current
     startLine.current = null

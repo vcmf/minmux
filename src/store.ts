@@ -605,8 +605,14 @@ export const useStore = create<AppState>((set, get) => ({
   setProfile: (profile) => set({ profile }),
   setEditor: (editor) => set({ editor }),
   setPreview: (preview) => set({ preview }),
-  openFile: (path, opts = {}) =>
+  openFile: (path, given = {}) =>
     set((state) => {
+      // A heading is only a markdown file's; another file takes GitHub's `#L12` as its line.
+      let opts = given
+      if (opts.anchor && !isMarkdownPath(path)) {
+        const n = /^L(\d+)/.exec(opts.anchor)
+        opts = { ...opts, anchor: undefined, ...(n ? { line: Number(n[1]) } : {}) }
+      }
       const tab = state.tabs.find((t) => t.id === (opts.tabId ?? state.activeTabId))
       if (!tab || !path) return {}
       const pane = opts.paneId

@@ -43,6 +43,11 @@ describe("renderMarkdown", () => {
     expect(out).toContain('href="https://x.test/p.png">https://x.test/p.png</a>')
   })
 
+  it("a linked image (a badge) is its link's text, the link kept", async () => {
+    const out = await html("[![build](https://img.test/x.svg)](https://ci.test/run)")
+    expect(out).toContain('<a href="https://ci.test/run"><span class="md-img">build</span></a>')
+  })
+
   it("links bare URLs", async () => {
     expect(await html("see https://example.com now")).toContain('<a href="https://example.com">')
   })

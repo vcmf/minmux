@@ -66,15 +66,10 @@ export async function highlightToHtml(code: string, lang: string | null): Promis
 // For markdown's fences, which render synchronously. `lang` is a language id or an extension.
 /** A synchronous highlighter, once highlight.js has loaded. */
 export async function syncHighlighter(): Promise<(code: string, lang: string) => string> {
-  let hljs: Hljs | null = null
-  try {
-    hljs = await loadHljs()
-  } catch {
-    hljs = null
-  }
+  const hljs = await loadHljs() // a failed load rejects: the caller tries again later
   return (code, lang) => {
-    const name = hljs && (hljs.getLanguage(lang) ? lang : languageForPath(`x.${lang}`))
-    if (!hljs || !name || !hljs.getLanguage(name)) return escapeHtml(code)
+    const name = hljs.getLanguage(lang) ? lang : languageForPath(`x.${lang}`)
+    if (!name || !hljs.getLanguage(name)) return escapeHtml(code)
     try {
       return hljs.highlight(code, { language: name, ignoreIllegals: true }).value
     } catch {

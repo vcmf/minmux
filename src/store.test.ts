@@ -1732,7 +1732,12 @@ describe("store — folder entries", () => {
     st().setFileView(m, "source")
     st().setFileView(m, "preview")
     expect((st().objects[m] as { view?: string }).view).toBeUndefined()
-    st().openFile("/w/a.ts")
+    st().openFile("/w/a.ts", { diff: true })
+    const code = tab().activeEntryId
+    st().openFile("/w/a.ts", { anchor: "L40" }) // GitHub's line anchor: a line, off the diff
+    expect(st().objects[code]).toEqual({ kind: "file", path: "/w/a.ts", line: 40, seq: 1 })
+    st().openFile("/w/a.ts", { anchor: "intro" }) // a heading means nothing here: no change
+    expect(st().objects[code]).toEqual({ kind: "file", path: "/w/a.ts", line: 40, seq: 1 })
     const objects = st().objects
     st().setFileView(tab().activeEntryId, "preview") // only markdown has one
     expect(st().objects).toBe(objects)
