@@ -152,8 +152,9 @@ function base(): Md {
     let depth = 0
     for (let k = 0; k < i; k++)
       depth += tokens[k]!.type === "link_open" ? 1 : tokens[k]!.type === "link_close" ? -1 : 0
-    if (depth > 0) return `<span class="md-img">${alt}</span>`
-    return `<a class="md-img" href="${escapeHtml(src)}">${alt}</a>`
+    const data = `data-src="${escapeHtml(src)}"` // lib/markdown-images loads it
+    if (depth > 0) return `<span class="md-img" ${data}>${alt}</span>`
+    return `<a class="md-img" href="${escapeHtml(src)}" ${data}>${alt}</a>`
   }
   md.core.ruler.push("minmux_refs", refs)
   md.core.ruler.push("minmux_marks", marks)

@@ -14,6 +14,7 @@ import { samePath } from "../lib/agent-dirs"
 import { findPane } from "../lib/pane-tree"
 import type { WslContext } from "../lib/wsl"
 import { blockAt, blockOf, topBlock } from "../lib/markdown-scroll"
+import { clickImage, hydrateImages, type ImageContext } from "../lib/markdown-images"
 
 const BIG_HTML = 50 * 1024 // past this, off-screen blocks skip layout (content-visibility)
 
@@ -49,6 +50,18 @@ export function MarkdownView({
 }) {
   const bodyRef = useRef<HTMLDivElement>(null)
   const shown = useRef<string | null>(null) // the text the body shows
+  const remote = useStore((s) => s.settings.remoteImages)
+  const images = useRef<ImageContext>({ remote })
+  images.current = { dir, root, wsl, remote }
+  const unhydrate = useRef<() => void>(() => {})
+  useEffect(() => () => unhydrate.current(), [])
+  // The Web images setting changed: what's shown now follows it.
+  useEffect(() => {
+    const body = bodyRef.current
+    if (!placed.current || !body) return
+    unhydrate.current()
+    unhydrate.current = hydrateImages(body, images.current)
+  }, [remote])
   const placed = useRef(false) // the first HTML is in and the view placed
   // Read when HTML lands (maybe renders later): the target asked for most recently.
   const target = useRef({ line, anchor, goKey })
@@ -91,7 +104,9 @@ export function MarkdownView({
     if (!el || !body) return
     const keep = placed.current && el.scrollTop > 0 ? topBlock(el, body) : null
     body.classList.toggle("big", html.length > BIG_HTML)
+    unhydrate.current()
     body.innerHTML = html
+    unhydrate.current = hydrateImages(body, images.current) // kept ones at once: sizes are set
     if (!placed.current) {
       placed.current = true
       return place(true)
@@ -156,6 +171,7 @@ export function MarkdownView({
     if (!a || !bodyRef.current?.contains(a)) return
     e.preventDefault()
     if (e.type === "mousedown") return // a middle press: no autoscroll; its auxclick follows
+    if (e.type === "click" && clickImage(e.target as Element, images.current)) return
     const t = linkTarget(a.getAttribute("href") ?? "", dir, root)
     if (!t) return
     if (t.kind === "external") return ipc.openExternal(t.url)

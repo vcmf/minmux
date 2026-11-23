@@ -1,6 +1,7 @@
 import { createContext, memo, useCallback, useContext, useEffect, useMemo, useState } from "react"
 import { ArrowSquareOut, Check, PencilSimple } from "@phosphor-icons/react"
 import { ipc } from "../lib/ipc"
+import { useStore } from "../store"
 import {
   hunkTail,
   threadsByFile,
@@ -43,6 +44,8 @@ const BodyContext = createContext<{
 /** A PR's body or comment, rendered as GitHub would (lib/markdown, in a worker). */
 function Body({ body }: { body: string }) {
   const { repo, onGo, titles } = useContext(BodyContext)
+  const remote = useStore((s) => s.settings.remoteImages)
+  const images = useMemo(() => ({ remote }), [remote]) // web images only: no files here
   const decorate = useCallback(
     (el: HTMLElement) => {
       for (const a of el.querySelectorAll<HTMLAnchorElement>("a[data-ref]")) {
@@ -78,6 +81,7 @@ function Body({ body }: { body: string }) {
       repo={repo || undefined}
       onLink={onLink}
       onRendered={decorate}
+      images={images}
     />
   )
 }

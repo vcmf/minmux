@@ -1554,8 +1554,38 @@ body.resizing-col {
 .md-view a:hover {
   text-decoration: underline;
 }
-.md-view a.md-img::before {
+/* An image (lib/markdown-images): a link to it until it loads, then the image. */
+.md-view .md-img::before {
   content: "🖼 ";
+}
+.md-view .md-img[data-state="loaded"]::before {
+  content: none;
+}
+.md-view .md-img img {
+  max-width: 100%;
+  height: auto;
+  vertical-align: middle;
+}
+.md-view .md-img[data-state="click"],
+.md-view .md-img[data-state="failed"] {
+  display: inline-block;
+  padding: 2px 8px;
+  border: 1px dashed var(--border2);
+  border-radius: 6px;
+  color: var(--dim);
+}
+.md-view .md-img[data-state="click"] {
+  cursor: pointer;
+}
+.md-view .md-img[data-state="click"]::after {
+  content: " · click to load";
+  color: var(--faint);
+}
+.md-view .md-img[data-state="failed"] {
+  text-decoration: line-through;
+}
+.md-view .md-img[data-state="loading"] {
+  opacity: 0.6;
 }
 .md-view :is(code, kbd) {
   font-family: var(--code-font);

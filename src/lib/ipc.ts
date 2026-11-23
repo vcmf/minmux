@@ -111,6 +111,8 @@ export interface Ipc {
   readFilePreview: (path: string, wsl?: WslContext) => Promise<PreviewData>
   // A file tab's read (fs worker); `since`: skip it when the file still matches (`same`).
   readFile: (path: string, wsl?: WslContext, since?: FileStamp) => Promise<FileData>
+  // A remote image for a markdown view, fetched by main (the page's policy refuses remote ones).
+  fetchImage: (url: string) => Promise<{ ok: true; dataUrl: string } | { ok: false; error: string }>
   // Native folder picker (Files root); `wsl` opens it at the distro's UNC share and returns
   // a distro-native Linux path.
   pickDirectory: (defaultPath?: string, wsl?: WslContext) => Promise<string | null>

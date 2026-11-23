@@ -20,6 +20,7 @@ import { randomBytes, randomUUID } from "node:crypto"
 import { StringDecoder } from "node:string_decoder"
 import * as pty from "node-pty"
 import type { IPty } from "node-pty"
+import { fetchImage, type RemoteImage } from "./remote-image"
 import { watch } from "chokidar"
 import {
   listShells,
@@ -1609,6 +1610,22 @@ function registerIpc() {
       return { kind: "error", message: lastErr }
     },
   )
+
+  // A remote image for a rendered markdown view, as a data: URL (the renderer's policy refuses
+  // remote images): never a local address, no cookies, a few at a time. → electron/remote-image.ts
+  let fetching = 0
+  const queued: (() => void)[] = []
+  ipcMain.handle("image:fetch", async (_e, url: unknown): Promise<RemoteImage> => {
+    if (typeof url !== "string") return { ok: false, error: "Not a URL" }
+    if (fetching >= 4) await new Promise<void>((go) => queued.push(go))
+    fetching++
+    try {
+      return await fetchImage(url)
+    } finally {
+      fetching--
+      queued.shift()?.()
+    }
+  })
 
   // A file tab's read, in the fs worker (a dead mount hangs it, not main): text up to the cap,
   // an image as a data URL, else what it is. A WSL path is read through the distro's share.

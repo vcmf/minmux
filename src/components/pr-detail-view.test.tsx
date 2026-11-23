@@ -207,4 +207,17 @@ describe("PrDetailView: markdown bodies", () => {
     fireEvent.click(screen.getByText("the doc"))
     expect(ipc.openExternal).toHaveBeenCalledWith("https://github.com/o/r/blob/HEAD/docs/x.md")
   })
+
+  it("a web image in a body loads on a click, not in the browser", async () => {
+    vi.mocked(ipc.fetchImage).mockResolvedValue({ ok: true, dataUrl: "data:image/png;base64,AQ==" })
+    const body2 = "![shot](https://img.test/b.png)"
+    vi.mocked(ipc.prDetail).mockResolvedValue({ ok: true, detail: detail(24, { body: body2 }) })
+    const { container } = render(<PrDetailView row={row(24)} />)
+    await waitFor(() =>
+      expect(container.querySelector('.pr-md .md-img[data-state="click"]')).not.toBeNull(),
+    )
+    fireEvent.click(container.querySelector(".pr-md .md-img")!)
+    expect(ipc.openExternal).not.toHaveBeenCalled()
+    await waitFor(() => expect(container.querySelector(".pr-md .md-img img")).not.toBeNull())
+  })
 })
