@@ -22,11 +22,23 @@ describe("cspFor", () => {
     )
     expect(csp).toContain(`script-src 'self' ${sha("a()")} ${sha("b()")};`)
   })
+
+  it("hashes a CRLF script as Chromium does, with LF line ends", () => {
+    expect(cspFor("<script>a()\r\nb()</script>")).toContain(sha("a()\nb()"))
+  })
 })
 
 describe("withCsp", () => {
-  it("puts the policy first in <head>", () => {
-    const out = withCsp("<html><head><script>a()</script></head></html>")
+  it("goes right after the charset, ahead of every script", () => {
+    const out = withCsp(
+      '<html><head data-x>\n<meta charset="UTF-8" /><script>a()</script></head></html>',
+    )
+    expect(out.indexOf("Content-Security-Policy")).toBeGreaterThan(out.indexOf("charset"))
     expect(out.indexOf("Content-Security-Policy")).toBeLessThan(out.indexOf("<script>"))
+    expect(withCsp("<head><script>a()</script>")).toMatch(/^<head>\s*<meta http-equiv/)
+  })
+
+  it("fails the build when there's nowhere to put it", () => {
+    expect(() => withCsp("<p>no head</p>")).toThrow(/no <head>/)
   })
 })

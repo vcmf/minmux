@@ -332,6 +332,26 @@ A running shell's env can't change, so `COLORFGBG` is stale for panes opened bef
 light/dark switch (incl. `appearance: "system"` following the OS); native shells get the live
 answer via xterm's OSC 11 reply.
 
+## The renderer's Content-Security-Policy {#csp}
+
+The page holds `window.minmux`, which spawns processes, and it renders HTML that other people
+wrote (markdown files, PR bodies). Behind the markdown allowlist, a policy in the **built**
+`index.html` (`electron/csp.ts`, added by a vite plugin) makes sure no script but our bundled ones
+runs: no inline `<script>`, no `onerror=`-style handlers, no `javascript:` URLs, no `eval` or
+`new Function`. The policy also refuses remote images, fonts and fetches.
+
+- **`index.html`'s inline pre-paint script** (see #first-paint-theme) is allowed by its sha256,
+  computed from the built page at build time, with CRLF read as LF the way Chromium's parser
+  does (a Windows checkout). Editing the script needs nothing more.
+- **The dev server has no policy**, since Vite injects inline scripts of its own. A violation shows
+  only in the built app, so check a change that loads anything new (a library, a remote
+  resource) with the run-minmux skill, which runs `out/`. Violations show in the console as
+  "Refused to …".
+- **A remote resource** (an image in a PR body) comes through main and reaches the page as a
+  `blob:` or `data:` URL. Never widen `img-src`/`connect-src` to `https:`.
+- **A dependency that needs `eval`** (some diagram libraries) runs in a worker or not at all;
+  `unsafe-eval` stays off.
+
 ## Agents follow a theme switch (mode 2031) {#theme-notify}
 
 An agent picks its palette at startup (it asks for the background, OSC 11) and draws its input
