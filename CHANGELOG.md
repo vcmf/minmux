@@ -3,6 +3,13 @@
 What changed in each minmux release, newest first. Generated from the pull request titles by
 [git-cliff](https://git-cliff.org): edit `cliff.toml`, not this file.
 
+## [0.1.65](https://github.com/vcmf/minmux/releases/tag/v0.1.65) - 2026-11-23
+
+### Added
+
+- Open an html file in the browser ([#209](https://github.com/vcmf/minmux/pull/209))
+- Start an installed agent from the new-tab menu ([#210](https://github.com/vcmf/minmux/pull/210))
+
 ## [0.1.64](https://github.com/vcmf/minmux/releases/tag/v0.1.64) - 2026-11-23
 
 ### Added
