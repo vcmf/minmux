@@ -15,9 +15,10 @@ export interface BrowserLaunch {
 
 // https handlers on Windows that aren't a browser taking a file: they'd run or misread it.
 const NOT_BROWSER = new Set(
-  "rundll32 openwith launchwinapp explorer cmd powershell pwsh wscript cscript mshta conhost".split(
-    " ",
-  ),
+  (
+    "rundll32 openwith launchwinapp explorer hh mshta msiexec regsvr32 cmd powershell pwsh " +
+    "wscript cscript conhost wsl bash node python pythonw"
+  ).split(" "),
 )
 
 const baseName = (p: string) => (p.split(/[\\/]/).pop() ?? "").toLowerCase()

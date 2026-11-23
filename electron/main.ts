@@ -750,16 +750,16 @@ function launch(plan: BrowserLaunch): Promise<boolean> {
   })
 }
 
-// A page is judged by the name clicked (what the button showed for), as long as it's a regular
-// file: a browser only renders it. The browser gets that path too, so relative CSS/images
-// resolve next to it. No browser plan (Linux: its .html default is the browser), or one that
+// A page is both the name clicked (what the button showed for) and what it really is (a
+// symlink named .html to anything else isn't one). The browser gets the clicked path, so
+// relative CSS/images resolve next to it. No browser plan (Linux: its .html default is the browser), or one that
 // fails, goes safeOpenPath's way: the default app, or a reveal.
 /** Open an HTML file in the default web browser. */
 async function openInBrowser(p: string): Promise<void> {
   try {
     if (path.isAbsolute(p) && isHtmlPath(p) && process.platform !== "linux") {
       const real = await fs.promises.realpath(p)
-      if ((await fs.promises.stat(real)).isFile()) {
+      if ((await fs.promises.stat(real)).isFile() && isHtmlPath(real)) {
         const handler = await app.getApplicationInfoForProtocol("https://").then(
           (i) => i.path,
           () => "",

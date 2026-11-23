@@ -25,6 +25,8 @@ describe("browserLaunch", () => {
       "C:\\Windows\\System32\\OpenWith.exe",
       "C:\\Windows\\System32\\LaunchWinApp.exe",
       "C:\\Windows\\explorer.exe",
+      "C:\\Windows\\hh.exe",
+      "C:\\Windows\\System32\\msiexec.exe",
       "C:\\x\\run.bat",
     ])
       expect(browserLaunch("win32", "C:\\w\\a.html", h)).toBeNull()
