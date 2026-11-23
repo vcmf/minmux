@@ -1,6 +1,6 @@
 # Markdown rendering
 
-Status: **proposal**, for discussion · Scope: `src/lib/markdown*` (new: renderer, worker, client,
+Status: **agreed**, step 1 next · Scope: `src/lib/markdown*` (new: renderer, worker, client,
 html allowlist), `src/components/file-view.tsx` (a Preview view), `src/components/markdown-view.tsx`
 (new), `src/components/pr-detail-view.tsx` (bodies and comments), `src/lib/folder-entries.ts`
 (`view`), `src/App.css`
@@ -52,6 +52,11 @@ goes in at once.
 
 **markdown-it** with `html` handled by our allowlist (below), `linkify: true`, and two plugins:
 `@mdit/plugin-tasklist` and `@mdit/plugin-katex`. Tables and strikethrough are built in.
+
+Headings get ids the way GitHub makes them (lowercase, spaces to `-`, punctuation dropped, `-1`
+for a repeat), written by a small core rule. Our docs link to sections all the time
+(`GOTCHAS.md#fonts`), so a link with a fragment scrolls to its heading, in the same view or in the
+file tab it opens.
 
 Math follows GitHub, since PR bodies are written for GitHub:
 
@@ -187,21 +192,26 @@ but that's a change to the find bar for every file tab and is left out of this d
 
 ## Steps
 
-1. The renderer (worker, client, allowlist, math rules, tests) and Preview in file tabs.
-2. PR bodies and comments.
-3. Images: relative ones through the fs worker, and remote ones on click.
+1. The renderer (worker, client, allowlist, math rules, heading anchors, tests) and Preview in
+   file tabs.
+2. A Content-Security-Policy for the renderer, in its own PR: `script-src 'self'` plus the hash of
+   the pre-paint script in `index.html`, with a test that the hash matches the script.
+3. PR bodies and comments.
+4. Images: relative ones through the fs worker, and remote ones on click.
 
-## Open questions
+## Settled in discussion
 
-- Should a file tab open on Preview or Source by default? Preview is proposed.
-- Remote images: is click-to-load the right default?
-- Footnotes, heading anchors and `:emoji:` shortcodes are GitHub features we leave out. Are any of
-  them needed in step 1?
-- Should the renderer CSP come before step 2, which brings in text from other people?
+- A markdown file tab opens on **Preview**; Source is one click away.
+- Remote images are **click-to-load** by default.
+- **Heading anchors** are in step 1. Footnotes stay out (`[^1]` reads fine as text), and
+  `:emoji:` shortcodes wait for step 3, if PR comments show they are common (the table is about
+  50 KB).
+- The **CSP lands before step 3**, the first step that renders text written by other people.
 
 ## Not in scope
 
 - Editing markdown, or a live split of source and preview.
 - Mermaid and other diagram fences.
+- Footnotes.
 - Markdown in the terminal itself.
 - Find in file tabs.
