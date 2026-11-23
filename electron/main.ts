@@ -120,7 +120,7 @@ import {
 } from "../src/lib/file-preview"
 import type { FileData, FileStamp } from "../src/lib/file-tab"
 import { isBundle, osMayOpen, type Os } from "./open-policy"
-import { browserLaunch, type BrowserLaunch } from "./open-in-browser"
+import { browserLaunches, desktopFileCandidates, type BrowserLaunch } from "./open-in-browser"
 import { isHtmlPath } from "../src/lib/file-actions"
 
 // This process's profile (a dev build is `dev`): picked before anything reads a path. An
@@ -721,12 +721,12 @@ async function safeOpenPath(p: string): Promise<void> {
   shell.showItemInFolder(p)
 }
 
-// The default web browser as its OS names it (see browserLaunch); "" when it can't tell.
+// The default web browser as its OS names it (see browserLaunches); "" when it can't tell.
 async function defaultBrowser(): Promise<string> {
   if (process.platform === "linux")
     return new Promise((done) =>
       execFile("xdg-settings", ["get", "default-web-browser"], { timeout: 3000 }, (err, out) =>
-        done(err ? "" : String(out)),
+        done(err ? "" : String(out).trim()),
       ),
     )
   return app.getApplicationInfoForProtocol("https://").then(
@@ -735,31 +735,59 @@ async function defaultBrowser(): Promise<string> {
   )
 }
 
-// Did the browser take it? A launcher (open, gtk-launch) by its exit code; the browser
-// itself (Windows) by starting, as it may run until it's closed.
+// A launcher (open, gtk-launch) that hasn't exited by then is taken as handing over; the
+// browser itself (wait: false) that hasn't failed by GRACE_MS has started.
+const LAUNCHER_MS = 5000
+const GRACE_MS = 1500
+
+// Did the browser take it? A launcher by its exit code; the browser itself by not failing
+// fast (a non-browser exe, a wrong argument), as it may run until it's closed.
 function launch(plan: BrowserLaunch): Promise<boolean> {
-  return new Promise((done) => {
+  return new Promise((resolve) => {
+    let settled = false
+    const done = (ok: boolean) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      child?.unref()
+      resolve(ok)
+    }
+    const timer = setTimeout(() => done(true), plan.wait ? LAUNCHER_MS : GRACE_MS)
+    let child: ReturnType<typeof spawn> | undefined
     try {
-      const child = spawn(plan.cmd, plan.args, { detached: !plan.wait, stdio: "ignore" })
+      child = spawn(plan.cmd, plan.args, { detached: !plan.wait, stdio: "ignore" })
       child.once("error", () => done(false))
-      if (plan.wait) child.once("exit", (code) => done(code === 0))
-      else child.once("spawn", () => (child.unref(), done(true)))
+      child.once("exit", (code) => done(code === 0))
     } catch {
       done(false)
     }
   })
 }
 
-// A web page (by its real path, so a symlink named .html to anything else isn't one) goes to
-// the default browser; anything else, or a browser that can't be found or started, takes
-// safeOpenPath's route (the default app, or a reveal).
+// The type is judged by the real path (a symlink named .html to anything else isn't a page),
+// but the browser gets the path clicked, so the page's relative CSS/images resolve next to it.
+// Anything else, or no browser that takes it, goes safeOpenPath's way (default app, or reveal).
 /** Open an HTML file in the default web browser. */
 async function openInBrowser(p: string): Promise<void> {
   try {
     const real = await fs.promises.realpath(p)
     if ((await fs.promises.stat(real)).isFile() && isHtmlPath(real)) {
-      const plan = browserLaunch(process.platform as Os, real, await defaultBrowser())
-      if (plan && (await launch(plan))) return
+      const os = process.platform as Os
+      const handler = await defaultBrowser()
+      let desktopFile = ""
+      if (os === "linux")
+        for (const f of desktopFileCandidates(handler, process.env, app.getPath("home")))
+          if (
+            await fs.promises.access(f).then(
+              () => true,
+              () => false,
+            )
+          ) {
+            desktopFile = f
+            break
+          }
+      for (const plan of browserLaunches(os, p, handler, desktopFile))
+        if (await launch(plan)) return
     }
   } catch {
     // gone or unreadable: safeOpenPath reveals what's there
