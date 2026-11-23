@@ -1724,7 +1724,11 @@ describe("store — folder entries", () => {
     expect((st().objects[m] as { view?: string }).view).toBe("source")
     st().openFile("/w/README.md", { anchor: "usage" }) // a heading is the Preview's
     expect(st().objects[m]).toMatchObject({ anchor: "usage", seq: 2 })
+    expect(st().objects[m]).not.toHaveProperty("line") // only the latest target
     expect((st().objects[m] as { view?: string }).view).toBeUndefined()
+    st().openFile("/w/README.md", { line: 9 })
+    expect(st().objects[m]).toMatchObject({ line: 9, seq: 3 })
+    expect(st().objects[m]).not.toHaveProperty("anchor")
     st().setFileView(m, "source")
     st().setFileView(m, "preview")
     expect((st().objects[m] as { view?: string }).view).toBeUndefined()

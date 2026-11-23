@@ -629,9 +629,14 @@ export const useStore = create<AppState>((set, get) => ({
       if (open) {
         const cur = state.objects[open] as FileEntry
         // At its line again, even the same one (scrolled away since): a new `seq` says "go".
-        let next: FileEntry = opts.line ? { ...cur, line: opts.line, seq: (cur.seq ?? 0) + 1 } : cur
-        if (opts.anchor) {
-          next = { ...next, anchor: opts.anchor, seq: (cur.seq ?? 0) + 1 }
+        // The latest target only: a line drops the heading asked before, and the other way round.
+        let next: FileEntry = cur
+        if (opts.line) {
+          next = { ...cur, line: opts.line, seq: (cur.seq ?? 0) + 1 }
+          delete next.anchor
+        } else if (opts.anchor) {
+          next = { ...cur, anchor: opts.anchor, seq: (cur.seq ?? 0) + 1 }
+          delete next.line
           delete next.view // a heading is the Preview's
         }
         if (opts.diff && cur.view !== "diff") next = { ...next, view: "diff" }

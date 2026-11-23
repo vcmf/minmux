@@ -47,8 +47,8 @@ const loadHighlight = () =>
     highlight = fn
   }))
 
-/** Heading anchors (`data-anchor`, never `id`: no clobbering of the page's names) and the
- *  source line of each top-level block (`data-line`, 1-based) for scroll keeping. */
+// `data-anchor`, never `id`: a heading can't clobber the page's names. `data-line` is 1-based.
+/** Heading anchors and each top-level block's source line. */
 function marks(state: StateCore): void {
   const seen = new Map<string, number>()
   state.tokens.forEach((t, i) => {

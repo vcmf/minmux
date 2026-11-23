@@ -38,7 +38,22 @@ describe("linkTarget", () => {
   })
 })
 
+describe("linkTarget: no path", () => {
+  it("a link to the file itself goes to its anchor, or nowhere", () => {
+    expect(linkTarget("?plain=1", "/r/docs")).toBeNull()
+    expect(linkTarget(".", "/r/docs")).toBeNull()
+    expect(linkTarget("./#x", "/r/docs")).toEqual({ kind: "anchor", anchor: "x" })
+    expect(linkTarget("..", "/r/docs")).toEqual({ kind: "folder", path: "/r" })
+  })
+})
+
 describe("joinPath", () => {
+  it("keeps a UNC path's server and share", () => {
+    const dir = "\\\\wsl.localhost\\Ubuntu\\home\\u\\docs"
+    expect(joinPath(dir, "GOTCHAS.md")).toBe("\\\\wsl.localhost\\Ubuntu\\home\\u\\docs\\GOTCHAS.md")
+    expect(joinPath("\\\\srv\\share", "../../x.md")).toBe("\\\\srv\\share\\x.md")
+  })
+
   it("never goes above the root", () => {
     expect(joinPath("/a", "../../x")).toBe("/x")
     expect(joinPath("C:\\a\\b", "..\\c.md")).toBe("C:\\a\\c.md")

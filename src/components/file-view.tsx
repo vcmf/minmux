@@ -132,7 +132,7 @@ export function FileView({ entryId, tabId }: { entryId: string; tabId: string })
   const [port, setPort] = useState({ top: 0, h: 0 })
   useEffect(() => {
     const el = scrollRef.current
-    if (!el) return
+    if (!el || view === "preview") return // no rows there: the Preview keeps its own scroll
     let raf = 0
     const read = () => {
       raf = 0

@@ -63,8 +63,8 @@ export async function highlightToHtml(code: string, lang: string | null): Promis
   }
 }
 
-/** A synchronous highlighter once highlight.js has loaded (markdown's fences need one): `code`
- *  as `lang` (a language id or one of file-preview's extensions) → escaped HTML. */
+// For markdown's fences, which render synchronously. `lang` is a language id or an extension.
+/** A synchronous highlighter, once highlight.js has loaded. */
 export async function syncHighlighter(): Promise<(code: string, lang: string) => string> {
   let hljs: Hljs | null = null
   try {

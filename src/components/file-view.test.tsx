@@ -304,6 +304,11 @@ describe("FileView: markdown", () => {
     await waitFor(() => expect(container.querySelector(".md-view a")).not.toBeNull())
     fireEvent.click(screen.getByText("site"))
     expect(ipc.openExternal).toHaveBeenCalledWith("https://example.com")
+    vi.mocked(ipc.openExternal).mockClear()
+    const middle = new MouseEvent("auxclick", { bubbles: true, cancelable: true, button: 1 })
+    screen.getByText("site").dispatchEvent(middle)
+    expect(middle.defaultPrevented).toBe(true) // never Chromium's new window
+    expect(ipc.openExternal).toHaveBeenCalledWith("https://example.com")
     expect(container.querySelector('.md-view a[href^="javascript"]')).toBeNull()
     fireEvent.click(screen.getByText("gotchas"))
     const tab = st().tabs[0]!

@@ -12,12 +12,14 @@ export function blockAt(body: HTMLElement, line: number): HTMLElement | null {
 }
 
 /** The first block in view: its source line and how far into it the view starts. */
+// A block without a line (raw HTML, display math) at the top counts as the lined one above it.
 export function topBlock(scroller: HTMLElement, body: HTMLElement): { line: number; off: number } {
   const top = scroller.scrollTop
+  let last: HTMLElement | null = null
   for (const el of body.querySelectorAll<HTMLElement>(":scope > [data-line]")) {
-    if (el.offsetTop + el.offsetHeight > top) {
-      return { line: Number(el.dataset.line), off: top - el.offsetTop }
-    }
+    if (el.offsetTop > top) break
+    last = el
+    if (el.offsetTop + el.offsetHeight > top) break
   }
-  return { line: 1, off: 0 }
+  return last ? { line: Number(last.dataset.line), off: top - last.offsetTop } : { line: 1, off: 0 }
 }

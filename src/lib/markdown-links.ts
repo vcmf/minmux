@@ -20,8 +20,10 @@ const decode = (s: string) => {
 /** `rel` from `dir` (`.` and `..` resolved; never above the root), in `dir`'s separator. */
 export function joinPath(dir: string, rel: string): string {
   const sep = dir.includes("\\") && !dir.includes("/") ? "\\" : "/"
-  const parts = dir.split(/[\\/]/).filter((p, i) => p || i === 0)
-  const min = 1 // the root ("" for `/`, `C:` on Windows) stays
+  // A UNC path (\\server\share\…) keeps its two leading separators and its share as the root.
+  const unc = /^[\\/]{2}[^\\/]/.test(dir)
+  const parts = (unc ? dir.slice(2) : dir).split(/[\\/]/).filter((p, i) => p || i === 0)
+  const min = unc ? Math.min(2, parts.length) : 1 // the root ("" for `/`, `C:`, a share) stays
   for (const seg of rel.split(/[\\/]/)) {
     if (!seg || seg === ".") continue
     if (seg === "..") {
@@ -29,7 +31,7 @@ export function joinPath(dir: string, rel: string): string {
     } else parts.push(seg)
   }
   const out = parts.join(sep)
-  return out || sep
+  return unc ? sep + sep + out : out || sep
 }
 
 /** Where `href` (as the renderer wrote it) goes from a file in `dir`; `/x` is from `root`. */
@@ -43,7 +45,8 @@ export function linkTarget(href: string, dir: string, root?: string): LinkTarget
   const pathPart = (hash < 0 ? h : h.slice(0, hash)).replace(/\?.*$/, "")
   const anchor = hash < 0 ? undefined : decode(h.slice(hash + 1)) || undefined
   const rel = decode(pathPart)
+  if (!rel || /^\.[\\/]*$/.test(rel)) return anchor ? { kind: "anchor", anchor } : null // this very file
   const path = rel.startsWith("/") ? joinPath(root ?? dir, rel) : joinPath(dir, rel)
-  const kind = /[\\/]$/.test(rel) ? "folder" : "file"
+  const kind = /(?:^|[\\/])\.{0,2}$/.test(rel) ? "folder" : "file" // `dir/`, `..`, `a/.`
   return { kind, path, ...(anchor ? { anchor } : {}) }
 }
