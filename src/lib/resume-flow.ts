@@ -12,6 +12,7 @@ export interface ShellFlow {
   agentSeen: boolean // an agent session ran here this run → a returning prompt matters
   resumeStage?: "await-prompt" | "typed" // a pending resume: waiting for the prompt / typed
   resumeSawStart: boolean // a C after typing: the next D is OUR command ending
+  launchPending?: boolean // a new-tab agent launch waits for the first prompt to type it
 }
 
 export const newShellFlow = (): ShellFlow => ({
@@ -28,6 +29,7 @@ export type Mark = { kind: "C" } | { kind: "D"; code?: number }
 export type FlowAction =
   | { type: "shell-idle" } // tell main: the foreground program (Claude) has exited
   | { type: "type-resume" } // the first prompt is here: type the pending resume
+  | { type: "type-launch" } // the first prompt is here: type the pending agent launch
   | { type: "fail-resume"; exitCode?: number } // our resume command exited before confirming
 
 /** `133;D;<code>` payload → the exit code (undefined if absent / unparseable). */
@@ -71,6 +73,11 @@ export function onMark(
   // Resume: the first prompt → type. After typing, only a D that follows our command's own C
   // means it exited before Claude confirmed; a D without a C is the shell's first prompt
   // arriving late (keystrokes typed ahead on a slow rc).
+  // A launch (new-tab menu's agent): the first prompt → type it, once.
+  if (s.launchPending) {
+    actions.push({ type: "type-launch" })
+    next.launchPending = false
+  }
   if (s.resumeStage === "await-prompt") actions.push({ type: "type-resume" })
   else if (s.resumeStage === "typed" && s.resumeSawStart && resuming && !suspended) {
     actions.push({ type: "fail-resume", exitCode: mark.code })

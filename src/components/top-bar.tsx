@@ -22,6 +22,8 @@ import {
 import { activeTheme, useStore } from "../store"
 import { ipc } from "../lib/ipc"
 import { AgentsIcon } from "./agent-marks"
+import { agentIcon } from "./agent-icon"
+import { AGENT_KINDS, agentColor, launchCommand, type InstalledAgent } from "../lib/agent-kinds"
 import { wslContext } from "../lib/wsl"
 import { allSessionIds } from "../lib/pane-tree"
 import { aggregateBadge } from "../lib/session-status"
@@ -34,6 +36,7 @@ import { hostSections, visibleHosts } from "../lib/ssh-host-list"
 import { TerminalManager } from "../terminal/terminal-manager"
 import brandIcon from "../assets/icon.png"
 import { isMac } from "../lib/platform"
+import type { ShellOption } from "../types"
 
 /** How many hosts the new-tab menu lists before "All hosts…". */
 const QUICK_HOSTS = 6
@@ -98,6 +101,19 @@ export function TopBar() {
   const [maximized, setMaximized] = useState(false)
   const [fullScreen, setFullScreen] = useState(false)
   const [shellMenu, setShellMenu] = useState(false)
+  // The menu's "Agents" group: the agents installed here, asked again per open (main caches).
+  const [installed, setInstalled] = useState<InstalledAgent[]>([])
+  useEffect(() => {
+    if (!shellMenu) return
+    let live = true
+    ipc
+      .agentsInstalled()
+      .then((kinds) => live && setInstalled(kinds))
+      .catch(() => {})
+    return () => {
+      live = false
+    }
+  }, [shellMenu])
 
   const rename = useTabRename()
   const editingId = rename.editingId
@@ -132,6 +148,15 @@ export function TopBar() {
   const openTab = (shell = defaultShell) => {
     if (shell) useStore.getState().newTab(shell)
     setShellMenu(false)
+  }
+
+  // A new tab (default shell) that starts the agent at its first prompt.
+  const openAgent = (shell: ShellOption, agent: InstalledAgent) => {
+    setShellMenu(false)
+    useStore.getState().newTab(shell)
+    const { tabs, activeTabId } = useStore.getState()
+    const id = tabs.find((t) => t.id === activeTabId)?.activeSessionId
+    if (id) TerminalManager.launchOnStart(id, launchCommand(agent))
   }
 
   // Sessions awaiting the user, in tab order — drives the bell count + jump.
@@ -291,6 +316,27 @@ export function TopBar() {
                     {sh.id === defaultShell?.id && <span className="shell-menu-def">default</span>}
                   </button>
                 ))}
+                {defaultShell && installed.length > 0 && (
+                  <div className="shell-menu-group">Agents</div>
+                )}
+                {defaultShell &&
+                  installed.map((agent) => {
+                    const kind = agent.kind
+                    const Icon = agentIcon(kind)
+                    return (
+                      <button
+                        key={kind}
+                        className="shell-menu-item"
+                        title={`New tab running ${launchCommand(agent)}`}
+                        onMouseDown={() => openAgent(defaultShell, agent)}
+                      >
+                        <span className="shell-menu-host">
+                          <Icon size={12} color={agentColor(kind, scheme)} />
+                          <span>{AGENT_KINDS[kind].label}</span>
+                        </span>
+                      </button>
+                    )
+                  })}
                 {quickHosts.length > 0 && <div className="shell-menu-group">SSH</div>}
                 {quickHosts.map((h) => (
                   <button

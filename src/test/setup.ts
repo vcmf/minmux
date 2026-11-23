@@ -81,6 +81,7 @@ const minmuxStub = {
   prChecks: vi.fn(async () => ({ ok: false, error: "failed" })),
   prFind: vi.fn(async () => ({ ok: false, error: "failed" })),
   prDetail: vi.fn(async () => ({ ok: false, error: "failed" })),
+  agentsInstalled: vi.fn(async () => []),
   ghInstalled: vi.fn(async () => true),
   prWrite: vi.fn(async () => ({ ok: false, error: "failed" })),
   prMerge: vi.fn(async () => ({ ok: false, error: "failed" })),

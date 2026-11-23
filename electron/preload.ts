@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer } from "electron"
 import type { AgentEvent, AgentKind } from "../src/lib/agent-graph"
+import type { InstalledAgent } from "../src/lib/agent-kinds"
 import type { SessionMeta } from "../src/lib/session-color"
 import type { ResumePlan } from "../src/lib/resume"
 import type { AgentProcsResult } from "../src/lib/agent-processes"
@@ -188,6 +189,7 @@ const api = {
   prDetail: (req: PrDetailRequest) => ipcRenderer.invoke("prs:detail", req),
   prChecks: (req: PrChecksRequest) => ipcRenderer.invoke("prs:checks", req),
   prFind: (req: PrFindRequest) => ipcRenderer.invoke("prs:find", req),
+  agentsInstalled: () => ipcRenderer.invoke("agents:installed") as Promise<InstalledAgent[]>,
   ghInstalled: () => ipcRenderer.invoke("prs:gh-installed") as Promise<boolean>,
   prWrite: (req: PrWriteRequest) => ipcRenderer.invoke("prs:write", req),
   prMerge: (req: PrMergeRequest) => ipcRenderer.invoke("prs:merge", req),
