@@ -52,4 +52,15 @@ describe("patchBlocks", () => {
     expect(body.children).toHaveLength(2)
     expect(body.children[1]!.textContent).toBe("after")
   })
+
+  it("hands each removed block's nodes over, and marks a line only on a block starting with an element", () => {
+    const body = document.createElement("div")
+    const shown = emptyShown()
+    patchBlocks(body, shown, [b("<p>a</p>", 1), b("text then <br>", 3)])
+    expect((body.querySelector("br") as HTMLElement).dataset.line).toBeUndefined()
+    const gone: Node[][] = []
+    patchBlocks(body, shown, [b("<p>a</p>", 1)], (nodes) => gone.push(nodes))
+    expect(gone).toHaveLength(1)
+    expect(gone[0]!.some((n) => n.textContent?.includes("text then"))).toBe(true)
+  })
 })

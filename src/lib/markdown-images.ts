@@ -170,19 +170,16 @@ async function load(el: HTMLElement, ctx: ImageContext): Promise<void> {
   const from = sourceOf(src, ctx)
   if (!from) return
   altOf(el)
-  if (el.dataset.state !== "loaded") el.dataset.state = "loading" // a loaded one stays as it is
+  // A loaded or failed one stays as it is while it's checked again (no flicker every recheck).
+  if (el.dataset.state !== "loaded" && el.dataset.state !== "failed") el.dataset.state = "loading"
   const got = await get(from.key, from.path, src, ctx)
   if ("error" in got) return failed(el, got.error)
   if (el.querySelector("img")?.getAttribute("src") !== got.dataUrl) show(el, got)
   else el.dataset.state = "loaded"
 }
 
-// One observer per write: images load as they come near the view. Returns its disposer (the
-// next write replaces every placeholder).
-/** Turn a view's image placeholders into images, per `ctx` (only within `nodes`, when given). */
-export function hydrateImages(root: HTMLElement, ctx: ImageContext, nodes?: Node[]): () => void {
-  const lazy: HTMLElement[] = []
-  const found = nodes
+const placeholders = (root: HTMLElement, nodes?: Node[]): HTMLElement[] =>
+  nodes
     ? nodes.flatMap((n) =>
         n instanceof HTMLElement
           ? [
@@ -192,44 +189,92 @@ export function hydrateImages(root: HTMLElement, ctx: ImageContext, nodes?: Node
           : [],
       )
     : [...root.querySelectorAll<HTMLElement>(".md-img[data-src]")]
-  for (const el of found) {
-    const src = el.dataset.src ?? ""
-    const from = sourceOf(src, ctx)
-    if (!from) continue
-    altOf(el)
-    const had = hit(from.key)
-    if (had) {
-      show(el, had) // at once: no layout shift on a re-render
-      if (from.path) lazy.push(el) // a file may have changed: checked by its stamp
-    } else if (inflight.has(from.key)) {
-      lazy.push(el) // clicked, or loading, before this re-render: it joins that load
-    } else if (isWeb(src) && ctx.remote === "click") {
-      el.dataset.state = "click"
-      el.title = `Click to load this image (${hostOf(src)})`
-    } else lazy.push(el)
+
+export const RECHECK_MS = 2000 // a view's file images are checked again (by stamp) this often
+
+/** A view's images over its life: one observer, blocks added and removed as it's patched. */
+export interface ImageLoader {
+  hydrate(nodes?: Node[]): void // placeholders in these nodes (all of the view's when none)
+  forget(nodes: Node[]): void // these left the view: no longer watched
+  recheck(): void // file images kept across a re-render: changed or created since? (throttled)
+  dispose(): void
+}
+
+// A Preview patches only the blocks that changed (lib/markdown-patch): what it adds is hydrated,
+// what it removes is forgotten, and the file images it keeps are checked again now and then (an
+// agent regenerating a diagram, or writing one that failed to load).
+/** The image loader for a view whose content is `root` (`ctx` read when it's needed). */
+export function imageLoader(root: HTMLElement, ctx: () => ImageContext): ImageLoader {
+  let io: IntersectionObserver | null = null
+  let checked = 0
+  const watch = (el: HTMLElement) => {
+    if (typeof IntersectionObserver === "undefined") return void load(el, ctx())
+    if (!io) {
+      // Relative to what scrolls the view (the margin must apply inside it, not to the window).
+      let scroller: Element | null = root.parentElement
+      while (scroller && !/(auto|scroll)/.test(getComputedStyle(scroller).overflowY)) {
+        scroller = scroller.parentElement
+      }
+      const obs = new IntersectionObserver(
+        (entries) => {
+          for (const e of entries) {
+            if (!e.isIntersecting) continue
+            obs.unobserve(e.target)
+            void load(e.target as HTMLElement, ctx())
+          }
+        },
+        { root: scroller, rootMargin: "600px 0px" },
+      )
+      io = obs
+    }
+    io.observe(el)
   }
-  if (!lazy.length) return () => {}
-  if (typeof IntersectionObserver === "undefined") {
-    for (const el of lazy) void load(el, ctx)
-    return () => {}
-  }
-  // Relative to what scrolls the view (the margin must apply inside it, not to the window).
-  let scroller: Element | null = root.parentElement
-  while (scroller && !/(auto|scroll)/.test(getComputedStyle(scroller).overflowY)) {
-    scroller = scroller.parentElement
-  }
-  const io = new IntersectionObserver(
-    (entries) => {
-      for (const e of entries) {
-        if (!e.isIntersecting) continue
-        io.unobserve(e.target)
-        void load(e.target as HTMLElement, ctx)
+  return {
+    hydrate(nodes) {
+      const c = ctx()
+      for (const el of placeholders(root, nodes)) {
+        const src = el.dataset.src ?? ""
+        const from = sourceOf(src, c)
+        if (!from) continue
+        altOf(el)
+        const had = hit(from.key)
+        if (had) {
+          show(el, had) // at once: no layout shift on a re-render
+          if (from.path) watch(el) // a file may have changed: checked by its stamp
+        } else if (inflight.has(from.key)) {
+          watch(el) // clicked, or loading, before this re-render: it joins that load
+        } else if (isWeb(src) && c.remote === "click") {
+          el.dataset.state = "click"
+          el.title = `Click to load this image (${hostOf(src)})`
+        } else watch(el)
       }
     },
-    { root: scroller, rootMargin: "600px 0px" },
-  )
-  for (const el of lazy) io.observe(el)
-  return () => io.disconnect()
+    forget(nodes) {
+      if (io) for (const el of placeholders(root, nodes)) io.unobserve(el)
+    },
+    recheck() {
+      if (Date.now() - checked < RECHECK_MS) return
+      checked = Date.now()
+      const c = ctx()
+      for (const el of placeholders(root)) {
+        const state = el.dataset.state
+        if ((state === "loaded" || state === "failed") && sourceOf(el.dataset.src ?? "", c)?.path) {
+          void load(el, c) // by its stamp: "same" costs a stat in the fs worker
+        }
+      }
+    },
+    dispose() {
+      io?.disconnect()
+      io = null
+    },
+  }
+}
+
+/** Turn a view's image placeholders into images, per `ctx` (only within `nodes`, when given). */
+export function hydrateImages(root: HTMLElement, ctx: ImageContext, nodes?: Node[]): () => void {
+  const loader = imageLoader(root, () => ctx)
+  loader.hydrate(nodes)
+  return () => loader.dispose()
 }
 
 /** A click on a web image waiting for one loads it (true); one loading takes the click too. */

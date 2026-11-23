@@ -228,8 +228,8 @@ function markdownDoc(kb: number): string {
 }
 
 // What a markdown file tab's Preview does while an agent rewrites the file (markdown-view.tsx):
-// the text changes, the worker renders it, and the HTML goes in with one write that keeps the
-// block in view. A section is added at the top each time (the hard case for keeping place).
+// the text changes, the worker renders it, and only the blocks that changed are replaced
+// (lib/markdown-patch), keeping the block in view. A section is added at the top each time (the hard case for keeping place).
 // On screen, scrolled to the middle, so its layout and content-visibility are the real ones.
 /** A markdown Preview re-rendering every `everyMs` beside the keystroke loop. */
 function markdownBeside(kb: number, everyMs: number): Beside {

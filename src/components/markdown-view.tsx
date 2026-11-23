@@ -16,13 +16,18 @@ import type { WslContext } from "../lib/wsl"
 import { blockAt, blockOf, topBlock } from "../lib/markdown-scroll"
 import { emptyShown, patchBlocks, type Shown } from "../lib/markdown-patch"
 import type { Block } from "../lib/markdown"
-import { clickImage, hydrateImages, type ImageContext } from "../lib/markdown-images"
+import {
+  clickImage,
+  imageLoader,
+  type ImageContext,
+  type ImageLoader,
+} from "../lib/markdown-images"
 
-const MAX_DISPOSERS = 32 // image observers kept across writes before one whole pass
 const BIG_HTML = 50 * 1024 // past this, off-screen blocks skip layout (content-visibility)
 
-// Rendered in a worker (lib/markdown-client); the HTML goes in with one innerHTML write, out of
-// React. A re-render (an agent rewriting the file) keeps the block at the top where it was.
+// Rendered in a worker (lib/markdown-client) as blocks; only the blocks that changed are replaced
+// (lib/markdown-patch), out of React. A re-render (an agent rewriting the file) keeps the block at
+// the top where it was.
 /** A markdown file tab's Preview. */
 export function MarkdownView({
   entryId,
@@ -57,22 +62,16 @@ export function MarkdownView({
   const images = useRef<ImageContext>({ remote })
   images.current = { dir, root, wsl, remote }
   const blocks = useRef<Shown>(emptyShown()) // the blocks the body shows (lib/markdown-patch)
-  // Each write hydrates only the nodes it added; their disposers pile up until a whole pass.
-  const disposers = useRef<(() => void)[]>([])
-  const unhydrateAll = () => {
-    disposers.current.forEach((d) => d())
-    disposers.current = []
-  }
-  const hydrateAll = (body: HTMLElement) => {
-    unhydrateAll()
-    disposers.current.push(hydrateImages(body, images.current))
-  }
-  useEffect(() => () => unhydrateAll(), [])
+  // The view's images (lib/markdown-images): blocks a write adds are hydrated, the ones it removes
+  // forgotten, the file images it keeps checked again by their stamp.
+  const loader = useRef<ImageLoader | null>(null)
+  const loaderFor = (body: HTMLElement) =>
+    (loader.current ??= imageLoader(body, () => images.current))
+  useEffect(() => () => loader.current?.dispose(), [])
   // The Web images setting changed: what's shown now follows it.
   useEffect(() => {
     const body = bodyRef.current
-    if (placed.current && body) hydrateAll(body)
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- per setting
+    if (placed.current && body) loaderFor(body).hydrate()
   }, [remote])
   const placed = useRef(false) // the first HTML is in and the view placed
   // Read when HTML lands (maybe renders later): the target asked for most recently.
@@ -118,9 +117,10 @@ export function MarkdownView({
     if (!el || !body) return
     const keep = placed.current && el.scrollTop > 0 ? topBlock(el, body) : null
     body.classList.toggle("big", next.reduce((n, b) => n + b.html.length, 0) > BIG_HTML)
-    const added = patchBlocks(body, blocks.current, next)
-    if (disposers.current.length > MAX_DISPOSERS) hydrateAll(body)
-    else disposers.current.push(hydrateImages(body, images.current, added))
+    const pics = loaderFor(body)
+    const added = patchBlocks(body, blocks.current, next, (gone) => pics.forget(gone))
+    pics.hydrate(added)
+    pics.recheck()
     if (!placed.current) {
       placed.current = true
       return place(true)

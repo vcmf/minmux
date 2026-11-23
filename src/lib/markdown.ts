@@ -39,6 +39,8 @@ const MATH_HINT = /\$\$|\$`|^\s*(?:```|~~~)\s*math\b|\$[^\s$][^$\n]*\$/m
 /** Whether `text` may hold math (KaTeX loads for it). */
 export const mayHaveMath = (text: string) => MATH_HINT.test(text)
 
+const count = (s: string, re: RegExp) => s.match(re)?.length ?? 0
+
 /** A heading's anchor as GitHub makes it: lowercase, punctuation gone, spaces to `-`. */
 export function slugOf(text: string): string {
   return text
@@ -197,14 +199,21 @@ export async function renderMarkdown(text: string, opts: RenderOptions = {}): Pr
   const tokens = md.parse(text, env)
   const blocks: Block[] = []
   let math = false
-  // Each top-level token run (its open to its matching close, or a lone block) is one block.
+  // Each top-level token run (its open to its matching close, or a lone block) is one block. A raw
+  // <details> left open (GitHub's fold: <details><summary>…, markdown, then </details>) takes in
+  // the blocks up to its close, so it folds them as on GitHub (a block is parsed on its own).
+  let open = 0 // raw <details> still open, in the block being built
   for (let i = 0, start = 0, depth = 0; i < tokens.length; i++) {
     depth += tokens[i]!.nesting
     if (depth !== 0) continue
     const html = md.renderer.render(tokens.slice(start, i + 1), md.options, env)
     if (html) {
       math ||= html.includes('class="katex')
-      blocks.push({ html, line: (tokens[start]!.map?.[0] ?? -1) + 1 })
+      const into = open > 0 ? blocks[blocks.length - 1] : undefined
+      if (into) into.html += html
+      else blocks.push({ html, line: (tokens[start]!.map?.[0] ?? -1) + 1 })
+      // Our own tags only (cleanHtml writes them; a user's text is escaped): exact counts.
+      open = Math.max(0, open + count(html, /<details[ >]/g) - count(html, /<\/details>/g))
     }
     start = i + 1
   }

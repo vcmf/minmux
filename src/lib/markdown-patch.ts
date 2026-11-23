@@ -14,7 +14,12 @@ export interface Shown {
 export const emptyShown = (): Shown => ({ html: [], nodes: [] })
 
 /** Bring `body` from `shown` to `next`; returns the nodes added (to hydrate). */
-export function patchBlocks(body: HTMLElement, shown: Shown, next: Block[]): Node[] {
+export function patchBlocks(
+  body: HTMLElement,
+  shown: Shown,
+  next: Block[],
+  onRemove?: (nodes: Node[]) => void, // a block's nodes, as they leave (to stop watching them)
+): Node[] {
   const old = shown.html
   let a = 0
   while (a < old.length && a < next.length && old[a] === next[a]!.html) a++
@@ -26,8 +31,11 @@ export function patchBlocks(body: HTMLElement, shown: Shown, next: Block[]): Nod
   ) {
     z++
   }
-  for (let k = a; k < old.length - z; k++)
-    for (const n of shown.nodes[k]!) n.parentNode?.removeChild(n)
+  for (let k = a; k < old.length - z; k++) {
+    const gone = shown.nodes[k]!
+    for (const n of gone) n.parentNode?.removeChild(n)
+    onRemove?.(gone)
+  }
 
   const changed = next.slice(a, next.length - z)
   const added: Node[][] = []
@@ -50,8 +58,12 @@ export function patchBlocks(body: HTMLElement, shown: Shown, next: Block[]): Nod
   shown.html = next.map((b) => b.html)
   // Every block's line (they move when text is added above): set where it changed.
   next.forEach((b, i) => {
-    const el = shown.nodes[i]!.find((n): n is HTMLElement => n.nodeType === Node.ELEMENT_NODE)
-    if (!el) return
+    // Its first node, when that's an element (raw HTML can start with text: no line then).
+    const first = shown.nodes[i]!.find(
+      (n) => !(n.nodeType === Node.TEXT_NODE && !n.textContent?.trim()),
+    )
+    if (!(first instanceof HTMLElement)) return
+    const el = first
     const line = b.line ? String(b.line) : undefined
     if (el.dataset.line === line) return
     if (line) el.dataset.line = line

@@ -26,6 +26,18 @@ describe("renderMarkdown", () => {
     expect(joined(r)).not.toContain("data-line") // lines move; the HTML compared mustn't
   })
 
+  it("a raw <details> holds the markdown up to its close, as one block", async () => {
+    const r = await renderMarkdown(
+      "<details>\n<summary>Logs</summary>\n\n- a\n- b\n\n</details>\n\nafter\n",
+    )
+    expect(r.blocks).toHaveLength(2)
+    expect(r.blocks[0]!.html).toMatch(/^<details>[\s\S]*<ul>[\s\S]*<\/details>/)
+    expect(r.blocks[1]!.html).toContain("after")
+    const body = document.createElement("div")
+    body.innerHTML = r.blocks[0]!.html
+    expect(body.querySelector("details ul")).not.toBeNull() // folded inside, as on GitHub
+  })
+
   it("text added above leaves the blocks below with the same HTML", async () => {
     const a = await renderMarkdown("para\n\n## Part\n")
     const b = await renderMarkdown("## New\n\nadded\n\npara\n\n## Part\n")
