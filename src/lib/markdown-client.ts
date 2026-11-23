@@ -4,15 +4,23 @@
 import type { Rendered } from "./markdown"
 
 export const MARKDOWN_MAX = 1024 * 1024 // past this a file tab shows its source (DOM cost)
-const KEPT = 8
+const KEPT = 64 // a PR's body and comments each take one…
+const KEPT_CHARS = 4 * 1024 * 1024 // …and big documents only a few
 
 let worker: Worker | null = null
 let failures = 0 // the worker crashed or failed to load: respawned up to MAX_FAILURES times
 const MAX_FAILURES = 3
-const RENDER_TIMEOUT_MS = 10_000 // a render stuck this long: the worker is replaced
 let seq = 0
 const waiting = new Map<number, (out: Rendered | null | undefined) => void>() // undefined: failed
 const kept = new Map<string, Rendered>() // insertion order = least → most recent
+// A watchdog, not a per-request timeout: a PR queues its body and every comment at once, and the
+// queue may take long. Only a worker that answers nothing at all for this long is replaced.
+const SILENT_MS = 10_000
+let watchdog: ReturnType<typeof setTimeout> | undefined
+function watch(): void {
+  clearTimeout(watchdog)
+  watchdog = waiting.size ? setTimeout(fail, SILENT_MS) : undefined
+}
 
 function fail(): void {
   failures++
@@ -20,6 +28,7 @@ function fail(): void {
   worker = null
   waiting.forEach((done) => done(undefined))
   waiting.clear()
+  watch()
 }
 
 function getWorker(): Worker | null {
@@ -29,6 +38,7 @@ function getWorker(): Worker | null {
     worker.onmessage = (e: MessageEvent<{ id: number; out: Rendered | null }>) => {
       waiting.get(e.data.id)?.(e.data.out)
       waiting.delete(e.data.id)
+      watch() // it answered: alive (the next one gets its own SILENT_MS)
     }
     worker.onerror = fail
     worker.onmessageerror = fail
@@ -38,42 +48,50 @@ function getWorker(): Worker | null {
   return worker
 }
 
+const keyOf = (text: string, repo?: string) => (repo ? `${repo}\0${text}` : text)
+
 /** `text`'s rendering from the last few, if it's there. */
-export function renderedNow(text: string): Rendered | undefined {
-  return kept.get(text)
+export function renderedNow(text: string, repo?: string): Rendered | undefined {
+  return kept.get(keyOf(text, repo))
 }
 
-function keep(text: string, r: Rendered): void {
-  kept.delete(text)
-  kept.set(text, r)
-  if (kept.size > KEPT) kept.delete(kept.keys().next().value!)
+let keptChars = 0
+function keep(key: string, r: Rendered): void {
+  const old = kept.get(key)
+  if (old) keptChars -= old.html.length
+  kept.delete(key)
+  kept.set(key, r)
+  keptChars += r.html.length
+  while (kept.size > 1 && (kept.size > KEPT || keptChars > KEPT_CHARS)) {
+    const [k, v] = kept.entries().next().value!
+    kept.delete(k)
+    keptChars -= v.html.length
+  }
 }
 
-/** `text` rendered as markdown; null when it couldn't be. */
-export async function renderMarkdownText(text: string): Promise<Rendered | null> {
-  const now = kept.get(text)
+/** `text` rendered as markdown (as a comment in `repo`, when given); null when it couldn't be. */
+export async function renderMarkdownText(text: string, repo?: string): Promise<Rendered | null> {
+  const key = keyOf(text, repo)
+  const now = kept.get(key)
   if (now) return now
   // Never on this thread where there are workers (xterm draws here): a broken worker shows the
   // source instead. Only tests (no Worker) render here.
   let out: Rendered | null | undefined
   if (typeof Worker === "undefined") {
-    out = await import("./markdown").then((m) => m.renderMarkdown(text)).catch(() => null)
+    out = await import("./markdown").then((m) => m.renderMarkdown(text, { repo })).catch(() => null)
   } else {
     const w = getWorker()
     out = w
       ? await new Promise<Rendered | null | undefined>((resolve) => {
           const id = ++seq
-          const timer = setTimeout(fail, RENDER_TIMEOUT_MS) // every waiting one: the source
-          waiting.set(id, (out) => {
-            clearTimeout(timer)
-            resolve(out)
-          })
-          w.postMessage({ id, text })
+          waiting.set(id, resolve)
+          if (!watchdog) watch()
+          w.postMessage({ id, text, repo })
         })
       : null
   }
   out ??= null
-  if (out) keep(text, out)
+  if (out) keep(key, out)
   return out
 }
 

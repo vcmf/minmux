@@ -53,6 +53,32 @@ describe("renderMarkdown", () => {
   })
 })
 
+describe("a PR's body (repo given)", () => {
+  const pr = async (md: string) => (await renderMarkdown(md, { repo: "o/r" })).html
+
+  it("links #12 and owner/name#12, never in code, a link, a URL or a word", async () => {
+    const out = await pr("Fixes #12 and x/y#3. `#4` [#5](https://a.test) a#6 https://h.test/#7")
+    expect(out).toContain('<a href="https://github.com/o/r/issues/12" data-ref="o/r#12">#12</a>')
+    expect(out).toContain('<a href="https://github.com/x/y/issues/3" data-ref="x/y#3">x/y#3</a>')
+    expect(out.match(/data-ref/g)).toHaveLength(2)
+  })
+
+  it("keeps a newline as a line break, as GitHub's comments do", async () => {
+    expect(await pr("one\ntwo")).toContain("one<br>")
+    expect(await html("one\ntwo")).not.toContain("<br>") // a file: markdown's own rule
+  })
+
+  it("no reference inside raw <code> or <kbd>", async () => {
+    expect(await pr("<code>#12</code> and <kbd>#3</kbd>, but #4")).toMatch(
+      /^(?!.*data-ref="o\/r#(12|3)").*data-ref="o\/r#4"/s,
+    )
+  })
+
+  it("a heading named #12 isn't a reference", async () => {
+    expect(await pr("# Title")).not.toContain("data-ref")
+  })
+})
+
 describe("math", () => {
   it("renders GitHub's four forms", async () => {
     const out = await html(
@@ -117,7 +143,10 @@ describe("safety", () => {
   ]
   it.each(corpus)("%s carries no live markup", async (src) => {
     const out = await html(src)
-    expect(out).not.toMatch(/<(script|img|iframe|style|svg|div|math|a)\b/i)
+    expect(out).not.toMatch(/<(script|img|iframe|style|svg|div|math)\b/i)
+    // the only links: ones we wrote (an image's), with a checked href and nothing else on them
+    for (const a of out.match(/<a\b[^>]*>/gi) ?? [])
+      expect(a).toMatch(/^<a class="md-img" href="[^"]*">$/)
     expect(out).not.toMatch(/<[a-z][^>]*\son[a-z]+\s*=/i) // no event handler on any tag
     expect(out).not.toMatch(/href="(javascript|vbscript|file|data):/i)
   })
@@ -129,6 +158,16 @@ describe("safety", () => {
     expect(out).toContain("<details open>")
     expect(out).toContain("<summary>More</summary>")
     expect(out).toContain("<kbd>⌘</kbd>")
+  })
+
+  it("turns a raw <img> (GitHub's drag-and-drop) into a link to the image", () => {
+    expect(cleanHtml('<img width="800" alt="Shot" src="https://a.test/i.png?x=1&amp;y=2">')).toBe(
+      '<a class="md-img" href="https://a.test/i.png?x=1&amp;y=2">Shot</a>',
+    )
+    expect(cleanHtml("<img src='javascript:alert(1)'>")).toBe(
+      "&lt;img src=&#39;javascript:alert(1)&#39;&gt;",
+    )
+    expect(cleanHtml("<img alt=x>")).toBe("&lt;img alt=x&gt;")
   })
 
   it("drops comments and keeps character references", () => {

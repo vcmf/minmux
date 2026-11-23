@@ -2,6 +2,14 @@
 // and mail through the OS, a relative path as a tab in the same pane (the WORKDIR_OBJECTS rule),
 // `#heading` within the view. Pure.
 
+const SCHEME = /^([a-z][a-z0-9+.-]*):/i
+
+/** A link markdown may write: http(s), mailto, or no scheme (relative, or `#heading`). */
+export function safeLink(url: string): boolean {
+  const scheme = SCHEME.exec(url.trim())
+  return !scheme || /^(?:https?|mailto)$/i.test(scheme[1]!)
+}
+
 /** A clicked link's target; null when it goes nowhere (a scheme we don't open). */
 export type LinkTarget =
   | { kind: "external"; url: string }
@@ -49,4 +57,15 @@ export function linkTarget(href: string, dir: string, root?: string): LinkTarget
   const path = rel.startsWith("/") ? joinPath(root ?? dir, rel) : joinPath(dir, rel)
   const kind = /(?:^|[\\/])\.{0,2}$/.test(rel) ? "folder" : "file" // `dir/`, `..`, `a/.`
   return { kind, path, ...(anchor ? { anchor } : {}) }
+}
+
+/** Where a link in a PR's body or comment goes: GitHub for a relative path (the repo's files). */
+export function prLinkTarget(href: string, repo: string): LinkTarget {
+  const t = linkTarget(href, "/") // resolved from the repo's root (`..` can't climb out)
+  if (t?.kind !== "file" && t?.kind !== "folder") return t
+  const hash = t.anchor ? `#${encodeURIComponent(t.anchor)}` : ""
+  return {
+    kind: "external",
+    url: `https://github.com/${repo}/blob/HEAD${encodeURI(t.path)}${hash}`,
+  }
 }

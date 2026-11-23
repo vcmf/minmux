@@ -3600,19 +3600,45 @@ body.resizing-col {
 .pr-loading {
   margin-top: 16px;
 }
-.pr-md p {
-  margin: 6px 0;
-  font-size: 12px;
+/* A PR's body or comment (markdown-block.tsx): the markdown view, sized for the dialog. */
+.md-view.md-compact {
+  max-width: none;
+  margin: 0;
+  padding: 2px 0;
+  font-size: 12.5px;
   line-height: 1.55;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
 }
-.pr-md a,
+.md-compact :is(p, ul, ol, pre, table, blockquote, details) {
+  margin: 0 0 8px;
+}
+.md-compact > :last-child {
+  margin-bottom: 0;
+}
+.md-compact :is(h1, h2, h3, h4, h5, h6) {
+  margin: 14px 0 8px;
+}
+.md-compact h1 {
+  font-size: 1.4em;
+}
+.md-compact h2 {
+  font-size: 1.25em;
+}
+.md-compact h3 {
+  font-size: 1.1em;
+}
+.md-compact pre code {
+  font-size: 11.5px;
+}
+.md-compact :is(.md-pending, .md-plain) {
+  white-space: pre-wrap;
+}
+.md-compact .md-pending {
+  color: var(--dim);
+}
 .pr-faint a {
   color: var(--accent);
   text-decoration: none;
 }
-.pr-code,
 .pr-hunk {
   margin: 6px 0;
   padding: 8px 10px;
