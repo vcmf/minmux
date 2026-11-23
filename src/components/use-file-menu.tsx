@@ -7,6 +7,7 @@ import {
   fileMenuItems,
   revealLabel,
   isAbsoluteHostPath,
+  isHtmlPath,
   type FileActionId,
 } from "../lib/file-actions"
 
@@ -56,6 +57,8 @@ export function useFileMenu(
       useStore.getState().setPreview({ abs: menu.abs, name: baseName(menu.abs) })
     else if (id === "setRoot") opts.onSetRoot(menu.abs)
     else if (id === "open") ipc.openFile("", menu.abs)
+    else if (id === "browser")
+      ipc.openPath(menu.abs) // the OS default app: its browser
     else if (id === "reveal") ipc.revealPath(menu.abs)
     else if (id === "copyPath") ipc.clipboardWrite(menu.abs)
     else if (id === "copyRel") ipc.clipboardWrite(menu.rel)
@@ -67,6 +70,7 @@ export function useFileMenu(
       y={menu.y}
       items={fileMenuItems({
         isDir: menu.isDir,
+        html: !menu.isDir && isHtmlPath(menu.abs),
         editorName: editor?.name ?? "",
         editorAvailable: editor?.available ?? false,
         revealLabel: revealLabel(platform),

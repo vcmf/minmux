@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react"
-import { ArrowSquareOut, FolderOpen, FolderSimple } from "@phosphor-icons/react"
+import { ArrowSquareOut, Browser, FolderOpen, FolderSimple } from "@phosphor-icons/react"
 import { useStore } from "../store"
 import { ipc } from "../lib/ipc"
 import { watches } from "../lib/fs-reads"
@@ -14,7 +14,7 @@ import { MARKDOWN_MAX } from "../lib/markdown-client"
 import { MarkdownView } from "./markdown-view"
 import { topBlock } from "../lib/markdown-scroll"
 import type { FileView as ViewName } from "../lib/file-store"
-import { isAbsoluteHostPath, revealLabel } from "../lib/file-actions"
+import { isAbsoluteHostPath, isHtmlPath, revealLabel } from "../lib/file-actions"
 import { findPane } from "../lib/pane-tree"
 import { rowWindow } from "../lib/virtual-rows"
 import { shortCwd } from "../lib/session-label"
@@ -240,6 +240,7 @@ export function FileView({ entryId, tabId }: { entryId: string; tabId: string })
     if (pane) s.openFolder(dir, { tabId, paneId: pane.id, wsl })
   }
   const canReveal = !wsl && isAbsoluteHostPath(path, platform)
+  const canBrowse = canReveal && isHtmlPath(path) // its default app: the OS browser
 
   if (!file) return null
   return (
@@ -278,6 +279,16 @@ export function FileView({ entryId, tabId }: { entryId: string; tabId: string })
               onClick={() => ipc.revealPath(path)}
             >
               <FolderOpen size={13} />
+            </button>
+          )}
+          {canBrowse && (
+            <button
+              className="iconbtn"
+              style={btn}
+              title="Open in browser"
+              onClick={() => ipc.openPath(path)}
+            >
+              <Browser size={13} />
             </button>
           )}
           {!wsl && (

@@ -5,6 +5,7 @@ import {
   clampMenuPosition,
   revealLabel,
   isAbsoluteHostPath,
+  isHtmlPath,
 } from "./file-actions"
 
 const base = { editorName: "VS Code", editorAvailable: true, revealLabel: "Reveal in Finder" }
@@ -37,9 +38,32 @@ describe("fileMenuItems", () => {
     expect(open.hint).toBe("not found")
   })
 
+  it("a web page also gets Open in browser, after Open", () => {
+    const items = fileMenuItems({ ...base, isDir: false, html: true })
+    expect(items.map((i) => i.id)).toEqual([
+      "preview",
+      "open",
+      "browser",
+      "reveal",
+      "copyPath",
+      "copyRel",
+    ])
+    expect(items.find((i) => i.id === "browser")!.label).toBe("Open in browser")
+  })
+
   it("uses the OS-specific reveal label", () => {
     const items = fileMenuItems({ ...base, isDir: true, revealLabel: "Show in File Manager" })
     expect(items.find((i) => i.id === "reveal")!.label).toBe("Show in File Manager")
+  })
+})
+
+describe("isHtmlPath", () => {
+  it("matches .html and .htm, any case", () => {
+    expect(isHtmlPath("/w/index.html")).toBe(true)
+    expect(isHtmlPath("/w/a.HTM")).toBe(true)
+    expect(isHtmlPath("/w/a.xhtml")).toBe(false)
+    expect(isHtmlPath("/w/html")).toBe(false)
+    expect(isHtmlPath("/w/a.html.bak")).toBe(false)
   })
 })
 

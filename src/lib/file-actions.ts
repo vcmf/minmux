@@ -18,6 +18,9 @@ export function isAbsoluteHostPath(p: string, platform?: string): boolean {
   return /^\//.test(p) && platform !== "win32" // on Windows a /… path is Git Bash's, not the host's
 }
 
+/** A web page the OS default browser opens (open-policy allows .html/.htm as data). */
+export const isHtmlPath = (p: string): boolean => /\.html?$/i.test(p)
+
 // Platform-appropriate label for the reveal-in-file-manager action.
 export function revealLabel(platform: string): string {
   if (platform === "darwin") return "Reveal in Finder"
@@ -26,7 +29,15 @@ export function revealLabel(platform: string): string {
 }
 
 export type FileActionId =
-  "preview" | "open" | "setRoot" | "reveal" | "copyPath" | "copyRel" | "openHere" | "openTab"
+  | "preview"
+  | "open"
+  | "browser"
+  | "setRoot"
+  | "reveal"
+  | "copyPath"
+  | "copyRel"
+  | "openHere"
+  | "openTab"
 
 export interface MenuItemSpec<Id extends string = FileActionId> {
   id: Id
@@ -41,6 +52,7 @@ export interface FileMenuInput {
   editorName: string // "" when no editor is available
   editorAvailable: boolean
   revealLabel: string // OS-specific, from editor-detect.revealLabel
+  html?: boolean // a web page: also "Open in browser"
 }
 
 /** Build the ordered menu for a file or folder row. Folders skip "Open in editor"
@@ -57,6 +69,7 @@ export function fileMenuItems(input: FileMenuInput): MenuItemSpec[] {
       disabled: !input.editorAvailable,
       hint: input.editorAvailable ? undefined : "not found",
     })
+    if (input.html) items.push({ id: "browser", label: "Open in browser" })
   }
   items.push({ id: "reveal", label: input.revealLabel })
   items.push({ id: "copyPath", label: "Copy path", separatorBefore: true })
