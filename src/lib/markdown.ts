@@ -9,6 +9,11 @@ import { escapeHtml, HIGHLIGHT_MAX } from "./file-preview"
 import { syncHighlighter } from "./highlighter"
 import { cleanHtml } from "./markdown-html"
 
+/** How to render: `repo` (owner/name) for a PR's body or comment, GitHub's comment rules. */
+export interface RenderOptions {
+  repo?: string
+}
+
 /** What a rendered document is: its HTML, and whether that has math (KaTeX's CSS then). */
 export interface Rendered {
   html: string
@@ -68,6 +73,48 @@ function marks(state: StateCore): void {
   })
 }
 
+// `#12` and `owner/name#12`, as GitHub links them in a comment (not in code, not in a link). Each
+// goes to its issues URL (GitHub sends a PR's on to the PR), marked `data-ref` for the dialog.
+const REF = /(?<![\w/#&.:-])(?:([\w.-]+\/[\w.-]+))?#(\d+)\b/g
+
+/** A PR body's references, as links. */
+function refs(state: StateCore): void {
+  const repo = (state.env as RenderOptions | undefined)?.repo
+  if (!repo) return
+  const text = (s: string) => {
+    const t = new state.Token("text", "", 0)
+    t.content = s
+    return t
+  }
+  for (const block of state.tokens) {
+    if (block.type !== "inline" || !block.children) continue
+    let inLink = 0
+    const out: Token[] = []
+    for (const t of block.children) {
+      if (t.type === "link_open") inLink++
+      else if (t.type === "link_close") inLink--
+      if (t.type !== "text" || inLink > 0 || !t.content.includes("#")) {
+        out.push(t)
+        continue
+      }
+      let at = 0
+      for (const m of t.content.matchAll(REF)) {
+        if (m.index > at) out.push(text(t.content.slice(at, m.index)))
+        const r = m[1] ?? repo
+        const open = new state.Token("link_open", "a", 1)
+        open.attrs = [
+          ["href", `https://github.com/${r}/issues/${m[2]}`],
+          ["data-ref", `${r}#${m[2]}`],
+        ]
+        out.push(open, text(m[0]), new state.Token("link_close", "a", -1))
+        at = m.index + m[0].length
+      }
+      if (at < t.content.length) out.push(at ? text(t.content.slice(at)) : t)
+    }
+    block.children = out
+  }
+}
+
 /** GitHub's $`…`$ inline math (ahead of the `$…$` rule, which would keep the backticks). */
 function backtickMath(state: StateInline, silent: boolean): boolean {
   const { src, pos } = state
@@ -110,6 +157,7 @@ function base(): Md {
     if (depth > 0) return `<span class="md-img">${alt}</span>`
     return `<a class="md-img" href="${escapeHtml(src)}">${alt}</a>`
   }
+  md.core.ruler.push("minmux_refs", refs)
   md.core.ruler.push("minmux_marks", marks)
   return md
 }
@@ -135,10 +183,11 @@ function mathMd(): Promise<Md> {
 }
 
 /** `text` rendered (KaTeX and highlight.js load the first time a document needs them). */
-export async function renderMarkdown(text: string): Promise<Rendered> {
+export async function renderMarkdown(text: string, opts: RenderOptions = {}): Promise<Rendered> {
   if (/^\s*(?:```|~~~)/m.test(text)) await loadHighlight()
   let md = (plain ??= base())
   if (mayHaveMath(text)) md = await mathMd().catch(() => md)
-  const html = md.render(text)
+  md.set({ breaks: !!opts.repo }) // GitHub's comments: a newline is a line break
+  const html = md.render(text, { repo: opts.repo })
   return { html, math: html.includes('class="katex') }
 }

@@ -69,7 +69,7 @@ describe("PrDetailView", () => {
     expect(screen.getByText(/Review threads \(2, 1 open\)/)).toBeInTheDocument()
     expect(screen.getByText("+new")).toBeInTheDocument()
     expect(screen.getByText("Looks good")).toBeInTheDocument()
-    fireEvent.click(screen.getByText("https://x.io"))
+    fireEvent.click(await screen.findByText("https://x.io")) // rendered: a link
     expect(ipc.openExternal).toHaveBeenCalledWith("https://x.io")
   })
 
@@ -138,5 +138,51 @@ describe("PrDetailView", () => {
     vi.mocked(ipc.prDetail).mockResolvedValue({ ok: false, error: "offline" })
     render(<PrDetailView row={row(5)} />)
     expect(await screen.findByText(/Can't reach GitHub/)).toBeInTheDocument()
+  })
+})
+
+describe("PrDetailView: markdown bodies", () => {
+  const body =
+    "## Summary\n\n- [x] done\n\nFixes #12, see #13 and [the doc](docs/x.md).\n\n<img src=x onerror=alert(1)>"
+  const links = {
+    closes: [
+      {
+        url: "https://github.com/o/r/issues/12",
+        number: 12,
+        repo: "o/r",
+        title: "The bug",
+        kind: "issue" as const,
+        state: null,
+      },
+    ],
+    mentions: [],
+    mentionedBy: [],
+  }
+
+  it("renders as GitHub does, raw HTML as text", async () => {
+    vi.mocked(ipc.prDetail).mockResolvedValue({ ok: true, detail: detail(20, { body, links }) })
+    const { container } = render(<PrDetailView row={row(20)} />)
+    await waitFor(() => expect(container.querySelector(".pr-md h2")).not.toBeNull())
+    expect(container.querySelector('.pr-md input[type="checkbox"]')).not.toBeNull()
+    expect(container.querySelector(".pr-md img")).toBeNull()
+    expect(container.querySelector(".pr-md")!.textContent).toContain("<img src=x")
+  })
+
+  it("a reference selects a listed PR, else opens on GitHub with its title as tooltip", async () => {
+    const onGo = vi.fn((pr: { number: number }) => pr.number === 13)
+    vi.mocked(ipc.prDetail).mockResolvedValue({ ok: true, detail: detail(21, { body, links }) })
+    const { container } = render(<PrDetailView row={row(21)} onGo={onGo} />)
+    const ref = (n: number) => container.querySelector<HTMLElement>(`.pr-md a[data-ref="o/r#${n}"]`)
+    await waitFor(() => expect(ref(12)).not.toBeNull())
+    const twelve = ref(12)!
+    expect(twelve.getAttribute("title")).toBe("The bug")
+    fireEvent.click(twelve)
+    expect(onGo).toHaveBeenCalledWith({ repo: "o/r", number: 12 })
+    expect(ipc.openExternal).toHaveBeenCalledWith("https://github.com/o/r/issues/12")
+    vi.mocked(ipc.openExternal).mockClear()
+    fireEvent.click(ref(13)!) // listed: selected in the dialog, not opened
+    expect(ipc.openExternal).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByText("the doc"))
+    expect(ipc.openExternal).toHaveBeenCalledWith("https://github.com/o/r/blob/HEAD/docs/x.md")
   })
 })

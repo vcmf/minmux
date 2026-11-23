@@ -3,7 +3,6 @@ import {
   bodyBlocks,
   bodyRefs,
   hunkTail,
-  linkify,
   parsePrDetail,
   threadsByFile,
   when,
@@ -216,17 +215,6 @@ describe("bodyBlocks", () => {
     expect(bodyBlocks("<img src=x onerror=alert(1)>")).toEqual([
       { code: false, text: "<img src=x onerror=alert(1)>" }, // text, never HTML
     ])
-  })
-})
-
-describe("linkify", () => {
-  it("http(s) links, trailing punctuation left out", () => {
-    expect(linkify("see https://x.io/a, ok")).toEqual([
-      { text: "see " },
-      { text: "https://x.io/a", url: "https://x.io/a" },
-      { text: ", ok" },
-    ])
-    expect(linkify("javascript:alert(1)")).toEqual([{ text: "javascript:alert(1)" }])
   })
 })
 

@@ -53,6 +53,26 @@ describe("renderMarkdown", () => {
   })
 })
 
+describe("a PR's body (repo given)", () => {
+  const pr = async (md: string) => (await renderMarkdown(md, { repo: "o/r" })).html
+
+  it("links #12 and owner/name#12, never in code, a link, a URL or a word", async () => {
+    const out = await pr("Fixes #12 and x/y#3. `#4` [#5](https://a.test) a#6 https://h.test/#7")
+    expect(out).toContain('<a href="https://github.com/o/r/issues/12" data-ref="o/r#12">#12</a>')
+    expect(out).toContain('<a href="https://github.com/x/y/issues/3" data-ref="x/y#3">x/y#3</a>')
+    expect(out.match(/data-ref/g)).toHaveLength(2)
+  })
+
+  it("keeps a newline as a line break, as GitHub's comments do", async () => {
+    expect(await pr("one\ntwo")).toContain("one<br>")
+    expect(await html("one\ntwo")).not.toContain("<br>") // a file: markdown's own rule
+  })
+
+  it("a heading named #12 isn't a reference", async () => {
+    expect(await pr("# Title")).not.toContain("data-ref")
+  })
+})
+
 describe("math", () => {
   it("renders GitHub's four forms", async () => {
     const out = await html(

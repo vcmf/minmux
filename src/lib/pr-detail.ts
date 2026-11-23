@@ -323,19 +323,6 @@ export function bodyBlocks(body: string): { code: boolean; text: string }[] {
   return out
 }
 
-/** Text split into plain runs and http(s) links (opened in the browser, never as HTML). */
-export function linkify(text: string): { text: string; url?: string }[] {
-  const out: { text: string; url?: string }[] = []
-  let at = 0
-  for (const m of text.matchAll(/https?:\/\/[^\s<>()"'`]+[^\s<>()"'`.,;:!?]/g)) {
-    if (m.index > at) out.push({ text: text.slice(at, m.index) })
-    out.push({ text: m[0], url: m[0] })
-    at = m.index + m[0].length
-  }
-  if (at < text.length) out.push({ text: text.slice(at) })
-  return out
-}
-
 /** When a comment was written, short. */
 export function when(at: string, now = Date.now()): string {
   const t = Date.parse(at)

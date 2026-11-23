@@ -50,3 +50,11 @@ export function linkTarget(href: string, dir: string, root?: string): LinkTarget
   const kind = /(?:^|[\\/])\.{0,2}$/.test(rel) ? "folder" : "file" // `dir/`, `..`, `a/.`
   return { kind, path, ...(anchor ? { anchor } : {}) }
 }
+
+/** Where a link in a PR's body or comment goes: GitHub for a relative path (the repo's files). */
+export function prLinkTarget(href: string, repo: string): LinkTarget {
+  const t = linkTarget(href, "/")
+  if (t?.kind !== "file" && t?.kind !== "folder") return t
+  const rel = href.trim().replace(/^(?:\.\/|\/)+/, "")
+  return { kind: "external", url: `https://github.com/${repo}/blob/HEAD/${rel}` }
+}

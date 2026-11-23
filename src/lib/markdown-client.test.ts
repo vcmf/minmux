@@ -10,11 +10,11 @@ class FakeWorker {
   constructor() {
     spawned++
   }
-  postMessage(m: { id: number; text: string }) {
+  postMessage(m: { id: number; text: string; repo?: string }) {
     if (mode === "crash") return void setTimeout(() => this.onerror?.(), 0)
     if (mode === "hang") return
     void import("./markdown").then(async ({ renderMarkdown }) => {
-      const out = await renderMarkdown(m.text)
+      const out = await renderMarkdown(m.text, { repo: m.repo })
       this.onmessage?.({ data: { id: m.id, out } } as MessageEvent)
     })
   }
@@ -41,8 +41,20 @@ describe("renderMarkdownText", () => {
     expect(r!.html).toContain("<h1")
     expect(c.renderedNow("# One")).toBe(r)
     expect(await c.renderMarkdownText("# One")).toBe(r) // from what's kept
-    for (let i = 0; i < 9; i++) await c.renderMarkdownText(`text ${i}`)
+    for (let i = 0; i < 64; i++) await c.renderMarkdownText(`text ${i}`)
     expect(c.renderedNow("# One")).toBeUndefined() // the oldest went
+    expect(c.renderedNow("text 63")).toBeDefined()
+    await c.renderMarkdownText("x".repeat(5 * 1024 * 1024)) // past the size cap alone: kept, the rest go
+    expect(c.renderedNow("text 63")).toBeUndefined()
+  })
+
+  it("keeps a PR comment apart from the same text in a file", async () => {
+    const c = await client()
+    const file = await c.renderMarkdownText("see #12")
+    const pr = await c.renderMarkdownText("see #12", "o/r")
+    expect(file!.html).not.toContain("data-ref")
+    expect(pr!.html).toContain('data-ref="o/r#12"')
+    expect(c.renderedNow("see #12", "o/r")).toBe(pr)
   })
 
   it("a crashed worker gives null (the source shows), respawned a few times, never this thread", async () => {

@@ -136,10 +136,20 @@ onclick=…>`), entity-encoded schemes, nested and unclosed tags, and `<img>`, `
 
 ### In the PR dialog
 
-PR bodies and comments render with the same worker and allowlist, replacing `bodyBlocks` and
-`Text`. Two inline rules keep what the dialog does today: a bare `#123` links to that PR (with its
-title when the dialog knows it), and links open through `ipc.openExternal`. GitHub's own HTML
-(`bodyHTML`) is not used (see "Challenges").
+PR bodies and comments render with the same worker and allowlist (`markdown-block.tsx`), replacing
+`bodyBlocks` and `Text`, with GitHub's comment rules (the `repo` option):
+
+- `#123` and `owner/name#123` link to GitHub's issues URL (which forwards a PR's), never inside
+  code or an existing link. Clicking one selects it in the dialog when it's listed there, as the
+  Closes / Mentions links do; otherwise it opens on GitHub. Its title, when the dialog knows it,
+  is the tooltip.
+- A newline is a line break, as GitHub's comments render it.
+- A relative link goes to the repo's file on GitHub (`blob/HEAD/<path>`); other links open
+  through `ipc.openExternal`.
+- `:emoji:` shortcodes stay text: the table is about 50 KB, and agents write emoji themselves.
+- A body shows as plain text until the worker answers; one rendered before shows at once.
+
+GitHub's own HTML (`bodyHTML`) is not used (see "Challenges").
 
 ### Look
 
