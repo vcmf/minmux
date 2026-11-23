@@ -135,6 +135,9 @@ rules also in `electron/CLAUDE.md` (loaded on demand). Design detail in `docs/AR
 - **On Windows the app spawns `wsl.exe`** — never runs _inside_ WSL. → GOTCHAS #windows
 - **Hidden surfaces (and visited background tabs) are parked** — opened off-screen,
   render-paused — not `visibility:hidden`. Unvisited background tabs aren't started at all. → GOTCHAS #hidden-terminals
+- **The built renderer has a Content-Security-Policy** (`electron/csp.ts`, added to the built
+  `index.html`): only bundled scripts run, no inline handlers, no `eval`; `index.html`'s inline
+  script is allowed by a hash computed at build. The dev server runs without it.
 - **No dark flash on launch** needs the `index.html` pre-paint script + `settingsLoaded` gate +
   saved window bg. → GOTCHAS #first-paint-theme
 - **`/color` + `/rename` live only in Claude's transcript**; slash commands fire no hook. → GOTCHAS #claude-transcript
