@@ -1,5 +1,5 @@
 import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react"
-import { FolderSimple } from "@phosphor-icons/react"
+import { Folder } from "@phosphor-icons/react"
 import { useStore } from "../store"
 import { ipc } from "../lib/ipc"
 import type { WslContext } from "../lib/wsl"
@@ -226,7 +226,7 @@ export function PathInput({
                 complete(name)
               }}
             >
-              <FolderSimple size={13} className="path-suggest-icon" />
+              <Folder size={13} weight="fill" className="path-suggest-icon" />
               <span>
                 <b>{name.slice(0, q.prefix.length)}</b>
                 {name.slice(q.prefix.length)}
