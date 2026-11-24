@@ -1840,3 +1840,18 @@ describe("PrDialog graph view", () => {
     expect(localStorage.getItem("minmux.prDialog.view")).toBe("graph")
   })
 })
+
+describe("PrDialog graph view, empty", () => {
+  it("an empty tab says so in the graph, and the arrows still switch tabs", async () => {
+    localStorage.setItem("minmux.prDialog.view", "graph")
+    answer({ mine: [row(1)], review: [] })
+    render(<PrDialog />)
+    const dialog = screen.getByRole("dialog")
+    await screen.findByRole("option", { name: /^#1/ })
+    fireEvent.keyDown(dialog, { key: "2" })
+    expect(await screen.findByText("No pull requests wait for your review.")).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: /Graph/ })).toHaveAttribute("aria-pressed", "true")
+    fireEvent.keyDown(dialog, { key: "ArrowLeft" })
+    expect(screen.getByRole("tab", { name: /Mine/ })).toHaveAttribute("aria-selected", "true")
+  })
+})

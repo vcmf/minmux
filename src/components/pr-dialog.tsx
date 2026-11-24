@@ -630,7 +630,8 @@ export function PrDialog() {
     const control = target.closest("button, input, select, textarea, a")
     if (control && (k === "Enter" || k === " ")) return
     // (the graph's arrows move in it: tabs stay on 1/2/3 there)
-    const t = view === "list" || !GRAPH_KEYS[k] ? tabFor(k, shownTab, tabs) : null
+    const moves = !!graph && graph.nodes.length > 0 // (an empty graph: arrows switch tabs)
+    const t = !moves || !GRAPH_KEYS[k] ? tabFor(k, shownTab, tabs) : null
     if (t) {
       e.preventDefault()
       return setTab(t)
@@ -639,7 +640,7 @@ export function PrDialog() {
       e.preventDefault()
       return setView(view === "graph" ? "list" : "graph")
     }
-    if (graph && GRAPH_KEYS[k]) {
+    if (moves && GRAPH_KEYS[k]) {
       e.preventDefault()
       const next = graphMove(graph, linked ? null : (row?.url ?? null), GRAPH_KEYS[k])
       if (next) select(next)
@@ -676,7 +677,7 @@ export function PrDialog() {
     })
   useEffect(() => {
     listRef.current?.querySelector(".pr-row.sel")?.scrollIntoView?.({ block: "nearest" })
-  }, [row?.url, shownTab])
+  }, [row?.url, shownTab, view]) // (back from the graph too: its pick may be far down)
 
   const several = accounts.length > 1
   // Names in the detail: yours (any of gh's accounts) marked, the PR's author with a chip.
@@ -706,6 +707,27 @@ export function PrDialog() {
       : t === "review"
         ? "Review requested"
         : `${lists?.repoName ?? "Repo"}${several && lists?.repoAccount ? ` · @${lists.repoAccount}` : ""}`
+
+  // What an empty tab says (the list's and the graph's alike).
+  const empty =
+    lists && rows.length === 0
+      ? !answered(lists, shownTab)
+        ? "Loading…" // (this tab's search still running; the others may be in)
+        : shownTab === "review"
+          ? "No pull requests wait for your review."
+          : shownTab === "repo" && lists.repoVisible === false && lists.accountsPending
+            ? "Checking which of gh's accounts can see it…"
+            : shownTab === "repo" && lists.repoVisible === false
+              ? `${picked ? `@${picked} can't` : several ? "No logged-in gh account can" : "gh's account can't"} see ${lists.repoName}.${several && picked ? " Pick another account, or All accounts." : ""}`
+              : "No pull requests."
+      : !lists && !error
+        ? "Loading…"
+        : null
+  // The tab listing a stack's base PR that this tab doesn't (a graph stub names it).
+  const tabOf = (pr: PrRow) => {
+    const t = tabs.find((t) => (lists?.[t] ?? []).some((r) => r.url === pr.url))
+    return t ? label(t) : undefined
+  }
 
   const dialog = (
     <div className="settings-overlay" onMouseDown={close}>
@@ -782,7 +804,11 @@ export function PrDialog() {
         {lists?.warning && !error && (
           <div className="pr-error stale">Some pull requests couldn't load: {lists.warning}</div>
         )}
-        {graph && rows.length > 0 ? (
+        {graph && empty ? (
+          <div className="pr-graph">
+            <div className="pr-empty">{empty}</div>
+          </div>
+        ) : graph ? (
           <PrGraphView
             graph={graph}
             selected={linked ? null : (row?.url ?? null)}
@@ -793,24 +819,12 @@ export function PrDialog() {
             onOpen={openInList}
             onRoot={openRoot}
             onGo={goTo}
+            tabOf={tabOf}
           />
         ) : (
           <div className="pr-body">
             <div className="pr-list" ref={listRef} role="listbox" aria-label={label(shownTab)}>
-              {lists && rows.length === 0 && (
-                <div className="pr-empty">
-                  {!answered(lists, shownTab)
-                    ? "Loading…" // (this tab's search still running; the others may be in)
-                    : shownTab === "review"
-                      ? "No pull requests wait for your review."
-                      : shownTab === "repo" && lists.repoVisible === false && lists.accountsPending
-                        ? "Checking which of gh's accounts can see it…"
-                        : shownTab === "repo" && lists.repoVisible === false
-                          ? `${picked ? `@${picked} can't` : several ? "No logged-in gh account can" : "gh's account can't"} see ${lists.repoName}.${several && picked ? " Pick another account, or All accounts." : ""}`
-                          : "No pull requests."}
-                </div>
-              )}
-              {!lists && !error && <div className="pr-empty">Loading…</div>}
+              {empty && <div className="pr-empty">{empty}</div>}
               {stack.map((s) => (
                 <PrListRow
                   key={s.row.url}

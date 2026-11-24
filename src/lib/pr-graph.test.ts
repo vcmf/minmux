@@ -103,7 +103,10 @@ describe("graphLayout", () => {
 
   it("a base that's neither the default branch nor a listed PR: the edge says which", () => {
     const g = layout([row(1, { base: "release/1.2" }), row(2)])
-    expect(g.labels.map((l) => l.text)).toEqual(["release/1.2"])
+    expect(g.labels.map((l) => l.text)).toEqual(["on release/1.2"])
+    // over its card, clear of the root
+    expect(g.labels[0]!.x).toBe(node(g, 1).x + 4)
+    expect(g.labels[0]!.y).toBeLessThan(node(g, 1).y)
   })
 
   it("a base PR in another tab: a stub between the root and the PR, one column right", () => {
@@ -113,6 +116,16 @@ describe("graphLayout", () => {
     expect(node(g, 2).col).toBe(1)
     expect(g.edges).toHaveLength(2) // root → stub → PR
     expect(g.labels).toEqual([]) // (the stub says it)
+  })
+
+  it("two stacks on the same PR in another tab: a stub each, told apart by their PR", () => {
+    const base = row(9)
+    const rows = [row(2, { base: "b9" }), row(3, { base: "b9" })]
+    const g = layout(rows, [base, ...rows])
+    expect(g.stubs.map((s) => [s.on.number, s.for])).toEqual([
+      [9, row(2).url],
+      [9, row(3).url],
+    ])
   })
 
   it("a fork PR stacks under the PR whose head is its base, as the list does", () => {

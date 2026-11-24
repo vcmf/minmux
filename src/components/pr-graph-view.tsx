@@ -20,6 +20,7 @@ import type { PrRow } from "../lib/pr-dashboard"
 import { prStateUi } from "../lib/pane-git"
 import { cardLook, GRAPH, type CardLook, type GraphLayout } from "../lib/pr-graph"
 import { ipc } from "../lib/ipc"
+import { repoUrl } from "../lib/pr-link"
 import { toDialog } from "./to-dialog"
 
 /** The word a card's status shows (none for a ready PR). */
@@ -42,8 +43,10 @@ export function PrGraphView(props: {
   onOpen: (url: string) => void
   onRoot: (repo: string) => void
   onGo: (pr: PrRow) => boolean
+  tabOf: (pr: PrRow) => string | undefined // the tab that lists a stub's PR
 }) {
-  const { graph, selected, hereUrl, panes, titleOf, focusedRepo, onOpen, onRoot, onGo } = props
+  const { graph, selected, hereUrl, panes, titleOf, focusedRepo, onOpen, onRoot, onGo, tabOf } =
+    props
   const ref = useRef<HTMLDivElement>(null)
   useEffect(() => {
     ref.current?.querySelector(".pr-gcard.sel")?.scrollIntoView?.({
@@ -77,11 +80,6 @@ export function PrGraphView(props: {
             <path key={e.key} d={e.d} className={e.hot ? "hot" : undefined} />
           ))}
         </svg>
-        {graph.labels.map((l) => (
-          <span key={`${l.x} ${l.y}`} className="pr-glabel" style={{ left: l.x, top: l.y }}>
-            {l.text}
-          </span>
-        ))}
         {graph.roots.map((r) => {
           const tab = !!focusedRepo && focusedRepo.toLowerCase() === r.repo.toLowerCase()
           const n = counts.get(r.repo.toLowerCase()) ?? 0
@@ -109,22 +107,32 @@ export function PrGraphView(props: {
                   {n} PR{n === 1 ? "" : "s"}
                 </span>
               </button>
-              <ExternalButton url={`https://github.com/${r.repo}`} what={r.repo} />
+              <ExternalButton url={repoUrl(r.repo)} what={r.repo} />
             </div>
           )
         })}
+        {graph.labels.map((l) => (
+          <span
+            key={`${l.x} ${l.y}`}
+            className="pr-glabel"
+            style={{ left: l.x, top: l.y, maxWidth: G.cardW - 8 }}
+          >
+            {l.text}
+          </span>
+        ))}
         {graph.stubs.map((s) => (
           <button
-            key={s.on.url}
+            key={s.for}
             className="pr-gstub"
             style={{ left: s.x, top: s.y, width: G.stubW, height: G.stubH }}
-            title={`Stacked on #${s.on.number}: ${s.on.title} (in another tab)`}
+            title={`Stacked on #${s.on.number}: ${s.on.title}${tabOf(s.on) ? ` (in ${tabOf(s.on)})` : ""}`}
             onClick={(e) => {
               toDialog(e.currentTarget)
               onGo(s.on)
             }}
           >
-            on #{s.on.number}
+            #{s.on.number}
+            {tabOf(s.on) ? ` · ${tabOf(s.on)}` : ""}
           </button>
         ))}
         {graph.nodes.map((n) => (
@@ -145,11 +153,11 @@ export function PrGraphView(props: {
   )
 }
 
-function ExternalButton({ url, what }: { url: string; what: string }) {
+function ExternalButton({ url, what, hint }: { url: string; what: string; hint?: string }) {
   return (
     <button
       className="pr-gext"
-      title={`Open ${what} on GitHub (o)`}
+      title={`Open ${what} on GitHub${hint ? ` (${hint})` : ""}`}
       aria-label={`Open ${what} on GitHub`}
       onClick={(e) => {
         ipc.openExternal(url)
@@ -196,7 +204,7 @@ function PrCard(props: {
     >
       <button
         className="pr-gopen"
-        title={`Open #${row.number} (Enter)`}
+        title={cardTip(row, word, look, panes, titleOf)}
         aria-label={`Open #${row.number} in the list`}
         onClick={(e) => {
           toDialog(e.currentTarget)
@@ -230,9 +238,33 @@ function PrCard(props: {
         <Where panes={panes} titleOf={titleOf} />
         {here && <span className="pr-chip pane here">here</span>}
       </div>
-      <ExternalButton url={row.url} what={`#${row.number}`} />
+      <ExternalButton url={row.url} what={`#${row.number}`} hint="o" />
     </div>
   )
+}
+
+/** A card's hover text (its parts take no pointer: the card's button has it all). */
+function cardTip(
+  row: PrRow,
+  word: string,
+  look: CardLook,
+  panes: PrPane[],
+  titleOf: (pane: string) => string,
+): string {
+  const state = [word, look.approved ? "approved" : ""].filter(Boolean).join(", ")
+  const where = panes.length
+    ? `Checked out in ${panes.map((p) => titleOf(p.pane)).join(", ")}`
+    : "Not checked out"
+  const comments = `${row.comments} comment${row.comments === 1 ? "" : "s"}`
+  return [
+    `#${row.number} ${row.title}`,
+    state,
+    `${row.head} · ${comments}`,
+    where,
+    "Enter opens it",
+  ]
+    .filter(Boolean)
+    .join("\n")
 }
 
 /** Where a PR is checked out: the busiest pane's agent and status, else a terminal. */

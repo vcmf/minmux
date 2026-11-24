@@ -63,6 +63,7 @@ export interface GraphNode {
 /** The base PR of a stack's bottom, listed in another tab: a small node opening it. */
 export interface GraphStub {
   on: PrRow
+  for: string // the url of the PR it leads to (two stacks can share a base)
   x: number
   y: number
 }
@@ -77,13 +78,13 @@ export interface GraphEdge {
 /** A bottom PR's base branch that's neither the default branch nor a known PR's. */
 export interface GraphLabel {
   text: string
-  x: number // its right end (it sits left of the card, over the edge)
+  x: number // its left end: over the card's top edge, in the gap above it
   y: number
 }
 
 export interface GraphLayout {
   roots: GraphRoot[]
-  nodes: GraphNode[] // in the list's order
+  nodes: GraphNode[] // grouped by repo, in the list's order within each
   stubs: GraphStub[]
   edges: GraphEdge[]
   labels: GraphLabel[]
@@ -207,7 +208,7 @@ export function graphLayout(stack: StackRow[], here?: string): GraphLayout {
         // root → stub → the PR, one column right
         const sx = colX(0)
         const sy = mid - G.stubH / 2
-        out.stubs.push({ on, x: sx, y: sy })
+        out.stubs.push({ on, for: row.url, x: sx, y: sy })
         out.edges.push({
           key: `root ${row.url} stub`,
           d: edgePath(rootOut.x, rootOut.y, sx, mid),
@@ -227,7 +228,7 @@ export function graphLayout(stack: StackRow[], here?: string): GraphLayout {
         hot: hot.has(row.url),
       })
       if (def && row.base && row.base !== def)
-        out.labels.push({ text: row.base, x: colX(0) - 8, y: mid - 6 })
+        out.labels.push({ text: `on ${row.base}`, x: colX(0) + 4, y: lineY(t.line) - 13 })
       walk(t, 0, null)
     }
   }

@@ -3471,10 +3471,12 @@ body.resizing-col {
 }
 .pr-glabel {
   position: absolute;
-  transform: translate(-100%, -100%);
   font-size: 10px;
+  line-height: 12px;
   color: var(--faint);
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
   pointer-events: none;
 }
 /* a node: an invisible button over the whole of it (opens it), its ↗ above that */
