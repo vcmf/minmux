@@ -171,10 +171,10 @@ export function FileView({ entryId, tabId }: { entryId: string; tabId: string })
   }, [data?.kind, entryId, view])
   const { start, end } = rowWindow(lines.length, LINE_H, port.top, port.h, 0)
 
-  // New lines (the highlighted ones landing, a re-read) replace each row's HTML, which moves a
-  // selection's ends: it's read before the commit (the DOM still has the committed rows) and
-  // put back after it. Each render that changes the lines saves afresh (a discarded render's
-  // save is overwritten, never carried over).
+  // New lines (the highlighted ones landing, a re-read) rewrite the rows whose HTML changed
+  // (LineCode leaves the rest alone), which moves a selection's ends there: it's read before the
+  // commit (the DOM still has the committed rows) and put back after it. Each render that changes
+  // the lines saves afresh (a discarded render's save is overwritten, never carried over).
   const committedLines = useRef(lines)
   const keptSel = useRef<SavedSelection | null>(null)
   keptSel.current = committedLines.current !== lines ? saveSelection(scrollRef.current) : null

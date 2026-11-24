@@ -162,13 +162,21 @@ describe("FileView", () => {
       truncated: false,
       size: 32,
     })
-    const { tabId, entryId } = open("/w/same.ts")
-    const { container } = render(<FileView entryId={entryId} tabId={tabId} />)
-    await waitFor(() => expect(container.querySelector(".hljs-keyword")).not.toBeNull())
-    const text = container.querySelector('[data-row="s1"] .file-view-code')!.lastChild!
-    act(() => useStore.setState({ home: "/elsewhere" })) // the view renders again
-    expect(container.querySelector(".file-view-path")).not.toBeNull()
-    expect(text.isConnected).toBe(true)
+    const home = st().home
+    useStore.setState({ home: "/w" })
+    try {
+      const { tabId, entryId } = open("/w/same.ts")
+      const { container } = render(<FileView entryId={entryId} tabId={tabId} />)
+      await waitFor(() => expect(container.querySelector(".hljs-keyword")).not.toBeNull())
+      expect(container.querySelector(".file-view-path")!.textContent).toBe("~/same.ts")
+      const text = container.querySelector('[data-row="s1"] .file-view-code')!.lastChild!
+      act(() => useStore.setState({ home: "/elsewhere" }))
+      // It rendered again (its path shows another way), and its lines' nodes are the same.
+      expect(container.querySelector(".file-view-path")!.textContent).toBe("/w/same.ts")
+      expect(text.isConnected).toBe(true)
+    } finally {
+      useStore.setState({ home })
+    }
   })
 
   it("keeps a selection when the highlighted lines replace the plain ones", async () => {

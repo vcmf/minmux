@@ -1,5 +1,5 @@
-// A file tab replaces a line's HTML when its highlighted version lands (plain first) or the file
-// is re-read: the browser then drops the selection's ends to the line's edges. The selection is
+// A file tab rewrites a line whose HTML changed (its highlighted version landing after the plain
+// one, or a re-read): the browser then drops a selection's ends there to the line's edges. The selection is
 // kept as (row, character offset) and put back after the update, only on rows whose text didn't
 // change (a re-read that moved lines would otherwise land it on other code).
 
