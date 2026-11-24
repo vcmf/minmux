@@ -18,6 +18,7 @@ export interface PrRow {
   title: string
   url: string
   repo: string // owner/name
+  defaultBranch?: string // the repo's (the graph's root); none in an answer from an older build
   author: string
   state: PrRowState
   head: string
@@ -102,7 +103,7 @@ export const CLOSED_DAYS = 14
 export const PR_FRAGMENT = `fragment pr on PullRequest {
   number title url state isDraft updatedAt
   author { login }
-  repository { nameWithOwner }
+  repository { nameWithOwner defaultBranchRef { name } }
   headRefName baseRefName isCrossRepository
   reviewDecision mergeStateStatus
   additions deletions
@@ -183,6 +184,12 @@ const REVIEWER: Record<string, PrRow["reviewers"][number]["state"]> = {
   DISMISSED: "dismissed",
 }
 
+/** The repo's default branch, when GitHub named one (an empty repo has none). */
+const defaultBranchOf = (repo: unknown): { defaultBranch?: string } => {
+  const name = str(obj(obj(repo)?.defaultBranchRef)?.name)
+  return name ? { defaultBranch: name } : {}
+}
+
 /** One search node → a row (null: not a PR, or missing what a row needs). */
 export function parsePrRow(v: unknown): PrRow | null {
   const o = obj(v)
@@ -208,6 +215,7 @@ export function parsePrRow(v: unknown): PrRow | null {
     title: str(o.title),
     url: str(o.url),
     repo: str(obj(o.repository)?.nameWithOwner),
+    ...defaultBranchOf(o.repository),
     author: str(obj(o.author)?.login),
     state,
     head: str(o.headRefName),

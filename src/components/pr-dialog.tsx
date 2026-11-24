@@ -7,6 +7,8 @@ import {
   GitMerge,
   GithubLogo,
   GitPullRequest,
+  Graph,
+  ListBullets,
   TerminalWindow,
   X,
 } from "@phosphor-icons/react"
@@ -54,6 +56,9 @@ import { refKey, type PrRef } from "../lib/pr-detail"
 import { repoUrl, findErrorText, prUrl, type PrFindResult } from "../lib/pr-link"
 import { ghEnvOf, paneGhEnv } from "../lib/open-link"
 import { baseOf, stackedOn, stackRows, type StackRow } from "../lib/pr-stacks"
+import { graphLayout, graphMove, type GraphKey } from "../lib/pr-graph"
+import { PrGraphView } from "./pr-graph-view"
+import { toDialog } from "./to-dialog"
 
 // gh's accounts as last answered (a failed answer too): the picker stays to pick another.
 let knownAccounts: GhAccount[] = []
@@ -78,6 +83,26 @@ const saveLast = () => {
   }
 }
 const TAB_KEY = "minmux.prDialog.tab"
+// List or graph (docs/design/PR_GRAPH.md): the one picked, kept across opens.
+type PrView = "list" | "graph"
+const VIEW_KEY = "minmux.prDialog.view"
+const readView = (): PrView => {
+  try {
+    return localStorage.getItem(VIEW_KEY) === "graph" ? "graph" : "list"
+  } catch {
+    return "list"
+  }
+}
+const GRAPH_KEYS: Record<string, GraphKey> = {
+  ArrowLeft: "left",
+  h: "left",
+  ArrowRight: "right",
+  l: "right",
+  ArrowUp: "up",
+  k: "up",
+  ArrowDown: "down",
+  j: "down",
+}
 const TEXT_FIELD =
   "textarea, select, input:not([type=checkbox]):not([type=radio]):not([type=button]):not([type=submit])"
 
@@ -204,6 +229,17 @@ export function PrDialog() {
   const [error, setError] = useState<{ error: PrListsError; message?: string } | null>(null)
   const [loading, setLoading] = useState(false)
   const [tab, setTabState] = useState<PrTab>(readTab)
+  const [view, setViewState] = useState<PrView>(readView)
+  // `remember`: a view the user picked (a card or a link switching to the list isn't kept).
+  const setView = (v: PrView, remember = true) => {
+    setViewState(v)
+    if (!remember) return
+    try {
+      localStorage.setItem(VIEW_KEY, v)
+    } catch {
+      // per-viewer convenience only
+    }
+  }
   const [selUrl, setSelUrl] = useState<string | null>(null) // by PR: a reorder keeps it
   const [now, setNow] = useState(Date.now())
   // The answer with the PRs just changed from here in place (their own rows: search lags).
@@ -430,6 +466,11 @@ export function PrDialog() {
     [lists, shownTab, all],
   )
   const rows = useMemo(() => stack.map((s) => s.row), [stack])
+  // (laid out only while the graph is shown: the list view does no graph work)
+  const graph = useMemo(
+    () => (view === "graph" ? graphLayout(stack, hereUrl) : null),
+    [view, stack, hereUrl],
+  )
   const selIdx = rows.findIndex((r) => r.url === selUrl)
   const row = rows[selIdx] ?? rows[0] // gone from the list: the first
   // When the list first shows rows, the PR the focused pane is on is selected if it's there;
@@ -477,6 +518,7 @@ export function PrDialog() {
   useEffect(() => {
     if (!prLink) return
     herePicked.current = true // (the link's PR, not the focused pane's)
+    setViewState("list") // (its detail is the list's; the view picked stays saved)
     const l: Linked = {
       ref: { repo: prLink.repo, number: prLink.number },
       at: prLink.at,
@@ -556,6 +598,19 @@ export function PrDialog() {
     refreshSoon()
   }
 
+  // A card: its PR in the list view (not kept as the view picked).
+  const openInList = (url: string) => {
+    select(url)
+    setView("list", false)
+  }
+  // A repo's root: the repo tab when it's that repo's (the only repo with a tab), else GitHub.
+  const openRoot = (repo: string) => {
+    if (tabs.includes("repo") && lists?.repoName?.toLowerCase() === repo.toLowerCase()) {
+      setTab("repo", null, false)
+      setView("list", false)
+    } else ipc.openExternal(repoUrl(repo))
+  }
+
   const goToPane = (id: string) => {
     useStore.getState().setPrDialogOpen(false)
     useStore.getState().focusSession(id)
@@ -574,10 +629,26 @@ export function PrDialog() {
     if (target.isContentEditable || target.matches?.(TEXT_FIELD)) return
     const control = target.closest("button, input, select, textarea, a")
     if (control && (k === "Enter" || k === " ")) return
-    const t = tabFor(k, shownTab, tabs)
+    // (the graph's arrows move in it: tabs stay on 1/2/3 there)
+    const moves = !!graph && graph.nodes.length > 0 // (an empty graph: arrows switch tabs)
+    const t = !moves || !GRAPH_KEYS[k] ? tabFor(k, shownTab, tabs) : null
     if (t) {
       e.preventDefault()
       return setTab(t)
+    }
+    if (k === "g") {
+      e.preventDefault()
+      return setView(view === "graph" ? "list" : "graph")
+    }
+    if (moves && GRAPH_KEYS[k]) {
+      e.preventDefault()
+      const next = graphMove(graph, linked ? null : (row?.url ?? null), GRAPH_KEYS[k])
+      if (next) select(next)
+      return
+    }
+    if (graph && k === "Enter" && row && !linked) {
+      e.preventDefault()
+      return openInList(row.url)
     }
     if (k === "ArrowDown" || k === "j") {
       e.preventDefault()
@@ -606,7 +677,7 @@ export function PrDialog() {
     })
   useEffect(() => {
     listRef.current?.querySelector(".pr-row.sel")?.scrollIntoView?.({ block: "nearest" })
-  }, [row?.url, shownTab])
+  }, [row?.url, shownTab, view]) // (back from the graph too: its pick may be far down)
 
   const several = accounts.length > 1
   // Names in the detail: yours (any of gh's accounts) marked, the PR's author with a chip.
@@ -637,6 +708,27 @@ export function PrDialog() {
         ? "Review requested"
         : `${lists?.repoName ?? "Repo"}${several && lists?.repoAccount ? ` · @${lists.repoAccount}` : ""}`
 
+  // What an empty tab says (the list's and the graph's alike).
+  const empty =
+    lists && rows.length === 0
+      ? !answered(lists, shownTab)
+        ? "Loading…" // (this tab's search still running; the others may be in)
+        : shownTab === "review"
+          ? "No pull requests wait for your review."
+          : shownTab === "repo" && lists.repoVisible === false && lists.accountsPending
+            ? "Checking which of gh's accounts can see it…"
+            : shownTab === "repo" && lists.repoVisible === false
+              ? `${picked ? `@${picked} can't` : several ? "No logged-in gh account can" : "gh's account can't"} see ${lists.repoName}.${several && picked ? " Pick another account, or All accounts." : ""}`
+              : "No pull requests."
+      : !lists && !error
+        ? "Loading…"
+        : null
+  // The tab listing a stack's base PR that this tab doesn't (a graph stub names it).
+  const tabOf = (pr: PrRow) => {
+    const t = tabs.find((t) => (lists?.[t] ?? []).some((r) => r.url === pr.url))
+    return t ? label(t) : undefined
+  }
+
   const dialog = (
     <div className="settings-overlay" onMouseDown={close}>
       <div
@@ -653,6 +745,23 @@ export function PrDialog() {
           <GithubLogo size={16} />
           <h2>Pull requests</h2>
           <AccountPicker accounts={accounts} account={picked} onPick={setAccount} />
+          <div className="pr-views" role="group" aria-label="View">
+            {(["list", "graph"] as const).map((v) => (
+              <button
+                key={v}
+                className={`pr-view${view === v ? " on" : ""}`}
+                aria-pressed={view === v}
+                title={`${v === "list" ? "List" : "Graph"} (g)`}
+                onClick={(e) => {
+                  setView(v)
+                  toDialog(e.currentTarget)
+                }}
+              >
+                {v === "list" ? <ListBullets size={13} /> : <Graph size={13} />}
+                {v === "list" ? "List" : "Graph"}
+              </button>
+            ))}
+          </div>
           <span className="pr-age">
             {loading ? "Refreshing…" : at ? `Updated ${ago(now - at)}` : ""}
           </span>
@@ -695,99 +804,105 @@ export function PrDialog() {
         {lists?.warning && !error && (
           <div className="pr-error stale">Some pull requests couldn't load: {lists.warning}</div>
         )}
-        <div className="pr-body">
-          <div className="pr-list" ref={listRef} role="listbox" aria-label={label(shownTab)}>
-            {lists && rows.length === 0 && (
-              <div className="pr-empty">
-                {!answered(lists, shownTab)
-                  ? "Loading…" // (this tab's search still running; the others may be in)
-                  : shownTab === "review"
-                    ? "No pull requests wait for your review."
-                    : shownTab === "repo" && lists.repoVisible === false && lists.accountsPending
-                      ? "Checking which of gh's accounts can see it…"
-                      : shownTab === "repo" && lists.repoVisible === false
-                        ? `${picked ? `@${picked} can't` : several ? "No logged-in gh account can" : "gh's account can't"} see ${lists.repoName}.${several && picked ? " Pick another account, or All accounts." : ""}`
-                        : "No pull requests."}
-              </div>
-            )}
-            {!lists && !error && <div className="pr-empty">Loading…</div>}
-            {stack.map((s) => (
-              <PrListRow
-                key={s.row.url}
-                stack={s}
-                selected={!linked && s.row === row}
-                showRepo={shownTab !== "repo"}
-                showAccount={several && !picked}
-                panes={panes.get(s.row.url) ?? []}
-                here={s.row.url === hereUrl ? focusedPane : undefined}
-                titleOf={titleOf}
-                onSelect={() => select(s.row.url)}
-                onGo={goTo}
-              />
-            ))}
+        {graph && empty ? (
+          <div className="pr-graph">
+            <div className="pr-empty">{empty}</div>
           </div>
-          <div className="pr-detail">
-            {linked && (
-              <LinkedNote
-                linked={linked}
-                listed={!!lists && PR_TABS.every((t) => answered(lists, t))}
-              />
-            )}
-            {shown ? (
-              <>
-                <PrSummary
-                  row={shown}
-                  panes={(panes.get(shown.url) ?? []).map((p) => ({
-                    ...p,
-                    title: titleOf(p.pane),
-                  }))}
-                  focused={focusedPane}
-                  onPane={goToPane}
-                  base={baseOf(shown, all)}
-                  above={stackedOn(shown, all)}
+        ) : graph ? (
+          <PrGraphView
+            graph={graph}
+            selected={linked ? null : (row?.url ?? null)}
+            hereUrl={hereUrl}
+            panes={panes}
+            titleOf={titleOf}
+            focusedRepo={tabs.includes("repo") ? lists?.repoName : undefined}
+            onOpen={openInList}
+            onRoot={openRoot}
+            onGo={goTo}
+            tabOf={tabOf}
+          />
+        ) : (
+          <div className="pr-body">
+            <div className="pr-list" ref={listRef} role="listbox" aria-label={label(shownTab)}>
+              {empty && <div className="pr-empty">{empty}</div>}
+              {stack.map((s) => (
+                <PrListRow
+                  key={s.row.url}
+                  stack={s}
+                  selected={!linked && s.row === row}
+                  showRepo={shownTab !== "repo"}
+                  showAccount={several && !picked}
+                  panes={panes.get(s.row.url) ?? []}
+                  here={s.row.url === hereUrl ? focusedPane : undefined}
+                  titleOf={titleOf}
+                  onSelect={() => select(s.row.url)}
                   onGo={goTo}
-                  env={env}
-                  onChanged={onChanged}
-                  reviewers={
-                    <PrReviewers
-                      key={shown.url}
-                      row={shown}
-                      cwd={env.cwd}
-                      wsl={env.wsl}
-                      account={shown.account}
-                      showAccount={several}
-                    />
-                  }
                 />
-                <PrDetailView
-                  key={shown.url}
-                  row={shown}
-                  listed={all}
-                  onGo={goToStable}
-                  onChecksSettled={refreshSoon}
-                  cwd={env.cwd}
-                  wsl={env.wsl}
-                  // Threads open in the editor when the focused checkout is this PR's repo on
-                  // its branch (the threads' lines are the PR's), at the repo's root; host
-                  // only (the editor can't open a WSL pane's Linux path).
-                  // (a linked PR: only when its link came from the focused pane, whose checkout this is)
-                  checkout={
-                    (!linked || !linked.pane || linked.pane === focusedPane) &&
-                    !req.wsl &&
-                    checkout.root &&
-                    checkout.branch === shown.head &&
-                    !shown.fork &&
-                    lists?.repoName?.toLowerCase() === shown.repo.toLowerCase()
-                      ? checkout.root
-                      : undefined
-                  }
+              ))}
+            </div>
+            <div className="pr-detail">
+              {linked && (
+                <LinkedNote
+                  linked={linked}
+                  listed={!!lists && PR_TABS.every((t) => answered(lists, t))}
                 />
-              </>
-            ) : (
-              !linked && <div className="pr-empty">Select a pull request.</div>
-            )}
+              )}
+              {shown ? (
+                <>
+                  <PrSummary
+                    row={shown}
+                    panes={(panes.get(shown.url) ?? []).map((p) => ({
+                      ...p,
+                      title: titleOf(p.pane),
+                    }))}
+                    focused={focusedPane}
+                    onPane={goToPane}
+                    base={baseOf(shown, all)}
+                    above={stackedOn(shown, all)}
+                    onGo={goTo}
+                    env={env}
+                    onChanged={onChanged}
+                    reviewers={
+                      <PrReviewers
+                        key={shown.url}
+                        row={shown}
+                        cwd={env.cwd}
+                        wsl={env.wsl}
+                        account={shown.account}
+                        showAccount={several}
+                      />
+                    }
+                  />
+                  <PrDetailView
+                    key={shown.url}
+                    row={shown}
+                    listed={all}
+                    onGo={goToStable}
+                    onChecksSettled={refreshSoon}
+                    cwd={env.cwd}
+                    wsl={env.wsl}
+                    // Threads open in the editor when the focused checkout is this PR's repo on
+                    // its branch (the threads' lines are the PR's), at the repo's root; host
+                    // only (the editor can't open a WSL pane's Linux path).
+                    // (a linked PR: only when its link came from the focused pane, whose checkout this is)
+                    checkout={
+                      (!linked || !linked.pane || linked.pane === focusedPane) &&
+                      !req.wsl &&
+                      checkout.root &&
+                      checkout.branch === shown.head &&
+                      !shown.fork &&
+                      lists?.repoName?.toLowerCase() === shown.repo.toLowerCase()
+                        ? checkout.root
+                        : undefined
+                    }
+                  />
+                </>
+              ) : (
+                !linked && <div className="pr-empty">Select a pull request.</div>
+              )}
+            </div>
           </div>
-        </div>
+        )}
       </div>
     </div>
   )
@@ -886,7 +1001,6 @@ const inControl = (e: React.MouseEvent) =>
   !!(e.target as HTMLElement).closest(".pr-row-main button, .pr-row-main [data-control]")
 
 /** Keys back to the dialog after a click on one of its controls (Enter opens the PR again). */
-const toDialog = (el: HTMLElement) => el.closest<HTMLElement>("[role=dialog]")?.focus()
 
 /** A repo's name: opens its page on GitHub. In a list row, a clickable label (no control
  *  inside an option: the list's own keys move through rows). */
