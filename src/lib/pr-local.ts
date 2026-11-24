@@ -22,8 +22,9 @@ export interface LocalRepo {
 
 export type PrLocalResult = { ok: true; repos: LocalRepo[] } | { ok: false }
 
-/** At most this many roots in one request. Each new root costs one `git rev-parse`, once (its
- *  repo is remembered); the worktree list is per repo, however many of its roots are open. */
+// Each new root costs one `git rev-parse`, once (its repo is remembered); the worktree list
+// is per repo, however many of its roots are open.
+/** At most this many roots in one request. */
 export const LOCAL_MAX_ROOTS = 128
 
 /** `git worktree list --porcelain` → the worktrees on a branch (never throws). */
@@ -43,14 +44,26 @@ export function parseWorktrees(out: string): LocalWorktree[] {
   return list
 }
 
-const norm = (p: string) => p.replace(/[\\/]+$/, "")
+// Trailing separators dropped, `\\` as `/`, a drive letter in upper case (git on Windows
+// writes `C:/…`; a pane's root may say `c:\\…`).
+const norm = (p: string) =>
+  p
+    .replace(/\\/g, "/")
+    .replace(/\/+$/, "")
+    .replace(/^([a-z]):/, (_, d: string) => `${d.toUpperCase()}:`)
+
+/** A WSL path on a Windows drive (`/mnt/c/w/r`) as Windows writes it (`C:/w/r`); else null. */
+export function hostPathOfWsl(p: string): string | null {
+  const m = /^\/mnt\/([a-zA-Z])(\/.*)?$/.exec(p)
+  return m ? `${m[1]!.toUpperCase()}:${m[2] ?? "/"}` : null
+}
 
 /** A folder's last part ("~/w/term/.worktrees/x" → "x"). */
 export const folderName = (p: string) => norm(p).split(/[\\/]/).pop() || p
 
-/** Each PR url → the worktrees that have its branch checked out and no pane in them (`known`:
- *  the folders panes are in, any of their checkouts). A fork's PR is never matched: a branch
- *  of the same name isn't its code. */
+// `known`: the folders panes are in (any of their checkouts). A fork's PR is never matched: a
+// branch of the same name isn't its code.
+/** Each PR url → the worktrees with its branch checked out and no pane in them. */
 export function worktreeCheckouts(
   repos: LocalRepo[],
   rows: PrRow[],

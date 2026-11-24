@@ -3,6 +3,7 @@
 // Asked once per dialog refresh, only while the dialog is open; nothing is polled. git runs
 // async with a timeout and a small concurrency limit, nowhere near the PTY path.
 import { execFile } from "node:child_process"
+import { access } from "node:fs/promises"
 import path from "node:path"
 import { promisify } from "node:util"
 import { Limiter } from "./pane-git"
@@ -19,6 +20,22 @@ const exec = promisify(execFile)
 
 /** Runs git in a folder; resolves with its stdout. */
 export type GitRunner = (args: string[], cwd: string) => Promise<string>
+export type DirExists = (p: string) => Promise<boolean>
+
+const dirExists: DirExists = (p) =>
+  access(p).then(
+    () => true,
+    () => false,
+  )
+
+/** The folders `git worktree list --porcelain` names, whatever their state. */
+const listed = (out: string) =>
+  new Set(
+    out
+      .split(/\r?\n/)
+      .filter((l) => l.startsWith("worktree "))
+      .map((l) => path.resolve(l.slice(9))),
+  )
 
 const defaultGit: GitRunner = async (args, cwd) =>
   (await exec("git", args, { cwd, timeout: 10_000, windowsHide: true, maxBuffer: 1024 * 1024 }))
@@ -37,6 +54,7 @@ export class PrLocal {
   constructor(
     private readonly run: GitRunner = defaultGit,
     private readonly now: () => number = Date.now,
+    private readonly exists: DirExists = dirExists,
   ) {}
 
   /** The repos the roots are in, each once (the same request while it runs: that answer). */
@@ -78,7 +96,14 @@ export class PrLocal {
           this.common.delete(r) // (looked up again next time: it may be gone, or moved)
         }
         if (list === null) return null
-        return { repo: await this.repoOf(dir, root), worktrees: parseWorktrees(list) }
+        // a root the repo no longer lists (removed, re-cloned as another repo): looked up again
+        const named = listed(list)
+        for (const r of rs) if (!named.has(path.resolve(r))) this.common.delete(r)
+        // (a locked worktree on a drive that's gone is never marked prunable)
+        const all = parseWorktrees(list)
+        const here = await Promise.all(all.map((w) => this.exists(w.path)))
+        const worktrees = all.filter((_, i) => here[i])
+        return { repo: await this.repoOf(dir, root), worktrees }
       }),
     )
     return { ok: true, repos: repos.filter((r): r is LocalRepo => r !== null) }

@@ -59,7 +59,7 @@ import { ghEnvOf, paneGhEnv } from "../lib/open-link"
 import { baseOf, stackedOn, stackRows, type StackRow } from "../lib/pr-stacks"
 import { graphLayout, graphMove, type GraphKey } from "../lib/pr-graph"
 import { PrGraphView } from "./pr-graph-view"
-import { folderName, worktreeCheckouts, type LocalRepo } from "../lib/pr-local"
+import { folderName, hostPathOfWsl, worktreeCheckouts, type LocalRepo } from "../lib/pr-local"
 import { paneOfGitKey } from "../lib/agent-dirs"
 import { toDialog } from "./to-dialog"
 
@@ -186,21 +186,32 @@ function paneFlatOf(
   return out
 }
 
-// The checkout roots of host panes (their shells' and their agents'), newline-joined: a
-// primitive the shallow compare can hold. Recomputed only when paneGit or sessions change.
+// The panes' checkout roots (their shells' and their agents'), as one primitive the shallow
+// compare can hold: host roots (asked about), then a tab, then every root a pane is in, a WSL
+// pane's `/mnt/c/…` as `C:/…` (a worktree a WSL pane has open isn't offered again).
+// Recomputed only when paneGit or sessions change.
 let rootsMemo: { args: unknown[]; out: string } | null = null
-function hostRootsOf(paneGit: Record<string, PaneGitInfo>, sessions: Record<string, Session>) {
+function rootsOf(paneGit: Record<string, PaneGitInfo>, sessions: Record<string, Session>) {
   const args = [paneGit, sessions]
   if (rootsMemo && rootsMemo.args.every((a, i) => a === args[i])) return rootsMemo.out
-  const roots = new Set<string>()
+  const host = new Set<string>()
+  const known = new Set<string>()
   for (const [key, info] of Object.entries(paneGit)) {
     const session = sessions[paneOfGitKey(key)]
-    // (an ssh pane has no local checkout; WSL's are Linux paths main can't read)
-    if (info.root && session && !session.remote && !ghEnvOf(session, info.root).wsl)
-      roots.add(info.root)
+    if (!info.root || !session || session.remote) continue // (an ssh pane: nothing local)
+    // (WSL's roots are Linux paths main's git can't read: host checkouts only, for now)
+    if (ghEnvOf(session, info.root).wsl) known.add(hostPathOfWsl(info.root) ?? info.root)
+    else {
+      host.add(info.root)
+      known.add(info.root)
+    }
   }
-  rootsMemo = { args, out: [...roots].sort().join("\n") }
+  rootsMemo = { args, out: `${[...host].sort().join("\n")}\t${[...known].sort().join("\n")}` }
   return rootsMemo.out
+}
+const splitRoots = (key: string) => {
+  const [host = "", known = ""] = key.split("\t")
+  return { host: host ? host.split("\n") : [], known: known ? known.split("\n") : [] }
 }
 
 /** The focused pane (the active tab's focused terminal). */
@@ -465,21 +476,22 @@ export function PrDialog() {
   const titleOf = (id: string) => titles.get(id) ?? id
   // Worktrees of the panes' repos (main's `git worktree list`): on open, then once per refresh
   // finished (never per tab answering), and when the panes' checkouts change.
-  const rootsKey = useStore((s) => hostRootsOf(s.paneGit, s.sessions))
+  const rootsKey = useStore((s) => rootsOf(s.paneGit, s.sessions))
+  const roots = useMemo(() => splitRoots(rootsKey), [rootsKey])
   const [local, setLocal] = useState<LocalRepo[]>([])
   useEffect(() => {
-    if (!rootsKey) return setLocal([])
+    if (!roots.host.length) return setLocal([])
     let live = true
     void ipc
-      .prLocal({ roots: rootsKey.split("\n") })
+      .prLocal({ roots: roots.host })
       .catch(() => ({ ok: false as const }))
       .then((res) => {
-        if (live && res.ok) setLocal(res.repos)
+        if (live) setLocal(res.ok ? res.repos : []) // (none offered that may be gone)
       })
     return () => {
       live = false
     }
-  }, [rootsKey, refreshed])
+  }, [roots, refreshed])
   // The focused pane, and the PR it's on (the "here" marker; selected once when it opens).
   const focusedPane = useFocusedPane()
   const hereUrl = useStore((s) =>
@@ -502,10 +514,7 @@ export function PrDialog() {
     return [...seen.values()]
   }, [lists])
   // Each PR → the worktrees with its branch and no pane in them.
-  const worktrees = useMemo(
-    () => worktreeCheckouts(local, all, rootsKey ? rootsKey.split("\n") : []),
-    [local, all, rootsKey],
-  )
+  const worktrees = useMemo(() => worktreeCheckouts(local, all, roots.known), [local, all, roots])
   const stack = useMemo(
     () => stackRows((lists?.[shownTab] ?? []) as PrRow[], all),
     [lists, shownTab, all],
@@ -659,8 +668,12 @@ export function PrDialog() {
   // A worktree with no terminal in it: one, split beside the focused pane (a host shell: the
   // worktrees listed are host folders, which a WSL shell can't start in).
   const openWorktree = (path: string) => {
-    useStore.getState().setPrDialogOpen(false)
-    useStore.getState().openFolderInSplit(path, undefined, true)
+    const st = useStore.getState()
+    const before = st.sessions
+    st.setPrDialogOpen(false)
+    st.openFolderInSplit(path, undefined, true)
+    // nothing opened (no shell for it): the keys back to the terminal they came from
+    if (useStore.getState().sessions === before) refocusActiveTerminal()
   }
 
   const goToPane = (id: string) => {

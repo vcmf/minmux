@@ -293,7 +293,10 @@ function Where(props: { panes: PrPane[]; worktrees: string[]; titleOf: (pane: st
   const more = n > 1 ? ` +${n - 1}` : ""
   if (!lead.agent)
     return (
-      <span className="pr-gat" title={`Checked out in ${titleOf(lead.pane)}`}>
+      <span
+        className="pr-gat"
+        title={`Checked out in ${[...panes.map((p) => titleOf(p.pane)), ...worktrees].join(", ")}`}
+      >
         <TerminalWindow size={12} />
         <span className="pr-gat-text">
           {titleOf(lead.pane)}

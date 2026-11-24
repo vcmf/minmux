@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest"
-import { folderName, parseWorktrees, worktreeCheckouts } from "./pr-local"
+import { folderName, hostPathOfWsl, parseWorktrees, worktreeCheckouts } from "./pr-local"
 import type { PrRow } from "./pr-dashboard"
 
 const row = (n: number, over: Partial<PrRow> = {}): PrRow => ({
@@ -95,6 +95,17 @@ describe("worktreeCheckouts", () => {
   it("the same worktree listed twice (two roots of one repo): once", () => {
     const twice = [repos[0]!, repos[0]!]
     expect(worktreeCheckouts(twice, [row(1)], []).get(row(1).url)).toEqual(["/w/r-1"])
+  })
+})
+
+describe("Windows paths", () => {
+  it("a WSL pane's /mnt/c path is the host's C:/ one; a pane on it hides the worktree", () => {
+    expect(hostPathOfWsl("/mnt/c/w/r-wt")).toBe("C:/w/r-wt")
+    expect(hostPathOfWsl("/mnt/d")).toBe("D:/")
+    expect(hostPathOfWsl("/home/me/r")).toBeNull()
+    const repos = [{ repo: "o/r", worktrees: [{ path: "C:/w/r-wt", branch: "b1" }] }]
+    expect(worktreeCheckouts(repos, [row(1)], ["C:/w/r-wt"]).size).toBe(0)
+    expect(worktreeCheckouts(repos, [row(1)], ["c:\\w\\r-wt\\"]).size).toBe(0)
   })
 })
 
