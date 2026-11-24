@@ -3402,6 +3402,286 @@ body.resizing-col {
   border-color: color-mix(in srgb, var(--accent) 55%, var(--border2));
   color: var(--accent);
 }
+
+/* ── Pull requests: graph view (docs/design/PR_GRAPH.md) ─────────────
+   DOM cards over one SVG edge layer. No transitions or animated effects:
+   the dialog sits over WebGL terminals. */
+.pr-views {
+  display: flex;
+  margin-left: 8px;
+  border: 1px solid var(--border2);
+  border-radius: 7px;
+  overflow: hidden;
+}
+.pr-view {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 9px;
+  border: 0;
+  background: transparent;
+  color: var(--dim);
+  font: inherit;
+  font-size: 11.5px;
+  cursor: pointer;
+}
+.pr-view + .pr-view {
+  border-left: 1px solid var(--border2);
+}
+.pr-view:hover {
+  color: var(--text);
+}
+.pr-view.on {
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  color: var(--accent);
+}
+.pr-graph {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  background: var(--panel);
+}
+.pr-graph-canvas {
+  position: relative;
+}
+.pr-gedges {
+  position: absolute;
+  left: 0;
+  top: 0;
+  pointer-events: none;
+}
+.pr-gedges path {
+  fill: none;
+  stroke: var(--text);
+  stroke-opacity: 0.26;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+}
+.pr-gedges path.hot {
+  stroke: var(--accent);
+  stroke-opacity: 0.8;
+  stroke-width: 1.8;
+}
+.pr-gsep {
+  position: absolute;
+  left: 16px;
+  right: 16px;
+  height: 1px;
+  background: var(--border);
+}
+.pr-glabel {
+  position: absolute;
+  transform: translate(-100%, -100%);
+  font-size: 10px;
+  color: var(--faint);
+  white-space: nowrap;
+  pointer-events: none;
+}
+/* a node: an invisible button over the whole of it (opens it), its ↗ above that */
+.pr-groot,
+.pr-gcard {
+  position: absolute;
+  box-sizing: border-box;
+  border-radius: 9px;
+  border: 1px solid var(--border2);
+  background: var(--elev);
+}
+.pr-gopen {
+  position: absolute;
+  inset: 0;
+  border: 0;
+  border-radius: inherit;
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+}
+.pr-gopen:focus-visible {
+  outline: 2px solid var(--blue);
+  outline-offset: 2px;
+}
+.pr-groot {
+  background: color-mix(in srgb, var(--text) 4%, var(--elev));
+  border-color: color-mix(in srgb, var(--text) 18%, transparent);
+}
+.pr-groot:hover,
+.pr-gcard:hover {
+  border-color: color-mix(in srgb, var(--text) 34%, transparent);
+}
+.pr-groot .pr-gopen {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 4px;
+  padding: 0 30px 0 12px;
+}
+.pr-groot-name {
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.pr-groot-sub {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 10.5px;
+  color: var(--dim);
+}
+.pr-gext {
+  position: absolute;
+  right: 5px;
+  top: 5px;
+  width: 22px;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--dim);
+  cursor: pointer;
+}
+.pr-gext:hover {
+  color: var(--text);
+  background: color-mix(in srgb, var(--text) 9%, transparent);
+}
+.pr-gcard {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 5px;
+  padding: 8px 10px 8px 11px;
+  background: color-mix(in srgb, var(--text) 3%, var(--elev));
+}
+.pr-gcard > :not(.pr-gopen):not(.pr-gext) {
+  pointer-events: none; /* (the card's button takes the click) */
+}
+.pr-gcard.tone-red {
+  background: color-mix(in srgb, var(--red) 13%, var(--elev));
+  border-color: color-mix(in srgb, var(--red) 55%, transparent);
+}
+.pr-gcard.tone-amber {
+  background: color-mix(in srgb, var(--amber) 13%, var(--elev));
+  border-color: color-mix(in srgb, var(--amber) 55%, transparent);
+}
+.pr-gcard.draft {
+  border-style: dashed;
+}
+.pr-gcard.draft:not(.tone-red):not(.tone-amber) {
+  background: var(--panel);
+  border-color: color-mix(in srgb, var(--text) 26%, transparent);
+}
+.pr-gcard.draft .pr-gtitle,
+.pr-gcard.done .pr-gtitle {
+  color: var(--dim);
+}
+.pr-gcard.done {
+  background: var(--panel);
+  border-color: var(--border);
+}
+.pr-gcard.here {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 16%, transparent);
+}
+.pr-gcard.sel {
+  outline: 2px solid var(--blue);
+  outline-offset: 2px;
+}
+.pr-gline {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding-right: 20px;
+}
+.pr-gline + .pr-gline {
+  padding-right: 0;
+}
+.pr-gstate {
+  display: flex;
+  flex: none;
+}
+.pr-gtitle,
+.pr-gbranch,
+.pr-gat-text {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+.pr-gsub,
+.pr-gwhere {
+  font-size: 10.5px;
+  color: var(--dim);
+}
+.pr-gtick {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--accent);
+  color: var(--bg);
+}
+.pr-gword {
+  flex: none;
+  font-weight: 500;
+}
+.tone-red .pr-gword {
+  color: var(--red);
+}
+.tone-amber .pr-gword {
+  color: var(--amber);
+}
+.pr-gbranch {
+  font-family: inherit;
+  color: var(--faint);
+}
+.pr-gcomments {
+  margin-left: auto;
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  color: var(--dim);
+}
+.pr-gcomments.none {
+  color: var(--faint);
+}
+.pr-gat {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  color: var(--text);
+}
+.pr-gnone {
+  color: var(--faint);
+}
+.pr-gwhere .pr-chip.here {
+  margin-left: auto;
+  flex: none;
+}
+.pr-gstub {
+  position: absolute;
+  box-sizing: border-box;
+  border: 1px dashed var(--border2);
+  border-radius: 13px;
+  background: var(--elev);
+  color: var(--dim);
+  font: inherit;
+  font-size: 10.5px;
+  cursor: pointer;
+}
+.pr-gstub:hover {
+  color: var(--text);
+  border-color: color-mix(in srgb, var(--text) 34%, transparent);
+}
 .pr-title-open {
   flex: 0 0 auto;
   margin-left: auto;
