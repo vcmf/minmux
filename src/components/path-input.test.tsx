@@ -3,6 +3,7 @@ import { render, screen, fireEvent, waitFor } from "@testing-library/react"
 import { PathInput } from "./path-input"
 import { ipc } from "../lib/ipc"
 import { useStore } from "../store"
+import { listings } from "../lib/listing-store"
 
 const d = (name: string) => ({ name, isDir: true })
 const LIST: Record<string, string[]> = {
@@ -14,7 +15,11 @@ const LIST: Record<string, string[]> = {
 beforeEach(() => {
   useStore.setState({ home: "/Users/me", platform: "darwin" })
   vi.mocked(ipc.readdir).mockImplementation(async (dir: string) => ({
-    entries: [...(LIST[dir] ?? []).map(d), { name: "file.txt", isDir: false }],
+    // A truncated read holds only folders (they sort first): more folders may be past the cap
+    entries: [
+      ...(LIST[dir] ?? []).map(d),
+      ...(dir === "/big" ? [] : [{ name: "f.txt", isDir: false }]),
+    ],
     truncated: dir === "/big",
   }))
 })
@@ -148,5 +153,20 @@ describe("PathInput", () => {
     await new Promise((r) => setTimeout(r, 0))
     expect(onSetRoot).not.toHaveBeenCalled()
     expect(input.className).not.toContain("invalid")
+  })
+  it("keeps its reads out of the folder views' listings", async () => {
+    const { input } = setup()
+    fireEvent.change(input, { target: { value: "/Users/me/nope/" } })
+    await waitFor(() => expect(ipc.readdir).toHaveBeenCalledWith("/Users/me/nope", undefined))
+    fireEvent.change(input, { target: { value: "~/" } })
+    await waitFor(() => expect(names()).toHaveLength(2))
+    expect(listings.get("")["/Users/me/nope"]).toBeUndefined()
+    expect(listings.get("")["/Users/me"]).toBeUndefined()
+  })
+
+  it("a pasted leading space still completes", async () => {
+    const { input } = setup()
+    fireEvent.change(input, { target: { value: " ~/wo" } })
+    await waitFor(() => expect(names()).toEqual(["workspace", "work-old"]))
   })
 })
