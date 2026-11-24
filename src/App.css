@@ -4196,7 +4196,7 @@ body.resizing-col {
 }
 .path-suggest-icon {
   flex: 0 0 auto;
-  color: var(--accent);
+  color: var(--blue); /* the folder icon everywhere (tree, sidebar) */
 }
 .path-suggest-more {
   padding: 4px 8px;
