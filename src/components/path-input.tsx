@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react"
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react"
 import { FolderSimple } from "@phosphor-icons/react"
 import { useStore } from "../store"
 import { ipc } from "../lib/ipc"
@@ -60,7 +60,10 @@ export function PathInput({
     () => (q && listing && !listing.error ? matchDirs(listing.entries, q.prefix, ci) : []),
     [q, listing, ci],
   )
-  const cur = sel === null ? -1 : matches.indexOf(sel)
+  const shown = useMemo(() => matches.slice(0, MAX_SHOWN), [matches])
+  const cur = sel === null ? -1 : shown.indexOf(sel)
+  // Shown with matches, or to say a too-big folder wasn't listed in full
+  const listed = open && !!q && !!listing && (shown.length > 0 || !!listing.truncated)
 
   // Read the folder being typed into: now when it has no listing, else a background refresh.
   useEffect(() => {
@@ -68,8 +71,9 @@ export function PathInput({
     const key = `${KEY}${scope}\0${dir}`
     folderReads.drop((k) => k.startsWith(KEY) && k !== key)
     const had = listings.get(scope)[dir]
-    // No background refresh on WSL: each read is a slow 9p trip (as in folder views).
-    if (had && wslRef.current) return
+    // No background refresh on WSL: each read is a slow 9p trip (as in folder views). A failed
+    // read is tried again, though.
+    if (had && !had.error && wslRef.current) return
     folderReads.request({
       key,
       urgent: !had,
@@ -84,6 +88,7 @@ export function PathInput({
     })
   }, [dir, scope])
   const gone = useRef(false) // unmounted: a pending check mustn't re-root after a cancel
+  const goId = useRef(0) // the latest Enter (an edit voids it): older checks are dropped
   useEffect(
     () => () => {
       gone.current = true
@@ -96,8 +101,18 @@ export function PathInput({
     if (cur >= 0) listRef.current?.children[cur]?.scrollIntoView?.({ block: "nearest" })
   }, [cur])
 
+  // The pane clips overflow: fit the list in what's left of it below the box.
+  useLayoutEffect(() => {
+    const list = listRef.current
+    const pane = list?.closest(".terminal-pane")
+    if (!list || !pane) return
+    const room = pane.getBoundingClientRect().bottom - list.getBoundingClientRect().top - 6
+    list.style.maxHeight = `${Math.max(48, Math.min(280, room))}px`
+  }, [listed])
+
   const edit = (v: string) => {
     setValue(v)
+    goId.current++
     setInvalid(false)
     setSel(null)
     setOpen(true)
@@ -109,8 +124,9 @@ export function PathInput({
     if (p === root) return onClose()
     // Must be an absolute host path AND an existing dir —
     // checked via the pane's WSL context so a Linux path validates through the UNC share.
-    const ok = isAbsoluteHostPath(p) && (await ipc.pathIsDir(p, wsl))
-    if (gone.current) return
+    const id = ++goId.current
+    const ok = isAbsoluteHostPath(p, wsl ? undefined : platform) && (await ipc.pathIsDir(p, wsl))
+    if (gone.current || id !== goId.current) return
     if (ok) {
       onSetRoot(p)
       onClose()
@@ -118,26 +134,26 @@ export function PathInput({
   }
 
   const onKeyDown = (e: React.KeyboardEvent) => {
-    const n = matches.length
+    const n = shown.length // only rows on screen are selectable
     if (e.key === "ArrowDown" || e.key === "ArrowUp") {
       if (!n) return
       e.preventDefault()
-      setSel(matches[e.key === "ArrowDown" ? (cur + 1) % n : cur <= 0 ? n - 1 : cur - 1]!)
+      setSel(shown[e.key === "ArrowDown" ? (cur + 1) % n : cur <= 0 ? n - 1 : cur - 1]!)
     } else if (e.key === "Tab") {
       e.preventDefault()
       if (!open) return setOpen(true)
       if (!q) return
-      if (cur >= 0) complete(matches[cur]!)
-      else if (n === 1) complete(matches[0]!)
+      if (cur >= 0) complete(shown[cur]!)
+      else if (matches.length === 1) complete(matches[0]!)
       else {
         const p = commonPrefix(matches, ci)
         if (p.length > q.prefix.length) edit(q.base + p)
       }
     } else if (e.key === "Enter") {
-      if (cur >= 0 && q) void go(q.base + matches[cur]!)
+      if (cur >= 0 && q) void go(q.base + shown[cur]!)
       else void go(value)
     } else if (e.key === "Escape") {
-      if (open && n) {
+      if (listed) {
         setOpen(false)
         setSel(null)
       } else onClose()
@@ -147,18 +163,9 @@ export function PathInput({
   // More than shown: past MAX_SHOWN, or past the read's cap (a truncated listing)
   const more = matches.length > MAX_SHOWN || !!listing?.truncated
   return (
-    // The pane gives the keyboard to its view on mouseup (terminal-pane). A press that starts
-    // in here (caret, a suggestion, the list's scrollbar) must leave it in the input, even when
-    // the release lands elsewhere (a picked suggestion's list may be gone by then).
-    <div
-      className="root-input-wrap"
-      onMouseDown={() =>
-        window.addEventListener("mouseup", (e) => e.stopPropagation(), {
-          capture: true,
-          once: true,
-        })
-      }
-    >
+    // data-keep-focus: the pane's mouseup leaves the keyboard here (terminal-pane), so a press
+    // on the caret, a suggestion or the list's scrollbar doesn't close the box.
+    <div className="root-input-wrap" data-keep-focus>
       <input
         ref={inputRef}
         className={`root-input${invalid ? " invalid" : ""}`}
@@ -166,12 +173,12 @@ export function PathInput({
         spellCheck={false}
         placeholder="Absolute folder path… (Tab completes)"
         role="combobox"
-        aria-expanded={open && matches.length > 0}
+        aria-expanded={listed}
         onChange={(e) => edit(e.target.value)}
         onKeyDown={onKeyDown}
         onBlur={onClose}
       />
-      {open && q && matches.length > 0 && (
+      {listed && q && (
         <div
           className="path-suggest"
           role="listbox"
@@ -179,7 +186,7 @@ export function PathInput({
           // a press anywhere in the list (its scrollbar too) keeps the input focused
           onMouseDown={(e) => e.preventDefault()}
         >
-          {matches.slice(0, MAX_SHOWN).map((name, i) => (
+          {shown.map((name, i) => (
             <div
               key={name}
               role="option"
@@ -198,7 +205,11 @@ export function PathInput({
               </span>
             </div>
           ))}
-          {more && <div className="path-suggest-more">… more — keep typing to narrow</div>}
+          {more && (
+            <div className="path-suggest-more">
+              {shown.length ? "… more — keep typing to narrow" : "Too many to list — type the name"}
+            </div>
+          )}
         </div>
       )}
     </div>

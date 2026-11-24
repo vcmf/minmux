@@ -67,7 +67,8 @@ describe("PathInput", () => {
   it("Enter on a typed path drops a trailing separator", async () => {
     const { input, onSetRoot } = setup()
     fireEvent.change(input, { target: { value: "~/workspace/" } })
-    fireEvent.keyDown(input, { key: "Escape" }) // closes the list (if shown), not the box
+    await waitFor(() => expect(names()).toHaveLength(2))
+    fireEvent.keyDown(input, { key: "Escape" }) // closes the list, not the box
     fireEvent.keyDown(input, { key: "Enter" })
     await waitFor(() => expect(onSetRoot).toHaveBeenCalledWith("/Users/me/workspace"))
   })
@@ -116,5 +117,36 @@ describe("PathInput", () => {
     expect(selected()).toBe("work-old")
     fireEvent.change(input, { target: { value: "~/wor" } }) // a new edit clears it
     expect(screen.queryByRole("option", { selected: true })).toBeNull()
+  })
+  it("a too-big folder with no match among what was read says so", async () => {
+    const { input } = setup()
+    fireEvent.change(input, { target: { value: "/big/zeta" } })
+    await waitFor(() => expect(screen.getByText(/too many to list/i)).toBeInTheDocument())
+    expect(names()).toEqual([])
+  })
+
+  it("only rows on screen can be selected", async () => {
+    const many = Array.from({ length: 250 }, (_, i) => `d${String(i).padStart(3, "0")}`)
+    LIST["/many"] = many
+    const { input, onSetRoot } = setup()
+    fireEvent.change(input, { target: { value: "/many/" } })
+    await waitFor(() => expect(names()).toHaveLength(200))
+    fireEvent.keyDown(input, { key: "ArrowUp" }) // wraps to the last row shown
+    expect(screen.getByRole("option", { selected: true }).textContent).toBe("d199")
+    fireEvent.keyDown(input, { key: "Enter" })
+    await waitFor(() => expect(onSetRoot).toHaveBeenCalledWith("/many/d199"))
+  })
+
+  it("an edit voids a pending check", async () => {
+    let answer!: (ok: boolean) => void
+    vi.mocked(ipc.pathIsDir).mockImplementationOnce(() => new Promise((r) => (answer = r)))
+    const { input, onSetRoot } = setup()
+    fireEvent.change(input, { target: { value: "/Users/me/workspace" } })
+    fireEvent.keyDown(input, { key: "Enter" })
+    fireEvent.change(input, { target: { value: "/Users/me/wo" } })
+    answer(true)
+    await new Promise((r) => setTimeout(r, 0))
+    expect(onSetRoot).not.toHaveBeenCalled()
+    expect(input.className).not.toContain("invalid")
   })
 })

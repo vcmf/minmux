@@ -17,8 +17,8 @@ export function expandTilde(p: string, home: string, win = false): string {
   return home.replace(/[\\/]+$/, "") + p.slice(1)
 }
 
-/** Drop trailing separators, keeping a root (`/`, `C:\`). `win`: `\` separates too
- *  (elsewhere it's part of a name). */
+// `win`: `\` separates too (elsewhere it's part of a name).
+/** Drop trailing separators, keeping a root (`/`, `C:\`). */
 export function trimTrailingSep(p: string, win = false): string {
   const t = p.replace(win ? /[\\/]+$/ : /\/+$/, "")
   if (!t) return p.slice(0, 1) // "/"
@@ -29,8 +29,8 @@ export function trimTrailingSep(p: string, win = false): string {
 // A UNC path lists only from its share on: \\server\share\…
 const UNC_SHARE = /^[\\/]{2}[^\\/]+[\\/][^\\/]+[\\/]/
 
-/** Split typed text into the folder to list and the prefix; null when it names no folder yet
- *  (no separator, or not absolute once `~` is expanded). `win`: `\` separates too. */
+// Null when it names no folder yet: no separator, or not absolute once `~` is expanded.
+/** Split typed text into the folder to list and the name prefix. */
 export function splitPathInput(input: string, home: string, win: boolean): PathQuery | null {
   const sep = win ? SEP : /\//
   let cut = -1
@@ -49,8 +49,8 @@ export function splitPathInput(input: string, home: string, win: boolean): PathQ
   return { base, dir: trimTrailingSep(expanded, win), prefix: input.slice(cut + 1) }
 }
 
-/** Subfolder names starting with `prefix` (listing order). Hidden ones only once the prefix
- *  starts with `.`. `ci`: the file system ignores case (macOS, Windows). */
+// Hidden ones only once the prefix starts with `.`; `ci`: the file system ignores case.
+/** Subfolder names starting with `prefix`, in listing order. */
 export function matchDirs(entries: readonly DirEntry[], prefix: string, ci: boolean): string[] {
   const p = ci ? prefix.toLowerCase() : prefix
   const hidden = prefix.startsWith(".")
@@ -62,8 +62,7 @@ export function matchDirs(entries: readonly DirEntry[], prefix: string, ci: bool
   return out
 }
 
-/** The longest prefix all `names` share ("" for none); case-insensitive when `ci`, taken
- *  from the first name. */
+/** The longest prefix all `names` share (spelled as in the first one). */
 export function commonPrefix(names: readonly string[], ci: boolean): string {
   if (!names.length) return ""
   const first = names[0]!

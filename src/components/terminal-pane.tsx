@@ -344,8 +344,12 @@ export function TerminalPane({ pane, tabId }: { pane: PaneLeaf; tabId: string })
       style={accent ? ({ "--pane-accent": accent } as React.CSSProperties) : undefined}
       onMouseDown={() => useStore.getState().setActivePane(tabId, visibleNow())}
       // Re-focus the terminal after any click/selection so keystrokes reach the
-      // PTY (the textarea doesn't always keep focus after a selection).
-      onMouseUp={() => focusEntry(visibleNow())}
+      // PTY (the textarea doesn't always keep focus after a selection) — unless a field that
+      // asks to keep it has it (the folder path box, mid-completion).
+      onMouseUp={() => {
+        if (document.activeElement?.closest("[data-keep-focus]")) return
+        focusEntry(visibleNow())
+      }}
       onContextMenu={openMenu}
     >
       <div
