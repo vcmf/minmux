@@ -18,6 +18,7 @@ import type { PrChecksRequest } from "../src/lib/pr-checks"
 import type { PrCandidatesRequest, PrReviewersRequest } from "../src/lib/pr-reviewers"
 import type { PrWriteRequest } from "../src/lib/pr-write"
 import type { PrFindRequest } from "../src/lib/pr-link"
+import type { PrLocalRequest } from "../src/lib/pr-local"
 import type { PrMergeRequest } from "../src/lib/pr-merge"
 import type { PrBranchRequest } from "../src/lib/pr-branch"
 
@@ -190,6 +191,7 @@ const api = {
   prDetail: (req: PrDetailRequest) => ipcRenderer.invoke("prs:detail", req),
   prChecks: (req: PrChecksRequest) => ipcRenderer.invoke("prs:checks", req),
   prFind: (req: PrFindRequest) => ipcRenderer.invoke("prs:find", req),
+  prLocal: (req: PrLocalRequest) => ipcRenderer.invoke("prs:local", req),
   agentsInstalled: () => ipcRenderer.invoke("agents:installed") as Promise<InstalledAgent[]>,
   ghInstalled: () => ipcRenderer.invoke("prs:gh-installed") as Promise<boolean>,
   prWrite: (req: PrWriteRequest) => ipcRenderer.invoke("prs:write", req),

@@ -1728,3 +1728,233 @@ describe("PrDialog labels", () => {
     )
   })
 })
+
+describe("PrDialog graph view", () => {
+  const toGraph = async () => {
+    fireEvent.click(await screen.findByRole("button", { name: /^Graph/ }))
+    return screen.getByRole("listbox", { name: "Pull requests graph" })
+  }
+
+  it("the switch shows the graph, a root per repo with its default branch; kept across opens", async () => {
+    answer({
+      mine: [
+        row(1, { defaultBranch: "main" }),
+        row(2, { base: "b1", defaultBranch: "main" }),
+        row(3, { repo: "a/x", url: "https://github.com/a/x/pull/3", defaultBranch: "develop" }),
+      ],
+    })
+    const { unmount } = render(<PrDialog />)
+    await screen.findByRole("option", { name: /PR 1/ })
+    await toGraph()
+    expect(screen.getByRole("option", { name: /#2 PR 2/ })).toBeInTheDocument()
+    expect(screen.getByText("o/r")).toBeInTheDocument()
+    expect(screen.getByText("a/x")).toBeInTheDocument()
+    expect(screen.getByText(/develop/)).toBeInTheDocument()
+    expect(localStorage.getItem("minmux.prDialog.view")).toBe("graph")
+    unmount()
+    render(<PrDialog />)
+    expect(await screen.findByRole("listbox", { name: "Pull requests graph" })).toBeInTheDocument()
+  })
+
+  it("a card's state: its word, the approved tick, the comment count", async () => {
+    answer({
+      mine: [
+        row(1, { merge: "conflicts", comments: 4 }),
+        row(2, { ci: "pending", review: "approved" }),
+      ],
+    })
+    render(<PrDialog />)
+    await screen.findByRole("option", { name: /PR 1/ })
+    await toGraph()
+    expect(screen.getByRole("option", { name: "#1 PR 1, conflicts" })).toBeInTheDocument()
+    expect(
+      screen.getByRole("option", { name: "#2 PR 2, CI running, approved" }),
+    ).toBeInTheDocument()
+    expect(screen.getByTitle("4 comments")).toBeInTheDocument()
+  })
+
+  it("a card opens its PR in the list, which isn't kept as the view; ↗ opens GitHub", async () => {
+    answer({ mine: [row(1), row(2)] })
+    render(<PrDialog />)
+    await screen.findByRole("option", { name: /PR 1/ })
+    await toGraph()
+    fireEvent.click(screen.getByRole("button", { name: "Open #2 on GitHub" }))
+    expect(ipc.openExternal).toHaveBeenCalledWith("https://github.com/o/r/pull/2")
+    fireEvent.click(screen.getByRole("button", { name: "Open #2 in the list" }))
+    expect(screen.getByRole("option", { name: /PR 2/ })).toHaveAttribute("aria-selected", "true")
+    expect(screen.queryByRole("listbox", { name: "Pull requests graph" })).toBeNull()
+    expect(localStorage.getItem("minmux.prDialog.view")).toBe("graph")
+  })
+
+  it("keys: arrows move in the graph, tabs stay on digits, Enter opens, g switches", async () => {
+    answer({ mine: [row(1), row(2, { base: "b1" }), row(3)], review: [row(9)] })
+    render(<PrDialog />)
+    await screen.findByRole("option", { name: /PR 1/ })
+    const dialog = screen.getByRole("dialog")
+    fireEvent.keyDown(dialog, { key: "g" })
+    const sel = () =>
+      screen.getAllByRole("option").find((o) => o.getAttribute("aria-selected") === "true")
+    expect(sel()).toHaveAccessibleName(/^#1/)
+    fireEvent.keyDown(dialog, { key: "ArrowRight" })
+    expect(sel()).toHaveAccessibleName(/^#2/) // stacked on 1, not the next tab
+    expect(screen.getByRole("tab", { name: /Mine/ })).toHaveAttribute("aria-selected", "true")
+    fireEvent.keyDown(dialog, { key: "ArrowDown" })
+    expect(sel()).toHaveAccessibleName(/^#3/)
+    fireEvent.keyDown(dialog, { key: "ArrowUp" })
+    fireEvent.keyDown(dialog, { key: "ArrowLeft" })
+    expect(sel()).toHaveAccessibleName(/^#1/)
+    fireEvent.keyDown(dialog, { key: "Enter" })
+    expect(screen.getByRole("option", { name: /PR 1/ })).toHaveAttribute("aria-selected", "true")
+    expect(ipc.openExternal).not.toHaveBeenCalled()
+    fireEvent.keyDown(dialog, { key: "g" })
+    fireEvent.keyDown(dialog, { key: "2" })
+    expect(screen.getByRole("tab", { name: /Review/ })).toHaveAttribute("aria-selected", "true")
+  })
+
+  it("roots: the focused repo's opens its tab; another repo's opens GitHub", async () => {
+    answer({
+      mine: [row(1), row(3, { repo: "a/x", url: "https://github.com/a/x/pull/3" })],
+      repo: [row(1)],
+      repoName: "o/r",
+    })
+    render(<PrDialog />)
+    await screen.findByRole("option", { name: /PR 1/ })
+    await toGraph()
+    fireEvent.click(screen.getByRole("button", { name: /^a\/x/ }))
+    expect(ipc.openExternal).toHaveBeenCalledWith("https://github.com/a/x")
+    fireEvent.click(screen.getByRole("button", { name: /^o\/r/ }))
+    expect(screen.getByRole("tab", { name: /o\/r/ })).toHaveAttribute("aria-selected", "true")
+    expect(screen.queryByRole("listbox", { name: "Pull requests graph" })).toBeNull()
+  })
+
+  it("a PR link switches to the list (its detail is there), the view picked stays saved", async () => {
+    answer({ mine: [row(1), row(2)] })
+    render(<PrDialog />)
+    await screen.findByRole("option", { name: /PR 1/ })
+    await toGraph()
+    act(() => st().openPrLink({ repo: "o/r", number: 2 }))
+    await waitFor(() =>
+      expect(screen.getByRole("option", { name: /PR 2/ })).toHaveAttribute("aria-selected", "true"),
+    )
+    expect(screen.queryByRole("listbox", { name: "Pull requests graph" })).toBeNull()
+    expect(localStorage.getItem("minmux.prDialog.view")).toBe("graph")
+  })
+})
+
+describe("PrDialog graph view, empty", () => {
+  it("an empty tab says so in the graph, and the arrows still switch tabs", async () => {
+    localStorage.setItem("minmux.prDialog.view", "graph")
+    answer({ mine: [row(1)], review: [] })
+    render(<PrDialog />)
+    const dialog = screen.getByRole("dialog")
+    await screen.findByRole("option", { name: /^#1/ })
+    fireEvent.keyDown(dialog, { key: "2" })
+    expect(await screen.findByText("No pull requests wait for your review.")).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: /Graph/ })).toHaveAttribute("aria-pressed", "true")
+    fireEvent.keyDown(dialog, { key: "ArrowLeft" })
+    expect(screen.getByRole("tab", { name: /Mine/ })).toHaveAttribute("aria-selected", "true")
+  })
+})
+
+describe("PrDialog worktrees not open", () => {
+  it("asked once on open and once per refresh finished, never per tab answering", async () => {
+    const id = st().tabs[0]!.activeSessionId
+    st().setPaneGit({ [id]: { root: "/w/r", branch: "main" } }, [id])
+    answer({ mine: [row(1)], review: [row(2)], repo: [row(3)], repoName: "o/r" })
+    render(<PrDialog />)
+    await screen.findByRole("option", { name: /PR 1/ })
+    await waitFor(() => expect(ipc.prLists).toHaveBeenCalledTimes(3))
+    await act(async () => {})
+    expect(ipc.prLocal).toHaveBeenCalledTimes(2)
+  })
+
+  it("a PR's branch in a worktree with no terminal: on its card, in its detail, opened there", async () => {
+    const id = st().tabs[0]!.activeSessionId
+    st().setPaneGit({ [id]: { root: "/w/r", branch: "main" } }, [id])
+    vi.mocked(ipc.prLocal).mockResolvedValue({
+      ok: true,
+      repos: [
+        {
+          repo: "o/r",
+          worktrees: [
+            { path: "/w/r", branch: "main" },
+            { path: "/w/r/.worktrees/tab", branch: "b1" },
+          ],
+        },
+      ],
+    })
+    answer({ mine: [row(1), row(2)] })
+    render(<PrDialog />)
+    await screen.findByRole("option", { name: /PR 1/ })
+    expect(ipc.prLocal).toHaveBeenCalledWith({ roots: ["/w/r"] })
+    // the detail: the worktree, with the way into it
+    await waitFor(() => expect(ipc.prLocal).toHaveBeenCalled())
+    const open = await screen.findByRole("button", { name: /tab worktree · open a terminal here/ })
+    // the graph card says so too (the pane's own checkout isn't listed again: main has a pane)
+    fireEvent.click(screen.getByRole("button", { name: /^Graph/ }))
+    expect(screen.getByText(/tab · worktree, not open/)).toBeInTheDocument()
+    expect(screen.queryAllByText(/worktree, not open/)).toHaveLength(1)
+    fireEvent.click(screen.getByRole("button", { name: /^List/ }))
+    fireEvent.click(await screen.findByRole("button", { name: /open a terminal here/ }))
+    expect(open).toBeTruthy()
+    expect(st().prDialogOpen).toBe(false)
+    expect(Object.values(st().sessions).some((x) => x.cwd === "/w/r/.worktrees/tab")).toBe(true)
+  })
+})
+
+describe("PrDialog progress estimate", () => {
+  it("the graph asks main to count its PRs' merged units and shows ~merged/(merged+open)", async () => {
+    const id = st().tabs[0]!.activeSessionId
+    st().setPaneGit({ [id]: { root: "/w/r", branch: "main" } }, [id])
+    vi.mocked(ipc.prLocal).mockResolvedValue({
+      ok: true,
+      repos: [{ repo: "o/r", worktrees: [], merged: { "b1\0main": 2, "b3\0main": 0 } }],
+    })
+    answer({
+      mine: [row(1, { defaultBranch: "main" }), row(2, { base: "b1" }), row(3)],
+    })
+    render(<PrDialog />)
+    await screen.findByRole("option", { name: /PR 1/ })
+    // the list view asks for worktrees only
+    await waitFor(() => expect(ipc.prLocal).toHaveBeenCalled())
+    expect(vi.mocked(ipc.prLocal).mock.calls.every(([r]) => !r.prs)).toBe(true)
+    fireEvent.click(screen.getByRole("button", { name: /^Graph/ }))
+    await waitFor(() =>
+      expect(ipc.prLocal).toHaveBeenLastCalledWith({
+        roots: ["/w/r"],
+        prs: [
+          { repo: "o/r", head: "b1", base: "main", defaultBranch: "main" },
+          { repo: "o/r", head: "b2", base: "b1" },
+          { repo: "o/r", head: "b3", base: "main" },
+        ],
+      }),
+    )
+    // #1: 2 merged in, #2 open on it → ~2/3; #3: nothing merged, nothing on it → no estimate
+    expect(await screen.findByText("~2/3")).toBeInTheDocument()
+    expect(document.querySelectorAll(".pr-gbar")).toHaveLength(1)
+    // back to the list: no git pass run again just for that
+    const n = vi.mocked(ipc.prLocal).mock.calls.length
+    fireEvent.click(screen.getByRole("button", { name: /^List/ }))
+    await act(async () => {})
+    expect(ipc.prLocal).toHaveBeenCalledTimes(n)
+  })
+})
+
+describe("PrDialog progress estimate, switching mid-request", () => {
+  it("back to the list while the graph's request runs: asked again, the worktrees not lost", async () => {
+    const id = st().tabs[0]!.activeSessionId
+    st().setPaneGit({ [id]: { root: "/w/r", branch: "main" } }, [id])
+    answer({ mine: [row(1)] })
+    render(<PrDialog />)
+    await screen.findByRole("option", { name: /PR 1/ })
+    await waitFor(() => expect(ipc.prLocal).toHaveBeenCalled())
+    await act(async () => {})
+    vi.mocked(ipc.prLocal).mockImplementationOnce(() => new Promise(() => {})) // never answers
+    fireEvent.click(screen.getByRole("button", { name: /^Graph/ }))
+    await waitFor(() => expect(vi.mocked(ipc.prLocal).mock.lastCall?.[0].prs).toBeDefined())
+    const n = vi.mocked(ipc.prLocal).mock.calls.length
+    fireEvent.click(screen.getByRole("button", { name: /^List/ }))
+    await waitFor(() => expect(ipc.prLocal).toHaveBeenCalledTimes(n + 1))
+    expect(vi.mocked(ipc.prLocal).mock.lastCall?.[0].prs).toBeUndefined()
+  })
+})

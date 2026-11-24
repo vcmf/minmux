@@ -121,6 +121,12 @@ function hostShellFor(state: AppState, src: Session | undefined): ShellOption | 
   return state.shells.find(ok) ?? def
 }
 
+/** A host shell (not ssh, not WSL), or none: for a host folder that mustn't open elsewhere. */
+function hostOnlyShellFor(state: AppState, src: Session | undefined): ShellOption | undefined {
+  const s = hostShellFor(state, src)
+  return s && !s.remote && !wslContext(s.command, s.args) ? s : undefined
+}
+
 // A WSL folder isn't used: a new tab takes the shell it's given, which may not be WSL.
 /** Where new tabs open: the focused folder entry's path, else the tab's terminal's cwd. */
 function focusedCwd(state: AppState): string | undefined {
@@ -313,7 +319,8 @@ interface AppState {
   setActiveTab: (tabId: string) => void
   renameTab: (tabId: string, title: string) => void // trimmed; "" unpins (back to the live title)
   splitActive: (direction: "row" | "column", fallback?: ShellOption) => void
-  openFolderInSplit: (cwd: string, paneId?: string) => void // split active pane at cwd; shell from paneId
+  // split active pane at cwd; shell from paneId (`host`: a host folder, never a WSL shell)
+  openFolderInSplit: (cwd: string, paneId?: string, host?: boolean) => void
   splitPaneAt: (paneId: string, cwd: string) => void // split beside that pane (its shell); not "seen"
   newSurface: (fallback?: ShellOption) => void // new terminal tab in the focused pane
   closeSurface: (tabId: string, sessionId: string) => void // one terminal; last one closes the pane
@@ -1066,13 +1073,16 @@ export const useStore = create<AppState>((set, get) => ({
   // Open a folder (an agent's cwd / worktree from the board) as a split beside the active
   // pane. Resolves the shell from the AGENT's own pane (paneId) so a WSL agent's path opens
   // in a WSL shell, not the active native pane's; a missing dir falls back to $HOME in main.
-  openFolderInSplit: (cwd, paneId) =>
+  openFolderInSplit: (cwd, paneId, host) =>
     set((state) => {
       const tab = state.tabs.find((t) => t.id === state.activeTabId)
       if (!tab) return {}
       const agentSession = paneId ? state.sessions[paneId] : undefined
       const src = state.sessions[tab.activeSessionId]
-      const shell = localShellFor(state, agentSession ?? src)
+      // (a host folder: a host shell or none, never WSL's, which would start in `~`)
+      const shell = host
+        ? hostOnlyShellFor(state, agentSession ?? src)
+        : localShellFor(state, agentSession ?? src)
       if (!shell) return {}
       return splitActivePane(state, { shell, cwd, direction: "row" })
     }),

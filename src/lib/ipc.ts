@@ -20,6 +20,7 @@ import type {
 } from "./pr-reviewers"
 import type { PrWriteRequest, PrWriteResult } from "./pr-write"
 import type { PrFindRequest, PrFindResult } from "./pr-link"
+import type { PrLocalRequest, PrLocalResult } from "./pr-local"
 import type { PrMergeRequest, PrMergeResult } from "./pr-merge"
 import type { PrBranchRequest, PrBranchResult } from "./pr-branch"
 import type { EditorInfo } from "./file-actions"
@@ -138,6 +139,7 @@ export interface Ipc {
   prDetail: (req: PrDetailRequest) => Promise<PrDetailResult> // one PR's comments
   prChecks: (req: PrChecksRequest) => Promise<PrChecksResult> // its checks and commits
   prFind: (req: PrFindRequest) => Promise<PrFindResult> // a PR link's PR, as an account that sees it
+  prLocal: (req: PrLocalRequest) => Promise<PrLocalResult> // worktrees of the panes' repos
   agentsInstalled: () => Promise<InstalledAgent[]> // the agents on the host's PATH (new-tab menu)
   ghInstalled: () => Promise<boolean> // gh on the host's PATH (the PR button is muted if not)
   prWrite: (req: PrWriteRequest) => Promise<PrWriteResult> // a comment, or a review

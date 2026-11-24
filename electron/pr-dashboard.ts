@@ -212,16 +212,24 @@ const NO_SCOPE_TTL = 10 * 60_000 // then teams are tried again (`gh auth refresh
 const QUERY = PR_QUERY.replace(/\s+/g, " ") // one line (newlines don't survive a Windows command line)
 
 // Prefers `upstream` (a fork's PRs live there), then `origin`, then any GitHub remote.
-/** `git remote -v` → the checkout's GitHub repo (null: none). */
-export function repoFromRemotes(out: string): string | null {
+/** `git remote -v` → the checkout's GitHub remote: its name and repo (null: none). */
+export function remoteFromRemotes(out: string): { name: string; repo: string } | null {
   const by = new Map<string, string>()
   for (const line of out.split(/\r?\n/)) {
     const [name, url] = line.split(/\s+/)
     const repo = url ? githubRepoOf(url) : null
     if (name && repo && !by.has(name)) by.set(name, repo)
   }
-  return by.get("upstream") ?? by.get("origin") ?? by.values().next().value ?? null
+  const name = by.has("upstream")
+    ? "upstream"
+    : by.has("origin")
+      ? "origin"
+      : by.keys().next().value
+  return name ? { name, repo: by.get(name)! } : null
 }
+
+/** `git remote -v` → the checkout's GitHub repo (null: none). */
+export const repoFromRemotes = (out: string): string | null => remoteFromRemotes(out)?.repo ?? null
 
 /** Classify a failed gh run: not installed, logged out, offline, or anything else. */
 export function ghError(e: unknown): {
