@@ -48,6 +48,15 @@ describe("splitPathInput", () => {
     })
     expect(splitPathInput("/a/b", "", true)).toBeNull() // a Git Bash path, not the host's
   })
+  it("Windows UNC: nothing until the share is typed", () => {
+    expect(splitPathInput("\\\\", "", true)).toBeNull()
+    expect(splitPathInput("\\\\srv\\", "", true)).toBeNull()
+    expect(splitPathInput("\\\\srv\\share\\do", "", true)).toEqual({
+      base: "\\\\srv\\share\\",
+      dir: "\\\\srv\\share",
+      prefix: "do",
+    })
+  })
   it("posix: a backslash is part of a name", () => {
     expect(splitPathInput("/a/b\\c", "", false)?.prefix).toBe("b\\c")
   })
@@ -63,8 +72,13 @@ describe("expandTilde / trimTrailingSep", () => {
   it("trims, keeping roots", () => {
     expect(trimTrailingSep("/a/b//")).toBe("/a/b")
     expect(trimTrailingSep("/")).toBe("/")
-    expect(trimTrailingSep("C:\\")).toBe("C:\\")
-    expect(trimTrailingSep("C:\\a\\")).toBe("C:\\a")
+    expect(trimTrailingSep("C:\\", true)).toBe("C:\\")
+    expect(trimTrailingSep("C:\\a\\", true)).toBe("C:\\a")
+  })
+  it("posix: a backslash is part of a name", () => {
+    expect(trimTrailingSep("/tmp/odd\\")).toBe("/tmp/odd\\")
+    expect(expandTilde("~\\x", "/h")).toBe("~\\x")
+    expect(expandTilde("~\\x", "C:\\h", true)).toBe("C:\\h\\x")
   })
 })
 

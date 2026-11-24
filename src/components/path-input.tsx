@@ -37,7 +37,7 @@ export function PathInput({
   const [value, setValue] = useState(root)
   const [invalid, setInvalid] = useState(false)
   const [open, setOpen] = useState(false) // suggestions shown: after a keystroke, not on entry
-  const [sel, setSel] = useState(-1)
+  const [sel, setSel] = useState<string | null>(null) // by name: a re-read may reorder the list
   const inputRef = useRef<HTMLInputElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
 
@@ -60,7 +60,7 @@ export function PathInput({
     () => (q && listing && !listing.error ? matchDirs(listing.entries, q.prefix, ci) : []),
     [q, listing, ci],
   )
-  const cur = sel < matches.length ? sel : -1
+  const cur = sel === null ? -1 : matches.indexOf(sel)
 
   // Read the folder being typed into: now when it has no listing, else a background refresh.
   useEffect(() => {
@@ -68,6 +68,8 @@ export function PathInput({
     const key = `${KEY}${scope}\0${dir}`
     folderReads.drop((k) => k.startsWith(KEY) && k !== key)
     const had = listings.get(scope)[dir]
+    // No background refresh on WSL: each read is a slow 9p trip (as in folder views).
+    if (had && wslRef.current) return
     folderReads.request({
       key,
       urgent: !had,
@@ -81,7 +83,14 @@ export function PathInput({
           .catch(() => {}),
     })
   }, [dir, scope])
-  useEffect(() => () => folderReads.drop((k) => k.startsWith(KEY)), [])
+  const gone = useRef(false) // unmounted: a pending check mustn't re-root after a cancel
+  useEffect(
+    () => () => {
+      gone.current = true
+      folderReads.drop((k) => k.startsWith(KEY))
+    },
+    [],
+  )
 
   useEffect(() => {
     if (cur >= 0) listRef.current?.children[cur]?.scrollIntoView?.({ block: "nearest" })
@@ -90,17 +99,19 @@ export function PathInput({
   const edit = (v: string) => {
     setValue(v)
     setInvalid(false)
-    setSel(-1)
+    setSel(null)
     setOpen(true)
   }
   const complete = (name: string) => q && edit(q.base + name + sepOf(q.base))
 
   const go = async (typed: string) => {
-    const p = trimTrailingSep(expandTilde(typed.trim(), home))
+    const p = trimTrailingSep(expandTilde(typed.trim(), home, win), win)
     if (p === root) return onClose()
     // Must be an absolute host path AND an existing dir —
     // checked via the pane's WSL context so a Linux path validates through the UNC share.
-    if (isAbsoluteHostPath(p) && (await ipc.pathIsDir(p, wsl))) {
+    const ok = isAbsoluteHostPath(p) && (await ipc.pathIsDir(p, wsl))
+    if (gone.current) return
+    if (ok) {
       onSetRoot(p)
       onClose()
     } else setInvalid(true)
@@ -111,7 +122,7 @@ export function PathInput({
     if (e.key === "ArrowDown" || e.key === "ArrowUp") {
       if (!n) return
       e.preventDefault()
-      setSel(e.key === "ArrowDown" ? (cur + 1) % n : cur <= 0 ? n - 1 : cur - 1)
+      setSel(matches[e.key === "ArrowDown" ? (cur + 1) % n : cur <= 0 ? n - 1 : cur - 1]!)
     } else if (e.key === "Tab") {
       e.preventDefault()
       if (!open) return setOpen(true)
@@ -128,14 +139,26 @@ export function PathInput({
     } else if (e.key === "Escape") {
       if (open && n) {
         setOpen(false)
-        setSel(-1)
+        setSel(null)
       } else onClose()
     }
   }
 
-  const more = matches.length - MAX_SHOWN + (listing?.truncated ? 1 : 0)
+  // More than shown: past MAX_SHOWN, or past the read's cap (a truncated listing)
+  const more = matches.length > MAX_SHOWN || !!listing?.truncated
   return (
-    <div className="root-input-wrap">
+    // The pane gives the keyboard to its view on mouseup (terminal-pane). A press that starts
+    // in here (caret, a suggestion, the list's scrollbar) must leave it in the input, even when
+    // the release lands elsewhere (a picked suggestion's list may be gone by then).
+    <div
+      className="root-input-wrap"
+      onMouseDown={() =>
+        window.addEventListener("mouseup", (e) => e.stopPropagation(), {
+          capture: true,
+          once: true,
+        })
+      }
+    >
       <input
         ref={inputRef}
         className={`root-input${invalid ? " invalid" : ""}`}
@@ -149,7 +172,13 @@ export function PathInput({
         onBlur={onClose}
       />
       {open && q && matches.length > 0 && (
-        <div className="path-suggest" role="listbox" ref={listRef}>
+        <div
+          className="path-suggest"
+          role="listbox"
+          ref={listRef}
+          // a press anywhere in the list (its scrollbar too) keeps the input focused
+          onMouseDown={(e) => e.preventDefault()}
+        >
           {matches.slice(0, MAX_SHOWN).map((name, i) => (
             <div
               key={name}
@@ -169,7 +198,7 @@ export function PathInput({
               </span>
             </div>
           ))}
-          {more > 0 && <div className="path-suggest-more">… more — keep typing to narrow</div>}
+          {more && <div className="path-suggest-more">… more — keep typing to narrow</div>}
         </div>
       )}
     </div>

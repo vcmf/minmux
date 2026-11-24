@@ -8,13 +8,14 @@ const d = (name: string) => ({ name, isDir: true })
 const LIST: Record<string, string[]> = {
   "/Users/me": ["workspace", "work-old", ".hidden"],
   "/Users/me/workspace": ["term", "term-phone"],
+  "/big": ["alpha", "beta"],
 }
 
 beforeEach(() => {
   useStore.setState({ home: "/Users/me", platform: "darwin" })
   vi.mocked(ipc.readdir).mockImplementation(async (dir: string) => ({
     entries: [...(LIST[dir] ?? []).map(d), { name: "file.txt", isDir: false }],
-    truncated: false,
+    truncated: dir === "/big",
   }))
 })
 
@@ -88,5 +89,32 @@ describe("PathInput", () => {
     await waitFor(() => expect(names()).toHaveLength(2))
     fireEvent.mouseDown(screen.getAllByRole("option")[0]!)
     expect(input.value).toBe("~/workspace/term/")
+  })
+  it("a truncated folder says more exist, however few match", async () => {
+    const { input } = setup()
+    fireEvent.change(input, { target: { value: "/big/a" } })
+    await waitFor(() => expect(names()).toEqual(["alpha"]))
+    expect(screen.getByText(/more/)).toBeInTheDocument()
+  })
+
+  it("a press on the list (its scrollbar) keeps the box open", async () => {
+    const { input, onClose } = setup()
+    fireEvent.change(input, { target: { value: "~/" } })
+    await waitFor(() => expect(names()).toHaveLength(2))
+    const list = screen.getByRole("listbox")
+    expect(fireEvent.mouseDown(list)).toBe(false) // default prevented: no blur
+    expect(onClose).not.toHaveBeenCalled()
+  })
+
+  it("the selection follows its name, not its row", async () => {
+    const { input } = setup()
+    fireEvent.change(input, { target: { value: "~/wo" } })
+    await waitFor(() => expect(names()).toHaveLength(2))
+    fireEvent.keyDown(input, { key: "ArrowDown" })
+    fireEvent.keyDown(input, { key: "ArrowDown" })
+    const selected = () => screen.getByRole("option", { selected: true }).textContent
+    expect(selected()).toBe("work-old")
+    fireEvent.change(input, { target: { value: "~/wor" } }) // a new edit clears it
+    expect(screen.queryByRole("option", { selected: true })).toBeNull()
   })
 })

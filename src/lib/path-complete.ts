@@ -11,19 +11,23 @@ export interface PathQuery {
 
 const SEP = /[\\/]/
 
-/** Expand a leading `~` to `home` (none: unchanged). */
-export function expandTilde(p: string, home: string): string {
-  if (!home || !/^~(?:[\\/]|$)/.test(p)) return p
+/** Expand a leading `~` to `home` (none: unchanged). `win`: `~\` too. */
+export function expandTilde(p: string, home: string, win = false): string {
+  if (!home || !(win ? /^~(?:[\\/]|$)/ : /^~(?:\/|$)/).test(p)) return p
   return home.replace(/[\\/]+$/, "") + p.slice(1)
 }
 
-/** Drop trailing separators, keeping a root (`/`, `C:\`). */
-export function trimTrailingSep(p: string): string {
-  const t = p.replace(/[\\/]+$/, "")
-  if (!t) return p.slice(0, 1) // "/" (or "\\")
-  if (/^[A-Za-z]:$/.test(t)) return t + p.charAt(t.length) // "C:\"
+/** Drop trailing separators, keeping a root (`/`, `C:\`). `win`: `\` separates too
+ *  (elsewhere it's part of a name). */
+export function trimTrailingSep(p: string, win = false): string {
+  const t = p.replace(win ? /[\\/]+$/ : /\/+$/, "")
+  if (!t) return p.slice(0, 1) // "/"
+  if (win && /^[A-Za-z]:$/.test(t)) return t + p.charAt(t.length) // "C:\"
   return t
 }
+
+// A UNC path lists only from its share on: \\server\share\…
+const UNC_SHARE = /^[\\/]{2}[^\\/]+[\\/][^\\/]+[\\/]/
 
 /** Split typed text into the folder to list and the prefix; null when it names no folder yet
  *  (no separator, or not absolute once `~` is expanded). `win`: `\` separates too. */
@@ -37,10 +41,12 @@ export function splitPathInput(input: string, home: string, win: boolean): PathQ
     }
   if (cut < 0) return null
   const base = input.slice(0, cut + 1)
-  const expanded = expandTilde(base, home)
-  const absolute = win ? /^(?:[A-Za-z]:[\\/]|\\\\)/.test(expanded) : expanded.startsWith("/")
+  const expanded = expandTilde(base, home, win)
+  const absolute = win
+    ? /^[A-Za-z]:[\\/]/.test(expanded) || UNC_SHARE.test(expanded)
+    : expanded.startsWith("/")
   if (!absolute) return null
-  return { base, dir: trimTrailingSep(expanded), prefix: input.slice(cut + 1) }
+  return { base, dir: trimTrailingSep(expanded, win), prefix: input.slice(cut + 1) }
 }
 
 /** Subfolder names starting with `prefix` (listing order). Hidden ones only once the prefix
