@@ -120,10 +120,11 @@ an older build has no branch: the root shows the repo alone.
   never matched by branch name** (their code lives in the fork). A worktree whose path is a
   pane's root is that pane (today's rule) and isn't listed twice, whether or not the pane's own
   PR lookup has answered.
-- The rest show as "worktree · not open" with **Open terminal here** (a new terminal tab in
-  that folder).
-- Not searched: repos no pane is in, clones elsewhere on disk. SSH panes add nothing; WSL runs
-  through `wsl.exe` as `pane-git` does.
+- The rest show as "worktree · not open" with **Open terminal here** (a split beside the
+  focused pane, in a host shell, as the agents panel opens a folder).
+- Not searched: repos no pane is in, clones elsewhere on disk. SSH panes add nothing. WSL panes
+  aren't searched in v1 (their roots are Linux paths main's git can't read); a WSL pane in
+  `/mnt/<drive>/…` still counts as having its worktree open.
 
 ### Progress estimate
 

@@ -4,6 +4,7 @@ import {
   ArrowSquareOut,
   Check,
   Copy,
+  FolderSimple,
   GitMerge,
   GithubLogo,
   GitPullRequest,
@@ -58,6 +59,8 @@ import { ghEnvOf, paneGhEnv } from "../lib/open-link"
 import { baseOf, stackedOn, stackRows, type StackRow } from "../lib/pr-stacks"
 import { graphLayout, graphMove, type GraphKey } from "../lib/pr-graph"
 import { PrGraphView } from "./pr-graph-view"
+import { folderName, hostPathOfWsl, worktreeCheckouts, type LocalRepo } from "../lib/pr-local"
+import { paneOfGitKey } from "../lib/agent-dirs"
 import { toDialog } from "./to-dialog"
 
 // gh's accounts as last answered (a failed answer too): the picker stays to pick another.
@@ -183,6 +186,34 @@ function paneFlatOf(
   return out
 }
 
+// The panes' checkout roots (their shells' and their agents'), as one primitive the shallow
+// compare can hold: host roots (asked about), then a tab, then every root a pane is in, a WSL
+// pane's `/mnt/c/…` as `C:/…` (a worktree a WSL pane has open isn't offered again).
+// Recomputed only when paneGit or sessions change.
+let rootsMemo: { args: unknown[]; out: string } | null = null
+function rootsOf(paneGit: Record<string, PaneGitInfo>, sessions: Record<string, Session>) {
+  const args = [paneGit, sessions]
+  if (rootsMemo && rootsMemo.args.every((a, i) => a === args[i])) return rootsMemo.out
+  const host = new Set<string>()
+  const known = new Set<string>()
+  for (const [key, info] of Object.entries(paneGit)) {
+    const session = sessions[paneOfGitKey(key)]
+    if (!info.root || !session || session.remote) continue // (an ssh pane: nothing local)
+    // (WSL's roots are Linux paths main's git can't read: host checkouts only, for now)
+    if (ghEnvOf(session, info.root).wsl) known.add(hostPathOfWsl(info.root) ?? info.root)
+    else {
+      host.add(info.root)
+      known.add(info.root)
+    }
+  }
+  rootsMemo = { args, out: `${[...host].sort().join("\n")}\t${[...known].sort().join("\n")}` }
+  return rootsMemo.out
+}
+const splitRoots = (key: string) => {
+  const [host = "", known = ""] = key.split("\t")
+  return { host: host ? host.split("\n") : [], known: known ? known.split("\n") : [] }
+}
+
 /** The focused pane (the active tab's focused terminal). */
 const useFocusedPane = () =>
   useStore((s) => s.tabs.find((t) => t.id === s.activeTabId)?.activeSessionId)
@@ -228,6 +259,7 @@ export function PrDialog() {
   const [at, setAt] = useState(mine?.at ?? 0)
   const [error, setError] = useState<{ error: PrListsError; message?: string } | null>(null)
   const [loading, setLoading] = useState(false)
+  const [refreshed, setRefreshed] = useState(0) // refreshes finished (local checkouts follow)
   const [tab, setTabState] = useState<PrTab>(readTab)
   const [view, setViewState] = useState<PrView>(readView)
   // `remember`: a view the user picked (a card or a link switching to the list isn't kept).
@@ -264,6 +296,7 @@ export function PrDialog() {
     () => () => {
       alive.current = false
       forgetFlat()
+      rootsMemo = null
     },
     [],
   )
@@ -311,6 +344,7 @@ export function PrDialog() {
     failures.current = 0
     halted.current = false
     setError(null)
+    setRefreshed((n) => n + 1)
     // (rows listed before gh's accounts were known aren't kept: they'd act as whoever is
     // gh's active account later)
     if (answerRef.current && !answerRef.current.accountsPending) {
@@ -440,6 +474,24 @@ export function PrDialog() {
     return { panes, titles }
   }, [paneFlat])
   const titleOf = (id: string) => titles.get(id) ?? id
+  // Worktrees of the panes' repos (main's `git worktree list`): on open, then once per refresh
+  // finished (never per tab answering), and when the panes' checkouts change.
+  const rootsKey = useStore((s) => rootsOf(s.paneGit, s.sessions))
+  const roots = useMemo(() => splitRoots(rootsKey), [rootsKey])
+  const [local, setLocal] = useState<LocalRepo[]>([])
+  useEffect(() => {
+    if (!roots.host.length) return setLocal([])
+    let live = true
+    void ipc
+      .prLocal({ roots: roots.host })
+      .catch(() => ({ ok: false as const }))
+      .then((res) => {
+        if (live) setLocal(res.ok ? res.repos : []) // (none offered that may be gone)
+      })
+    return () => {
+      live = false
+    }
+  }, [roots, refreshed])
   // The focused pane, and the PR it's on (the "here" marker; selected once when it opens).
   const focusedPane = useFocusedPane()
   const hereUrl = useStore((s) =>
@@ -461,6 +513,8 @@ export function PrDialog() {
       for (const r of lists?.[t] ?? []) if (!seen.has(r.url)) seen.set(r.url, r)
     return [...seen.values()]
   }, [lists])
+  // Each PR → the worktrees with its branch and no pane in them.
+  const worktrees = useMemo(() => worktreeCheckouts(local, all, roots.known), [local, all, roots])
   const stack = useMemo(
     () => stackRows((lists?.[shownTab] ?? []) as PrRow[], all),
     [lists, shownTab, all],
@@ -609,6 +663,17 @@ export function PrDialog() {
       setTab("repo", null, false)
       setView("list", false)
     } else ipc.openExternal(repoUrl(repo))
+  }
+
+  // A worktree with no terminal in it: one, split beside the focused pane (a host shell: the
+  // worktrees listed are host folders, which a WSL shell can't start in).
+  const openWorktree = (path: string) => {
+    const st = useStore.getState()
+    const before = st.sessions
+    st.setPrDialogOpen(false)
+    st.openFolderInSplit(path, undefined, true)
+    // nothing opened (no shell for it): the keys back to the terminal they came from
+    if (useStore.getState().sessions === before) refocusActiveTerminal()
   }
 
   const goToPane = (id: string) => {
@@ -820,6 +885,7 @@ export function PrDialog() {
             onRoot={openRoot}
             onGo={goTo}
             tabOf={tabOf}
+            worktrees={worktrees}
           />
         ) : (
           <div className="pr-body">
@@ -857,6 +923,8 @@ export function PrDialog() {
                     }))}
                     focused={focusedPane}
                     onPane={goToPane}
+                    worktrees={worktrees.get(shown.url) ?? []}
+                    onWorktree={openWorktree}
                     base={baseOf(shown, all)}
                     above={stackedOn(shown, all)}
                     onGo={goTo}
@@ -1173,6 +1241,8 @@ function PrSummary(props: {
   panes: (PrPane & { title: string })[]
   focused: string | undefined // the focused pane
   onPane: (id: string) => void
+  worktrees: string[] // worktrees with its branch and no terminal in them
+  onWorktree: (path: string) => void
   reviewers: React.ReactNode
   base: PrRow | null // the PR this one is stacked on
   above: PrRow[] // the PRs stacked on this one
@@ -1180,7 +1250,8 @@ function PrSummary(props: {
   env: { cwd?: string; wsl?: { distro?: string } }
   onChanged: (action: PrBranchAction, row: PrRow) => void // its state changed: lists catch up
 }) {
-  const { row, panes, focused, onPane, reviewers, base, above, onGo, env, onChanged } = props
+  const { row, panes, focused, onPane, worktrees, onWorktree, reviewers } = props
+  const { base, above, onGo, env, onChanged } = props
   const link = (pr: PrRow) => (
     <button
       key={pr.url}
@@ -1238,7 +1309,7 @@ function PrSummary(props: {
         </div>
       )}
       {reviewers}
-      {panes.length > 0 && (
+      {(panes.length > 0 || worktrees.length > 0) && (
         <>
           {/* an agent on its branch: "working on it"; a plain terminal: checked out */}
           <h4>
@@ -1268,6 +1339,17 @@ function PrSummary(props: {
                 </button>
               )
             })}
+            {worktrees.map((w) => (
+              <button
+                key={w}
+                className="pr-pane"
+                title={`Open a terminal in ${w}`}
+                onClick={() => onWorktree(w)}
+              >
+                <FolderSimple size={13} /> {folderName(w)}{" "}
+                <span className="pr-faint">worktree · open a terminal here</span>
+              </button>
+            ))}
           </div>
         </>
       )}

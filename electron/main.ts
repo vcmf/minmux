@@ -93,6 +93,7 @@ import {
 } from "./legacy-migrate"
 import { PaneGitService } from "./pane-git"
 import { PrDashboard } from "./pr-dashboard"
+import { PrLocal } from "./pr-local"
 import { BRANCH_ACTIONS } from "../src/lib/pr-branch"
 import { isGhLogin, type PrListsRequest } from "../src/lib/pr-dashboard"
 import type { PrDetailRequest } from "../src/lib/pr-detail"
@@ -217,6 +218,7 @@ const REAP_MS = 3000
 // Branch + GitHub PR per terminal (sidebar), via git + the user's `gh`.
 const paneGit = new PaneGitService()
 const prDashboard = new PrDashboard()
+const prLocal = new PrLocal()
 const NOT_A_PR = { ok: false, error: "failed", message: "Not a pull request" } as const
 /** A renderer's PR request → which PR and where gh runs (null: not one). */
 function prTarget(req: unknown): PrDetailRequest | null {
@@ -1441,6 +1443,14 @@ function registerIpc() {
     const t = prTarget(req)
     const fresh = (req as { fresh?: unknown } | null)?.fresh === true
     return t ? prDashboard.detail({ ...t, fresh }) : NOT_A_PR
+  })
+  // The dialog's local checkouts: worktrees of the repos the panes are in (on its refresh).
+  ipcMain.handle("prs:local", async (_e, req: unknown) => {
+    const roots = (req as { roots?: unknown } | null)?.roots
+    if (!Array.isArray(roots)) return { ok: false }
+    return prLocal.checkouts({
+      roots: roots.filter((r): r is string => typeof r === "string" && r.length > 0),
+    })
   })
   // A PR link clicked (a terminal's, the sidebar's): the PR as an account that can see it.
   ipcMain.handle("prs:find", async (_e, req: unknown) => {
