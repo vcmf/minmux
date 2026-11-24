@@ -9,6 +9,7 @@ import { isAbsoluteHostPath } from "../lib/file-actions"
 import {
   commonPrefix,
   expandTilde,
+  isUncPath,
   matchDirs,
   sepOf,
   splitPathInput,
@@ -48,7 +49,9 @@ export function PathInput({
   const scope = wsl ? `wsl:${wsl.distro ?? ""}` : ""
   const wslRef = useRef(wsl)
   wslRef.current = wsl
-  const KEY = `complete\0${useId()}\0` // this box's read keys (the queue is shared)
+  const id = useId()
+  const KEY = `complete\0${id}\0` // this box's read keys (the queue is shared)
+  const pending = useRef(new Set<string>()) // folders being read: asked again, not re-read
 
   useEffect(() => inputRef.current?.select(), [])
 
@@ -63,8 +66,10 @@ export function PathInput({
   )
   const shown = useMemo(() => matches.slice(0, MAX_SHOWN), [matches])
   const cur = sel === null ? -1 : shown.indexOf(sel)
-  // Folders may be past the read's cap only when it read nothing but folders (dirs sort first)
-  const cut = !!listing?.truncated && listing.entries.every((e) => e.isDir)
+  // A capped read may miss folders (symlinked ones past the cap read as files): Tab won't guess.
+  // The hint says so only when it read nothing but folders (dirs sort first).
+  const partial = !!listing?.truncated
+  const cut = partial && listing.entries.every((e) => e.isDir)
   // Shown with matches, or to say a too-big folder wasn't listed in full
   const listed = open && !!q && !!listing && (shown.length > 0 || cut)
 
@@ -72,8 +77,14 @@ export function PathInput({
   // it's typed into again).
   useEffect(() => {
     const key = `${KEY}${scope}\0${dir}`
-    folderReads.drop((k) => k.startsWith(KEY) && k !== key) // a folder typed past
-    if (!dir || (own[dir] && !own[dir].error)) return
+    // A folder typed past: its queued read goes (it reads again when typed into again)
+    folderReads.drop((k) => {
+      const drop = k.startsWith(KEY) && k !== key
+      if (drop) pending.current.delete(k.slice(k.lastIndexOf("\0") + 1))
+      return drop
+    })
+    if (!dir || (own[dir] && !own[dir].error) || pending.current.has(dir)) return
+    pending.current.add(dir)
     folderReads.request({
       key,
       urgent: true,
@@ -82,7 +93,8 @@ export function PathInput({
         ipc
           .readdir(dir, wslRef.current)
           .catch((): DirListing => ({ entries: [], truncated: false, error: true }))
-          .then((l) => !gone.current && setOwn((o) => ({ ...o, [dir]: l }))),
+          .then((l) => !gone.current && setOwn((o) => ({ ...o, [dir]: l })))
+          .finally(() => pending.current.delete(dir)),
     })
     // eslint-disable-next-line react-hooks/exhaustive-deps -- `own` checked at entry only
   }, [dir, scope, KEY])
@@ -132,7 +144,7 @@ export function PathInput({
     // checked via the pane's WSL context so a Linux path validates through the UNC share.
     const id = ++goId.current
     const ok =
-      isAbsoluteHostPath(p, wsl ? undefined : platform) &&
+      (isAbsoluteHostPath(p, wsl ? undefined : platform) || (win && isUncPath(p))) &&
       (await ipc.pathIsDir(p, wsl).catch(() => false))
     if (gone.current || id !== goId.current) return
     if (ok) {
@@ -142,6 +154,7 @@ export function PathInput({
   }
 
   const onKeyDown = (e: React.KeyboardEvent) => {
+    if (e.nativeEvent.isComposing) return // the IME's keys (pick, confirm, cancel a candidate)
     const n = shown.length // only rows on screen are selectable
     if (e.key === "ArrowDown" || e.key === "ArrowUp") {
       if (!n) return
@@ -152,15 +165,14 @@ export function PathInput({
       e.preventDefault()
       if (!open) return setOpen(true)
       if (cur >= 0) complete(shown[cur]!)
-      else if (cut)
-        return // more folders past the read's cap may match: only a pick completes
+      // More folders past the read's cap may match: only a pick completes
+      else if (partial) return
       else if (matches.length === 1) complete(matches[0]!)
       else {
         const p = commonPrefix(matches, ci)
         if (p.length > q.prefix.length) edit(q.base + p)
       }
     } else if (e.key === "Enter") {
-      if (e.nativeEvent.isComposing) return // confirming an IME candidate
       if (cur >= 0 && q) void go(q.base + shown[cur]!)
       else void go(value)
     } else if (e.key === "Escape") {
@@ -185,6 +197,8 @@ export function PathInput({
         placeholder="Absolute folder path… (Tab completes)"
         role="combobox"
         aria-expanded={listed}
+        aria-controls={listed ? `${id}-list` : undefined}
+        aria-activedescendant={cur >= 0 ? `${id}-opt-${cur}` : undefined}
         onChange={(e) => edit(e.target.value)}
         onKeyDown={onKeyDown}
         // Not when the window loses focus (⌘Tab to look a name up): the text stays
@@ -194,6 +208,7 @@ export function PathInput({
         <div
           className="path-suggest"
           role="listbox"
+          id={`${id}-list`}
           ref={listRef}
           // a press anywhere in the list (its scrollbar too) keeps the input focused
           onMouseDown={(e) => e.preventDefault()}
@@ -202,6 +217,7 @@ export function PathInput({
             <div
               key={name}
               role="option"
+              id={`${id}-opt-${i}`}
               aria-selected={i === cur}
               className={`path-suggest-item${i === cur ? " sel" : ""}`}
               // mousedown, not click: the input keeps focus (its blur closes the box)

@@ -1,6 +1,6 @@
 // Folder-path completion for the folder tab's path box (VS Code-style): the text up to the
 // last separator names a folder, the rest is a prefix of one of its subfolders. Pure — the
-// component reads the folder (one read per folder, shared listings) and filters here.
+// box reads each folder once into its own cache and filters here.
 import type { DirEntry } from "./dir-listing"
 
 export interface PathQuery {
@@ -28,6 +28,9 @@ export function trimTrailingSep(p: string, win = false): string {
 
 // A UNC path lists only from its share on: \\server\share\…
 const UNC_SHARE = /^[\\/]{2}[^\\/]+[\\/][^\\/]+[\\/]/
+
+/** A Windows UNC path, either slash (`\\srv\share`, `//srv/share`). */
+export const isUncPath = (p: string): boolean => /^[\\/]{2}[^\\/]/.test(p)
 
 // Null when it names no folder yet: no separator, or not absolute once `~` is expanded.
 /** Split typed text into the folder to list and the name prefix. */

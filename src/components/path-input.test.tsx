@@ -195,4 +195,38 @@ describe("PathInput", () => {
     fireEvent.change(input, { target: { value: "~/" } })
     await waitFor(() => expect(names()).toHaveLength(2))
   })
+  it("Windows: a //server/share path is accepted on Enter", async () => {
+    useStore.setState({ platform: "win32", home: "C:\\Users\\me" })
+    const { input, onSetRoot } = setup()
+    fireEvent.change(input, { target: { value: "//nas/share/proj" } })
+    fireEvent.keyDown(input, { key: "Enter" })
+    await waitFor(() => expect(onSetRoot).toHaveBeenCalledWith("//nas/share/proj"))
+  })
+
+  it("leaves keys to an IME while it composes, and points at the selected row", async () => {
+    const { input } = setup()
+    fireEvent.change(input, { target: { value: "~/wo" } })
+    await waitFor(() => expect(names()).toHaveLength(2))
+    fireEvent.keyDown(input, { key: "ArrowDown", isComposing: true })
+    expect(screen.queryByRole("option", { selected: true })).toBeNull()
+    fireEvent.keyDown(input, { key: "ArrowDown" })
+    const opt = screen.getByRole("option", { selected: true })
+    expect(input.getAttribute("aria-activedescendant")).toBe(opt.id)
+  })
+
+  it("a folder being read isn't read again when typed into again", async () => {
+    let done!: () => void
+    vi.mocked(ipc.readdir).mockClear()
+    vi.mocked(ipc.readdir).mockImplementationOnce(
+      () => new Promise((r) => (done = () => r({ entries: [d("x")], truncated: false }))),
+    )
+    const { input } = setup()
+    fireEvent.change(input, { target: { value: "/slow/" } })
+    await waitFor(() => expect(ipc.readdir).toHaveBeenCalledTimes(1))
+    fireEvent.change(input, { target: { value: "/slow" } })
+    fireEvent.change(input, { target: { value: "/slow/" } })
+    done()
+    await waitFor(() => expect(names()).toEqual(["x"]))
+    expect(ipc.readdir).toHaveBeenCalledTimes(1)
+  })
 })

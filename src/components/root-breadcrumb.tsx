@@ -4,6 +4,7 @@ import { ipc } from "../lib/ipc"
 import type { WslContext } from "../lib/wsl"
 import { parseBreadcrumb, collapseBreadcrumb } from "../lib/breadcrumb"
 import { PathInput } from "./path-input"
+import { refocusActiveTerminal } from "./refocus-terminal"
 
 const MAX_VISIBLE = 3 // trailing crumbs shown inline; the rest fold into the "…" menu
 
@@ -30,10 +31,17 @@ export function RootBreadcrumb({
     if (picked) setRoot(picked)
   }
 
+  // Closed (Enter, Esc, Tab out): the keyboard goes back to the pane's view, unless a click
+  // already gave it to something else.
+  const close = () => {
+    setEditing(false)
+    refocusActiveTerminal()
+  }
+
   if (editing) {
     return (
       <div className="rootbar">
-        <PathInput root={root} wsl={wsl} onSetRoot={setRoot} onClose={() => setEditing(false)} />
+        <PathInput root={root} wsl={wsl} onSetRoot={setRoot} onClose={close} />
       </div>
     )
   }
