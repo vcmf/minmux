@@ -3,6 +3,16 @@
 What changed in each minmux release, newest first. Generated from the pull request titles by
 [git-cliff](https://git-cliff.org): edit `cliff.toml`, not this file.
 
+## [0.1.66](https://github.com/vcmf/minmux/releases/tag/v0.1.66) - 2026-11-24
+
+### Added
+
+- Complete folder paths in the path box ([#212](https://github.com/vcmf/minmux/pull/212))
+
+### Fixed
+
+- Stop rewriting every line on each render ([#211](https://github.com/vcmf/minmux/pull/211))
+
 ## [0.1.65](https://github.com/vcmf/minmux/releases/tag/v0.1.65) - 2026-11-23
 
 ### Added
