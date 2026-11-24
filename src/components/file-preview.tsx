@@ -66,6 +66,9 @@ export function FilePreview() {
     [lineCount],
   )
 
+  // A stable object: React 19 rewrites innerHTML for a new one, which drops a selection.
+  const code = useMemo(() => (html === null ? null : { __html: html }), [html])
+
   if (!target) return null
 
   return (
@@ -123,12 +126,12 @@ export function FilePreview() {
               {" Use Open in editor or Reveal above."}
             </div>
           )}
-          {data?.kind === "text" && html !== null && (
+          {data?.kind === "text" && code && (
             <div className="lp-scroll">
               <div className="lp-grid">
                 <pre className="lp-gutter">{gutter}</pre>
                 <pre className="lp-code">
-                  <code className="hljs" dangerouslySetInnerHTML={{ __html: html }} />
+                  <code className="hljs" dangerouslySetInnerHTML={code} />
                 </pre>
               </div>
             </div>
