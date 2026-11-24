@@ -346,8 +346,9 @@ export function TerminalPane({ pane, tabId }: { pane: PaneLeaf; tabId: string })
       // Re-focus the terminal after any click/selection so keystrokes reach the
       // PTY (the textarea doesn't always keep focus after a selection) — unless a field that
       // asks to keep it has it (the folder path box, mid-completion).
-      onMouseUp={() => {
-        if (document.activeElement?.closest("[data-keep-focus]")) return
+      onMouseUp={(e) => {
+        const a = document.activeElement
+        if (a?.closest("[data-keep-focus]") && e.currentTarget.contains(a)) return
         focusEntry(visibleNow())
       }}
       onContextMenu={openMenu}

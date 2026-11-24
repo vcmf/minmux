@@ -1,11 +1,10 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react"
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react"
 import { FolderSimple } from "@phosphor-icons/react"
 import { useStore } from "../store"
 import { ipc } from "../lib/ipc"
 import type { WslContext } from "../lib/wsl"
-import { folderReads, watches } from "../lib/fs-reads"
-import { listings } from "../lib/listing-store"
-import { BIG_FOLDER, type DirListing } from "../lib/dir-listing"
+import { folderReads } from "../lib/fs-reads"
+import type { DirListing } from "../lib/dir-listing"
 import { isAbsoluteHostPath } from "../lib/file-actions"
 import {
   commonPrefix,
@@ -17,13 +16,11 @@ import {
 } from "../lib/path-complete"
 
 const MAX_SHOWN = 200 // suggestions rendered at once; keep typing to narrow
-const KEY = "complete\0" // this input's read keys (the queue is shared with folder views)
-const subscribe = (fn: () => void) => listings.subscribe(fn)
 
 // Typing inside a name filters a listing already read; only a new folder (a `/` typed or
 // deleted) is read, once, through the shared read queue. Reads land in the box's own cache,
-// which lives while it's open: never in the folder views' listings (a failed or unwatched
-// read there would go stale under them). A folder a view watches is taken from those.
+// which lives while it's open; it neither reads nor writes the folder views' listings (whether
+// one of those is current isn't known here, and a box's read would go stale under a view).
 /** The folder tab's type-a-path box, with folder completion (↑/↓, Tab, Enter, Esc). */
 export function PathInput({
   root,
@@ -51,6 +48,7 @@ export function PathInput({
   const scope = wsl ? `wsl:${wsl.distro ?? ""}` : ""
   const wslRef = useRef(wsl)
   wslRef.current = wsl
+  const KEY = `complete\0${useId()}\0` // this box's read keys (the queue is shared)
 
   useEffect(() => inputRef.current?.select(), [])
 
@@ -58,11 +56,7 @@ export function PathInput({
   const q = useMemo(() => splitPathInput(typed, home, win), [typed, home, win])
   const dir = open ? q?.dir : undefined
   const [own, setOwn] = useState<Record<string, DirListing>>({})
-  const all = useSyncExternalStore(subscribe, () => listings.get(scope))
-  // A view's listing is current while its folder is watched (host folders: watches are keyed
-  // by host path).
-  const live = (d: string) => !wsl && !all[d]?.error && watches.current().includes(d)
-  const listing = dir ? (own[dir] ?? (live(dir) ? all[dir] : undefined)) : undefined
+  const listing = dir ? own[dir] : undefined
   const matches = useMemo(
     () => (q && listing && !listing.error ? matchDirs(listing.entries, q.prefix, ci) : []),
     [q, listing, ci],
@@ -74,24 +68,24 @@ export function PathInput({
   // Shown with matches, or to say a too-big folder wasn't listed in full
   const listed = open && !!q && !!listing && (shown.length > 0 || cut)
 
-  // Read the folder being typed into, once while the box is open (unless a view keeps it).
+  // Read the folder being typed into, once while the box is open (a failed read: again when
+  // it's typed into again).
   useEffect(() => {
-    if (!dir || own[dir] || live(dir)) return
     const key = `${KEY}${scope}\0${dir}`
-    folderReads.drop((k) => k.startsWith(KEY) && k !== key)
+    folderReads.drop((k) => k.startsWith(KEY) && k !== key) // a folder typed past
+    if (!dir || (own[dir] && !own[dir].error)) return
     folderReads.request({
       key,
       urgent: true,
       front: true,
-      big: (listings.get(scope)[dir]?.total ?? 0) > BIG_FOLDER,
       run: () =>
         ipc
           .readdir(dir, wslRef.current)
           .catch((): DirListing => ({ entries: [], truncated: false, error: true }))
           .then((l) => !gone.current && setOwn((o) => ({ ...o, [dir]: l }))),
     })
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- `own`/`live` checked at entry
-  }, [dir, scope])
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `own` checked at entry only
+  }, [dir, scope, KEY])
   const gone = useRef(false) // unmounted: a pending check mustn't re-root after a cancel
   const goId = useRef(0) // the latest Enter (an edit voids it): older checks are dropped
   useEffect(
@@ -99,7 +93,7 @@ export function PathInput({
       gone.current = true
       folderReads.drop((k) => k.startsWith(KEY))
     },
-    [],
+    [KEY],
   )
 
   useEffect(() => {
@@ -154,16 +148,19 @@ export function PathInput({
       e.preventDefault()
       setSel(shown[e.key === "ArrowDown" ? (cur + 1) % n : cur <= 0 ? n - 1 : cur - 1]!)
     } else if (e.key === "Tab") {
+      if (e.shiftKey || !q) return // nothing to complete: Tab moves focus as usual
       e.preventDefault()
       if (!open) return setOpen(true)
-      if (!q) return
       if (cur >= 0) complete(shown[cur]!)
+      else if (cut)
+        return // more folders past the read's cap may match: only a pick completes
       else if (matches.length === 1) complete(matches[0]!)
       else {
         const p = commonPrefix(matches, ci)
         if (p.length > q.prefix.length) edit(q.base + p)
       }
     } else if (e.key === "Enter") {
+      if (e.nativeEvent.isComposing) return // confirming an IME candidate
       if (cur >= 0 && q) void go(q.base + shown[cur]!)
       else void go(value)
     } else if (e.key === "Escape") {

@@ -169,4 +169,30 @@ describe("PathInput", () => {
     fireEvent.change(input, { target: { value: " ~/wo" } })
     await waitFor(() => expect(names()).toEqual(["workspace", "work-old"]))
   })
+  it("Tab doesn't guess in a folder read only up to the cap", async () => {
+    const { input } = setup()
+    fireEvent.change(input, { target: { value: "/big/a" } })
+    await waitFor(() => expect(names()).toEqual(["alpha"]))
+    fireEvent.keyDown(input, { key: "Tab" })
+    expect(input.value).toBe("/big/a") // "/big/ab…" may be past the cap
+  })
+
+  it("Tab moves focus when there's nothing to complete; Shift+Tab always", () => {
+    const { input } = setup()
+    fireEvent.change(input, { target: { value: "relative" } })
+    expect(fireEvent.keyDown(input, { key: "Tab" })).toBe(true) // not prevented
+    fireEvent.change(input, { target: { value: "~/" } })
+    expect(fireEvent.keyDown(input, { key: "Tab", shiftKey: true })).toBe(true)
+  })
+
+  it("a failed read is tried again when its folder is typed into again", async () => {
+    const { input } = setup()
+    vi.mocked(ipc.readdir).mockClear()
+    vi.mocked(ipc.readdir).mockRejectedValueOnce(new Error("asleep"))
+    fireEvent.change(input, { target: { value: "~/" } })
+    await waitFor(() => expect(ipc.readdir).toHaveBeenCalledTimes(1))
+    fireEvent.change(input, { target: { value: "~" } })
+    fireEvent.change(input, { target: { value: "~/" } })
+    await waitFor(() => expect(names()).toHaveLength(2))
+  })
 })
