@@ -1,4 +1,12 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from "react"
+import {
+  memo,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react"
 import { ArrowSquareOut, Browser, FolderOpen, FolderSimple } from "@phosphor-icons/react"
 import { useStore } from "../store"
 import { ipc } from "../lib/ipc"
@@ -163,10 +171,10 @@ export function FileView({ entryId, tabId }: { entryId: string; tabId: string })
   }, [data?.kind, entryId, view])
   const { start, end } = rowWindow(lines.length, LINE_H, port.top, port.h, 0)
 
-  // New lines (the highlighted ones landing, a re-read) replace each row's HTML, which moves a
-  // selection's ends: it's read before the commit (the DOM still has the committed rows) and
-  // put back after it. Each render that changes the lines saves afresh (a discarded render's
-  // save is overwritten, never carried over).
+  // New lines (the highlighted ones landing, a re-read) rewrite the rows whose HTML changed
+  // (LineCode leaves the rest alone), which moves a selection's ends there: it's read before the
+  // commit (the DOM still has the committed rows) and put back after it. Each render that changes
+  // the lines saves afresh (a discarded render's save is overwritten, never carried over).
   const committedLines = useRef(lines)
   const keptSel = useRef<SavedSelection | null>(null)
   keptSel.current = committedLines.current !== lines ? saveSelection(scrollRef.current) : null
@@ -322,7 +330,7 @@ export function FileView({ entryId, tabId }: { entryId: string; tabId: string })
                     {d.type === "add" ? "+" : d.type === "del" ? "−" : ""}
                   </span>
                   {/* highlighted by side in the worker (escaped text in spans) */}
-                  <span className="file-view-code" dangerouslySetInnerHTML={{ __html: html }} />
+                  <LineCode html={html} />
                 </div>
               )
             })}
@@ -368,7 +376,7 @@ export function FileView({ entryId, tabId }: { entryId: string; tabId: string })
                     {n}
                   </span>
                   {/* highlight.js output: escaped text in spans (or plain escaped text) */}
-                  <span className="file-view-code" dangerouslySetInnerHTML={{ __html: html }} />
+                  <LineCode html={html} />
                 </div>
               )
             })}
@@ -404,3 +412,11 @@ export function FileView({ entryId, tabId }: { entryId: string; tabId: string })
 
 const btn = { width: 22, height: 22 }
 const VIEW_LABEL: Record<ViewName, string> = { preview: "Preview", source: "Source", diff: "Diff" }
+
+// React 19 writes innerHTML again whenever `dangerouslySetInnerHTML` is a new object, so each
+// render of the view (a scroll frame, a git poll) would rewrite every line in view: the browser
+// then moves a selection's ends to the line's edges. Memoized, a line's DOM changes only with it.
+/** A line's code: its HTML, written only when it changes. */
+const LineCode = memo(function LineCode({ html }: { html: string }) {
+  return <span className="file-view-code" dangerouslySetInnerHTML={{ __html: html }} />
+})

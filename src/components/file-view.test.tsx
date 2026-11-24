@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest"
-import { render, screen, fireEvent, waitFor } from "@testing-library/react"
+import { act, render, screen, fireEvent, waitFor } from "@testing-library/react"
 import { FileView } from "./file-view"
 import { useStore } from "../store"
 import { ipc } from "../lib/ipc"
@@ -153,6 +153,30 @@ describe("FileView", () => {
     await waitFor(() => expect(ipc.readFile).toHaveBeenCalledTimes(2))
     expect(vi.mocked(ipc.readFile).mock.calls[1]![2]).toEqual({ size: 11, mtimeMs: 1 })
     expect(container.querySelector(".hljs-keyword")).not.toBeNull()
+  })
+
+  it("a render that changes no line leaves the lines' DOM alone (a selection stays put)", async () => {
+    vi.mocked(ipc.readFile).mockResolvedValue({
+      kind: "text",
+      text: "const answer = 42\nreturn answer\n",
+      truncated: false,
+      size: 32,
+    })
+    const home = st().home
+    useStore.setState({ home: "/w" })
+    try {
+      const { tabId, entryId } = open("/w/same.ts")
+      const { container } = render(<FileView entryId={entryId} tabId={tabId} />)
+      await waitFor(() => expect(container.querySelector(".hljs-keyword")).not.toBeNull())
+      expect(container.querySelector(".file-view-path")!.textContent).toBe("~/same.ts")
+      const text = container.querySelector('[data-row="s1"] .file-view-code')!.lastChild!
+      act(() => useStore.setState({ home: "/elsewhere" }))
+      // It rendered again (its path shows another way), and its lines' nodes are the same.
+      expect(container.querySelector(".file-view-path")!.textContent).toBe("/w/same.ts")
+      expect(text.isConnected).toBe(true)
+    } finally {
+      useStore.setState({ home })
+    }
   })
 
   it("keeps a selection when the highlighted lines replace the plain ones", async () => {
