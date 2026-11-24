@@ -1,14 +1,15 @@
-import { useEffect, useRef, useState, type ReactNode } from "react"
+import { useState, type ReactNode } from "react"
 import { CaretRight, DotsThree, FolderOpen, PencilSimple } from "@phosphor-icons/react"
 import { ipc } from "../lib/ipc"
 import type { WslContext } from "../lib/wsl"
 import { parseBreadcrumb, collapseBreadcrumb } from "../lib/breadcrumb"
-import { isAbsoluteHostPath } from "../lib/file-actions"
+import { PathInput } from "./path-input"
+import { refocusActiveTerminal } from "./refocus-terminal"
 
 const MAX_VISIBLE = 3 // trailing crumbs shown inline; the rest fold into the "…" menu
 
 // A collapsible clickable breadcrumb of the current root, a "…" dropdown for folded ancestors,
-// browse (native picker) + type-a-path entry, and the folder tab's own buttons after them.
+// browse (native picker) + type-a-path entry (with folder completion, path-input), and the folder tab's own buttons after them.
 /** A folder tab's root navigation bar. */
 export function RootBreadcrumb({
   root,
@@ -22,58 +23,25 @@ export function RootBreadcrumb({
   actions?: ReactNode
 }) {
   const [editing, setEditing] = useState(false)
-  const [value, setValue] = useState("")
-  const [invalid, setInvalid] = useState(false)
   const [menuOpen, setMenuOpen] = useState(false)
-  const inputRef = useRef<HTMLInputElement>(null)
 
   const setRoot = onSetRoot
-
-  const beginEdit = () => {
-    setValue(root)
-    setInvalid(false)
-    setEditing(true)
-  }
-  useEffect(() => {
-    if (editing) inputRef.current?.select()
-  }, [editing])
-
-  const applyTyped = async () => {
-    const p = value.trim()
-    if (p === root) return setEditing(false)
-    // Must be an absolute host path AND an existing dir —
-    // checked via the pane's WSL context so a Linux path validates through the UNC share.
-    if (isAbsoluteHostPath(p) && (await ipc.pathIsDir(p, wsl))) {
-      setRoot(p)
-      setEditing(false)
-    } else {
-      setInvalid(true)
-    }
-  }
   const browse = async () => {
     const picked = await ipc.pickDirectory(root, wsl)
     if (picked) setRoot(picked)
   }
 
+  // Closed (Enter, Esc, Tab out): the keyboard goes back to the pane's view, unless a click
+  // already gave it to something else.
+  const close = () => {
+    setEditing(false)
+    refocusActiveTerminal()
+  }
+
   if (editing) {
     return (
       <div className="rootbar">
-        <input
-          ref={inputRef}
-          className={`root-input${invalid ? " invalid" : ""}`}
-          value={value}
-          spellCheck={false}
-          placeholder="Absolute folder path…"
-          onChange={(e) => {
-            setValue(e.target.value)
-            setInvalid(false)
-          }}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") void applyTyped()
-            else if (e.key === "Escape") setEditing(false)
-          }}
-          onBlur={() => setEditing(false)}
-        />
+        <PathInput root={root} wsl={wsl} onSetRoot={setRoot} onClose={close} />
       </div>
     )
   }
@@ -126,7 +94,12 @@ export function RootBreadcrumb({
         ))}
       </div>
       <div className="rootbar-actions">
-        <button className="iconbtn" style={btn} title="Enter a path" onClick={beginEdit}>
+        <button
+          className="iconbtn"
+          style={btn}
+          title="Enter a path"
+          onClick={() => setEditing(true)}
+        >
           <PencilSimple size={13} />
         </button>
         <button
