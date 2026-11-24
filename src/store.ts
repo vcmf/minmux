@@ -121,6 +121,12 @@ function hostShellFor(state: AppState, src: Session | undefined): ShellOption | 
   return state.shells.find(ok) ?? def
 }
 
+/** A host shell (not ssh, not WSL), or none: for a host folder that mustn't open elsewhere. */
+function hostOnlyShellFor(state: AppState, src: Session | undefined): ShellOption | undefined {
+  const s = hostShellFor(state, src)
+  return s && !s.remote && !wslContext(s.command, s.args) ? s : undefined
+}
+
 // A WSL folder isn't used: a new tab takes the shell it's given, which may not be WSL.
 /** Where new tabs open: the focused folder entry's path, else the tab's terminal's cwd. */
 function focusedCwd(state: AppState): string | undefined {
@@ -1073,7 +1079,10 @@ export const useStore = create<AppState>((set, get) => ({
       if (!tab) return {}
       const agentSession = paneId ? state.sessions[paneId] : undefined
       const src = state.sessions[tab.activeSessionId]
-      const shell = (host ? hostShellFor : localShellFor)(state, agentSession ?? src)
+      // (a host folder: a host shell or none, never WSL's, which would start in `~`)
+      const shell = host
+        ? hostOnlyShellFor(state, agentSession ?? src)
+        : localShellFor(state, agentSession ?? src)
       if (!shell) return {}
       return splitActivePane(state, { shell, cwd, direction: "row" })
     }),

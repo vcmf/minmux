@@ -29,8 +29,12 @@ export interface LocalWorktree {
 export interface LocalRepo {
   repo: string | null
   worktrees: LocalWorktree[]
-  merged?: Record<string, number> // head branch → PRs merged into it (from its commits)
+  merged?: Record<string, number> // unitsKey(head, base) → PRs merged into it (its commits)
 }
+
+/** The key a PR's merged units are answered under: its head and base (one branch can have
+ *  PRs into two bases). */
+export const unitsKey = (head: string, base: string) => `${head}\0${base}`
 
 export type PrLocalResult = { ok: true; repos: LocalRepo[] } | { ok: false }
 

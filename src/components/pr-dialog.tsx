@@ -64,6 +64,7 @@ import {
   hostPathOfWsl,
   openUnder,
   progressOf,
+  unitsKey as mergedKey,
   worktreeCheckouts,
   type LocalPr,
   type LocalRepo,
@@ -490,20 +491,24 @@ export function PrDialog() {
   // (the graph's PRs, for their merged units: only while it's shown; `progressRows` is set
   // further down, once the tab's rows are known)
   const [unitsKey, setUnitsKey] = useState("")
-  const asked = useRef<{ roots: unknown; refreshed: number } | null>(null)
+  const asked = useRef<{ roots: unknown; refreshed: number; done: boolean } | null>(null)
   useEffect(() => {
     if (!roots.host.length) return setLocal([])
-    // back to the list: the counts are just left unused (the git pass isn't run again for that)
+    // back to the list: the counts are just left unused (the git pass isn't run again for that,
+    // once its answer is in: one dropped half-way is asked for again)
     const was = asked.current
-    if (!unitsKey && was && was.roots === roots && was.refreshed === refreshed) return
-    asked.current = { roots, refreshed }
+    if (!unitsKey && was?.done && was.roots === roots && was.refreshed === refreshed) return
+    const mine = { roots, refreshed, done: false }
+    asked.current = mine
     let live = true
     const prs = unitsKey ? (JSON.parse(unitsKey) as LocalPr[]) : []
     void ipc
       .prLocal({ roots: roots.host, ...(prs.length ? { prs } : {}) })
       .catch(() => ({ ok: false as const }))
       .then((res) => {
-        if (live) setLocal(res.ok ? res.repos : []) // (none offered that may be gone)
+        if (!live) return
+        mine.done = true
+        setLocal(res.ok ? res.repos : []) // (none offered that may be gone)
       })
     return () => {
       live = false
@@ -537,8 +542,10 @@ export function PrDialog() {
     [lists, shownTab, all],
   )
   const rows = useMemo(() => stack.map((s) => s.row), [stack])
-  // The graph's open PRs (not forks): their merged units are counted in main.
+  // The graph's open PRs (not forks): their merged units are counted in main. (Not while a
+  // refresh runs: each tab answering would start a git pass, then the finished refresh another.)
   useEffect(() => {
+    if (loading) return
     const prs: LocalPr[] =
       view === "graph"
         ? rows
@@ -551,14 +558,19 @@ export function PrDialog() {
             }))
         : []
     setUnitsKey(prs.length ? JSON.stringify(prs) : "")
-  }, [view, rows])
+  }, [view, rows, loading])
   // Each PR's estimate: merged units (main's count) over those plus its open stacked PRs.
   const progress = useMemo(() => {
     const out = new Map<string, { merged: number; open: number }>()
     if (view !== "graph") return out
     for (const r of rows) {
-      const repo = local.find((l) => l.repo?.toLowerCase() === r.repo.toLowerCase())
-      const p = progressOf(repo?.merged?.[r.head], openUnder(r, all))
+      if (r.fork || (r.state !== "open" && r.state !== "draft")) continue // (only these counted)
+      const key = mergedKey(r.head, r.base)
+      // (two clones of the repo: the one that has its branches fetched)
+      const repo = local.find(
+        (l) => l.repo?.toLowerCase() === r.repo.toLowerCase() && l.merged?.[key] !== undefined,
+      )
+      const p = progressOf(repo?.merged?.[key], openUnder(r, all))
       if (p) out.set(r.url, p)
     }
     return out
@@ -1111,8 +1123,6 @@ function AccountPicker(props: {
 /** Whether an event came from a control inside a row (that control handles it). */
 const inControl = (e: React.MouseEvent) =>
   !!(e.target as HTMLElement).closest(".pr-row-main button, .pr-row-main [data-control]")
-
-/** Keys back to the dialog after a click on one of its controls (Enter opens the PR again). */
 
 /** A repo's name: opens its page on GitHub. In a list row, a clickable label (no control
  *  inside an option: the list's own keys move through rows). */

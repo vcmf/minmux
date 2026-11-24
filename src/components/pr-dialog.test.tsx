@@ -1908,7 +1908,7 @@ describe("PrDialog progress estimate", () => {
     st().setPaneGit({ [id]: { root: "/w/r", branch: "main" } }, [id])
     vi.mocked(ipc.prLocal).mockResolvedValue({
       ok: true,
-      repos: [{ repo: "o/r", worktrees: [], merged: { b1: 2, b3: 0 } }],
+      repos: [{ repo: "o/r", worktrees: [], merged: { "b1\0main": 2, "b3\0main": 0 } }],
     })
     answer({
       mine: [row(1, { defaultBranch: "main" }), row(2, { base: "b1" }), row(3)],
@@ -1937,5 +1937,24 @@ describe("PrDialog progress estimate", () => {
     fireEvent.click(screen.getByRole("button", { name: /^List/ }))
     await act(async () => {})
     expect(ipc.prLocal).toHaveBeenCalledTimes(n)
+  })
+})
+
+describe("PrDialog progress estimate, switching mid-request", () => {
+  it("back to the list while the graph's request runs: asked again, the worktrees not lost", async () => {
+    const id = st().tabs[0]!.activeSessionId
+    st().setPaneGit({ [id]: { root: "/w/r", branch: "main" } }, [id])
+    answer({ mine: [row(1)] })
+    render(<PrDialog />)
+    await screen.findByRole("option", { name: /PR 1/ })
+    await waitFor(() => expect(ipc.prLocal).toHaveBeenCalled())
+    await act(async () => {})
+    vi.mocked(ipc.prLocal).mockImplementationOnce(() => new Promise(() => {})) // never answers
+    fireEvent.click(screen.getByRole("button", { name: /^Graph/ }))
+    await waitFor(() => expect(vi.mocked(ipc.prLocal).mock.lastCall?.[0].prs).toBeDefined())
+    const n = vi.mocked(ipc.prLocal).mock.calls.length
+    fireEvent.click(screen.getByRole("button", { name: /^List/ }))
+    await waitFor(() => expect(ipc.prLocal).toHaveBeenCalledTimes(n + 1))
+    expect(vi.mocked(ipc.prLocal).mock.lastCall?.[0].prs).toBeUndefined()
   })
 })

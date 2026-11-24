@@ -286,7 +286,7 @@ function cardTip(
     `${row.head} · ${comments}`,
     where,
     progress
-      ? `~${progress.merged}/${progress.merged + progress.open}: ${progress.merged} merged in (from its commits), ${progress.open} open stacked on it`
+      ? `~${progress.merged}/${progress.merged + progress.open}: ${progress.merged} merged in (its commits, as of your last fetch), ${progress.open} open stacked on it`
       : "",
     "Enter opens it",
   ]

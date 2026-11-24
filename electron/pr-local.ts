@@ -16,6 +16,7 @@ import {
   parseWorktrees,
   UNITS_MAX_COMMITS,
   type LocalPr,
+  unitsKey,
   type LocalRepo,
   type PrLocalRequest,
   type PrLocalResult,
@@ -49,6 +50,7 @@ const defaultGit: GitRunner = async (args, cwd) =>
 const REPO_TTL = 60_000
 const COMMON_MAX = 256
 const UNITS_MAX = 2000
+const UNITS_RETRY = 10 * 60_000 // a range git failed on (too slow, say): tried again after this
 
 type Remote = { repo: string; name: string } | null
 
@@ -58,6 +60,7 @@ export class PrLocal {
   private remotes = new Map<string, { remote: Remote; at: number }>() // common dir → its remote
   // (common dir, head tip, base tip, default tip) → merged units; -1: too long a range
   private units = new Map<string, number>()
+  private unitsFailed = new Map<string, number>() // the same key → when git failed on it
   private git = new Limiter(3)
   private inFlight = new Map<string, Promise<PrLocalResult>>()
 
@@ -168,8 +171,19 @@ export class PrLocal {
     prs: LocalPr[],
   ): Promise<Record<string, number>> {
     const prefix = `refs/remotes/${remote}/`
+    // only the refs asked about (a repo with thousands of remote branches lists just these),
+    // and the remote's HEAD: the default branch when the row doesn't name it (an older answer)
+    const names = new Set(["HEAD"])
+    for (const p of prs) {
+      names.add(p.head)
+      names.add(p.base)
+      if (p.defaultBranch) names.add(p.defaultBranch)
+    }
+    const patterns = [...names].map((n) => prefix + n)
     const out = await this.git
-      .run(() => this.run(["for-each-ref", "--format=%(refname)%00%(objectname)", prefix], root))
+      .run(() =>
+        this.run(["for-each-ref", "--format=%(refname)%00%(objectname)", ...patterns], root),
+      )
       .catch(() => "")
     const tips = new Map<string, string>()
     for (const line of out.split(/\r?\n/)) {
@@ -182,9 +196,11 @@ export class PrLocal {
         const head = tips.get(p.head)
         const base = tips.get(p.base)
         if (!head || !base || head === base) return
-        const def = p.defaultBranch ? tips.get(p.defaultBranch) : undefined
+        const def = tips.get(p.defaultBranch ?? "HEAD")
         const key = [dir, head, base, def ?? ""].join("\0")
         let n = this.units.get(key)
+        const failed = this.unitsFailed.get(key)
+        if (n === undefined && failed !== undefined && this.now() - failed < UNITS_RETRY) return
         if (n === undefined) {
           const not = def && def !== base ? [`^${def}`] : []
           const log = await this.git
@@ -201,13 +217,20 @@ export class PrLocal {
               ),
             )
             .catch(() => null)
-          if (log === null) return // (not kept: asked again next time)
+          if (log === null) {
+            // (kept a while: a range too slow for the timeout isn't run again every refresh)
+            if (this.unitsFailed.size >= UNITS_MAX)
+              this.unitsFailed.delete(this.unitsFailed.keys().next().value!)
+            this.unitsFailed.set(key, this.now())
+            return
+          }
+          this.unitsFailed.delete(key)
           const lines = log.split(/\r?\n/).filter(Boolean).length
           n = lines > UNITS_MAX_COMMITS ? -1 : countMergedUnits(log)
           if (this.units.size >= UNITS_MAX) this.units.delete(this.units.keys().next().value!)
           this.units.set(key, n)
         }
-        if (n >= 0) merged[p.head] = n
+        if (n >= 0) merged[unitsKey(p.head, p.base)] = n
       }),
     )
     return merged
