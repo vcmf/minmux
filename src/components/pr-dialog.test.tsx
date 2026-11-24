@@ -1901,3 +1901,41 @@ describe("PrDialog worktrees not open", () => {
     expect(Object.values(st().sessions).some((x) => x.cwd === "/w/r/.worktrees/tab")).toBe(true)
   })
 })
+
+describe("PrDialog progress estimate", () => {
+  it("the graph asks main to count its PRs' merged units and shows ~merged/(merged+open)", async () => {
+    const id = st().tabs[0]!.activeSessionId
+    st().setPaneGit({ [id]: { root: "/w/r", branch: "main" } }, [id])
+    vi.mocked(ipc.prLocal).mockResolvedValue({
+      ok: true,
+      repos: [{ repo: "o/r", worktrees: [], merged: { b1: 2, b3: 0 } }],
+    })
+    answer({
+      mine: [row(1, { defaultBranch: "main" }), row(2, { base: "b1" }), row(3)],
+    })
+    render(<PrDialog />)
+    await screen.findByRole("option", { name: /PR 1/ })
+    // the list view asks for worktrees only
+    await waitFor(() => expect(ipc.prLocal).toHaveBeenCalled())
+    expect(vi.mocked(ipc.prLocal).mock.calls.every(([r]) => !r.prs)).toBe(true)
+    fireEvent.click(screen.getByRole("button", { name: /^Graph/ }))
+    await waitFor(() =>
+      expect(ipc.prLocal).toHaveBeenLastCalledWith({
+        roots: ["/w/r"],
+        prs: [
+          { repo: "o/r", head: "b1", base: "main", defaultBranch: "main" },
+          { repo: "o/r", head: "b2", base: "b1" },
+          { repo: "o/r", head: "b3", base: "main" },
+        ],
+      }),
+    )
+    // #1: 2 merged in, #2 open on it → ~2/3; #3: nothing merged, nothing on it → no estimate
+    expect(await screen.findByText("~2/3")).toBeInTheDocument()
+    expect(document.querySelectorAll(".pr-gbar")).toHaveLength(1)
+    // back to the list: no git pass run again just for that
+    const n = vi.mocked(ipc.prLocal).mock.calls.length
+    fireEvent.click(screen.getByRole("button", { name: /^List/ }))
+    await act(async () => {})
+    expect(ipc.prLocal).toHaveBeenCalledTimes(n)
+  })
+})

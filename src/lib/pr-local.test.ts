@@ -1,5 +1,14 @@
 import { describe, it, expect } from "vitest"
-import { folderName, hostPathOfWsl, parseWorktrees, worktreeCheckouts } from "./pr-local"
+import {
+  countMergedUnits,
+  folderName,
+  hostPathOfWsl,
+  openUnder,
+  parseLocalRequest,
+  parseWorktrees,
+  progressOf,
+  worktreeCheckouts,
+} from "./pr-local"
 import type { PrRow } from "./pr-dashboard"
 
 const row = (n: number, over: Partial<PrRow> = {}): PrRow => ({
@@ -113,5 +122,80 @@ describe("folderName", () => {
   it("the last part of a folder", () => {
     expect(folderName("/w/term/.worktrees/x/")).toBe("x")
     expect(folderName("C:\\w\\r")).toBe("r")
+  })
+})
+
+describe("countMergedUnits", () => {
+  const gh = (subject: string) => `noreply@github.com\0${subject}`
+  it("GitHub's squash and merge commits, each PR once", () => {
+    const out = [
+      gh("feat(x): one (#12)"),
+      gh("Merge pull request #13 from me/b13"),
+      gh("Merge pull request #13 from me/b13"), // (the same PR: once)
+      gh("Merge branch 'main' into b1"), // GitHub's "Update branch": no PR
+      "me@example.com\0fix: hand-written (#99)", // someone's own commit naming an issue
+      "me@example.com\0Merge pull request #7 from x/y", // a cherry-pick: not GitHub's
+      "",
+    ].join("\r\n")
+    expect(countMergedUnits(out)).toBe(2)
+  })
+
+  it("nothing of GitHub's, or not an answer: none", () => {
+    expect(countMergedUnits("")).toBe(0)
+    expect(countMergedUnits("fatal: bad revision")).toBe(0)
+  })
+})
+
+describe("openUnder", () => {
+  it("the open and draft PRs stacked on it, at any depth; closed ones and forks' bases aside", () => {
+    const rows = [
+      row(1),
+      row(2, { base: "b1" }),
+      row(3, { base: "b2", state: "draft" }),
+      row(4, { base: "b1", state: "merged" }), // merged: not open (its stack still walked)
+      row(5, { base: "b4" }),
+      row(6),
+    ]
+    expect(openUnder(rows[0]!, rows)).toBe(3) // 2, 3, 5
+    expect(openUnder(rows[5]!, rows)).toBe(0)
+  })
+
+  it("a cycle ends", () => {
+    const rows = [row(1, { base: "b2" }), row(2, { base: "b1" })]
+    expect(openUnder(rows[0]!, rows)).toBe(1)
+  })
+})
+
+describe("progressOf", () => {
+  it("shown when main counted and there's something to show", () => {
+    expect(progressOf(undefined, 3)).toBeNull() // no remote refs: never a guess
+    expect(progressOf(0, 0)).toBeNull()
+    expect(progressOf(2, 1)).toEqual({ merged: 2, open: 1 })
+    expect(progressOf(0, 2)).toEqual({ merged: 0, open: 2 })
+  })
+})
+
+describe("parseLocalRequest", () => {
+  it("roots and the PRs to count, each checked; anything else: not a request", () => {
+    expect(parseLocalRequest(null)).toBeNull()
+    expect(parseLocalRequest({ roots: "x" })).toBeNull()
+    expect(parseLocalRequest({ roots: ["/w/r", 3, ""] })).toEqual({ roots: ["/w/r"] })
+    expect(
+      parseLocalRequest({
+        roots: ["/w/r"],
+        prs: [
+          { repo: "o/r", head: "b1", base: "main", defaultBranch: "main" },
+          { repo: "o/r", head: "b2", base: "b1", defaultBranch: 7 },
+          { repo: "o/r", head: "", base: "main" },
+          null,
+        ],
+      }),
+    ).toEqual({
+      roots: ["/w/r"],
+      prs: [
+        { repo: "o/r", head: "b1", base: "main", defaultBranch: "main" },
+        { repo: "o/r", head: "b2", base: "b1" },
+      ],
+    })
   })
 })

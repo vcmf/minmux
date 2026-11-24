@@ -3668,9 +3668,35 @@ body.resizing-col {
 .pr-gtree {
   color: var(--dim);
 }
+.pr-gprog {
+  margin-left: auto;
+  flex: none;
+  color: var(--dim);
+}
 .pr-gwhere .pr-chip.here {
   margin-left: auto;
   flex: none;
+}
+.pr-gprog + .pr-chip.here {
+  margin-left: 0;
+}
+/* the progress estimate: a thin bar along the card's bottom edge */
+.pr-gbar {
+  position: absolute;
+  left: 11px;
+  right: 11px;
+  bottom: 4px;
+  height: 3px;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--text) 9%, transparent);
+  overflow: hidden;
+  pointer-events: none;
+}
+.pr-gbar > span {
+  display: block;
+  height: 100%;
+  border-radius: 2px;
+  background: var(--accent);
 }
 .pr-gstub {
   position: absolute;

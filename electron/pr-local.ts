@@ -1,5 +1,6 @@
-// The pull requests dialog's local checkouts (docs/design/PR_GRAPH.md, step 2): per repo the
-// panes are in (roots grouped by their git common dir), its worktrees and its GitHub repo.
+// The pull requests dialog's local checkouts (docs/design/PR_GRAPH.md, steps 2 and 3): per repo
+// the panes are in (roots grouped by their git common dir), its worktrees, its GitHub repo,
+// and (graph view) how many PRs were merged into each listed PR's branch, from its commits.
 // Asked once per dialog refresh, only while the dialog is open; nothing is polled. git runs
 // async with a timeout and a small concurrency limit, nowhere near the PTY path.
 import { execFile } from "node:child_process"
@@ -7,10 +8,14 @@ import { access } from "node:fs/promises"
 import path from "node:path"
 import { promisify } from "node:util"
 import { Limiter } from "./pane-git"
-import { repoFromRemotes } from "./pr-dashboard"
+import { remoteFromRemotes } from "./pr-dashboard"
 import {
+  countMergedUnits,
+  LOCAL_MAX_PRS,
   LOCAL_MAX_ROOTS,
   parseWorktrees,
+  UNITS_MAX_COMMITS,
+  type LocalPr,
   type LocalRepo,
   type PrLocalRequest,
   type PrLocalResult,
@@ -43,11 +48,16 @@ const defaultGit: GitRunner = async (args, cwd) =>
 
 const REPO_TTL = 60_000
 const COMMON_MAX = 256
+const UNITS_MAX = 2000
+
+type Remote = { repo: string; name: string } | null
 
 export class PrLocal {
   // root → its repo's common git dir (a worktree's root never moves to another repo)
   private common = new Map<string, string | null>()
-  private remotes = new Map<string, { repo: string | null; at: number }>() // common dir → repo
+  private remotes = new Map<string, { remote: Remote; at: number }>() // common dir → its remote
+  // (common dir, head tip, base tip, default tip) → merged units; -1: too long a range
+  private units = new Map<string, number>()
   private git = new Limiter(3)
   private inFlight = new Map<string, Promise<PrLocalResult>>()
 
@@ -62,10 +72,11 @@ export class PrLocal {
     const roots = [...new Set(req.roots)]
       .filter((r) => path.isAbsolute(r))
       .slice(0, LOCAL_MAX_ROOTS)
-    const key = JSON.stringify([...roots].sort())
+    const prs = (req.prs ?? []).slice(0, LOCAL_MAX_PRS)
+    const key = JSON.stringify([[...roots].sort(), prs])
     let p = this.inFlight.get(key)
     if (!p) {
-      p = this.read(roots)
+      p = this.read(roots, prs)
         .catch((): PrLocalResult => ({ ok: false }))
         .finally(() => this.inFlight.delete(key))
       this.inFlight.set(key, p)
@@ -73,7 +84,7 @@ export class PrLocal {
     return p
   }
 
-  private async read(roots: string[]): Promise<PrLocalResult> {
+  private async read(roots: string[], prs: LocalPr[]): Promise<PrLocalResult> {
     const dirs = await Promise.all(roots.map((r) => this.commonDir(r)))
     const groups = new Map<string, string[]>() // common dir → its roots
     roots.forEach((r, i) => {
@@ -103,7 +114,14 @@ export class PrLocal {
         const all = parseWorktrees(list)
         const here = await Promise.all(all.map((w) => this.exists(w.path)))
         const worktrees = all.filter((_, i) => here[i])
-        return { repo: await this.repoOf(dir, root), worktrees }
+        const remote = await this.remoteOf(dir, root)
+        const repo: LocalRepo = { repo: remote?.repo ?? null, worktrees }
+        const mine = remote
+          ? prs.filter((p) => p.repo.toLowerCase() === remote.repo.toLowerCase())
+          : []
+        if (remote && mine.length)
+          repo.merged = await this.mergedUnits(dir, root, remote.name, mine)
+        return repo
       }),
     )
     return { ok: true, repos: repos.filter((r): r is LocalRepo => r !== null) }
@@ -124,18 +142,74 @@ export class PrLocal {
     return dir
   }
 
-  private async repoOf(dir: string, root: string): Promise<string | null> {
+  private async remoteOf(dir: string, root: string): Promise<Remote> {
     const hit = this.remotes.get(dir)
-    if (hit && this.now() - hit.at < REPO_TTL) return hit.repo
-    const repo = await this.git
+    if (hit && this.now() - hit.at < REPO_TTL) return hit.remote
+    const remote = await this.git
       .run(() => this.run(["remote", "-v"], root))
-      .then(repoFromRemotes)
+      .then(remoteFromRemotes)
       .catch(() => undefined)
     // a failure isn't kept: the last answer if there's one, else asked again next refresh
-    if (repo === undefined) return hit?.repo ?? null
+    if (remote === undefined) return hit?.remote ?? null
     if (this.remotes.size >= COMMON_MAX && !this.remotes.has(dir))
       this.remotes.delete(this.remotes.keys().next().value!)
-    this.remotes.set(dir, { repo, at: this.now() })
-    return repo
+    this.remotes.set(dir, { remote, at: this.now() })
+    return remote
+  }
+
+  // From the remote's refs (no checkout needed; a local branch not pulled doesn't lag): the
+  // commits on the PR's branch, not on its base nor the default branch (a stacked PR doesn't
+  // count its base's units, nor the default branch's merged in by "Update branch").
+  /** Each PR's head → the PRs GitHub merged into it (a PR whose refs aren't fetched: none). */
+  private async mergedUnits(
+    dir: string,
+    root: string,
+    remote: string,
+    prs: LocalPr[],
+  ): Promise<Record<string, number>> {
+    const prefix = `refs/remotes/${remote}/`
+    const out = await this.git
+      .run(() => this.run(["for-each-ref", "--format=%(refname)%00%(objectname)", prefix], root))
+      .catch(() => "")
+    const tips = new Map<string, string>()
+    for (const line of out.split(/\r?\n/)) {
+      const [ref, sha] = line.split("\0")
+      if (ref?.startsWith(prefix) && sha) tips.set(ref.slice(prefix.length), sha)
+    }
+    const merged: Record<string, number> = {}
+    await Promise.all(
+      prs.map(async (p) => {
+        const head = tips.get(p.head)
+        const base = tips.get(p.base)
+        if (!head || !base || head === base) return
+        const def = p.defaultBranch ? tips.get(p.defaultBranch) : undefined
+        const key = [dir, head, base, def ?? ""].join("\0")
+        let n = this.units.get(key)
+        if (n === undefined) {
+          const not = def && def !== base ? [`^${def}`] : []
+          const log = await this.git
+            .run(() =>
+              this.run(
+                [
+                  "log",
+                  "--format=%ce%x00%s",
+                  `--max-count=${UNITS_MAX_COMMITS + 1}`,
+                  `${base}..${head}`,
+                  ...not,
+                ],
+                root,
+              ),
+            )
+            .catch(() => null)
+          if (log === null) return // (not kept: asked again next time)
+          const lines = log.split(/\r?\n/).filter(Boolean).length
+          n = lines > UNITS_MAX_COMMITS ? -1 : countMergedUnits(log)
+          if (this.units.size >= UNITS_MAX) this.units.delete(this.units.keys().next().value!)
+          this.units.set(key, n)
+        }
+        if (n >= 0) merged[p.head] = n
+      }),
+    )
+    return merged
   }
 }

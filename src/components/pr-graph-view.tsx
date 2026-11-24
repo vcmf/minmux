@@ -47,10 +47,11 @@ export function PrGraphView(props: {
   onGo: (pr: PrRow) => boolean
   tabOf: (pr: PrRow) => string | undefined // the tab that lists a stub's PR
   worktrees: Map<string, string[]> // PR url → worktrees with its branch, no terminal in them
+  progress: Map<string, { merged: number; open: number }> // PR url → its estimate
 }) {
   const { graph, selected, hereUrl, panes, titleOf, focusedRepo, onOpen, onRoot, onGo, tabOf } =
     props
-  const { worktrees } = props
+  const { worktrees, progress } = props
   const ref = useRef<HTMLDivElement>(null)
   useEffect(() => {
     ref.current?.querySelector(".pr-gcard.sel")?.scrollIntoView?.({
@@ -149,6 +150,7 @@ export function PrGraphView(props: {
             here={n.row.url === hereUrl}
             panes={panes.get(n.row.url) ?? []}
             worktrees={worktrees.get(n.row.url) ?? []}
+            progress={progress.get(n.row.url)}
             titleOf={titleOf}
             onOpen={onOpen}
           />
@@ -182,10 +184,11 @@ function PrCard(props: {
   here: boolean
   panes: PrPane[]
   worktrees: string[]
+  progress: { merged: number; open: number } | undefined
   titleOf: (pane: string) => string
   onOpen: (url: string) => void
 }) {
-  const { row, x, y, selected, here, panes, worktrees, titleOf, onOpen } = props
+  const { row, x, y, selected, here, panes, worktrees, progress, titleOf, onOpen } = props
   const look = cardLook(row)
   const word = lookWord(row, look)
   const cls = [
@@ -210,7 +213,7 @@ function PrCard(props: {
     >
       <button
         className="pr-gopen"
-        title={cardTip(row, word, look, panes, worktrees, titleOf)}
+        title={cardTip(row, word, look, panes, worktrees, progress, titleOf)}
         aria-label={`Open #${row.number} in the list`}
         onClick={(e) => {
           toDialog(e.currentTarget)
@@ -242,8 +245,22 @@ function PrCard(props: {
       </div>
       <div className="pr-gline pr-gwhere">
         <Where panes={panes} worktrees={worktrees} titleOf={titleOf} />
+        {progress && (
+          <span className="pr-gprog">
+            ~{progress.merged}/{progress.merged + progress.open}
+          </span>
+        )}
         {here && <span className="pr-chip pane here">here</span>}
       </div>
+      {progress && (
+        <span className="pr-gbar" aria-hidden>
+          <span
+            style={{
+              width: `${Math.round((100 * progress.merged) / (progress.merged + progress.open))}%`,
+            }}
+          />
+        </span>
+      )}
       <ExternalButton url={row.url} what={`#${row.number}`} hint="o" />
     </div>
   )
@@ -256,6 +273,7 @@ function cardTip(
   look: CardLook,
   panes: PrPane[],
   worktrees: string[],
+  progress: { merged: number; open: number } | undefined,
   titleOf: (pane: string) => string,
 ): string {
   const state = [word, look.approved ? "approved" : ""].filter(Boolean).join(", ")
@@ -267,6 +285,9 @@ function cardTip(
     state,
     `${row.head} · ${comments}`,
     where,
+    progress
+      ? `~${progress.merged}/${progress.merged + progress.open}: ${progress.merged} merged in (from its commits), ${progress.open} open stacked on it`
+      : "",
     "Enter opens it",
   ]
     .filter(Boolean)
