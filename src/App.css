@@ -3665,6 +3665,9 @@ body.resizing-col {
 .pr-gnone {
   color: var(--faint);
 }
+.pr-gtree {
+  color: var(--dim);
+}
 .pr-gwhere .pr-chip.here {
   margin-left: auto;
   flex: none;

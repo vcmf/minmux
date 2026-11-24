@@ -1855,3 +1855,38 @@ describe("PrDialog graph view, empty", () => {
     expect(screen.getByRole("tab", { name: /Mine/ })).toHaveAttribute("aria-selected", "true")
   })
 })
+
+describe("PrDialog worktrees not open", () => {
+  it("a PR's branch in a worktree with no terminal: on its card, in its detail, opened there", async () => {
+    const id = st().tabs[0]!.activeSessionId
+    st().setPaneGit({ [id]: { root: "/w/r", branch: "main" } }, [id])
+    vi.mocked(ipc.prLocal).mockResolvedValue({
+      ok: true,
+      repos: [
+        {
+          repo: "o/r",
+          worktrees: [
+            { path: "/w/r", branch: "main" },
+            { path: "/w/r/.worktrees/tab", branch: "b1" },
+          ],
+        },
+      ],
+    })
+    answer({ mine: [row(1), row(2)] })
+    render(<PrDialog />)
+    await screen.findByRole("option", { name: /PR 1/ })
+    expect(ipc.prLocal).toHaveBeenCalledWith({ roots: ["/w/r"] })
+    // the detail: the worktree, with the way into it
+    await waitFor(() => expect(ipc.prLocal).toHaveBeenCalled())
+    const open = await screen.findByRole("button", { name: /tab worktree · open a terminal here/ })
+    // the graph card says so too (the pane's own checkout isn't listed again: main has a pane)
+    fireEvent.click(screen.getByRole("button", { name: /^Graph/ }))
+    expect(screen.getByText(/tab · worktree, not open/)).toBeInTheDocument()
+    expect(screen.queryAllByText(/worktree, not open/)).toHaveLength(1)
+    fireEvent.click(screen.getByRole("button", { name: /^List/ }))
+    fireEvent.click(await screen.findByRole("button", { name: /open a terminal here/ }))
+    expect(open).toBeTruthy()
+    expect(st().prDialogOpen).toBe(false)
+    expect(Object.values(st().sessions).some((x) => x.cwd === "/w/r/.worktrees/tab")).toBe(true)
+  })
+})

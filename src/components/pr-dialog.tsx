@@ -4,6 +4,7 @@ import {
   ArrowSquareOut,
   Check,
   Copy,
+  FolderSimple,
   GitMerge,
   GithubLogo,
   GitPullRequest,
@@ -58,6 +59,8 @@ import { ghEnvOf, paneGhEnv } from "../lib/open-link"
 import { baseOf, stackedOn, stackRows, type StackRow } from "../lib/pr-stacks"
 import { graphLayout, graphMove, type GraphKey } from "../lib/pr-graph"
 import { PrGraphView } from "./pr-graph-view"
+import { folderName, worktreeCheckouts, type LocalRepo } from "../lib/pr-local"
+import { paneOfGitKey } from "../lib/agent-dirs"
 import { toDialog } from "./to-dialog"
 
 // gh's accounts as last answered (a failed answer too): the picker stays to pick another.
@@ -183,6 +186,23 @@ function paneFlatOf(
   return out
 }
 
+// The checkout roots of host panes (their shells' and their agents'), newline-joined: a
+// primitive the shallow compare can hold. Recomputed only when paneGit or sessions change.
+let rootsMemo: { args: unknown[]; out: string } | null = null
+function hostRootsOf(paneGit: Record<string, PaneGitInfo>, sessions: Record<string, Session>) {
+  const args = [paneGit, sessions]
+  if (rootsMemo && rootsMemo.args.every((a, i) => a === args[i])) return rootsMemo.out
+  const roots = new Set<string>()
+  for (const [key, info] of Object.entries(paneGit)) {
+    const session = sessions[paneOfGitKey(key)]
+    // (an ssh pane has no local checkout; WSL's are Linux paths main can't read)
+    if (info.root && session && !session.remote && !ghEnvOf(session, info.root).wsl)
+      roots.add(info.root)
+  }
+  rootsMemo = { args, out: [...roots].sort().join("\n") }
+  return rootsMemo.out
+}
+
 /** The focused pane (the active tab's focused terminal). */
 const useFocusedPane = () =>
   useStore((s) => s.tabs.find((t) => t.id === s.activeTabId)?.activeSessionId)
@@ -264,6 +284,7 @@ export function PrDialog() {
     () => () => {
       alive.current = false
       forgetFlat()
+      rootsMemo = null
     },
     [],
   )
@@ -440,6 +461,22 @@ export function PrDialog() {
     return { panes, titles }
   }, [paneFlat])
   const titleOf = (id: string) => titles.get(id) ?? id
+  // Worktrees of the panes' repos (main's `git worktree list`), asked with each refresh done.
+  const rootsKey = useStore((s) => hostRootsOf(s.paneGit, s.sessions))
+  const [local, setLocal] = useState<LocalRepo[]>([])
+  useEffect(() => {
+    if (!rootsKey) return setLocal([])
+    let live = true
+    void ipc
+      .prLocal({ roots: rootsKey.split("\n") })
+      .catch(() => ({ ok: false as const }))
+      .then((res) => {
+        if (live && res.ok) setLocal(res.repos)
+      })
+    return () => {
+      live = false
+    }
+  }, [rootsKey, at])
   // The focused pane, and the PR it's on (the "here" marker; selected once when it opens).
   const focusedPane = useFocusedPane()
   const hereUrl = useStore((s) =>
@@ -461,6 +498,11 @@ export function PrDialog() {
       for (const r of lists?.[t] ?? []) if (!seen.has(r.url)) seen.set(r.url, r)
     return [...seen.values()]
   }, [lists])
+  // Each PR → the worktrees with its branch and no pane in them.
+  const worktrees = useMemo(
+    () => worktreeCheckouts(local, all, rootsKey ? rootsKey.split("\n") : []),
+    [local, all, rootsKey],
+  )
   const stack = useMemo(
     () => stackRows((lists?.[shownTab] ?? []) as PrRow[], all),
     [lists, shownTab, all],
@@ -609,6 +651,12 @@ export function PrDialog() {
       setTab("repo", null, false)
       setView("list", false)
     } else ipc.openExternal(repoUrl(repo))
+  }
+
+  // A worktree with no terminal in it: one, split beside the focused pane.
+  const openWorktree = (path: string) => {
+    useStore.getState().setPrDialogOpen(false)
+    useStore.getState().openFolderInSplit(path)
   }
 
   const goToPane = (id: string) => {
@@ -820,6 +868,7 @@ export function PrDialog() {
             onRoot={openRoot}
             onGo={goTo}
             tabOf={tabOf}
+            worktrees={worktrees}
           />
         ) : (
           <div className="pr-body">
@@ -857,6 +906,8 @@ export function PrDialog() {
                     }))}
                     focused={focusedPane}
                     onPane={goToPane}
+                    worktrees={worktrees.get(shown.url) ?? []}
+                    onWorktree={openWorktree}
                     base={baseOf(shown, all)}
                     above={stackedOn(shown, all)}
                     onGo={goTo}
@@ -1173,6 +1224,8 @@ function PrSummary(props: {
   panes: (PrPane & { title: string })[]
   focused: string | undefined // the focused pane
   onPane: (id: string) => void
+  worktrees: string[] // worktrees with its branch and no terminal in them
+  onWorktree: (path: string) => void
   reviewers: React.ReactNode
   base: PrRow | null // the PR this one is stacked on
   above: PrRow[] // the PRs stacked on this one
@@ -1180,7 +1233,8 @@ function PrSummary(props: {
   env: { cwd?: string; wsl?: { distro?: string } }
   onChanged: (action: PrBranchAction, row: PrRow) => void // its state changed: lists catch up
 }) {
-  const { row, panes, focused, onPane, reviewers, base, above, onGo, env, onChanged } = props
+  const { row, panes, focused, onPane, worktrees, onWorktree, reviewers } = props
+  const { base, above, onGo, env, onChanged } = props
   const link = (pr: PrRow) => (
     <button
       key={pr.url}
@@ -1238,7 +1292,7 @@ function PrSummary(props: {
         </div>
       )}
       {reviewers}
-      {panes.length > 0 && (
+      {(panes.length > 0 || worktrees.length > 0) && (
         <>
           {/* an agent on its branch: "working on it"; a plain terminal: checked out */}
           <h4>
@@ -1268,6 +1322,17 @@ function PrSummary(props: {
                 </button>
               )
             })}
+            {worktrees.map((w) => (
+              <button
+                key={w}
+                className="pr-pane"
+                title={`Open a terminal in ${w}`}
+                onClick={() => onWorktree(w)}
+              >
+                <FolderSimple size={13} /> {folderName(w)}{" "}
+                <span className="pr-faint">worktree · open a terminal here</span>
+              </button>
+            ))}
           </div>
         </>
       )}

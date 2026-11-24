@@ -7,6 +7,7 @@ import {
   ArrowSquareOut,
   ChatCircle,
   Check,
+  FolderSimple,
   GitBranch,
   GitMerge,
   GitPullRequest,
@@ -21,6 +22,7 @@ import { prStateUi } from "../lib/pane-git"
 import { cardLook, GRAPH, type CardLook, type GraphLayout } from "../lib/pr-graph"
 import { ipc } from "../lib/ipc"
 import { repoUrl } from "../lib/pr-link"
+import { folderName } from "../lib/pr-local"
 import { toDialog } from "./to-dialog"
 
 /** The word a card's status shows (none for a ready PR). */
@@ -44,9 +46,11 @@ export function PrGraphView(props: {
   onRoot: (repo: string) => void
   onGo: (pr: PrRow) => boolean
   tabOf: (pr: PrRow) => string | undefined // the tab that lists a stub's PR
+  worktrees: Map<string, string[]> // PR url → worktrees with its branch, no terminal in them
 }) {
   const { graph, selected, hereUrl, panes, titleOf, focusedRepo, onOpen, onRoot, onGo, tabOf } =
     props
+  const { worktrees } = props
   const ref = useRef<HTMLDivElement>(null)
   useEffect(() => {
     ref.current?.querySelector(".pr-gcard.sel")?.scrollIntoView?.({
@@ -144,6 +148,7 @@ export function PrGraphView(props: {
             selected={n.row.url === selected}
             here={n.row.url === hereUrl}
             panes={panes.get(n.row.url) ?? []}
+            worktrees={worktrees.get(n.row.url) ?? []}
             titleOf={titleOf}
             onOpen={onOpen}
           />
@@ -176,10 +181,11 @@ function PrCard(props: {
   selected: boolean
   here: boolean
   panes: PrPane[]
+  worktrees: string[]
   titleOf: (pane: string) => string
   onOpen: (url: string) => void
 }) {
-  const { row, x, y, selected, here, panes, titleOf, onOpen } = props
+  const { row, x, y, selected, here, panes, worktrees, titleOf, onOpen } = props
   const look = cardLook(row)
   const word = lookWord(row, look)
   const cls = [
@@ -204,7 +210,7 @@ function PrCard(props: {
     >
       <button
         className="pr-gopen"
-        title={cardTip(row, word, look, panes, titleOf)}
+        title={cardTip(row, word, look, panes, worktrees, titleOf)}
         aria-label={`Open #${row.number} in the list`}
         onClick={(e) => {
           toDialog(e.currentTarget)
@@ -235,7 +241,7 @@ function PrCard(props: {
         </span>
       </div>
       <div className="pr-gline pr-gwhere">
-        <Where panes={panes} titleOf={titleOf} />
+        <Where panes={panes} worktrees={worktrees} titleOf={titleOf} />
         {here && <span className="pr-chip pane here">here</span>}
       </div>
       <ExternalButton url={row.url} what={`#${row.number}`} hint="o" />
@@ -249,12 +255,12 @@ function cardTip(
   word: string,
   look: CardLook,
   panes: PrPane[],
+  worktrees: string[],
   titleOf: (pane: string) => string,
 ): string {
   const state = [word, look.approved ? "approved" : ""].filter(Boolean).join(", ")
-  const where = panes.length
-    ? `Checked out in ${panes.map((p) => titleOf(p.pane)).join(", ")}`
-    : "Not checked out"
+  const at = [...panes.map((p) => titleOf(p.pane)), ...worktrees.map((w) => `${w} (no terminal)`)]
+  const where = at.length ? `Checked out in ${at.join(", ")}` : "Not checked out"
   const comments = `${row.comments} comment${row.comments === 1 ? "" : "s"}`
   return [
     `#${row.number} ${row.title}`,
@@ -268,10 +274,23 @@ function cardTip(
 }
 
 /** Where a PR is checked out: the busiest pane's agent and status, else a terminal. */
-function Where({ panes, titleOf }: { panes: PrPane[]; titleOf: (pane: string) => string }) {
+function Where(props: { panes: PrPane[]; worktrees: string[]; titleOf: (pane: string) => string }) {
+  const { panes, worktrees, titleOf } = props
   const lead = panes[0] // (sorted: waiting, working, idle agents, then terminals)
+  const tree = worktrees[0]
+  if (!lead && tree)
+    return (
+      <span className="pr-gat pr-gtree">
+        <FolderSimple size={12} />
+        <span className="pr-gat-text">
+          {folderName(tree)} · worktree, not open
+          {worktrees.length > 1 ? ` +${worktrees.length - 1}` : ""}
+        </span>
+      </span>
+    )
   if (!lead) return <span className="pr-gnone">not checked out</span>
-  const more = panes.length > 1 ? ` +${panes.length - 1}` : ""
+  const n = panes.length + worktrees.length
+  const more = n > 1 ? ` +${n - 1}` : ""
   if (!lead.agent)
     return (
       <span className="pr-gat" title={`Checked out in ${titleOf(lead.pane)}`}>
