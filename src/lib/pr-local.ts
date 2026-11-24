@@ -22,8 +22,9 @@ export interface LocalRepo {
 
 export type PrLocalResult = { ok: true; repos: LocalRepo[] } | { ok: false }
 
-/** At most this many roots in one request (more panes than that share repos anyway). */
-export const LOCAL_MAX_ROOTS = 32
+/** At most this many roots in one request. Each new root costs one `git rev-parse`, once (its
+ *  repo is remembered); the worktree list is per repo, however many of its roots are open. */
+export const LOCAL_MAX_ROOTS = 128
 
 /** `git worktree list --porcelain` → the worktrees on a branch (never throws). */
 export function parseWorktrees(out: string): LocalWorktree[] {

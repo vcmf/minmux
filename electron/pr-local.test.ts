@@ -75,6 +75,37 @@ describe("PrLocal", () => {
     expect(calls(run, "rev-parse")).toBe(3) // (/w/r twice, /w/l once)
   })
 
+  it("a failed remote lookup isn't kept: asked again next time", async () => {
+    let fail = true
+    const run = fakeGit()
+    const inner = run.getMockImplementation()!
+    run.mockImplementation(async (args, cwd) => {
+      if (fail && args[0] === "remote") throw new Error("index.lock")
+      return inner(args, cwd)
+    })
+    const local = new PrLocal(run)
+    const first = await local.checkouts({ roots: ["/w/r"] })
+    expect(first.ok && first.repos[0]!.repo).toBeNull()
+    fail = false
+    const second = await local.checkouts({ roots: ["/w/r"] })
+    expect(second.ok && second.repos[0]!.repo).toBe("o/r")
+  })
+
+  it("a repo's first folder gone (a removed worktree): listed from its next one", async () => {
+    const run = fakeGit({
+      "/w/r-wt worktree list --porcelain": new Error("ENOENT"),
+      "/w/r remote -v": "origin\tgit@github.com:o/r.git (fetch)\n",
+    })
+    const local = new PrLocal(run)
+    const res = await local.checkouts({ roots: ["/w/r-wt", "/w/r"] })
+    expect(res.ok && res.repos.map((r) => r.repo)).toEqual(["o/r"])
+    // the gone one's repo is looked up again next time
+    await local.checkouts({ roots: ["/w/r-wt", "/w/r"] })
+    expect(run.mock.calls.filter(([a, c]) => a[0] === "rev-parse" && c === "/w/r-wt")).toHaveLength(
+      2,
+    )
+  })
+
   it("a failed worktree list leaves that repo out; the others answer", async () => {
     const run = fakeGit({ "/w/l worktree list --porcelain": new Error("boom") })
     const res = await new PrLocal(run).checkouts({ roots: ["/w/r", "/w/l"] })

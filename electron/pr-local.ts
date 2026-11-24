@@ -57,18 +57,28 @@ export class PrLocal {
 
   private async read(roots: string[]): Promise<PrLocalResult> {
     const dirs = await Promise.all(roots.map((r) => this.commonDir(r)))
-    const groups = new Map<string, string>() // common dir → a root of it
+    const groups = new Map<string, string[]>() // common dir → its roots
     roots.forEach((r, i) => {
       const d = dirs[i]
-      if (d && !groups.has(d)) groups.set(d, r)
+      if (d) groups.set(d, [...(groups.get(d) ?? []), r])
     })
     const repos = await Promise.all(
-      [...groups].map(async ([dir, root]): Promise<LocalRepo | null> => {
-        const [list, repo] = await Promise.all([
-          this.git.run(() => this.run(["worktree", "list", "--porcelain"], root)).catch(() => null),
-          this.repoOf(dir, root),
-        ])
-        return list === null ? null : { repo, worktrees: parseWorktrees(list) }
+      [...groups].map(async ([dir, rs]): Promise<LocalRepo | null> => {
+        // the first of its roots git can run in (a worktree removed since: the next one)
+        let list: string | null = null
+        let root = rs[0]!
+        for (const r of rs) {
+          list = await this.git
+            .run(() => this.run(["worktree", "list", "--porcelain"], r))
+            .catch(() => null)
+          if (list !== null) {
+            root = r
+            break
+          }
+          this.common.delete(r) // (looked up again next time: it may be gone, or moved)
+        }
+        if (list === null) return null
+        return { repo: await this.repoOf(dir, root), worktrees: parseWorktrees(list) }
       }),
     )
     return { ok: true, repos: repos.filter((r): r is LocalRepo => r !== null) }
@@ -95,7 +105,9 @@ export class PrLocal {
     const repo = await this.git
       .run(() => this.run(["remote", "-v"], root))
       .then(repoFromRemotes)
-      .catch(() => hit?.repo ?? null)
+      .catch(() => undefined)
+    // a failure isn't kept: the last answer if there's one, else asked again next refresh
+    if (repo === undefined) return hit?.repo ?? null
     if (this.remotes.size >= COMMON_MAX && !this.remotes.has(dir))
       this.remotes.delete(this.remotes.keys().next().value!)
     this.remotes.set(dir, { repo, at: this.now() })

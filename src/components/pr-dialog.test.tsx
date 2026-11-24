@@ -1857,6 +1857,17 @@ describe("PrDialog graph view, empty", () => {
 })
 
 describe("PrDialog worktrees not open", () => {
+  it("asked once on open and once per refresh finished, never per tab answering", async () => {
+    const id = st().tabs[0]!.activeSessionId
+    st().setPaneGit({ [id]: { root: "/w/r", branch: "main" } }, [id])
+    answer({ mine: [row(1)], review: [row(2)], repo: [row(3)], repoName: "o/r" })
+    render(<PrDialog />)
+    await screen.findByRole("option", { name: /PR 1/ })
+    await waitFor(() => expect(ipc.prLists).toHaveBeenCalledTimes(3))
+    await act(async () => {})
+    expect(ipc.prLocal).toHaveBeenCalledTimes(2)
+  })
+
   it("a PR's branch in a worktree with no terminal: on its card, in its detail, opened there", async () => {
     const id = st().tabs[0]!.activeSessionId
     st().setPaneGit({ [id]: { root: "/w/r", branch: "main" } }, [id])

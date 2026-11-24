@@ -1444,7 +1444,6 @@ function registerIpc() {
     const fresh = (req as { fresh?: unknown } | null)?.fresh === true
     return t ? prDashboard.detail({ ...t, fresh }) : NOT_A_PR
   })
-  // A PR link clicked (a terminal's, the sidebar's): the PR as an account that can see it.
   // The dialog's local checkouts: worktrees of the repos the panes are in (on its refresh).
   ipcMain.handle("prs:local", async (_e, req: unknown) => {
     const roots = (req as { roots?: unknown } | null)?.roots
@@ -1453,6 +1452,7 @@ function registerIpc() {
       roots: roots.filter((r): r is string => typeof r === "string" && r.length > 0),
     })
   })
+  // A PR link clicked (a terminal's, the sidebar's): the PR as an account that can see it.
   ipcMain.handle("prs:find", async (_e, req: unknown) => {
     const t = prTarget(req)
     return t ? prDashboard.find(t) : NOT_A_PR

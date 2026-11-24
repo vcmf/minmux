@@ -248,6 +248,7 @@ export function PrDialog() {
   const [at, setAt] = useState(mine?.at ?? 0)
   const [error, setError] = useState<{ error: PrListsError; message?: string } | null>(null)
   const [loading, setLoading] = useState(false)
+  const [refreshed, setRefreshed] = useState(0) // refreshes finished (local checkouts follow)
   const [tab, setTabState] = useState<PrTab>(readTab)
   const [view, setViewState] = useState<PrView>(readView)
   // `remember`: a view the user picked (a card or a link switching to the list isn't kept).
@@ -332,6 +333,7 @@ export function PrDialog() {
     failures.current = 0
     halted.current = false
     setError(null)
+    setRefreshed((n) => n + 1)
     // (rows listed before gh's accounts were known aren't kept: they'd act as whoever is
     // gh's active account later)
     if (answerRef.current && !answerRef.current.accountsPending) {
@@ -461,7 +463,8 @@ export function PrDialog() {
     return { panes, titles }
   }, [paneFlat])
   const titleOf = (id: string) => titles.get(id) ?? id
-  // Worktrees of the panes' repos (main's `git worktree list`), asked with each refresh done.
+  // Worktrees of the panes' repos (main's `git worktree list`): on open, then once per refresh
+  // finished (never per tab answering), and when the panes' checkouts change.
   const rootsKey = useStore((s) => hostRootsOf(s.paneGit, s.sessions))
   const [local, setLocal] = useState<LocalRepo[]>([])
   useEffect(() => {
@@ -476,7 +479,7 @@ export function PrDialog() {
     return () => {
       live = false
     }
-  }, [rootsKey, at])
+  }, [rootsKey, refreshed])
   // The focused pane, and the PR it's on (the "here" marker; selected once when it opens).
   const focusedPane = useFocusedPane()
   const hereUrl = useStore((s) =>
@@ -653,10 +656,11 @@ export function PrDialog() {
     } else ipc.openExternal(repoUrl(repo))
   }
 
-  // A worktree with no terminal in it: one, split beside the focused pane.
+  // A worktree with no terminal in it: one, split beside the focused pane (a host shell: the
+  // worktrees listed are host folders, which a WSL shell can't start in).
   const openWorktree = (path: string) => {
     useStore.getState().setPrDialogOpen(false)
-    useStore.getState().openFolderInSplit(path)
+    useStore.getState().openFolderInSplit(path, undefined, true)
   }
 
   const goToPane = (id: string) => {
