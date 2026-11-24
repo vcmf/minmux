@@ -898,6 +898,14 @@ describe("store — ssh remote sessions", () => {
     expect(focused().command).toBe(shell.command)
     expect(focused().cwd).toBe("C:/w/r-wt")
   })
+
+  it("a host folder with no host shell at all: nothing opens (never WSL in its home)", () => {
+    st().setShells([wslShell])
+    st().newTab(wslShell)
+    const before = st().sessions
+    st().openFolderInSplit("C:/w/r-wt", undefined, true)
+    expect(st().sessions).toBe(before)
+  })
 })
 
 describe("store — an unreadable saved host", () => {

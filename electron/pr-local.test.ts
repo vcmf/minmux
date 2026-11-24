@@ -148,3 +148,134 @@ describe("PrLocal", () => {
     expect(run.mock.calls.some(([, cwd]) => cwd === "rel")).toBe(false)
   })
 })
+
+describe("PrLocal merged units", () => {
+  const refs = [
+    "refs/remotes/origin/main\0aaa",
+    "refs/remotes/origin/b1\0bbb",
+    "refs/remotes/origin/b2\0ccc",
+    "refs/remotes/origin/HEAD\0aaa",
+  ].join("\n")
+  const pr = (head: string, base: string) => ({ repo: "O/R", head, base, defaultBranch: "main" })
+  // git filters by the patterns asked for: the fake answers every ref of the remote asked
+  const git = (over: Partial<Record<string, string | Error>> = {}) => {
+    const run = fakeGit({
+      "/w/r log --format=%ce%x00%s --max-count=501 aaa..bbb":
+        "noreply@github.com\0a (#5)\nnoreply@github.com\0b (#6)\n",
+      "/w/r log --format=%ce%x00%s --max-count=501 bbb..ccc ^aaa": "noreply@github.com\0c (#7)\n",
+      ...over,
+    })
+    const inner = run.getMockImplementation()!
+    run.mockImplementation(async (args, cwd) => {
+      if (args[0] !== "for-each-ref") return inner(args, cwd)
+      const remote = args[2]!.split("/")[2]!
+      return remote === "origin" ? refs : refs.replaceAll("origin", remote)
+    })
+    return run
+  }
+  const key = (head: string, base: string) => `${head}\0${base}`
+
+  it("from the remote's refs: the PR's own commits, not its base's nor the default branch's", async () => {
+    const run = git()
+    const res = await new PrLocal(run).checkouts({
+      roots: ["/w/r"],
+      prs: [pr("b1", "main"), pr("b2", "b1"), pr("gone", "main"), pr("x", "y")],
+    })
+    expect(res.ok && res.repos[0]!.merged).toEqual({
+      [key("b1", "main")]: 2,
+      [key("b2", "b1")]: 1,
+    }) // (no refs: none)
+    // only the refs asked about (and the remote's HEAD), never the whole remote
+    const refsAsked = run.mock.calls.find(([a]) => a[0] === "for-each-ref")![0].slice(2)
+    expect(refsAsked.sort()).toEqual(
+      ["HEAD", "main", "b1", "b2", "gone", "x", "y"].map((n) => `refs/remotes/origin/${n}`).sort(),
+    )
+  })
+
+  it("a PR whose tips didn't move isn't read again; one that moved is", async () => {
+    let tips = refs
+    const run = git()
+    const inner = run.getMockImplementation()!
+    run.mockImplementation(async (args, cwd) =>
+      args[0] === "for-each-ref" ? tips : inner(args, cwd),
+    )
+    const local = new PrLocal(run)
+    await local.checkouts({ roots: ["/w/r"], prs: [pr("b1", "main")] })
+    await local.checkouts({ roots: ["/w/r"], prs: [pr("b1", "main")] })
+    expect(calls(run, "log")).toBe(1)
+    tips = refs.replace("b1\0bbb", "b1\0ddd")
+    run.mockImplementation(async (args, cwd) =>
+      args[0] === "for-each-ref"
+        ? tips
+        : args[0] === "log"
+          ? "noreply@github.com\0a (#5)\n"
+          : inner(args, cwd),
+    )
+    const res = await local.checkouts({ roots: ["/w/r"], prs: [pr("b1", "main")] })
+    expect(calls(run, "log")).toBe(2) // (b1 moved: read once more)
+    expect(res.ok && res.repos[0]!.merged).toEqual({ [key("b1", "main")]: 1 })
+  })
+
+  it("a range longer than 500 commits: no estimate", async () => {
+    const long = Array.from({ length: 501 }, (_, i) => `noreply@github.com\0x (#${i})`).join("\n")
+    const run = git({ "/w/r log --format=%ce%x00%s --max-count=501 aaa..bbb": long })
+    const res = await new PrLocal(run).checkouts({ roots: ["/w/r"], prs: [pr("b1", "main")] })
+    expect(res.ok && res.repos[0]!.merged).toEqual({})
+  })
+
+  it("the remote the repo is listed by (upstream first), and only that repo's PRs", async () => {
+    const run = git({
+      "/w/r remote -v":
+        "origin\tgit@github.com:me/r.git (fetch)\nupstream\tgit@github.com:o/r.git (fetch)\n",
+    })
+    const res = await new PrLocal(run).checkouts({
+      roots: ["/w/r"],
+      prs: [pr("b1", "main"), { repo: "a/b", head: "b1", base: "main" }],
+    })
+    expect(res.ok && res.repos[0]!.merged).toEqual({ [key("b1", "main")]: 2 })
+  })
+
+  it("no PRs asked about (the list view): no refs read", async () => {
+    const run = git()
+    await new PrLocal(run).checkouts({ roots: ["/w/r"] })
+    expect(calls(run, "for-each-ref")).toBe(0)
+  })
+})
+
+describe("PrLocal merged units, more", () => {
+  const refs =
+    "refs/remotes/origin/HEAD\0aaa\nrefs/remotes/origin/main\0aaa\nrefs/remotes/origin/b1\0bbb\nrefs/remotes/origin/b2\0ccc"
+  const withRefs = (run: ReturnType<typeof fakeGit>, log: (args: string[]) => Promise<string>) => {
+    const inner = run.getMockImplementation()!
+    run.mockImplementation(async (args, cwd) =>
+      args[0] === "for-each-ref" ? refs : args[0] === "log" ? log(args) : inner(args, cwd),
+    )
+    return run
+  }
+
+  it("no default branch named (an older answer): the remote's HEAD is kept out", async () => {
+    const run = withRefs(fakeGit(), async () => "noreply@github.com\0x (#1)\n")
+    await new PrLocal(run).checkouts({
+      roots: ["/w/r"],
+      prs: [{ repo: "o/r", head: "b2", base: "b1" }],
+    })
+    const log = run.mock.calls.find(([a]) => a[0] === "log")![0]
+    expect(log.slice(-2)).toEqual(["bbb..ccc", "^aaa"])
+  })
+
+  it("a range git failed on isn't run again for a while (a slow one would take a slot each refresh)", async () => {
+    let t = 0
+    const run = withRefs(fakeGit(), async () => {
+      throw new Error("timeout")
+    })
+    const local = new PrLocal(run, () => t)
+    const ask = () =>
+      local.checkouts({ roots: ["/w/r"], prs: [{ repo: "o/r", head: "b1", base: "main" }] })
+    await ask()
+    await ask()
+    expect(calls(run, "log")).toBe(1)
+    t = 11 * 60_000
+    await ask()
+    expect(calls(run, "log")).toBe(2)
+  })
+})

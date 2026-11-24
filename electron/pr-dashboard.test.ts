@@ -4,6 +4,7 @@ import {
   ghError,
   parseAccounts,
   PrDashboard,
+  remoteFromRemotes,
   repoFromRemotes,
   repoOrder,
   tokenEnv,
@@ -18,6 +19,19 @@ const answer = JSON.stringify({
 // gh's own calls (`gh auth status` asked first is gh's accounts: none here, an old gh)
 const queries = (run: { mock: { calls: Parameters<PrRunner>[] } }) =>
   run.mock.calls.filter(([cmd, args]) => cmd === "gh" && args[0] === "api")
+
+describe("remoteFromRemotes", () => {
+  it("the remote's name with its repo: upstream, then origin, then any GitHub one", () => {
+    const both =
+      "origin\tgit@github.com:me/r.git (fetch)\nupstream\thttps://github.com/o/r.git (fetch)\n"
+    expect(remoteFromRemotes(both)).toEqual({ name: "upstream", repo: "o/r" })
+    expect(remoteFromRemotes("gh\tgit@github.com:a/b.git (fetch)\n")).toEqual({
+      name: "gh",
+      repo: "a/b",
+    })
+    expect(remoteFromRemotes("origin\tgit@gitlab.com:a/b.git (fetch)\n")).toBeNull()
+  })
+})
 
 describe("repoFromRemotes", () => {
   it("upstream first (a fork's PRs live there), then origin, then any GitHub remote", () => {

@@ -140,8 +140,10 @@ For a PR P in a repo the dialog has locally (any worktree of it), whose head was
   - At most 500 commits read (`--max-count`); a shallow or odd range shows no bar.
 - Shown as `~merged/(merged+open)` and a bar when merged + open > 0; no remote ref, no bar,
   never a guess.
-- Cached per (head tip, base tip), read with one `git for-each-ref refs/remotes/<remote>` per
-  repo in the same pass; a pair that didn't move costs nothing.
+- Cached per (head tip, base tip, default tip), the tips read with one `git for-each-ref` per
+  repo for just the refs asked about (plus the remote's HEAD, the default branch when a row
+  from an older build doesn't name it); a pair that didn't move costs nothing. A range git
+  fails on waits ten minutes before it's tried again.
 - Counts, not line-weighted. PRs closed without merging aren't counted.
 - Known misses: rebase merges, stack tools that land each child on the default branch (the
   child then isn't under P anyway), a stale fetch. A later step can ask GitHub (merged PRs per
