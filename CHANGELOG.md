@@ -3,6 +3,12 @@
 What changed in each minmux release, newest first. Generated from the pull request titles by
 [git-cliff](https://git-cliff.org): edit `cliff.toml`, not this file.
 
+## [0.1.67](https://github.com/vcmf/minmux/releases/tag/v0.1.67) - 2026-11-24
+
+### Added
+
+- Graph view of pull requests ([#218](https://github.com/vcmf/minmux/pull/218))
+
 ## [0.1.66](https://github.com/vcmf/minmux/releases/tag/v0.1.66) - 2026-11-24
 
 ### Added
