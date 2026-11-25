@@ -256,7 +256,9 @@ Researched on real data (2026-11-25):
   call is named by its server as configured where it ran when it's read, and the name is kept
   through recounts (so a server removed later keeps its counts); else it stays raw for a later
   config to name; a tool no config names isn't MCP. Checked on real data: forks and resumes
-  don't repeat calls across files (0 of 58,873 Claude tool uses, 0 of 2,757 Codex calls).
+  don't repeat calls across files (0 of 58,873 Claude tool uses, 0 of 2,757 Codex calls). OpenCode's
+  fork does copy its parent's parts: a part whose row was made more than a minute after its call
+  started is such a copy, and isn't counted again. Days are the user's local ones.
 - A scan runs when a history window is shown, one at a time, a result reused for 30 s; never on
   a timer. Measured here: the first scan of all history 90 s (in the worker), the next 0.1 s.
 - **The view**: a Graph | Inventory switch at the graph's top right. The inventory covers the

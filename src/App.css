@@ -4758,7 +4758,7 @@ button.fleet-row:not(:disabled):hover {
   display: flex;
   align-items: center;
   gap: 10px;
-  max-width: calc(100% - 40px);
+  max-width: calc(100% - 240px); /* (clear of the Unpin button at the bottom right) */
   padding: 6px 8px 6px 14px;
   border: 1px solid var(--accent);
   border-radius: 8px;

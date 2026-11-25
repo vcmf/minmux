@@ -4,7 +4,7 @@
 import fs from "node:fs"
 import path from "node:path"
 import { DatabaseSync } from "node:sqlite"
-import type { Uses } from "../../src/lib/fleet-inventory"
+import { localDay, type Uses } from "../../src/lib/fleet-inventory"
 import { jsonlFiles, mapLimit } from "../history-read"
 import type { DayAcc, InventorySource, SessionEntry } from "../inventory-scan"
 import { claudeHome } from "./claude-history"
@@ -16,17 +16,18 @@ import { OpencodeConfig, opencodeServerOf } from "./opencode-toolbox"
 import { emptyKit, kitName, type Kit } from "./toolbox"
 
 // (the agents write ISO timestamps without spaces: the day is a timestamp's first 10 characters)
-const DAY = /"timestamp":"(\d{4}-\d{2}-\d{2})/g
+const STAMP = /"timestamp":"(\d{4}-\d{2}-\d{2}T[^"]{0,40})"/g
 
-/** A line's own day: its record's `timestamp` (Claude writes it last, Codex first). */
+/** A line's own local day: its record's `timestamp` (Claude writes it last, Codex first). */
 export function lineDay(line: string, which: "first" | "last"): string | undefined {
-  let day: string | undefined
-  DAY.lastIndex = 0
-  for (let m = DAY.exec(line); m; m = DAY.exec(line)) {
-    day = m[1]
+  let stamp: string | undefined
+  STAMP.lastIndex = 0
+  for (let m = STAMP.exec(line); m; m = STAMP.exec(line)) {
+    stamp = m[1]
     if (which === "first") break
   }
-  return day
+  const ms = stamp ? Date.parse(stamp) : NaN
+  return Number.isNaN(ms) ? undefined : localDay(ms)
 }
 
 /** A line folded with a step 5 line reader: what it adds goes to its day. */
@@ -117,9 +118,14 @@ export function opencodeInventory(db = opencodeDb, config = new OpencodeConfig()
   ) => {
     const final = r.status === "completed" || r.status === "error"
     const tool = kitName(r.tool)
-    const at = new Date(typeof r.t === "number" && r.t > 0 ? r.t : NaN)
-    if (!final || !tool || Number.isNaN(at.getTime())) return // (no sane time: not counted)
-    const u = (days[at.toISOString().slice(0, 10)] ??= { mcp: {}, skills: {} })
+    const row = typeof r.t === "number" && r.t > 0 ? r.t : NaN
+    if (!final || !tool || Number.isNaN(row)) return // (no sane time: not counted)
+    // A fork copies its parent's parts (OpenCode's Session.fork): the copy's row is made at the
+    // fork, its call's own start kept from the original. A part made well after its call
+    // started is such a copy, counted already in the session it came from.
+    const start = typeof r.start === "number" && r.start > 0 ? r.start : row
+    if (row - start > 60_000) return
+    const u = (days[localDay(start)] ??= { mcp: {}, skills: {} })
     const ok = r.status === "completed"
     if (tool === "skill") {
       const n = kitName(r.name)
@@ -182,12 +188,14 @@ export function opencodeInventory(db = opencodeDb, config = new OpencodeConfig()
         }
         try {
           const count = d.prepare("select count(*) n from part where session_id = ?")
+          // (json_valid first: one malformed row skips itself, not its whole session)
           const parts = d.prepare(
             `select time_created t, json_extract(data, '$.tool') tool,
                json_extract(data, '$.state.status') status,
-               json_extract(data, '$.state.input.name') name
+               json_extract(data, '$.state.input.name') name,
+               json_extract(data, '$.state.time.start') start
              from part where session_id = ? and data like '%"type":"tool"%'
-               and json_extract(data, '$.type') = 'tool'`,
+               and json_valid(data) and json_extract(data, '$.type') = 'tool'`,
           )
           const batch: Record<string, SessionEntry> = {}
           let k = 0
@@ -198,7 +206,10 @@ export function opencodeInventory(db = opencodeDb, config = new OpencodeConfig()
               const had = known[ses.id]
               // (a call running at the last count can finish without a new part or a session
               // update: such a session is read again until none is left running)
-              if (had?.sig === sig && !had.open) continue
+              // (one still "running" a day after its session last moved was cut off, OpenCode
+              // gone mid-call: not read again for it)
+              const stuck = had?.open && (ses.u ?? 0) < Date.now() - 24 * 60 * 60_000
+              if (had?.sig === sig && (!had.open || stuck)) continue
               const days: Record<string, Uses> = {}
               const names = { ...had?.names }
               let open = false
@@ -257,6 +268,7 @@ const BATCH = 200 // sessions per database read
 
 interface Row {
   t: number
+  start?: unknown // the call's own start (`state.time.start`)
   dir: string | null
   tool: unknown
   status: unknown

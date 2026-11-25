@@ -2,13 +2,14 @@ import { describe, it, expect } from "vitest"
 import {
   dayBefore,
   liveToolbox,
+  localDay,
   usedBy,
   windowToolbox,
   type InventoryAgent,
 } from "./fleet-inventory"
 import type { FleetAgent } from "./fleet-model"
 
-const today = new Date("2026-11-25T12:00:00Z")
+const today = new Date(2026, 10, 25, 12)
 const hist: InventoryAgent = {
   days: {
     "2026-11-25": { mcp: { gh: 2 }, skills: { r: 1 } },
@@ -26,6 +27,10 @@ const agent = (id: string, toolbox: FleetAgent["toolbox"], kind: FleetAgent["kin
   ({ id, sessionId: id, paneId: "p", kind, status: "idle", subs: [], toolbox }) as FleetAgent
 
 describe("fleet-inventory", () => {
+  it("a day is the user's local one, zero-padded", () => {
+    expect(localDay(new Date(2026, 0, 5, 23, 59).getTime())).toBe("2026-01-05")
+  })
+
   it("days before today", () => {
     expect(dayBefore(today, 0)).toBe("2026-11-25")
     expect(dayBefore(today, 6)).toBe("2026-11-19")

@@ -316,7 +316,7 @@ describe("the agents' sources", () => {
       "create table part (id text, session_id text, time_created integer, time_updated integer, data text)",
     )
     db.exec("create table session (id text, directory text, time_updated integer)")
-    db.prepare("insert into session values (?, ?, ?)").run("s1", proj, 1)
+    db.prepare("insert into session values (?, ?, ?)").run("s1", proj, Date.now())
     const ins = db.prepare("insert into part values (?, ?, ?, ?, ?)")
     const t = Date.parse("2026-11-25T10:00:00Z")
     const tool = (tool: string, status: string, input: unknown = {}) =>
@@ -330,6 +330,20 @@ describe("the agents' sources", () => {
     ins.run("g", "s1", t + 5, t + 5, tool("gone_q", "completed"))
     ins.run("h", "s1", null as never, null as never, tool("echo_ping", "completed"))
     ins.run("i", "s1", t + 6, t + 6, j({ type: "text", text: "hi" }))
+    // A fork's copy of an earlier call: its row made an hour after the call started.
+    ins.run(
+      "j",
+      "s1",
+      t + 3_600_000,
+      t + 3_600_000,
+      j({
+        type: "tool",
+        tool: "echo_ping",
+        state: { status: "completed", input: {}, time: { start: t } },
+      }),
+    )
+    // A row of malformed JSON: skips itself only.
+    ins.run("k", "s1", t + 7, t + 7, '{"type":"tool", broken')
     db.close()
     const cfg = path.join(dir, "cfg")
     fs.mkdirSync(path.join(cfg, "opencode"), { recursive: true })

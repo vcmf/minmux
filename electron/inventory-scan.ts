@@ -6,7 +6,12 @@
 import fs from "node:fs"
 import path from "node:path"
 import type { AgentKind } from "../src/lib/agent-graph"
-import type { Inventory, InventoryAgent, Uses } from "../src/lib/fleet-inventory"
+import {
+  localDay,
+  type Inventory,
+  type InventoryAgent,
+  type Uses,
+} from "../src/lib/fleet-inventory"
 import { wireName } from "./agents/toolbox"
 
 /** What a file's lines added up to so far. */
@@ -232,7 +237,7 @@ export async function scanInventory(
   }
   await dropStaleTemps(cacheFile)
   const out: Inventory = {}
-  const day = (ms: number) => new Date(ms).toISOString().slice(0, 10)
+  const day = localDay
   for (const src of sources) {
     const agent: InventoryAgent = { days: {}, loaded: {}, mcpNow: [], skillsNow: [] }
     const take = (e: FileEntry) => {

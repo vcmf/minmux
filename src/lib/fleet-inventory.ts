@@ -29,9 +29,18 @@ export const WINDOW_DAYS: Record<Exclude<InventoryWindow, "live" | "all">, numbe
   "30d": 30,
 }
 
-/** A day `n` days before `today` (`YYYY-MM-DD`, UTC like the agents' timestamps). */
+/** A moment's day in the user's own time zone (`YYYY-MM-DD`): the days the windows count. */
+export function localDay(ms: number): string {
+  const d = new Date(ms)
+  const two = (n: number) => String(n).padStart(2, "0")
+  return `${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())}`
+}
+
+/** The local day `n` days before `today`. */
 export function dayBefore(today: Date, n: number): string {
-  return new Date(today.getTime() - n * 86_400_000).toISOString().slice(0, 10)
+  const d = new Date(today)
+  d.setDate(d.getDate() - n)
+  return localDay(d.getTime())
 }
 
 const add = (into: Record<string, number>, from: Record<string, number> | undefined) => {
