@@ -4,6 +4,7 @@ import type { InstalledAgent } from "../src/lib/agent-kinds"
 import type { SessionMeta } from "../src/lib/session-color"
 import type { ResumePlan } from "../src/lib/resume"
 import type { AgentProcsResult } from "../src/lib/agent-processes"
+import type { Inventory } from "../src/lib/fleet-inventory"
 import type {
   PastSession,
   PastSessionsResult,
@@ -109,6 +110,7 @@ const api = {
   },
   agentProcesses: (open: string[]) =>
     ipcRenderer.invoke("agents:processes", open) as Promise<AgentProcsResult>,
+  fleetInventory: () => ipcRenderer.invoke("fleet:inventory") as Promise<Inventory | null>,
   pastSessions: () => ipcRenderer.invoke("agents:sessions") as Promise<PastSessionsResult>,
   resumeOne: (s: Pick<PastSession, "agent" | "sessionId">, confirmed?: boolean) =>
     ipcRenderer.invoke("agents:resume-one", s, confirmed === true) as Promise<ResumePlan | null>,

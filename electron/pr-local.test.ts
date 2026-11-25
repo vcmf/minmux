@@ -28,10 +28,71 @@ function fakeGit(over: Partial<Record<string, string | Error>> = {}) {
   })
   return run
 }
+// The merged-units refs read (not the default branch's HEAD lookup, also a for-each-ref).
+const isRefs = (a: string[]) => a[0] === "for-each-ref" && a[1] !== "--format=%(symref:short)"
 const calls = (run: ReturnType<typeof fakeGit>, what: string) =>
   run.mock.calls.filter(([args]) => args.join(" ").startsWith(what)).length
 
 describe("PrLocal", () => {
+  it("names each repo's default branch from its remote's HEAD, read once", async () => {
+    const run = fakeGit({
+      "/w/r for-each-ref --format=%(symref:short) refs/remotes/origin/HEAD": "origin/main\n",
+    })
+    const local = new PrLocal(run)
+    const res = await local.checkouts({ roots: ["/w/r", "/w/l"] })
+    expect(res.ok && res.repos.map((r) => r.defaultBranch)).toEqual(["main", undefined])
+    await local.checkouts({ roots: ["/w/r"] })
+    expect(calls(run, "for-each-ref")).toBe(1) // cached with the remote; none asked for /w/l
+  })
+
+  it("no HEAD ref: no default branch, and that answer is kept", async () => {
+    const run = fakeGit({
+      "/w/r for-each-ref --format=%(symref:short) refs/remotes/origin/HEAD": "",
+    })
+    const local = new PrLocal(run)
+    const res = await local.checkouts({ roots: ["/w/r"] })
+    expect(res.ok && res.repos[0]!.defaultBranch).toBeUndefined()
+    await local.checkouts({ roots: ["/w/r"] })
+    expect(calls(run, "for-each-ref")).toBe(1)
+  })
+
+  it("a remote with no HEAD ref (upstream added by hand): origin's HEAD instead", async () => {
+    const run = fakeGit({
+      "/w/r remote -v":
+        "origin\tgit@github.com:me/r.git (fetch)\nupstream\tgit@github.com:o/r.git (fetch)\n",
+      "/w/r for-each-ref --format=%(symref:short) refs/remotes/upstream/HEAD": "",
+      "/w/r for-each-ref --format=%(symref:short) refs/remotes/origin/HEAD": "origin/develop\n",
+    })
+    const res = await new PrLocal(run).checkouts({ roots: ["/w/r"] })
+    expect(res.ok && res.repos[0]).toMatchObject({ repo: "o/r", defaultBranch: "develop" })
+  })
+
+  it("origin's HEAD failing too: not remembered as no default branch", async () => {
+    const run = fakeGit({
+      "/w/r remote -v":
+        "origin\tgit@github.com:me/r.git (fetch)\nupstream\tgit@github.com:o/r.git (fetch)\n",
+      "/w/r for-each-ref --format=%(symref:short) refs/remotes/upstream/HEAD": "",
+    })
+    const local = new PrLocal(run)
+    await local.checkouts({ roots: ["/w/r"] })
+    await local.checkouts({ roots: ["/w/r"] })
+    expect(calls(run, "for-each-ref --format=%(symref:short) refs/remotes/upstream/HEAD")).toBe(2)
+  })
+
+  it("answers only the asked roots the repo still lists", async () => {
+    const run = fakeGit({ "/w/gone rev-parse --git-common-dir": "/w/r/.git\n" })
+    const res = await new PrLocal(run).checkouts({ roots: ["/w/r", "/w/gone"] })
+    expect(res.ok && res.repos[0]!.roots).toEqual(["/w/r"])
+  })
+
+  it("git failing: no default branch, asked again next time", async () => {
+    const run = fakeGit()
+    const local = new PrLocal(run)
+    await local.checkouts({ roots: ["/w/r"] })
+    await local.checkouts({ roots: ["/w/r"] })
+    expect(calls(run, "for-each-ref")).toBe(2)
+  })
+
   it("one worktree list per repo, however many of its worktrees panes are in", async () => {
     const run = fakeGit()
     const res = await new PrLocal(run).checkouts({ roots: ["/w/r", "/w/r-wt", "/w/l"] })
@@ -44,8 +105,9 @@ describe("PrLocal", () => {
             { path: "/w/r", branch: "main" },
             { path: "/w/r-wt", branch: "b1" },
           ],
+          roots: ["/w/r", "/w/r-wt"],
         },
-        { repo: null, worktrees: [{ path: "/w/l", branch: "x" }] },
+        { repo: null, worktrees: [{ path: "/w/l", branch: "x" }], roots: ["/w/l"] },
       ],
     })
     expect(calls(run, "worktree list")).toBe(2)
@@ -167,7 +229,7 @@ describe("PrLocal merged units", () => {
     })
     const inner = run.getMockImplementation()!
     run.mockImplementation(async (args, cwd) => {
-      if (args[0] !== "for-each-ref") return inner(args, cwd)
+      if (!isRefs(args)) return inner(args, cwd)
       const remote = args[2]!.split("/")[2]!
       return remote === "origin" ? refs : refs.replaceAll("origin", remote)
     })
@@ -186,7 +248,7 @@ describe("PrLocal merged units", () => {
       [key("b2", "b1")]: 1,
     }) // (no refs: none)
     // only the refs asked about (and the remote's HEAD), never the whole remote
-    const refsAsked = run.mock.calls.find(([a]) => a[0] === "for-each-ref")![0].slice(2)
+    const refsAsked = run.mock.calls.find(([a]) => isRefs(a))![0].slice(2)
     expect(refsAsked.sort()).toEqual(
       ["HEAD", "main", "b1", "b2", "gone", "x", "y"].map((n) => `refs/remotes/origin/${n}`).sort(),
     )
@@ -196,20 +258,14 @@ describe("PrLocal merged units", () => {
     let tips = refs
     const run = git()
     const inner = run.getMockImplementation()!
-    run.mockImplementation(async (args, cwd) =>
-      args[0] === "for-each-ref" ? tips : inner(args, cwd),
-    )
+    run.mockImplementation(async (args, cwd) => (isRefs(args) ? tips : inner(args, cwd)))
     const local = new PrLocal(run)
     await local.checkouts({ roots: ["/w/r"], prs: [pr("b1", "main")] })
     await local.checkouts({ roots: ["/w/r"], prs: [pr("b1", "main")] })
     expect(calls(run, "log")).toBe(1)
     tips = refs.replace("b1\0bbb", "b1\0ddd")
     run.mockImplementation(async (args, cwd) =>
-      args[0] === "for-each-ref"
-        ? tips
-        : args[0] === "log"
-          ? "noreply@github.com\0a (#5)\n"
-          : inner(args, cwd),
+      isRefs(args) ? tips : args[0] === "log" ? "noreply@github.com\0a (#5)\n" : inner(args, cwd),
     )
     const res = await local.checkouts({ roots: ["/w/r"], prs: [pr("b1", "main")] })
     expect(calls(run, "log")).toBe(2) // (b1 moved: read once more)
@@ -238,7 +294,7 @@ describe("PrLocal merged units", () => {
   it("no PRs asked about (the list view): no refs read", async () => {
     const run = git()
     await new PrLocal(run).checkouts({ roots: ["/w/r"] })
-    expect(calls(run, "for-each-ref")).toBe(0)
+    expect(calls(run, "for-each-ref --format=%(refname)")).toBe(0)
   })
 })
 
@@ -248,7 +304,7 @@ describe("PrLocal merged units, more", () => {
   const withRefs = (run: ReturnType<typeof fakeGit>, log: (args: string[]) => Promise<string>) => {
     const inner = run.getMockImplementation()!
     run.mockImplementation(async (args, cwd) =>
-      args[0] === "for-each-ref" ? refs : args[0] === "log" ? log(args) : inner(args, cwd),
+      isRefs(args) ? refs : args[0] === "log" ? log(args) : inner(args, cwd),
     )
     return run
   }

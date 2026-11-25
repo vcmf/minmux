@@ -34,6 +34,7 @@ const minmuxStub = {
   resumePlan: vi.fn(async () => ({})),
   pastSessions: vi.fn(async () => ({ sessions: [], failed: [] })),
   agentProcesses: vi.fn(async () => ({ panes: {} })),
+  fleetInventory: vi.fn(async () => ({})),
   searchSessions: vi.fn(async () => 0),
   cancelSessionSearch: vi.fn(),
   onSessionHits: vi.fn(unsub),

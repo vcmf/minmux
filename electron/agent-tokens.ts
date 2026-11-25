@@ -3,8 +3,9 @@
 // reducer folds onto the matching node. Runs on the hook channel in the main process, off the
 // terminal hot path — see startAgentObservability.
 
-import type { AgentEvent, TokenUsage } from "../src/lib/agent-graph"
+import type { AgentEvent, TokenUsage, Toolbox } from "../src/lib/agent-graph"
 import type { TranscriptFold } from "./transcript-fold"
+import type { Tickets } from "./agents/toolbox"
 
 /** Host-fs candidate paths for a transcript path the agent reported. Identity on same-OS
  *  runs; on WSL the agent's Linux path resolves to the pane's distro's UNC shares (see main —
@@ -27,6 +28,14 @@ export function subagentTranscriptPath(
   return `${base}/subagents/agent-${agentId}.jsonl`
 }
 
+/** What a transcript read gives: tokens, a session Stop's toolbox, sub-agent reads, ordering. */
+export interface ReadView<T> {
+  tokens: (v: T) => TokenUsage
+  toolbox?: (v: T, ev: AgentEvent) => Promise<Toolbox | undefined>
+  sub?: (v: T, ev: AgentEvent) => void
+  tickets?: Tickets
+}
+
 /** Which events to price, and which transcript to read for each:
  *   - Stop         → the session transcript  → the session root
  *   - SubagentStop → the sub-agent transcript → that sub-agent
@@ -41,29 +50,37 @@ export function subagentTranscriptPath(
  *     UserPromptSubmit prunes a finished sub-agent before its (slow) read lands, the reducer's
  *     no-resurrection guard drops it and no badge appears. Narrow — sub-agent transcripts are
  *     small so the read is fast; the session root is never pruned, only evicted on SessionEnd. */
-export async function tokenEventsForBatch(
-  tracker: TranscriptFold<TokenUsage>, // the agent's transcript reader (Claude's, Codex's…)
+export async function tokenEventsForBatch<T = TokenUsage>(
+  tracker: TranscriptFold<T>, // the agent's transcript reader (Claude's, Codex's…)
   batch: AgentEvent[],
   resolve: ResolvePath = identity,
+  view: ReadView<T> = { tokens: (v) => v as TokenUsage },
 ): Promise<AgentEvent[]> {
   const out: AgentEvent[] = []
   for (const ev of batch) {
-    if (ev.event === "SessionEnd" && ev.transcriptPath) {
-      tracker.forget(ev.transcriptPath)
+    if (ev.event === "SessionEnd") {
+      if (ev.transcriptPath) tracker.forget(ev.transcriptPath)
       continue
     }
     // Session turn finished → price the session transcript against the root.
     if (ev.event === "Stop" && ev.transcriptPath) {
-      const tokens = await tracker.update(ev.transcriptPath, resolve(ev.transcriptPath, ev.paneId))
-      out.push({ event: "TokenUsage", sessionId: ev.sessionId, tokens })
+      const ticket = view.tickets?.take(ev.sessionId) ?? 0
+      const read = await tracker.update(ev.transcriptPath, resolve(ev.transcriptPath, ev.paneId))
+      const toolbox = await view.toolbox?.(read, ev)
+      // (a later Stop's snapshot already went out: this older one would undo it)
+      if (view.tickets && !view.tickets.send(ev.sessionId, ticket)) continue
+      out.push({ event: "TokenUsage", sessionId: ev.sessionId, tokens: view.tokens(read) })
+      if (toolbox) out.push({ event: "Toolbox", sessionId: ev.sessionId, toolbox })
     }
     // Sub-agent finished → price its own transcript against that sub-agent, then free the
     // accumulator (a sub-agent stops exactly once, so its state is never read again).
     if (ev.event === "SubagentStop" && ev.agentId) {
       const txPath = ev.agentTranscriptPath ?? subagentTranscriptPath(ev.transcriptPath, ev.agentId)
       if (txPath) {
-        const tokens = await tracker.update(txPath, resolve(txPath, ev.paneId))
+        const read = await tracker.update(txPath, resolve(txPath, ev.paneId))
+        const tokens = view.tokens(read)
         out.push({ event: "TokenUsage", sessionId: ev.sessionId, agentId: ev.agentId, tokens })
+        view.sub?.(read, ev)
         tracker.forget(txPath)
       }
     }

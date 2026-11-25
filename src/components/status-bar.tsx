@@ -12,7 +12,9 @@ export function StatusBar() {
   const sessions = useStore((s) => s.sessions)
   const remotePhase = useStore((s) => s.remotePhase)
   // The pane you're driving never counts as waiting (the attention rule).
-  const driving = useStore((s) => (s.windowFocused ? focusedTerminal(s) : undefined))
+  const driving = useStore((s) =>
+    s.windowFocused && !s.activeView ? focusedTerminal(s) : undefined,
+  )
   const git = useStore((s) => s.git)
   const [platform, setPlatform] = useState("")
   const [clock, setClock] = useState(clockNow)

@@ -11,6 +11,7 @@ import { AgentsPanel } from "./components/agents-panel"
 import { PaneLayout } from "./components/pane-layout"
 import { SettingsPanel } from "./components/settings-panel"
 import { PrDialog } from "./components/pr-dialog"
+import { FleetView } from "./components/fleet-view"
 import { FilePreview } from "./components/file-preview"
 import { CloseConfirmDialog } from "./components/close-confirm-dialog"
 import { RightPanelResizer } from "./components/right-panel-resizer"
@@ -51,13 +52,14 @@ let layoutBlocked = false
 /** How long after mount the host list is first fetched (the first tab spawns before). */
 const SSH_HOSTS_DELAY_MS = 800
 
-/** Branches and PRs aren't on screen: the sidebar is collapsed and the agents panel isn't shown. */
-const gitOffScreen = (s: { sidebarCollapsed: boolean; rightView: unknown }) =>
-  s.sidebarCollapsed && s.rightView !== "agents"
+/** Branches and PRs aren't on screen: sidebar collapsed, no agents panel, no fleet shown. */
+const gitOffScreen = (s: { sidebarCollapsed: boolean; rightView: unknown; activeView: unknown }) =>
+  s.sidebarCollapsed && s.rightView !== "agents" && s.activeView !== "fleet"
 
 function App() {
   const tabs = useStore((s) => s.tabs)
   const activeTabId = useStore((s) => s.activeTabId)
+  const activeView = useStore((s) => s.activeView)
   const settings = useStore((s) => s.settings)
   const settingsLoaded = useStore((s) => s.settingsLoaded)
   const theme = useStore(activeTheme) // stable object per variant — changes only on a real switch
@@ -221,6 +223,7 @@ function App() {
               activeTabId: s.activeTabId,
               objects: s.objects,
               folderViews: s.folderViews,
+              views: s.views,
             },
             json,
           )
@@ -236,7 +239,8 @@ function App() {
         state.activeTabId !== prev.activeTabId ||
         state.rightPanelWidth !== prev.rightPanelWidth ||
         state.objects !== prev.objects ||
-        state.folderViews !== prev.folderViews
+        state.folderViews !== prev.folderViews ||
+        state.views !== prev.views
       ) {
         clearTimeout(timer)
         timer = setTimeout(save, 600)
@@ -392,7 +396,13 @@ function App() {
   // close so background tabs release their GPU context and heavy splits use DOM.
   useEffect(() => {
     return useStore.subscribe((state, prev) => {
-      if (state.activeTabId !== prev.activeTabId || state.tabs !== prev.tabs) {
+      // A view shown or hidden counts too: its panes leave (or come back on) the screen, and the
+      // contexts must go BEFORE React parks the panes (moving a live canvas can lose it).
+      if (
+        state.activeTabId !== prev.activeTabId ||
+        state.tabs !== prev.tabs ||
+        state.activeView !== prev.activeView
+      ) {
         TerminalManager.reconcileRenderers()
       }
     })
@@ -549,6 +559,7 @@ function App() {
     const unsub = useStore.subscribe((state, prev) => {
       if (state.sidebarCollapsed !== prev.sidebarCollapsed && !state.sidebarCollapsed) pollSoon()
       if (state.rightView !== prev.rightView && state.rightView === "agents") pollSoon()
+      if (state.activeView !== prev.activeView && state.activeView === "fleet") pollSoon()
       // Another checkout to show, or a folder to look up: the edits poll alone, soon.
       if (state.paneWork !== prev.paneWork) {
         const shown = Object.entries(state.paneWork)
@@ -685,6 +696,7 @@ function App() {
       } else if ((e.metaKey && k === "f") || (e.ctrlKey && e.shiftKey && k === "f")) {
         e.preventDefault()
         const s = useStore.getState()
+        if (s.activeView && !s.searchOpen) return // no terminal on screen to search
         s.setSearchOpen(!s.searchOpen)
       }
     }
@@ -718,7 +730,9 @@ function App() {
       <div className="body">
         {!sidebarCollapsed && <Sidebar />}
         <div className="content">
-          {activeTab ? (
+          {activeView === "fleet" ? (
+            <FleetView />
+          ) : activeTab ? (
             <PaneLayout key={activeTab.id} node={activeTab.root} tabId={activeTab.id} />
           ) : (
             <div className="empty">No sessions — open a tab.</div>

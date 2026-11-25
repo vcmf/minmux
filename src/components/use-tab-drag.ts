@@ -133,8 +133,13 @@ export function useTabDrag(axis: "x" | "y") {
         const s = useStore.getState()
         // Shown, not "seen": passing over a group mustn't clear its needs-input signal (the
         // drop that moves a terminal there reveals it). It may have closed meanwhile.
-        if (s.dragging && s.activeTabId !== tabId && s.tabs.some((t) => t.id === tabId))
-          useStore.setState({ activeTabId: tabId })
+        // Behind a view, the context tab itself opens too (its panes aren't on screen).
+        if (
+          s.dragging &&
+          (s.activeTabId !== tabId || s.activeView) &&
+          s.tabs.some((t) => t.id === tabId)
+        )
+          useStore.setState({ activeTabId: tabId, activeView: null })
       }, SPRING_MS),
     }
   }

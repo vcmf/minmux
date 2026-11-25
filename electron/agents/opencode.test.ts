@@ -19,6 +19,19 @@ import { OPENCODE_DROP_VERSION, OPENCODE_PLUGIN } from "./opencode-plugin"
 const URL_ = "file:///home/u/.config/minmux/agents/minmux-opencode.js"
 const plugins = (json: string | undefined) => (JSON.parse(json!) as { plugin: unknown[] }).plugin
 
+describe("opencode skill calls", () => {
+  it("a skill tool's start carries the skill's name; other tools carry none", () => {
+    const at = (o: Record<string, unknown>) =>
+      normalizeOpencodeDrop({ v: 1, sessionID: "ses_r", directory: "/repo", ...o }, "p")!
+    expect(
+      at({ e: "tool", phase: "start", tool: "skill", skill: "fleet", callID: "c" }).skill,
+    ).toBe("fleet")
+    expect(
+      at({ e: "tool", phase: "start", tool: "bash", skill: "x", callID: "c" }).skill,
+    ).toBeUndefined()
+  })
+})
+
 describe("mergeOpencodeConfig", () => {
   it("no config of the user's: just our plugin", () => {
     expect(plugins(mergeOpencodeConfig(undefined, URL_))).toEqual([URL_])

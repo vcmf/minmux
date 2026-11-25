@@ -4202,3 +4202,577 @@ body.resizing-col {
   padding: 4px 8px;
   color: var(--faint);
 }
+
+/* ── View tabs (docs/design/FLEET_GRAPH.md): after the terminal tabs, not in their drag list ── */
+.view-tabs {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 auto;
+}
+.view-tab-icon {
+  flex: none;
+  color: var(--dim);
+}
+.view-tab.active .view-tab-icon {
+  color: var(--text);
+}
+.fleet-btn {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 22px;
+  padding: 0 8px;
+  background: var(--elev);
+  color: var(--text);
+  border: 1px solid var(--border2);
+  border-radius: 6px;
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+.fleet-btn:hover {
+  background: var(--bg);
+}
+.fleet-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.fleet-view {
+  height: 100%;
+  display: flex;
+  outline: none;
+  background: var(--bg);
+}
+.fleet-graph {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.fleet-edges {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.fleet-viewport {
+  position: absolute;
+  inset: 0;
+  overflow: clip; /* the camera pans the layer: no scrolling at all, not even focus's (fleet-view) */
+  cursor: grab;
+  touch-action: none;
+  user-select: none; /* a drag pans, it never selects the cards' text */
+  outline: none;
+}
+.fleet-viewport:focus-visible {
+  box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--accent) 60%, transparent);
+}
+.fleet-viewport.panning {
+  cursor: grabbing;
+}
+.fleet-layer {
+  position: absolute;
+  left: 0;
+  top: 0;
+  will-change: transform;
+}
+.fleet-view .one {
+  display: block;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+.fleet-view .faint {
+  color: var(--faint);
+}
+.fleet-view .dim {
+  color: var(--dim);
+}
+.fleet-view .warn {
+  color: var(--amber);
+}
+.fleet-view .ok {
+  color: var(--accent);
+}
+.fleet-view .done {
+  color: var(--blue);
+}
+.fleet-root {
+  position: absolute;
+  border: none;
+  border-radius: 50%;
+  background: var(--text);
+  color: var(--bg);
+  font: inherit;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  cursor: pointer;
+  box-shadow:
+    0 0 0 7px color-mix(in srgb, var(--text) 5%, transparent),
+    0 0 0 8px color-mix(in srgb, var(--text) 14%, transparent);
+}
+.fleet-root.sel,
+.fleet-root:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 4px;
+}
+.fleet-root-label {
+  position: absolute;
+  width: 240px;
+  text-align: center;
+  font-size: 12px;
+  line-height: 17px;
+  color: var(--dim);
+  pointer-events: none;
+}
+.fleet-card {
+  position: absolute;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 2px;
+  padding: 7px 12px;
+  background: var(--panel);
+  border: 1px solid var(--border2);
+  border-radius: 8px;
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  line-height: 17px;
+  text-align: left;
+}
+.fleet-pr.amber {
+  border-color: color-mix(in srgb, var(--amber) 60%, transparent);
+}
+.fleet-pr.red {
+  border-color: color-mix(in srgb, var(--red) 60%, transparent);
+}
+.fleet-pr.draft {
+  border-style: dashed;
+}
+/* A status word stays on one line: the title beside it gives way. */
+.fleet-panel-row .fleet-st {
+  flex: none;
+  white-space: nowrap;
+  margin-left: auto;
+}
+.fleet-panel-row .one {
+  min-width: 0;
+}
+.fleet-st.amber {
+  color: var(--amber);
+}
+.fleet-st.red {
+  color: var(--red);
+}
+.fleet-st.ok {
+  color: var(--accent);
+}
+.fleet-link {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  padding: 2px;
+  background: none;
+  border: none;
+  color: var(--faint);
+  cursor: pointer;
+}
+.fleet-link:hover {
+  color: var(--text);
+}
+.fleet-pr .one:first-child {
+  padding-right: 14px;
+}
+.fleet-branch,
+.fleet-sub {
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+  border-style: dashed;
+  border-radius: 999px;
+  color: var(--dim);
+}
+.fleet-sub {
+  font-size: 11px;
+  padding: 0 10px;
+}
+.fleet-agent {
+  cursor: pointer;
+  border-radius: 10px;
+}
+.fleet-agent.waiting {
+  border-color: color-mix(in srgb, var(--amber) 55%, transparent);
+}
+.fleet-agent.idle {
+  opacity: 0.75;
+}
+.fleet-agent.sel,
+.fleet-agent:focus-visible {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent);
+  outline: none;
+}
+.fleet-kind {
+  vertical-align: -2px;
+  display: inline-flex;
+  flex: none;
+}
+.fleet-pr-icon {
+  display: inline-flex;
+  vertical-align: -2px;
+  color: var(--accent); /* an open PR, as GitHub colours it */
+}
+.fleet-pr-icon.draft {
+  color: var(--faint);
+}
+.fleet-unpin {
+  position: absolute;
+  right: 16px;
+  bottom: 16px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.fleet-dock {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  display: flex;
+  gap: 24px;
+  padding: 8px 190px 8px 20px; /* (its right end clear of the Graph | Inventory switch) */
+  overflow-x: auto; /* one strip: it scrolls sideways, never grows over the graph */
+  scrollbar-width: thin;
+  background: color-mix(in srgb, var(--bg) 92%, transparent);
+  border-bottom: 1px solid var(--border);
+}
+.fleet-dock-repo {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0;
+  background: none;
+  border: none;
+  font: inherit;
+  font-size: 12px;
+  color: var(--text);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.fleet-dock-dot {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: var(--text);
+  color: var(--bg);
+  font-size: 11px;
+  font-weight: 600;
+}
+.fleet-counts {
+  display: inline-flex;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--faint);
+}
+.fleet-panel {
+  flex: 0 0 320px;
+  box-sizing: border-box;
+  padding: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  overflow-y: auto;
+  border-left: 1px solid var(--border);
+  background: var(--panel);
+  font-size: 12px;
+}
+.fleet-panel h2 {
+  margin: 0;
+  font-size: 17px;
+}
+.fleet-panel h3 {
+  margin: 10px 0 0;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+.fleet-panel .btn {
+  align-self: flex-start;
+}
+.fleet-back {
+  align-self: flex-start;
+  padding: 0;
+  background: none;
+  border: none;
+  color: var(--dim);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.fleet-panel-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.fleet-pick,
+.fleet-repo-row {
+  padding: 6px 8px;
+  margin: 0 -8px;
+  background: none;
+  border: none;
+  border-radius: 6px;
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+.fleet-repo-row {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 10px 12px;
+  background: var(--elev);
+  border: 1px solid var(--border);
+}
+.fleet-pick:hover,
+.fleet-repo-row:hover {
+  background: var(--elev);
+}
+.fleet-facts {
+  display: grid;
+  grid-template-columns: 64px 1fr;
+  gap: 4px 8px;
+  margin: 4px 0 0;
+}
+.fleet-facts dt {
+  color: var(--faint);
+}
+.fleet-facts dd {
+  margin: 0;
+  min-width: 0;
+}
+.fleet-meter {
+  display: block;
+  height: 4px;
+  margin-top: 4px;
+  border-radius: 2px;
+  background: var(--elev);
+}
+.fleet-meter > span {
+  display: block;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--dim);
+}
+.fleet-meter > span.warn {
+  background: var(--amber);
+}
+.fleet-hint {
+  margin-top: auto;
+  font-size: 11px;
+}
+.fleet-empty {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.fleet-empty p {
+  margin: 10px 0 0;
+  max-width: 340px;
+  text-align: center;
+  line-height: 1.5;
+}
+.fleet-empty > div {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+/* The open repo's circle glows faintly into the graph. */
+.fleet-root.open {
+  box-shadow:
+    0 0 0 7px color-mix(in srgb, var(--text) 5%, transparent),
+    0 0 0 8px color-mix(in srgb, var(--text) 14%, transparent),
+    0 0 0 16px color-mix(in srgb, var(--text) 3%, transparent),
+    0 0 90px 40px color-mix(in srgb, var(--text) 7%, transparent);
+}
+/* A session's MCP servers and skills in the panel. */
+.fleet-tools-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+.fleet-tools-head .faint {
+  text-transform: none;
+  letter-spacing: 0;
+}
+.fleet-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.fleet-chip {
+  border: 1px solid var(--border2);
+  border-radius: 6px;
+  padding: 3px 8px;
+  font-size: 12px;
+  line-height: 17px;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fleet-chip.bad {
+  border-color: color-mix(in srgb, var(--red) 55%, transparent);
+  color: var(--red);
+}
+.fleet-chip.unused {
+  border-style: dashed;
+  color: var(--dim);
+}
+/* The Fleet view's Graph | Inventory switch, the inventory over the graph, a picked row's mark. */
+.fleet-modes {
+  position: absolute;
+  top: 10px;
+  right: 12px;
+  z-index: 6;
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--border2);
+  border-radius: 8px;
+  background: var(--bg);
+}
+.fleet-window {
+  border: none;
+  background: none;
+  color: var(--dim);
+  font: inherit;
+  font-size: 12px;
+  padding: 3px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.fleet-window.on {
+  background: var(--border2);
+  color: var(--text);
+}
+.fleet-inventory {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  overflow: auto;
+  background: var(--bg);
+  padding: 14px 20px 24px;
+}
+.fleet-windows {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-bottom: 14px;
+  padding-right: 170px; /* (clear of the switch) */
+}
+.fleet-windows .faint {
+  margin-left: 10px;
+  font-size: 12px;
+}
+.fleet-columns {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 24px;
+}
+.fleet-column h2 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  margin: 0 0 6px;
+}
+.fleet-column h3 {
+  margin: 14px 0 6px;
+}
+.fleet-rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.fleet-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  min-width: 0;
+  padding: 4px 6px;
+  border: none;
+  border-radius: 5px;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+}
+.fleet-row .one {
+  min-width: 0;
+}
+.fleet-row .faint {
+  flex: none;
+  white-space: nowrap;
+}
+button.fleet-row:not(:disabled) {
+  cursor: pointer;
+}
+button.fleet-row:not(:disabled):hover {
+  background: var(--border2);
+}
+.fleet-row.bad {
+  color: var(--red);
+}
+.fleet-row.unused {
+  color: var(--dim);
+}
+.fleet-more {
+  border: none;
+  background: none;
+  color: var(--dim);
+  font: inherit;
+  font-size: 12px;
+  padding: 4px 6px;
+  cursor: pointer;
+}
+.fleet-marked {
+  position: absolute;
+  left: 50%;
+  bottom: 14px;
+  z-index: 6;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: calc(100% - 240px); /* (clear of the Unpin button at the bottom right) */
+  padding: 6px 8px 6px 14px;
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  background: var(--bg);
+  font-size: 12px;
+}
+.fleet-card.marked {
+  /* (an outline: the selection and focus rings, box shadows, still show) */
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+.fleet-panel-host {
+  display: contents; /* (only there to make the panel inert under the inventory) */
+}
+.fleet-inventory-host[hidden] {
+  display: none;
+}

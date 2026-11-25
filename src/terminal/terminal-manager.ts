@@ -48,6 +48,7 @@ import {
   type ShellFlow,
 } from "../lib/resume-flow"
 import { isMac, isWindows } from "../lib/platform"
+import { shownTerminalTab } from "../lib/view-tabs"
 import {
   afterStart,
   authPrompt,
@@ -310,7 +311,8 @@ function releaseWebgl(entry: Entry) {
  *  — many simultaneous WebGL contexts corrupt the glyph atlas. */
 function reconcileRenderers() {
   const state = useStore.getState()
-  const tab = state.tabs.find((t) => t.id === state.activeTabId)
+  // None while a view covers the pane area: its panes are off screen (and about to park).
+  const tab = shownTerminalTab(state)
   // Each pane's active surface only — a surface hidden behind another holds no context.
   const visible = tab ? visibleSessionIds(tab.root) : []
   // Which panes get a live GPU context. Default (`auto`) is the focused pane only —

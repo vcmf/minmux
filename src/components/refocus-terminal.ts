@@ -11,6 +11,7 @@ export function focusEntry(id: string): void {
 /** Give the keyboard to the active tab's focused entry, now. */
 export function focusActiveEntry(): void {
   const s = useStore.getState()
+  if (s.activeView) return // the panes are parked behind a view: never focus an inert terminal
   const id = s.tabs.find((t) => t.id === s.activeTabId)?.activeEntryId
   if (id) focusEntry(id)
 }
