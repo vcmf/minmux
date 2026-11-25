@@ -248,9 +248,12 @@ Researched on real data (2026-11-25):
   file moved (Codex archiving it) keeps its entry; one deleted (Claude's 30-day cleanup) keeps
   its counts, so All means everything since minmux first scanned. It's saved every 20 s during a
   scan and written whole through a temporary file; a newer build's file is never written over.
-  OpenCode is read by part id (its primary key, in time order), a page at a time; calls still
-  running are kept by id and counted once they finish (let go after a day). Its tool calls are
-  kept raw (folder and tool) and resolved to servers when a result is built.
+  OpenCode's database is a ledger of its sessions the same way: each session's fingerprint (how
+  many parts, and the last change to one, through the session index) is checked, and only the
+  ones that moved are recounted whole, their entry replaced (no reliance on id order or the
+  clock; a call still running is counted once it finishes). An MCP call is named by its server
+  as configured where it ran when it's read (so a server removed later keeps its counts), else
+  kept raw for a later config to name; a tool no config names isn't MCP.
 - A scan runs when a history window is shown, one at a time, a result reused for 30 s; never on
   a timer. Measured here: the first scan of all history 90 s (in the worker), the next 0.1 s.
 - **The view**: a Graph | Inventory switch at the graph's top right. The inventory covers the

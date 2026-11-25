@@ -25,19 +25,16 @@ export interface InventorySource {
   line(acc: DayAcc, line: string, day: string): DayAcc
   /** What its config says it has now (servers; skills, null: not supported). */
   loaded(): Promise<{ mcp: string[]; skills: string[] | null }>
-  /** Uses kept elsewhere (OpenCode's database): read on from `after`, kept raw till `resolve`. */
-  store?(after: StoreMark): Promise<{ until: StoreMark; days: Record<string, Uses> }>
+  /** Sessions kept in a database (OpenCode's): the ones whose fingerprint changed, recounted. */
+  sessions?(known: Record<string, string>): Promise<Record<string, SessionEntry>>
   resolve?(days: Record<string, Uses>): Promise<Record<string, Uses>>
   noSkills?: true // skills not supported (Codex): so even when its config can't be read
 }
 
-/** Where a store was read up to, and the calls still running then. */
-export interface StoreMark {
-  t: number
-  id: string
-  pending?: string[]
-  floor?: string // the oldest id of the last minutes: read from again (a late writer's row)
-  recent?: [string, number][] // ids (and times) read from `floor` on: skipped when read again
+/** One database session's ledger entry: its fingerprint when counted, and its uses per day. */
+export interface SessionEntry {
+  sig: string
+  days: Record<string, Uses>
 }
 
 interface FileEntry {
@@ -50,13 +47,13 @@ interface FileEntry {
 }
 
 export interface InventoryCache {
-  v: 2
+  v: 3
   files: Record<string, FileEntry> // by `<kind>:<file name>`
-  stores: Partial<Record<AgentKind, { until: StoreMark; days: Record<string, Uses> }>>
+  sessions: Partial<Record<AgentKind, Record<string, SessionEntry>>> // by session id
 }
 
 /** The cache's format; a file of a later one (a newer build's) is never written over. */
-const CACHE_V = 2
+const CACHE_V = 3
 
 const CHUNK = 1 << 18
 const MAX_LINE = 8 * 1024 * 1024 // (a line longer than this is no record we count: skipped)
@@ -134,16 +131,47 @@ export function addInto(into: Uses, u: Uses) {
   add(into.skills, u.skills)
 }
 
-const emptyCache = (): InventoryCache => ({ v: CACHE_V, files: {}, stores: {} })
+const emptyCache = (): InventoryCache => ({ v: CACHE_V, files: {}, sessions: {} })
+
+const isUses = (u: unknown) =>
+  !!u &&
+  typeof u === "object" &&
+  typeof (u as Uses).mcp === "object" &&
+  typeof (u as Uses).skills === "object"
+const isDays = (d: unknown) =>
+  !!d && typeof d === "object" && Object.values(d as Record<string, unknown>).every(isUses)
+/** A ledger entry of the shape this build counts with (any other is dropped: read again). */
+const isFileEntry = (e: unknown) => {
+  const x = e as FileEntry
+  return (
+    !!x &&
+    typeof x.kind === "string" &&
+    typeof x.path === "string" &&
+    typeof x.offset === "number" &&
+    typeof x.mtime === "number" &&
+    !!x.acc &&
+    isDays(x.acc.days) &&
+    Array.isArray(x.acc.mcpLoaded) &&
+    Array.isArray(x.acc.skillsLoaded)
+  )
+}
 
 /** The cache, or an empty one; `newer`: written by a later build (kept, never written over). */
 export async function readCache(file: string): Promise<InventoryCache & { newer?: true }> {
   try {
     const c = JSON.parse(await fs.promises.readFile(file, "utf8")) as InventoryCache
     if (typeof c?.v === "number" && c.v > CACHE_V) return { ...emptyCache(), newer: true }
-    return c?.v === CACHE_V && c.files && typeof c.files === "object"
-      ? { ...c, stores: c.stores ?? {} }
-      : emptyCache()
+    if (c?.v !== CACHE_V || !c.files || typeof c.files !== "object") return emptyCache()
+    const files: Record<string, FileEntry> = {}
+    for (const [k, e] of Object.entries(c.files)) if (isFileEntry(e)) files[k] = e
+    const sessions: InventoryCache["sessions"] = {}
+    for (const [kind, m] of Object.entries(c.sessions ?? {})) {
+      const ok: Record<string, SessionEntry> = {}
+      for (const [id, e] of Object.entries(m ?? {}))
+        if (typeof e?.sig === "string" && isDays(e.days)) ok[id] = e
+      sessions[kind as AgentKind] = ok
+    }
+    return { v: CACHE_V, files, sessions }
   } catch {
     return emptyCache()
   }
@@ -152,7 +180,7 @@ export async function readCache(file: string): Promise<InventoryCache & { newer?
 /** Write the cache whole, through a temporary file (a crash mid-write leaves the old one). */
 export async function writeCache(file: string, cache: InventoryCache) {
   await fs.promises.mkdir(path.dirname(file), { recursive: true })
-  const tmp = `${file}.${process.pid}.tmp`
+  const tmp = `${file}.tmp` // (one name: a write cut short is written over next time)
   await fs.promises.writeFile(tmp, JSON.stringify(cache))
   await fs.promises.rename(tmp, file)
 }
@@ -233,23 +261,20 @@ export async function scanInventory(
     // The rest of its ledger: files gone, or not listed this time, still count.
     for (const [key, e] of Object.entries(cache.files))
       if (e.kind === src.kind && !listed.has(key)) take(e)
-    if (src.store) {
-      const kept = cache.stores[src.kind]
-      // (a mark of another shape is no place to read on from: read it all again)
-      const had =
-        kept && typeof kept.until === "object" && typeof kept.until?.t === "number"
-          ? kept
-          : { until: { t: 0, id: "" }, days: {} }
+    if (src.sessions) {
+      // A ledger of its sessions: the ones whose fingerprint changed are recounted whole and
+      // replace their entry; the others (deleted ones too) count as they were.
+      const mine = (cache.sessions[src.kind] ??= {})
       try {
-        const more = await src.store(had.until)
-        const days = structuredClone(had.days)
-        for (const [d, u] of Object.entries(more.days))
-          addInto((days[d] ??= { mcp: {}, skills: {} }), u)
-        cache.stores[src.kind] = { until: more.until, days }
+        const known = Object.fromEntries(Object.entries(mine).map(([id, e]) => [id, e.sig]))
+        Object.assign(mine, await src.sessions(known))
       } catch {
-        // its store can't be read now: what the cache had
+        // its database can't be read now: what the ledger has
       }
-      const raw = cache.stores[src.kind]?.days ?? {}
+      const raw: Record<string, Uses> = {}
+      for (const e of Object.values(mine))
+        for (const [d, u] of Object.entries(e.days))
+          addInto((raw[d] ??= { mcp: {}, skills: {} }), u)
       const days = src.resolve
         ? await src.resolve(raw).catch((): Record<string, Uses> => ({}))
         : raw

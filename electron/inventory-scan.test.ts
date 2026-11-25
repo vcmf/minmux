@@ -22,6 +22,7 @@ import { OpencodeConfig } from "./agents/opencode-toolbox"
 import { CodexMcpConfig } from "./agents/codex-toolbox"
 import { ClaudeMcpConfig } from "./agents/claude-toolbox"
 import { SessionsOps, type SessionsReply } from "./sessions-ops"
+import type { Uses } from "../src/lib/fleet-inventory"
 
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), "minmux-inv-"))
 const j = (o: unknown) => JSON.stringify(o)
@@ -150,32 +151,37 @@ describe("scanInventory", () => {
     expect((await readCache(cache)).files).toEqual({})
   })
 
-  it("a source's store is read on from where it stopped; a failing one keeps what it had", async () => {
+  it("a database's sessions: recounted only when changed, kept when gone or unreadable", async () => {
     const cache = path.join(tmp(), "c.json")
-    let calls: number[] = []
+    const asked: Record<string, string>[] = []
     let fail = false
+    let db: Record<string, { sig: string; days: Record<string, Uses> }> = {
+      s1: { sig: "1:1", days: { "2026-11-25": { mcp: { e: 1 }, skills: {} } } },
+      s2: { sig: "1:1", days: { "2026-11-24": { mcp: { e: 2 }, skills: {} } } },
+    }
     const src: InventorySource = {
       kind: "opencode",
       files: async () => [],
       line: (a) => a,
       loaded: async () => ({ mcp: [], skills: null }),
-      store: async (after) => {
-        calls.push(after.t)
+      sessions: async (known) => {
+        asked.push(known)
         if (fail) throw new Error("locked")
-        return {
-          until: { t: after.t + 10, id: "x" },
-          days: { "2026-11-25": { mcp: { e: 1 }, skills: {} } },
-        }
+        return Object.fromEntries(Object.entries(db).filter(([id, e]) => known[id] !== e.sig))
       },
     }
     await scanInventory([src], cache)
+    // s1 grew (recounted, replaced); s2 deleted from the database (kept).
+    db = { s1: { sig: "2:2", days: { "2026-11-25": { mcp: { e: 3 }, skills: {} } } } }
     const two = await scanInventory([src], cache)
-    expect(calls).toEqual([0, 10])
-    expect(two.opencode!.days["2026-11-25"]!.mcp).toEqual({ e: 2 })
+    expect(asked[1]).toEqual({ s1: "1:1", s2: "1:1" })
+    expect(two.opencode!.days).toEqual({
+      "2026-11-25": { mcp: { e: 3 }, skills: {} },
+      "2026-11-24": { mcp: { e: 2 }, skills: {} },
+    })
     expect(two.opencode!.skillsNow).toBeNull()
     fail = true
-    calls = []
-    expect((await scanInventory([src], cache)).opencode!.days["2026-11-25"]!.mcp).toEqual({ e: 2 })
+    expect((await scanInventory([src], cache)).opencode!.days["2026-11-25"]!.mcp).toEqual({ e: 3 })
   })
 
   it("keeps what it had: a failed read, a file not listed this time, a newer build's cache", async () => {
@@ -299,88 +305,64 @@ describe("the agents' sources", () => {
     expect(await src.loaded()).toEqual({ mcp: [], skills: null })
   })
 
-  it("OpenCode: finished tool calls from a mark on, servers as configured where each ran", async () => {
+  it("OpenCode: a session's finished calls, recounted when its parts change", async () => {
     const dir = tmp()
     const file = path.join(dir, "opencode.db")
     const proj = path.join(dir, "proj")
     fs.mkdirSync(proj)
     fs.writeFileSync(path.join(proj, "opencode.json"), j({ mcp: { linear: {} } }))
     const db = new DatabaseSync(file)
-    db.exec("create table part (id text, session_id text, time_created integer, data text)")
+    db.exec(
+      "create table part (id text, session_id text, time_created integer, time_updated integer, data text)",
+    )
     db.exec("create table session (id text, directory text)")
     db.prepare("insert into session values (?, ?)").run("s1", proj)
-    const ins = db.prepare("insert into part values (?, ?, ?, ?)")
-    const t = Date.now() - 10 * 60_000 // (recent: a running call is still running)
-    const today = new Date(t).toISOString().slice(0, 10)
+    const ins = db.prepare("insert into part values (?, ?, ?, ?, ?)")
+    const t = Date.parse("2026-11-25T10:00:00Z")
     const tool = (tool: string, status: string, input: unknown = {}) =>
       j({ type: "tool", tool, state: { status, input } })
-    ins.run("a", "s1", t, tool("echo_ping", "completed"))
-    ins.run("b", "s1", t, tool("linear_issue", "completed")) // (same ms: paged by id)
-    ins.run("c", "s1", t + 1, tool("echo_ping", "error"))
-    ins.run("d", "s1", t + 2, tool("skill", "completed", { name: "fleet" }))
-    ins.run("e", "s1", t + 3, tool("skill", "running"))
-    ins.run("f", "s1", t + 4, tool("echo_ping", "completed"))
-    ins.run("g", "s1", t + 5, j({ type: "text", text: "hi" }))
+    ins.run("a", "s1", t, t, tool("echo_ping", "completed"))
+    ins.run("b", "s1", t, t, tool("linear_issue", "completed"))
+    ins.run("c", "s1", t + 1, t + 1, tool("echo_ping", "error"))
+    ins.run("d", "s1", t + 2, t + 2, tool("skill", "completed", { name: "fleet" }))
+    ins.run("e", "s1", t + 3, t + 3, tool("skill", "running"))
+    ins.run("f", "s1", t + 4, t + 4, tool("bash", "completed"))
+    ins.run("g", "s1", t + 5, t + 5, tool("gone_q", "completed"))
+    ins.run("h", "s1", null as never, null as never, tool("echo_ping", "completed"))
+    ins.run("i", "s1", t + 6, t + 6, j({ type: "text", text: "hi" }))
     db.close()
     const cfg = path.join(dir, "cfg")
     fs.mkdirSync(path.join(cfg, "opencode"), { recursive: true })
     fs.writeFileSync(path.join(cfg, "opencode", "opencode.json"), j({ mcp: { echo: {} } }))
     const src = opencodeInventory(() => file, new OpencodeConfig(dir, { XDG_CONFIG_HOME: cfg }))
-    const got = await src.store!({ t: 0, id: "" })
-    // Read to the end; the running call is kept to check again.
-    expect(got.until).toMatchObject({ t: t + 5, id: "g", pending: ["e"], floor: "a" })
-    // Named when read, while their servers are configured.
-    expect(got.days[today]!.mcp).toEqual({ "=echo": 2, "=linear": 1 })
-    expect(await src.resolve!(got.days)).toEqual({
-      [today]: { mcp: { echo: 2, linear: 1 }, mcpFailed: { echo: 1 }, skills: { fleet: 1 } },
+    const got = await src.sessions!({})
+    // Named when read, while their servers are configured; the running call not yet counted.
+    expect(got.s1!.days["2026-11-25"]).toMatchObject({
+      mcp: { "=echo": 1, "=linear": 1 },
+      mcpFailed: { "=echo": 1 },
+      skills: { fleet: 1 },
     })
-    // Once it finishes, it's counted (and nothing else again).
+    expect(await src.resolve!(got.s1!.days)).toEqual({
+      "2026-11-25": {
+        mcp: { echo: 1, linear: 1 },
+        mcpFailed: { echo: 1 },
+        skills: { fleet: 1 },
+      },
+    })
+    // Unchanged: not read again. Once the running one finishes, its session is recounted.
+    expect(await src.sessions!({ s1: got.s1!.sig })).toEqual({})
     const d2 = new DatabaseSync(file)
-    d2.prepare("update part set data = ? where id = 'e'").run(
+    d2.prepare("update part set data = ?, time_updated = ? where id = 'e'").run(
       tool("skill", "completed", { name: "x" }),
+      t + 9,
     )
     d2.close()
-    const more = await src.store!(got.until)
-    expect(more.until).toMatchObject({ t: t + 5, id: "g", pending: [] })
-    // (the window read again: nothing counted twice)
-    expect(await src.resolve!(more.days)).toEqual({ [today]: { mcp: {}, skills: { x: 1 } } })
-    // A row another OpenCode wrote a moment late, its id below the newest: still read, once.
-    const late = new DatabaseSync(file)
-    late
-      .prepare("insert into part values (?, ?, ?, ?)")
-      .run("bb", "s1", t + 1, tool("echo_ping", "completed"))
-    late
-      .prepare("insert into part values (?, ?, ?, ?)")
-      .run("z", "s1", null as never, tool("echo_ping", "completed"))
-    late
-      .prepare("insert into part values (?, ?, ?, ?)")
-      .run("zz", "s1", t + 9, tool("gone_q", "completed"))
-    late.close()
-    const after = await src.store!(more.until)
-    expect(await src.resolve!(after.days)).toEqual({
-      // (z: no sane time; gone_q: no config names it, so no MCP call)
-      [today]: { mcp: { echo: 1 }, skills: {} },
-    })
+    const again = await src.sessions!({ s1: got.s1!.sig })
+    expect(again.s1!.days["2026-11-25"]!.skills).toEqual({ fleet: 1, x: 1 })
     // A server removed from the config after its calls were read keeps them.
     fs.rmSync(path.join(proj, "opencode.json"))
-    expect((await src.resolve!(got.days))[today]!.mcp).toEqual({ echo: 2, linear: 1 })
-    expect(await src.store!(after.until)).toMatchObject({ days: {} })
-    // A call still running a day on (its agent died) is let go.
-    const d3 = new DatabaseSync(file)
-    d3.prepare("insert into part values (?, ?, ?, ?)").run(
-      "a0",
-      "s1",
-      Date.now() - 2 * 24 * 60 * 60_000,
-      tool("echo_ping", "running"),
-    )
-    d3.close()
-    expect((await src.store!({ ...more.until, pending: ["a0"] })).until.pending).toEqual([])
-    expect(
-      await opencodeInventory(() => path.join(dir, "none.db")).store!({ t: 5, id: "" }),
-    ).toEqual({
-      until: { t: 5, id: "" },
-      days: {},
-    })
+    expect((await src.resolve!(got.s1!.days))["2026-11-25"]!.mcp).toEqual({ echo: 1, linear: 1 })
+    expect(await opencodeInventory(() => path.join(dir, "none.db")).sessions!({})).toEqual({})
   })
 })
 

@@ -38,16 +38,22 @@ function useHistory(
   const [state, setState] = useState<"idle" | "loading" | "failed">("idle")
   const [attempt, setAttempt] = useState(0)
   const fetched = useRef(0)
+  const tried = useRef(0)
   useEffect(() => {
-    // (main reuses a scan for 30 s: sooner than that, the answer would be the same)
-    if (!want || (inv && Date.now() - fetched.current < 30_000)) return
+    // (main reuses a scan for 30 s: sooner than that, the answer would be the same; a retry
+    // always asks)
+    const retrying = attempt !== tried.current
+    tried.current = attempt
+    if (!want || (inv && !retrying && Date.now() - fetched.current < 30_000)) return
     let live = true
     setState("loading") // (the numbers shown stay until the new ones come)
     ipc.fleetInventory().then(
       (v) => {
         if (!live) return
-        fetched.current = Date.now()
-        if (v) setInv(v)
+        if (v) {
+          fetched.current = Date.now()
+          setInv(v)
+        }
         setState(v ? "idle" : "failed")
       },
       () => live && setState("failed"),

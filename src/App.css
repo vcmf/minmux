@@ -4766,5 +4766,10 @@ button.fleet-row:not(:disabled):hover {
   font-size: 12px;
 }
 .fleet-card.marked {
-  box-shadow: 0 0 0 2px var(--accent);
+  /* (an outline: the selection and focus rings, box shadows, still show) */
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+.fleet-inventory-host[hidden] {
+  display: none;
 }
