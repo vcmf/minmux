@@ -165,9 +165,9 @@ describe("scanInventory", () => {
       line: (a) => a,
       loaded: async () => ({ mcp: [], skills: null }),
       sessions: async (known) => {
-        asked.push(known)
+        asked.push(Object.fromEntries(Object.entries(known).map(([id, e]) => [id, e.sig])))
         if (fail) throw new Error("locked")
-        return Object.fromEntries(Object.entries(db).filter(([id, e]) => known[id] !== e.sig))
+        return Object.fromEntries(Object.entries(db).filter(([id, e]) => known[id]?.sig !== e.sig))
       },
     }
     await scanInventory([src], cache)
@@ -315,8 +315,8 @@ describe("the agents' sources", () => {
     db.exec(
       "create table part (id text, session_id text, time_created integer, time_updated integer, data text)",
     )
-    db.exec("create table session (id text, directory text)")
-    db.prepare("insert into session values (?, ?)").run("s1", proj)
+    db.exec("create table session (id text, directory text, time_updated integer)")
+    db.prepare("insert into session values (?, ?, ?)").run("s1", proj, 1)
     const ins = db.prepare("insert into part values (?, ?, ?, ?, ?)")
     const t = Date.parse("2026-11-25T10:00:00Z")
     const tool = (tool: string, status: string, input: unknown = {}) =>
@@ -350,18 +350,24 @@ describe("the agents' sources", () => {
       },
     })
     // Unchanged: not read again. Once the running one finishes, its session is recounted.
-    expect(await src.sessions!({ s1: got.s1!.sig })).toEqual({})
+    expect(await src.sessions!({ s1: got.s1! })).toEqual({})
     const d2 = new DatabaseSync(file)
     d2.prepare("update part set data = ?, time_updated = ? where id = 'e'").run(
       tool("skill", "completed", { name: "x" }),
       t + 9,
     )
+    d2.prepare("update session set time_updated = 2 where id = 's1'").run() // (it moved on)
     d2.close()
-    const again = await src.sessions!({ s1: got.s1!.sig })
-    expect(again.s1!.days["2026-11-25"]!.skills).toEqual({ fleet: 1, x: 1 })
-    // A server removed from the config after its calls were read keeps them.
+    // A server removed from the config: a recount still names its calls as before.
     fs.rmSync(path.join(proj, "opencode.json"))
-    expect((await src.resolve!(got.s1!.days))["2026-11-25"]!.mcp).toEqual({ echo: 1, linear: 1 })
+    const again = await src.sessions!({ s1: got.s1! })
+    expect(again.s1!.days["2026-11-25"]!.skills).toEqual({ fleet: 1, x: 1 })
+    expect((await src.resolve!(again.s1!.days))["2026-11-25"]!.mcp).toEqual({ echo: 1, linear: 1 })
+    // (a schema whose sessions have no time: the part count alone)
+    const d4 = new DatabaseSync(file)
+    d4.exec("alter table session drop column time_updated")
+    d4.close()
+    expect(Object.keys(await src.sessions!({}))).toEqual(["s1"])
     expect(await opencodeInventory(() => path.join(dir, "none.db")).sessions!({})).toEqual({})
   })
 })

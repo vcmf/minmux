@@ -60,6 +60,7 @@ function useHistory(
     )
     return () => {
       live = false
+      setState((s) => (s === "loading" ? "idle" : s)) // (cancelled: nothing is loading now)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- `inv` read, not watched
   }, [want, win, attempt])
@@ -67,11 +68,13 @@ function useHistory(
 }
 
 export function FleetInventory(props: {
+  shown: boolean // (kept mounted while the graph shows: it reads and renders nothing then)
   agents: FleetAgent[]
   onPick: (ids: string[], label: string) => void
 }) {
   const [win, setWin] = useState<InventoryWindow>("live")
-  const { inv, state, retry } = useHistory(win !== "live", win)
+  const { inv, state, retry } = useHistory(props.shown && win !== "live", win)
+  if (!props.shown) return null
   const today = new Date() // (each render: a view left open over midnight moves on)
   return (
     <div className="fleet-inventory">

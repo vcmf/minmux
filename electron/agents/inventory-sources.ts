@@ -110,11 +110,16 @@ export function opencodeInventory(db = opencodeDb, config = new OpencodeConfig()
   // One finished tool call into its day: a skill by its name; an MCP call by its server as
   // configured where it ran, named now (kept: a server removed later keeps its counts), or
   // kept raw, `<folder>\0<tool>`, for a later config to name.
-  const countCall = async (days: Record<string, Uses>, r: Row) => {
+  const countCall = async (
+    days: Record<string, Uses>,
+    names: Record<string, string>, // `<folder>\0<tool>` → its server, as once configured
+    r: Row,
+  ) => {
     const final = r.status === "completed" || r.status === "error"
     const tool = kitName(r.tool)
-    if (!final || !tool || !Number.isFinite(r.t)) return
-    const u = (days[new Date(r.t).toISOString().slice(0, 10)] ??= { mcp: {}, skills: {} })
+    const at = new Date(typeof r.t === "number" && r.t > 0 ? r.t : NaN)
+    if (!final || !tool || Number.isNaN(at.getTime())) return // (no sane time: not counted)
+    const u = (days[at.toISOString().slice(0, 10)] ??= { mcp: {}, skills: {} })
     const ok = r.status === "completed"
     if (tool === "skill") {
       const n = kitName(r.name)
@@ -122,8 +127,13 @@ export function opencodeInventory(db = opencodeDb, config = new OpencodeConfig()
       return
     }
     if (!tool.includes("_")) return // (a built-in: an MCP tool is `<server>_<tool>`)
-    const server = opencodeServerOf(tool, (await config.servers(r.dir ?? undefined)) ?? [])
-    const key = server ? `=${server}` : `${r.dir ?? ""}\0${tool}`
+    const raw = `${r.dir ?? ""}\0${tool}`
+    // (as configured now, else as it was when last counted: a server removed later keeps its
+    // calls through a recount)
+    const server =
+      opencodeServerOf(tool, (await config.servers(r.dir ?? undefined)) ?? []) ?? names[raw]
+    if (server) names[raw] = server
+    const key = server ? `=${server}` : raw
     const into = ok ? u.mcp : (u.mcpFailed ??= {})
     into[key] = (into[key] ?? 0) + 1
   }
@@ -142,38 +152,61 @@ export function opencodeInventory(db = opencodeDb, config = new OpencodeConfig()
     // Each session's tool calls, recounted only when its fingerprint (how many parts, and the
     // last change to one, through the session index) moved: no reliance on id order or the
     // clock, and a call still running is counted once it finishes (its part changes).
-    async sessions(known: Record<string, string>) {
+    // Each session's tool calls, recounted only when its fingerprint moved: its part count
+    // (from the session index alone) and its own last update. No reliance on id order or the
+    // clock; a call still running is counted once its session moves on. A session that can't
+    // be read is skipped (its entry kept); what was recounted before a failure is kept.
+    async sessions(known: Record<string, SessionEntry>) {
       const file = db()
       const out: Record<string, SessionEntry> = {}
       if (!fs.existsSync(file)) return out
       const open = () => new DatabaseSync(file, { readOnly: true, timeout: 1000 })
-      let list: { id: string; dir: string | null }[]
+      let list: { id: string; dir: string | null; u: number | null }[]
       const d0 = open()
       try {
-        list = d0.prepare("select id, directory dir from session").all() as unknown as typeof list
+        try {
+          list = d0
+            .prepare("select id, directory dir, time_updated u from session")
+            .all() as unknown as typeof list
+        } catch {
+          // (a schema without it: the part count alone says what moved)
+          list = d0
+            .prepare("select id, directory dir, null u from session")
+            .all() as unknown as typeof list
+        }
       } finally {
         d0.close()
       }
       for (let i = 0; i < list.length; i += BATCH) {
-        const d = open() // (never held open between batches: OpenCode keeps writing)
+        let d: DatabaseSync
         try {
-          const sig = d.prepare(
-            "select count(*) n, max(time_updated) u from part where session_id = ?",
-          )
+          d = open() // (never held open between batches: OpenCode keeps writing)
+        } catch {
+          break // (busy now: what's recounted so far is kept, the rest next scan)
+        }
+        try {
+          const count = d.prepare("select count(*) n from part where session_id = ?")
           const parts = d.prepare(
             `select time_created t, json_extract(data, '$.tool') tool,
                json_extract(data, '$.state.status') status,
                json_extract(data, '$.state.input.name') name
-             from part where session_id = ? and json_extract(data, '$.type') = 'tool'`,
+             from part where session_id = ? and data like '%"type":"tool"%'
+               and json_extract(data, '$.type') = 'tool'`,
           )
           for (const ses of list.slice(i, i + BATCH)) {
-            const f = sig.get(ses.id) as { n: number; u: number | null } | undefined
-            const now = `${f?.n ?? 0}:${f?.u ?? 0}`
-            if (known[ses.id] === now) continue
-            const days: Record<string, Uses> = {}
-            for (const r of parts.all(ses.id) as unknown as Row[])
-              await countCall(days, { ...r, dir: ses.dir })
-            out[ses.id] = { sig: now, days }
+            try {
+              const n = (count.get(ses.id) as { n: number } | undefined)?.n ?? 0
+              const sig = `${n}:${ses.u ?? 0}`
+              const had = known[ses.id]
+              if (had?.sig === sig) continue
+              const days: Record<string, Uses> = {}
+              const names = { ...had?.names }
+              for (const r of parts.all(ses.id) as unknown as Row[])
+                await countCall(days, names, { ...r, dir: ses.dir })
+              out[ses.id] = { sig, days, ...(Object.keys(names).length ? { names } : {}) }
+            } catch {
+              // this session can't be read now: its entry stays as it was
+            }
           }
         } finally {
           d.close()

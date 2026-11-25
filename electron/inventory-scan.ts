@@ -26,7 +26,7 @@ export interface InventorySource {
   /** What its config says it has now (servers; skills, null: not supported). */
   loaded(): Promise<{ mcp: string[]; skills: string[] | null }>
   /** Sessions kept in a database (OpenCode's): the ones whose fingerprint changed, recounted. */
-  sessions?(known: Record<string, string>): Promise<Record<string, SessionEntry>>
+  sessions?(known: Record<string, SessionEntry>): Promise<Record<string, SessionEntry>>
   resolve?(days: Record<string, Uses>): Promise<Record<string, Uses>>
   noSkills?: true // skills not supported (Codex): so even when its config can't be read
 }
@@ -35,6 +35,7 @@ export interface InventorySource {
 export interface SessionEntry {
   sig: string
   days: Record<string, Uses>
+  names?: Record<string, string> // (a tool's server as once configured: kept through a recount)
 }
 
 interface FileEntry {
@@ -180,13 +181,30 @@ export async function readCache(file: string): Promise<InventoryCache & { newer?
 /** Write the cache whole, through a temporary file (a crash mid-write leaves the old one). */
 export async function writeCache(file: string, cache: InventoryCache) {
   await fs.promises.mkdir(path.dirname(file), { recursive: true })
-  const tmp = `${file}.tmp` // (one name: a write cut short is written over next time)
+  // (one per process: two workers, one stopping, never write the same one)
+  const tmp = `${file}.${process.pid}.tmp`
   await fs.promises.writeFile(tmp, JSON.stringify(cache))
   await fs.promises.rename(tmp, file)
 }
 
 const inMemory = new Map<string, InventoryCache>()
-const SAVE_MS = 20_000 // (a long first scan keeps what it read even if it's stopped)
+const SAVE_MS = 20_000
+
+/** Temporary files a stopped writer left (an hour old: no write takes that long). */
+async function dropStaleTemps(file: string) {
+  try {
+    const dir = path.dirname(file)
+    const base = `${path.basename(file)}.`
+    for (const n of await fs.promises.readdir(dir))
+      if (n.startsWith(base) && n.endsWith(".tmp")) {
+        const p = path.join(dir, n)
+        const st = await fs.promises.stat(p)
+        if (Date.now() - st.mtimeMs > 60 * 60_000) await fs.promises.rm(p, { force: true })
+      }
+  } catch {
+    // nothing to tidy
+  }
+} // (a long first scan keeps what it read even if it's stopped)
 
 /** Scan every source (only what's new since the cache) and add it all up. */
 export async function scanInventory(
@@ -202,10 +220,13 @@ export async function scanInventory(
   const cache = newer ? (inMemory.get(cacheFile) ?? read) : read
   if (newer) inMemory.set(cacheFile, cache)
   let saved = Date.now()
+  let dirty = false // (written only when something changed)
   const save = async () => {
     saved = Date.now()
-    if (!newer) await writeCache(cacheFile, cache).catch(() => {})
+    if (!newer && dirty) await writeCache(cacheFile, cache).catch(() => {})
+    dirty = false
   }
+  await dropStaleTemps(cacheFile)
   const out: Inventory = {}
   const day = (ms: number) => new Date(ms).toISOString().slice(0, 10)
   for (const src of sources) {
@@ -253,7 +274,10 @@ export async function scanInventory(
           // unreadable for now: what was read before counts, the rest next scan
         }
       }
-      if (e.offset) cache.files[key] = e
+      if (e.offset) {
+        if (e.offset !== had?.offset || e.path !== had?.path) dirty = true
+        cache.files[key] = e
+      }
       // (a file read again from the start that couldn't be: its ledger entry still counts)
       take(e.offset || !had ? e : had)
       if (Date.now() - saved > SAVE_MS) await save()
@@ -266,8 +290,9 @@ export async function scanInventory(
       // replace their entry; the others (deleted ones too) count as they were.
       const mine = (cache.sessions[src.kind] ??= {})
       try {
-        const known = Object.fromEntries(Object.entries(mine).map(([id, e]) => [id, e.sig]))
-        Object.assign(mine, await src.sessions(known))
+        const changed = await src.sessions(mine)
+        if (Object.keys(changed).length) dirty = true
+        Object.assign(mine, changed)
       } catch {
         // its database can't be read now: what the ledger has
       }

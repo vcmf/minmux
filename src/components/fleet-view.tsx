@@ -688,6 +688,10 @@ export function FleetView() {
       ),
     ).length
     setMarked({ ids: new Set(ids), label, repos: repoCount })
+    // (a glide that can't happen soon, its card not placed, isn't done later out of nowhere)
+    window.setTimeout(() => {
+      if (toFind.current === (ids[0] ?? null)) toFind.current = null
+    }, 3000)
     toFind.current = ids[0] ?? null
     const repo = repos.find((r) =>
       [...r.prs.flatMap((p) => p.agents), ...r.branches.flatMap((b) => b.agents), ...r.agents].some(
@@ -738,7 +742,7 @@ export function FleetView() {
         )}
         {/* (kept mounted: its window and history stay for the next look) */}
         <div className="fleet-inventory-host" hidden={mode !== "inventory"}>
-          <FleetInventory agents={fleetAgents} onPick={pick} />
+          <FleetInventory shown={mode === "inventory"} agents={fleetAgents} onPick={pick} />
         </div>
         <canvas className="fleet-edges" ref={canvas} aria-hidden="true" />
         <div

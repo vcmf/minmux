@@ -248,8 +248,8 @@ Researched on real data (2026-11-25):
   file moved (Codex archiving it) keeps its entry; one deleted (Claude's 30-day cleanup) keeps
   its counts, so All means everything since minmux first scanned. It's saved every 20 s during a
   scan and written whole through a temporary file; a newer build's file is never written over.
-  OpenCode's database is a ledger of its sessions the same way: each session's fingerprint (how
-  many parts, and the last change to one, through the session index) is checked, and only the
+  OpenCode's database is a ledger of its sessions the same way: each session's fingerprint (its part
+  count, from the session index alone, and its own last update) is checked, and only the
   ones that moved are recounted whole, their entry replaced (no reliance on id order or the
   clock; a call still running is counted once it finishes). An MCP call is named by its server
   as configured where it ran when it's read (so a server removed later keeps its counts), else
