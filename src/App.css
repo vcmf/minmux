@@ -4353,6 +4353,15 @@ body.resizing-col {
 .fleet-pr.draft {
   border-style: dashed;
 }
+/* A status word stays on one line: the title beside it gives way. */
+.fleet-panel-row .fleet-st {
+  flex: none;
+  white-space: nowrap;
+  margin-left: auto;
+}
+.fleet-panel-row .one {
+  min-width: 0;
+}
 .fleet-st.amber {
   color: var(--amber);
 }
