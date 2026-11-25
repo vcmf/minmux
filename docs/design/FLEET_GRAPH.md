@@ -25,6 +25,8 @@ over both and the sidebar:
   node.
 - A **side panel** for the selection: all repos, one repo (its PRs and sessions), or one agent
   (where it runs, what it's doing, context, sub-agents, MCP servers and skills used vs loaded).
+- An **inventory** of MCP servers and skills per agent kind: use counts, and the ones loaded but
+  never used, over the live sessions or the last 7 or 30 days.
 - **Performance** first: nothing runs while the tab isn't shown, no new GitHub query types,
   nothing on the terminal path, and no extra WebGL context.
 
@@ -120,7 +122,8 @@ sit on a ring, in a stable order (first seen).
 - PR cards reuse the PR graph's looks (`lib/pr-graph` `cardLook`: red for conflicts, failing CI
   or changes requested, amber for CI running, dashed for a draft, an approved tick). A PR the
   lists don't hold shows its number and state only. Agent cards: kind dot, name, sub-agent
-  count; status dot and what it's doing; amber border when it needs you; idle ones dimmed.
+  count; status dot and what it's doing; amber border when it needs you; idle ones dimmed; a
+  thin context meter along the bottom edge, amber past 80% of the window.
 - Edges: agent to PR in the agent kind's colour, PR to repo neutral (red when blocked),
   sub-agent dashed. Selecting an agent tints its path to the repo green.
 - Sub-agents are the live ones: the agent graph drops a turn's finished sub-agents at the next
@@ -147,21 +150,26 @@ sit on a ring, in a stable order (first seen).
 - **An agent**: repo and PR, status and since when, the pane it runs in (Go to pane switches
   to that terminal tab and focuses it), branch, cwd, current action, context use, sub-agents,
   MCP servers and skills (step 5).
+- **Inventory** (step 6), from a Graph | Inventory switch in the header: one column per agent
+  kind, each MCP server and skill with its use count, then the loaded but unused ones; window
+  Live, 7 days, 30 days or All. Codex skill counts are marked "likely". Clicking a row switches
+  to the graph with the sessions that used it highlighted.
 
 ## Data
 
 The fleet adds a pure model (`lib/fleet-model`) over what minmux already tracks, plus two pieces
 of plumbing.
 
-| What                                                | Source                                                                                                                    |
-| --------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
-| Sessions, status, sub-agents, current tool, tokens  | the agent graph (`lib/agent-graph`, hook-fed)                                                                             |
-| Session name and colour                             | `agent-meta` (per pane)                                                                                                   |
-| Which checkout an agent works in                    | the sidebar's rule (`lib/agent-dirs`): Claude's `in` folder and the pane's work checkouts first, the pane's cwd otherwise |
-| Branch and PR (number, state, url) of that checkout | `PaneGitInfo`, as the sidebar shows                                                                                       |
-| `owner/name`                                        | the repo lookup the PR dialog caches per root (`repoFromRemotes`)                                                         |
-| Default branch                                      | `defaultBranchRef` on listed PRs; else the remote's HEAD, read once per repo root and cached                              |
-| PR titles, CI, review; my open PRs                  | the PR lists' `mine` list, refreshed while the Fleet tab is shown                                                         |
+| What                                                | Source                                                                                                                                                                                       |
+| --------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Sessions, status, sub-agents, current tool, tokens  | the agent graph (`lib/agent-graph`, hook-fed)                                                                                                                                                |
+| Session name and colour                             | `agent-meta` (per pane)                                                                                                                                                                      |
+| Which checkout an agent works in                    | the sidebar's rule (`lib/agent-dirs`): Claude's `in` folder and the pane's work checkouts first, the pane's cwd otherwise                                                                    |
+| Branch and PR (number, state, url) of that checkout | `PaneGitInfo`, as the sidebar shows                                                                                                                                                          |
+| `owner/name`                                        | the repo lookup the PR dialog caches per root (`repoFromRemotes`)                                                                                                                            |
+| Default branch                                      | `defaultBranchRef` on listed PRs; else the remote's HEAD, read once per repo root and cached                                                                                                 |
+| PR titles, CI, review; my open PRs                  | the PR lists' `mine` list, refreshed while the Fleet tab is shown                                                                                                                            |
+| Context use                                         | the session's `tokens.context`; the window from Codex's report, from the model in Claude's transcript (200k, or 1M for a 1M-context model), none for OpenCode (tokens shown without a meter) |
 
 - An agent on its repo's default branch hangs off the repo. A branch with no PR shows as a
   branch node. A PR not in `mine` (someone else's, or past the list's 30) keeps the pane's
@@ -191,6 +199,11 @@ Researched on real data (2026-11-25):
   unverified locally.
 - Counted in main per session from events it already handles, sent on the agent event channel.
   Transcripts are read incrementally (one Codex rollout here is 16 GB).
+- **Inventory windows** (step 6): Live adds up the per-session counts. 7 days, 30 days and All
+  come from a history scan in the sessions worker, which already reads past sessions for the
+  agents list: each transcript, rollout or OpenCode session is read once and its counts cached
+  by path, size and mtime, so later scans only read what changed. It runs when the inventory is
+  shown, never on a timer.
 
 ## Rendering
 
@@ -238,8 +251,9 @@ One PR each into `epic/fleet-graph`:
    grow-out; the perf check.
 5. **MCP servers and skills** (#225). Verify the two unknown formats first, then the per
    session counts, Claude's config reads and the side panel lists.
+6. **Inventory** (#228). The history scan and its cache in the sessions worker, the inventory
+   view, highlighting sessions from a row.
 
 ## Open questions
 
 - Repos shown: live sessions plus my open PRs, or also PRs where my review is requested?
-- An MCP and skills inventory across sessions (the canvas's third board): a later step or out?
