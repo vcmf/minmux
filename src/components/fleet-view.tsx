@@ -27,6 +27,7 @@ import { AGENT_STATUS_UI } from "../lib/agent-status-ui"
 import { agentColor, agentInfo } from "../lib/agent-kinds"
 import { agentIcon } from "./agent-icon"
 import { ipc } from "../lib/ipc"
+import { cardInView, keyPan, wheelPan } from "../lib/fleet-camera"
 import { TerminalManager } from "../terminal/terminal-manager"
 
 type Selection = { kind: "repo"; key: string } | { kind: "agent"; id: string } | null
@@ -80,8 +81,6 @@ const goToPane = (paneId: string) => {
 }
 
 export function FleetView() {
-  // The keyboard comes here when the view shows (the parked terminals are inert).
-  const ref = useRef<HTMLDivElement>(null)
   const repos = useFleetModel()
   const [openKey, setOpenKey] = useState<string | null>(null)
   const [sel, setSel] = useState<Selection>(null)
@@ -138,7 +137,8 @@ export function FleetView() {
   // The camera: the world point in the middle of the view. It lives in a ref and is written to
   // the cards' layer as a transform (and the canvas redrawn) on a frame: panning renders nothing.
   const viewport = useRef<HTMLDivElement>(null)
-  // (the keyboard lands on the graph's viewport: arrows pan it at once)
+  // The keyboard lands on the graph's viewport when the view shows (the parked terminals are
+  // inert): arrows pan it at once.
   useEffect(() => viewport.current?.focus(), [])
   const layer = useRef<HTMLDivElement>(null)
   const canvas = useRef<HTMLCanvasElement>(null)
@@ -302,35 +302,23 @@ export function FleetView() {
     }
     const onWheel = (e: WheelEvent) => {
       e.preventDefault()
-      if (e.ctrlKey) return // a pinch (or ctrl+wheel): no zoom yet, and never a pan
-      // (lines and pages in pixels; shift turns a mouse wheel sideways)
-      const unit = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? el.clientHeight : 1
-      const dx = e.deltaX || (e.shiftKey ? e.deltaY : 0)
-      const dy = e.shiftKey && !e.deltaX ? 0 : e.deltaY
-      pan(dx * unit, dy * unit)
+      const d = wheelPan(e, el.clientHeight)
+      if (d) pan(d.dx, d.dy)
     }
-    // The keyboard pans too: arrows a step, Page Up/Down a screen (not from a text field).
+    // The keyboard pans too (not from a text field); Home goes back to the view's centre.
     const onKey = (e: KeyboardEvent) => {
       if ((e.target as HTMLElement).closest("input, textarea, select")) return
-      const step = 80
-      const page = el.clientHeight * 0.8
-      const d: Record<string, [number, number]> = {
-        ArrowLeft: [-step, 0],
-        ArrowRight: [step, 0],
-        ArrowUp: [0, -step],
-        ArrowDown: [0, step],
-        PageUp: [0, -page],
-        PageDown: [0, page],
-      }
-      const m = d[e.key]
-      if (!m) return
+      const d = keyPan(e, el.clientHeight)
+      if (!d) return
       e.preventDefault()
-      pan(m[0], m[1])
+      if (d === "home") {
+        extent.current = bounds(nodesRef.current)
+        moveToRef.current({ x: FLEET.cx, y: FLEET.cy }, true)
+      } else pan(d.dx, d.dy)
     }
     let drag: { x: number; y: number; id: number } | null = null
     const onDown = (e: PointerEvent) => {
       if (e.button !== 0 || (e.target as HTMLElement).closest("button, .fleet-card")) return
-      e.preventDefault() // no text selection following the drag
       drag = { x: e.clientX, y: e.clientY, id: e.pointerId }
       el.setPointerCapture?.(e.pointerId)
       el.classList.add("panning")
@@ -357,15 +345,17 @@ export function FleetView() {
       const id = t.closest<HTMLElement>("[data-node]")?.dataset.node
       const n = id ? nodesRef.current.find((x) => x.id === id) : undefined
       if (!n) return
-      const { x: sx, y: sy } = toScreen(n, cam.current, el.clientWidth, el.clientHeight)
-      const margin = 24
-      const inside =
-        sx - n.w / 2 >= margin &&
-        sx + n.w / 2 <= el.clientWidth - margin &&
-        sy - n.h / 2 >= margin &&
-        sy + n.h / 2 <= el.clientHeight - margin
-      if (!inside) moveToRef.current({ x: n.x, y: n.y }, true)
+      // (the dock of other repos covers the view's top while a repo is open)
+      const dock = el.parentElement?.querySelector<HTMLElement>(".fleet-dock")
+      const top = dock ? dock.getBoundingClientRect().bottom - el.getBoundingClientRect().top : 0
+      const view = { w: el.clientWidth, h: el.clientHeight, top: Math.max(0, top) }
+      if (!cardInView(n, cam.current, view)) moveToRef.current({ x: n.x, y: n.y }, true)
     }
+    // (overflow: clip forbids scrolling; this catches an engine that scrolls anyway)
+    const noScroll = () => {
+      if (el.scrollLeft || el.scrollTop) el.scrollLeft = el.scrollTop = 0
+    }
+    el.addEventListener("scroll", noScroll)
     el.addEventListener("focusin", onFocus)
     el.addEventListener("keydown", onKey)
     el.addEventListener("lostpointercapture", end)
@@ -379,6 +369,7 @@ export function FleetView() {
     return () => {
       cancelAnimationFrame(frame.current)
       cancelAnimationFrame(glide.current)
+      el.removeEventListener("scroll", noScroll)
       el.removeEventListener("focusin", onFocus)
       el.removeEventListener("keydown", onKey)
       el.removeEventListener("lostpointercapture", end)
@@ -393,14 +384,14 @@ export function FleetView() {
 
   const docked = open ? repos.filter((r) => r.key !== open.key) : []
   return (
-    <div className="fleet-view" ref={ref} tabIndex={-1}>
+    <div className="fleet-view">
       <div className="fleet-graph">
         <canvas className="fleet-edges" ref={canvas} aria-hidden="true" />
         <div
           className="fleet-viewport"
           ref={viewport}
           tabIndex={0}
-          aria-label="Fleet graph: arrows and Page Up/Down pan it"
+          aria-label="Fleet graph: arrows and Page Up/Down pan it, Home centres it"
         >
           <div className="fleet-layer" ref={layer}>
             {nodes.map((n) => (
