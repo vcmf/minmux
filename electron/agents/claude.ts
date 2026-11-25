@@ -14,7 +14,7 @@ import { HOOK_WRITER } from "../hook-writer"
 import { TranscriptMeta } from "../transcript-meta"
 import { TranscriptFold } from "../transcript-fold"
 import { addLine as addTokenLine, emptyUsage } from "../transcript-tokens"
-import { ClaudeMcpConfig, addClaudeKitLine, claudeSubagentUses } from "./claude-toolbox"
+import { ClaudeMcpConfig, addClaudeKitLine } from "./claude-toolbox"
 import { SubUses, Tickets, addUses, emptyKit, toToolbox, type Kit } from "./toolbox"
 import type { AgentAdapter, AgentShell, AgentSpec, SessionRules } from "./types"
 import { cdPrefix, workedFolders } from "./worked"
@@ -212,11 +212,6 @@ export function createClaudeAdapter(): AgentAdapter {
         // (a sub-agent's uses are its session's: its whole transcript, its own entry)
         sub: (r, ev) => ev.agentId && subs.put(ev.sessionId, ev.agentId, r.kit),
         toolbox: async (r, ev) => {
-          // (the first time this run sees a session, its finished sub-agents are counted from
-          // their files: a resumed or reopened session keeps them)
-          const tx = ev.transcriptPath
-          if (tx && process.platform !== "win32")
-            await subs.seed(ev.sessionId, () => claudeSubagentUses(tx))
           return toToolbox(
             addUses(r.kit, subs.of(ev.sessionId)),
             await mcpConfig?.servers(subs.root(ev.sessionId, ev.cwd)),

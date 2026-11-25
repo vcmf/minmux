@@ -28,9 +28,7 @@ export function subagentTranscriptPath(
   return `${base}/subagents/agent-${agentId}.jsonl`
 }
 
-/** What a read of a transcript gives: its tokens and, for a session's Stop, its MCP servers and
- *  skills (one read gives both). `sub` sees a sub-agent's read before it's forgotten; `tickets`
- *  keeps a session's snapshots in order. */
+/** What a transcript read gives: tokens, a session Stop's toolbox, sub-agent reads, ordering. */
 export interface ReadView<T> {
   tokens: (v: T) => TokenUsage
   toolbox?: (v: T, ev: AgentEvent) => Promise<Toolbox | undefined>
@@ -61,7 +59,6 @@ export async function tokenEventsForBatch<T = TokenUsage>(
   const out: AgentEvent[] = []
   for (const ev of batch) {
     if (ev.event === "SessionEnd") {
-      view.tickets?.forget(ev.sessionId)
       if (ev.transcriptPath) tracker.forget(ev.transcriptPath)
       continue
     }

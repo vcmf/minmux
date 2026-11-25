@@ -7,8 +7,7 @@ import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import { Worker } from "node:worker_threads"
-import { TranscriptFold } from "../transcript-fold"
-import { bump, emptyKit, kitName, nameList, withTool, type Kit } from "./toolbox"
+import { bump, kitName, nameList, withTool, type Kit } from "./toolbox"
 
 /** `mcp__<server>__<tool>` → its server as the user knows it (`claude_ai_X` → `claude.ai X`). */
 export function mcpServerOf(tool: string): string | undefined {
@@ -102,29 +101,6 @@ const serversIn = (o: unknown): string[] => {
     : []
 }
 
-/** The uses each of a session's sub-agents made, by agent id, from their transcripts
- *  (`<session>/subagents/agent-<id>.jsonl`): read in chunks, off the agent's loop. */
-export async function claudeSubagentUses(transcriptPath: string): Promise<Map<string, Kit>> {
-  const out = new Map<string, Kit>()
-  const dir = transcriptPath.replace(/\.jsonl$/i, "")
-  if (dir === transcriptPath) return out
-  let files: string[]
-  try {
-    files = (await fs.promises.readdir(path.join(dir, "subagents"))).slice(0, 512)
-  } catch {
-    return out
-  }
-  const fold = new TranscriptFold<Kit>(addClaudeKitLine, emptyKit)
-  for (const f of files) {
-    const id = /^agent-(.+)\.jsonl$/.exec(f)?.[1]
-    if (!id) continue
-    const p = path.join(dir, "subagents", f)
-    out.set(id, await fold.update(p))
-    fold.forget(p)
-  }
-  return out
-}
-
 /** What minmux needs from `~/.claude.json`: the user's servers and, per project, its servers
  *  and the switches that turn them on or off. Small, whatever the file's size. */
 export interface ClaudeDigest {
@@ -212,10 +188,7 @@ class DigestWorker {
 
 const REUSE_MS = 30_000
 
-/** The servers Claude's config gives a session: user-wide and per project in `~/.claude.json`
- *  (under CLAUDE_CONFIG_DIR when set), and the project's `.mcp.json` (the nearest, up to the
- *  repo root) when approved there or in a settings file. Read off main's thread; a reading is
- *  reused for half a minute (staleness is harmless). Undefined when nothing could be read. */
+/** The servers Claude's config gives a session (FLEET_GRAPH.md, step 5): read off main's thread. */
 export class ClaudeMcpConfig {
   private digests = new Map<string, { mtime: number; at: number; d: ClaudeDigest | null }>()
   private small = new Map<string, { mtime: number; json: unknown }>()

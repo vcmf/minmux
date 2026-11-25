@@ -231,7 +231,9 @@ Researched on real data (2026-11-25):
 - Verified 2026-11-25 (codex-cli 0.167.1, opencode 1.18.34) with a scratch stdio MCP server.
 - Counted in main per session from events it already handles, sent on the agent event channel.
   A sub-agent's uses count for its session: one entry per sub-agent, replaced (never added to)
-  by each read of its whole transcript, so a continued or still-running sub-agent counts once. A server's configured name is matched to its tool
+  by each read of its whole transcript, so a continued or still-running sub-agent counts once.
+  Sub-agents are read when they stop: after a relaunch, one that finished before it counts again
+  only if it runs again (a session's sub-agent folder can hold gigabytes; it's never re-read). A server's configured name is matched to its tool
   names the way the agents write them (`[^A-Za-z0-9_-]` → `_`); servers the user turned off or
   never approved aren't listed. Config files are re-read at most every 30 s.
   Transcripts are read incrementally (one Codex rollout here is 16 GB).

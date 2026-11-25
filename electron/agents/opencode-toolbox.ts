@@ -26,9 +26,21 @@ export function stripJsonc(src: string): string {
       i += 2
       while (i < src.length && !(src[i] === "*" && src[i + 1] === "/")) i++
       i++
+    } else if (c === ",") {
+      // (a trailing comma, outside strings: dropped)
+      let j = i + 1
+      for (;;) {
+        while (j < src.length && /\s/.test(src[j]!)) j++
+        if (src[j] === "/" && src[j + 1] === "/") while (j < src.length && src[j] !== "\n") j++
+        else if (src[j] === "/" && src[j + 1] === "*") {
+          j = src.indexOf("*/", j + 2)
+          j = j < 0 ? src.length : j + 2
+        } else break
+      }
+      if (src[j] !== "}" && src[j] !== "]") out += c
     } else out += c
   }
-  return out.replace(/,(\s*[}\]])/g, "$1")
+  return out
 }
 
 const PROJECT_CONFIG = ["opencode.json", "opencode.jsonc"]
@@ -57,10 +69,7 @@ export function opencodeServersOf(layers: McpLayer[]): string[] {
   return Object.keys(merged).filter((k) => merged[k]!.enabled !== false)
 }
 
-/** OpenCode's config files and skill folders for a session's folder: the global ones
- *  (`~/.config/opencode`, `OPENCODE_CONFIG`, `OPENCODE_CONFIG_CONTENT` when main has them) and
- *  the project's, from the folder up to its repo root (`opencode.json(c)`, `.opencode/`); skills
- *  also from Claude's folders, which OpenCode reads too. Files are parsed once per change. */
+/** OpenCode's config layers and skill folders for a session (FLEET_GRAPH.md, step 5). */
 export class OpencodeConfig {
   private cache = new Map<string, { mtime: number; layer: McpLayer }>()
   constructor(

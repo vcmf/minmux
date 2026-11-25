@@ -3,12 +3,7 @@ import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import { SubUses, Tickets, addUses, bump, emptyKit, toToolbox, withTool } from "./toolbox"
-import {
-  ClaudeMcpConfig,
-  addClaudeKitLine,
-  claudeSubagentUses,
-  mcpServerOf,
-} from "./claude-toolbox"
+import { ClaudeMcpConfig, addClaudeKitLine, mcpServerOf } from "./claude-toolbox"
 import { addCodexKitLine, codexHomeOf, codexServersIn, CodexMcpConfig } from "./codex-toolbox"
 import {
   OpencodeToolbox,
@@ -80,31 +75,10 @@ describe("toolbox", () => {
     const b = t.take("s")
     expect(t.send("s", b)).toBe(true)
     expect(t.send("s", a)).toBe(false)
+    // A session that ended and resumed keeps counting: an old read can't land last.
     const c = t.take("s")
-    t.forget("s") // (it ended while that read was out)
+    expect(t.send("s", t.take("s"))).toBe(true)
     expect(t.send("s", c)).toBe(false)
-  })
-
-  it("seeding: once per session, every caller waits for it; a running one counts once", async () => {
-    const subs = new SubUses()
-    let loads = 0
-    let release!: () => void
-    const gate = new Promise<void>((r) => (release = r))
-    const load = async () => {
-      loads++
-      await gate
-      return new Map([["bg", { ...emptyKit, mcp: { gh: 2 } }]]) // still running: 2 so far
-    }
-    const first = subs.seed("s", load)
-    let second = false
-    const later = subs.seed("s", load).then(() => (second = true))
-    await Promise.resolve()
-    expect(second).toBe(false) // (waits for the one count)
-    release()
-    await Promise.all([first, later])
-    expect(loads).toBe(1)
-    subs.put("s", "bg", { ...emptyKit, mcp: { gh: 3 } }) // it stops: its whole transcript
-    expect(subs.of("s")!.mcp).toEqual({ gh: 3 })
   })
 
   it("a session's root is its first folder", () => {
@@ -213,28 +187,6 @@ describe("Claude's transcript", () => {
     expect(await c.servers(sub)).toEqual(["u", "p", "m"])
   })
 
-  it("a session's finished sub-agents, counted from their files", async () => {
-    const dir = tmp()
-    const tx = path.join(dir, "s.jsonl")
-    fs.mkdirSync(path.join(dir, "s", "subagents"), { recursive: true })
-    const use = (name: string) =>
-      `${j({ type: "assistant", message: { content: [{ type: "tool_use", name, input: { skill: "r" } }] } })}\n`
-    fs.writeFileSync(
-      path.join(dir, "s", "subagents", "agent-1.jsonl"),
-      use("mcp__gh__x") + use("Skill"),
-    )
-    fs.writeFileSync(path.join(dir, "s", "subagents", "agent-2.jsonl"), use("mcp__gh__y"))
-    const found = await claudeSubagentUses(tx)
-    expect([...found.keys()].sort()).toEqual(["1", "2"])
-    expect([found.get("1")!.mcp, found.get("1")!.skills, found.get("2")!.mcp]).toEqual([
-      { gh: 1 },
-      { r: 1 },
-      { gh: 1 },
-    ])
-    expect((await claudeSubagentUses(path.join(dir, "none.jsonl"))).size).toBe(0)
-    expect((await claudeSubagentUses("not-a-transcript")).size).toBe(0)
-  })
-
   it("one read gives the tokens and the toolbox (on Stop; a sub-agent's gives tokens only)", async () => {
     const dir = tmp()
     const tx = path.join(dir, "s.jsonl")
@@ -336,7 +288,8 @@ describe("Codex's rollout", () => {
 })
 
 describe("OpenCode", () => {
-  it("reads JSONC", () => {
+  it("reads JSONC (a comma inside a string stays)", () => {
+    expect(JSON.parse(stripJsonc('{ "a": "x,]", "b": [1, ], }'))).toEqual({ a: "x,]", b: [1] })
     expect(JSON.parse(stripJsonc('{ // a\n "a": "x//y", /* b */ "c": [1,],\n}'))).toEqual({
       a: "x//y",
       c: [1],

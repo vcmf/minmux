@@ -94,15 +94,16 @@ export function toToolbox(kit: Kit, configured?: string[], skills = true): Toolb
   }
 }
 
-/** Keeps a session's snapshots in order: reads of the same session can finish out of order
- *  (a config read takes longer one time than the next), and an older one must not land last. */
+/** Keeps a session's snapshots in order (reads can finish out of order); never reset, so a
+ *  read from before a session ended and resumed can't land after a newer one. */
 export class Tickets {
   private next = new Map<string, number>()
   private sent = new Map<string, number>()
   /** A ticket for a read starting now. */
   take(session: string): number {
     const n = (this.next.get(session) ?? 0) + 1
-    if (!this.next.has(session) && this.next.size >= MAX_KEYS) {
+    this.next.delete(session)
+    if (this.next.size >= MAX_KEYS * 4) {
       const old = this.next.keys().next().value!
       this.next.delete(old)
       this.sent.delete(old)
@@ -112,14 +113,9 @@ export class Tickets {
   }
   /** May this ticket's result go out (nothing newer went first)? Marks it sent. */
   send(session: string, ticket: number): boolean {
-    if (!this.next.has(session)) return false // (it ended meanwhile)
     if (ticket < (this.sent.get(session) ?? 0)) return false
     this.sent.set(session, ticket)
     return true
-  }
-  forget(session: string) {
-    this.next.delete(session)
-    this.sent.delete(session)
   }
 }
 
@@ -131,25 +127,18 @@ const weight = (k: Kit) =>
     0,
   )
 
-/** Per session, the uses each of its sub-agents made, one entry per sub-agent (its whole
- *  transcript, read when it stops, or when a run first sees the session). A read replaces its
- *  agent's entry, never adds to it, and only when it holds at least as many uses: a continued
- *  sub-agent, one still running at the first read, or two reads finishing out of order all
- *  count once. Sessions are kept when they end (one may be resumed); the least recently used go
- *  past 256. Also where each session started (its project's config). */
+const MAX_AGENTS = 8192 // per session (a long one has hundreds)
+
+/** Per session, each sub-agent's uses (one entry each, replaced by a fuller read); and where
+ *  each session started. See FLEET_GRAPH.md, "MCP servers and skills". */
 export class SubUses {
   private agents = new Map<string, Map<string, Kit>>()
   private roots = new Map<string, string>()
-  private seen = new Set<string>()
 
   /** `m`'s entry for `k`, moved to the newest end (least recently used go first). */
   private touch<V>(m: Map<string, V>, k: string, v: V) {
     m.delete(k)
-    if (m.size >= MAX_KEYS) {
-      const old = m.keys().next().value!
-      m.delete(old)
-      if (m === (this.agents as unknown)) this.seen.delete(old) // (counted again if it comes back)
-    }
+    if (m.size >= MAX_KEYS) m.delete(m.keys().next().value!)
     m.set(k, v)
   }
 
@@ -162,30 +151,12 @@ export class SubUses {
     return cwd
   }
 
-  private loads = new Map<string, Promise<void>>()
-  /** The first time a session is asked about (this run, or since it was let go), its
-   *  sub-agents are counted from their files by `load`; every caller waits for that one count,
-   *  so no snapshot goes out without it. */
-  seed(session: string, load: () => Promise<Map<string, Kit>>): Promise<void> {
-    if (this.seen.has(session)) return this.loads.get(session) ?? Promise.resolve()
-    if (this.seen.size >= MAX_KEYS * 4) this.seen.clear()
-    this.seen.add(session)
-    const p = load()
-      .then((found) => {
-        for (const [agent, kit] of found) this.put(session, agent, kit)
-      })
-      .catch(() => {})
-      .finally(() => this.loads.delete(session))
-    this.loads.set(session, p)
-    return p
-  }
-
   /** One sub-agent's uses, from a read of its whole transcript. */
   put(session: string, agent: string, kit: Kit) {
     const m = this.agents.get(session) ?? new Map<string, Kit>()
     const had = m.get(agent)
     if (!had || weight(kit) >= weight(had)) {
-      if (!had && m.size >= MAX_KEYS) return
+      if (!had && m.size >= MAX_AGENTS) return
       m.set(agent, kit)
     }
     this.touch(this.agents, session, m)
