@@ -349,14 +349,15 @@ describe("the agents' sources", () => {
         skills: { fleet: 1 },
       },
     })
-    // Unchanged: not read again. Once the running one finishes, its session is recounted.
-    expect(await src.sessions!({ s1: got.s1! })).toEqual({})
+    // A call still running: read again each time (same counts) until it's done.
+    expect(got.s1!.open).toBe(true)
+    expect((await src.sessions!({ s1: got.s1! })).s1!.days).toEqual(got.s1!.days)
     const d2 = new DatabaseSync(file)
     d2.prepare("update part set data = ?, time_updated = ? where id = 'e'").run(
       tool("skill", "completed", { name: "x" }),
       t + 9,
     )
-    d2.prepare("update session set time_updated = 2 where id = 's1'").run() // (it moved on)
+    // (no new part, no session update: it was running at the last count, so it's read again)
     d2.close()
     // A server removed from the config: a recount still names its calls as before.
     fs.rmSync(path.join(proj, "opencode.json"))

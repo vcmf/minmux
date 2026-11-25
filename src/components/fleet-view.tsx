@@ -654,6 +654,8 @@ export function FleetView() {
   }, [mode])
   // The first marked session comes into view once its card is placed (its repo may be opening).
   const toFind = useRef<string | null>(null)
+  const pickTimer = useRef<number | undefined>(undefined)
+  useEffect(() => () => window.clearTimeout(pickTimer.current), [])
   useEffect(() => {
     const id = toFind.current
     if (!id) return
@@ -688,10 +690,10 @@ export function FleetView() {
       ),
     ).length
     setMarked({ ids: new Set(ids), label, repos: repoCount })
-    // (a glide that can't happen soon, its card not placed, isn't done later out of nowhere)
-    window.setTimeout(() => {
-      if (toFind.current === (ids[0] ?? null)) toFind.current = null
-    }, 3000)
+    // (a glide that can't happen soon, its card not placed, isn't done later out of nowhere;
+    // a newer pick's own timer replaces this one)
+    window.clearTimeout(pickTimer.current)
+    pickTimer.current = window.setTimeout(() => (toFind.current = null), 3000)
     toFind.current = ids[0] ?? null
     const repo = repos.find((r) =>
       [...r.prs.flatMap((p) => p.agents), ...r.branches.flatMap((b) => b.agents), ...r.agents].some(
@@ -813,18 +815,21 @@ export function FleetView() {
           </div>
         )}
       </div>
-      <FleetPanel
-        repos={repos}
-        open={open}
-        sel={shownSel}
-        agentOf={(id) => lookup.get(nodeId.agent(id))}
-        onRepo={(key) => {
-          if (openKey !== key) toggle(key)
-          else setSel({ kind: "repo", key })
-        }}
-        onAgent={(id) => setSel({ kind: "agent", id })}
-        onAll={closeAll}
-      />
+      {/* (inert under the inventory: a click there would change the graph out of sight) */}
+      <div className="fleet-panel-host" inert={mode === "inventory"}>
+        <FleetPanel
+          repos={repos}
+          open={open}
+          sel={shownSel}
+          agentOf={(id) => lookup.get(nodeId.agent(id))}
+          onRepo={(key) => {
+            if (openKey !== key) toggle(key)
+            else setSel({ kind: "repo", key })
+          }}
+          onAgent={(id) => setSel({ kind: "agent", id })}
+          onAll={closeAll}
+        />
+      </div>
     </div>
   )
 }

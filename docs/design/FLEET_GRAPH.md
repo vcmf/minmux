@@ -251,9 +251,12 @@ Researched on real data (2026-11-25):
   OpenCode's database is a ledger of its sessions the same way: each session's fingerprint (its part
   count, from the session index alone, and its own last update) is checked, and only the
   ones that moved are recounted whole, their entry replaced (no reliance on id order or the
-  clock; a call still running is counted once it finishes). An MCP call is named by its server
-  as configured where it ran when it's read (so a server removed later keeps its counts), else
-  kept raw for a later config to name; a tool no config names isn't MCP.
+  clock). A session that had a call still running at its last count is read again each scan
+  until none is, so a call that finishes (or is aborted) without a new part is counted. An MCP
+  call is named by its server as configured where it ran when it's read, and the name is kept
+  through recounts (so a server removed later keeps its counts); else it stays raw for a later
+  config to name; a tool no config names isn't MCP. Checked on real data: forks and resumes
+  don't repeat calls across files (0 of 58,873 Claude tool uses, 0 of 2,757 Codex calls).
 - A scan runs when a history window is shown, one at a time, a result reused for 30 s; never on
   a timer. Measured here: the first scan of all history 90 s (in the worker), the next 0.1 s.
 - **The view**: a Graph | Inventory switch at the graph's top right. The inventory covers the

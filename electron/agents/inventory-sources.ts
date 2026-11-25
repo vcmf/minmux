@@ -147,16 +147,12 @@ export function opencodeInventory(db = opencodeDb, config = new OpencodeConfig()
         skills: await config.skills(undefined),
       }
     },
-    // The database's tool calls, kept raw (`<folder>\0<tool>` → calls) and made into servers
-    // only when the result is built: one whose config can't be read now isn't lost.
-    // Each session's tool calls, recounted only when its fingerprint (how many parts, and the
-    // last change to one, through the session index) moved: no reliance on id order or the
-    // clock, and a call still running is counted once it finishes (its part changes).
-    // Each session's tool calls, recounted only when its fingerprint moved: its part count
-    // (from the session index alone) and its own last update. No reliance on id order or the
-    // clock; a call still running is counted once its session moves on. A session that can't
-    // be read is skipped (its entry kept); what was recounted before a failure is kept.
-    async sessions(known: Record<string, SessionEntry>) {
+    // Sessions recounted when their fingerprint moved (part count, from the index alone, and
+    // the session's own last update), or when a call was still running at their last count.
+    async sessions(
+      known: Record<string, SessionEntry>,
+      onBatch?: (done: Record<string, SessionEntry>) => Promise<void>,
+    ) {
       const file = db()
       const out: Record<string, SessionEntry> = {}
       if (!fs.existsSync(file)) return out
@@ -193,21 +189,36 @@ export function opencodeInventory(db = opencodeDb, config = new OpencodeConfig()
              from part where session_id = ? and data like '%"type":"tool"%'
                and json_extract(data, '$.type') = 'tool'`,
           )
+          const batch: Record<string, SessionEntry> = {}
+          let k = 0
           for (const ses of list.slice(i, i + BATCH)) {
             try {
               const n = (count.get(ses.id) as { n: number } | undefined)?.n ?? 0
               const sig = `${n}:${ses.u ?? 0}`
               const had = known[ses.id]
-              if (had?.sig === sig) continue
+              // (a call running at the last count can finish without a new part or a session
+              // update: such a session is read again until none is left running)
+              if (had?.sig === sig && !had.open) continue
               const days: Record<string, Uses> = {}
               const names = { ...had?.names }
+              let open = false
               for (const r of parts.all(ses.id) as unknown as Row[])
-                await countCall(days, names, { ...r, dir: ses.dir })
-              out[ses.id] = { sig, days, ...(Object.keys(names).length ? { names } : {}) }
+                if (r.status === "completed" || r.status === "error")
+                  await countCall(days, names, { ...r, dir: ses.dir })
+                else open = true
+              batch[ses.id] = {
+                sig,
+                days,
+                ...(Object.keys(names).length ? { names } : {}),
+                ...(open ? { open: true as const } : {}),
+              }
             } catch {
               // this session can't be read now: its entry stays as it was
             }
+            if (++k % 20 === 0) await new Promise((r) => setImmediate(r)) // (others' turn)
           }
+          Object.assign(out, batch)
+          await onBatch?.(batch) // (kept as it goes: a stopped worker loses one batch at most)
         } finally {
           d.close()
         }

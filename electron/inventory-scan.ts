@@ -26,7 +26,10 @@ export interface InventorySource {
   /** What its config says it has now (servers; skills, null: not supported). */
   loaded(): Promise<{ mcp: string[]; skills: string[] | null }>
   /** Sessions kept in a database (OpenCode's): the ones whose fingerprint changed, recounted. */
-  sessions?(known: Record<string, SessionEntry>): Promise<Record<string, SessionEntry>>
+  sessions?(
+    known: Record<string, SessionEntry>,
+    onBatch?: (done: Record<string, SessionEntry>) => Promise<void>,
+  ): Promise<Record<string, SessionEntry>>
   resolve?(days: Record<string, Uses>): Promise<Record<string, Uses>>
   noSkills?: true // skills not supported (Codex): so even when its config can't be read
 }
@@ -36,6 +39,7 @@ export interface SessionEntry {
   sig: string
   days: Record<string, Uses>
   names?: Record<string, string> // (a tool's server as once configured: kept through a recount)
+  open?: true // a call was still running: read again next time
 }
 
 interface FileEntry {
@@ -188,7 +192,7 @@ export async function writeCache(file: string, cache: InventoryCache) {
 }
 
 const inMemory = new Map<string, InventoryCache>()
-const SAVE_MS = 20_000
+const SAVE_MS = 20_000 // (a long first scan keeps what it read even if it's stopped)
 
 /** Temporary files a stopped writer left (an hour old: no write takes that long). */
 async function dropStaleTemps(file: string) {
@@ -204,7 +208,7 @@ async function dropStaleTemps(file: string) {
   } catch {
     // nothing to tidy
   }
-} // (a long first scan keeps what it read even if it's stopped)
+}
 
 /** Scan every source (only what's new since the cache) and add it all up. */
 export async function scanInventory(
@@ -251,6 +255,9 @@ export async function scanInventory(
     // a UUID, a rollout's time and id), so a file moved (Codex archiving it) keeps its place
     // and counts, and one deleted (Claude's cleanup) keeps its counts. Nothing leaves it.
     const listed = new Set<string>()
+    // (two files of one name: the one at the entry's place is read, the other left)
+    const at = (f: { file: string }) => cache.files[`${src.kind}:${path.basename(f.file)}`]?.path
+    files.sort((a, b) => Number(at(b) === b.file) - Number(at(a) === a.file))
     for (const f of files) {
       if (signal?.aborted) break
       const key = `${src.kind}:${path.basename(f.file)}`
@@ -275,7 +282,7 @@ export async function scanInventory(
         }
       }
       if (e.offset) {
-        if (e.offset !== had?.offset || e.path !== had?.path) dirty = true
+        if (e.offset !== had?.offset || e.path !== had?.path || e.mtime !== had?.mtime) dirty = true
         cache.files[key] = e
       }
       // (a file read again from the start that couldn't be: its ledger entry still counts)
@@ -290,9 +297,18 @@ export async function scanInventory(
       // replace their entry; the others (deleted ones too) count as they were.
       const mine = (cache.sessions[src.kind] ??= {})
       try {
-        const changed = await src.sessions(mine)
-        if (Object.keys(changed).length) dirty = true
-        Object.assign(mine, changed)
+        const take = (batch: Record<string, SessionEntry>) => {
+          if (!Object.keys(batch).length) return
+          Object.assign(mine, batch)
+          dirty = true
+        }
+        // (each batch kept as it's done, and saved now and then; then the whole answer)
+        take(
+          await src.sessions(mine, async (batch) => {
+            take(batch)
+            if (Date.now() - saved > SAVE_MS) await save()
+          }),
+        )
       } catch {
         // its database can't be read now: what the ledger has
       }
