@@ -71,4 +71,5 @@ export const turning = (m: MotionState) =>
 
 /** Whether the loop has anything to do: when not, it stops (and costs nothing). */
 export const moving = (m: MotionState) =>
-  m.shown && (turning(m) || (!m.reduced && (m.working || m.growing)))
+  m.shown &&
+  (turning(m) || (!m.reduced && (m.growing || (m.working && m.sinceInput < IDLE_STOP_MS))))

@@ -141,5 +141,9 @@ describe("the loop's rules", () => {
     expect(moving({ ...still, sinceInput: 0, working: true, reduced: true })).toBe(false)
     expect(moving({ ...still, working: true, shown: false })).toBe(false) // hidden: nothing
     expect(moving({ ...still, sinceInput: 0, growing: true })).toBe(true)
+    // dots stop too after a long idle (nobody is watching)
+    expect(moving({ ...still, open: false, working: true, sinceInput: IDLE_STOP_MS + 1 })).toBe(
+      false,
+    )
   })
 })

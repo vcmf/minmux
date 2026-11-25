@@ -4295,6 +4295,9 @@ body.resizing-col {
 .fleet-view .ok {
   color: var(--accent);
 }
+.fleet-view .done {
+  color: var(--blue);
+}
 .fleet-root {
   position: absolute;
   border: none;

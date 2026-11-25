@@ -94,7 +94,7 @@ const agentDoing = (a: FleetAgent) =>
 
 /** The class a status's word takes (no dot: the agent's icon says which agent it is). */
 const statusTone = (status: FleetAgent["status"]) =>
-  status === "working" ? "ok" : status === "waiting" ? "warn" : "dim"
+  status === "working" ? "ok" : status === "waiting" ? "warn" : status === "done" ? "done" : "dim"
 
 const goToPane = (paneId: string) => {
   useStore.getState().focusSession(paneId)
@@ -123,6 +123,8 @@ export function FleetView() {
       openRoots.current = []
       setOpenKey(null)
       setSel(null)
+      pins.current.clear()
+      setPinCount(0)
     } else if (open && open.key !== openKey) {
       setOpenKey(open.key)
       setSel((s) => (s?.kind === "repo" && s.key === openKey ? { kind: "repo", key: open.key } : s))
@@ -136,19 +138,35 @@ export function FleetView() {
   const pins = useRef(new Map<string, { x: number; y: number }>())
   const [pinCount, setPinCount] = useState(0)
   const openedAt = useRef(0)
-  const place = useCallback((repo: FleetRepo | null, all: FleetRepo[]): FleetNode[] => {
-    const base = repo ? relax(openLayout(repo, theta.current)) : overviewLayout(all)
-    if (!pins.current.size) return base
-    return base.map((n) => {
-      const p = pins.current.get(n.id)
-      return p ? { ...n, x: p.x, y: p.y } : n
-    })
-  }, [])
-  const nodes = useMemo(
-    () => place(open, repos),
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- pinCount: the pins changed
-    [open, repos, place, pinCount],
+  const [, setPinVersion] = useState(0) // a pin moved: render with it
+  const reduced = useRef(
+    typeof window !== "undefined" &&
+      !!window.matchMedia?.("(prefers-reduced-motion: reduce)").matches,
   )
+  // The one place positions come from, for React and the motion loop alike: the open repo at
+  // its angle, growing out while it opens, pinned cards where they were left (fixed in the overlap
+  // pass, their sub-agents moved with them).
+  const layoutNow = useCallback((repo: FleetRepo | null, all: FleetRepo[], now: number) => {
+    if (!repo) return overviewLayout(all)
+    let ns = openLayout(repo, theta.current)
+    const pinned = pins.current
+    if (pinned.size) {
+      const shift = new Map<string, { dx: number; dy: number }>()
+      ns = ns.map((n) => {
+        const p = pinned.get(n.id)
+        if (!p) return n
+        shift.set(n.id, { dx: p.x - n.x, dy: p.y - n.y })
+        return { ...n, x: p.x, y: p.y }
+      })
+      ns = ns.map((n) => {
+        const d = !pinned.has(n.id) && n.parent ? shift.get(n.parent) : undefined
+        return d ? { ...n, x: n.x + d.dx, y: n.y + d.dy } : n
+      })
+    }
+    ns = relax(ns, 40, pinned.size ? new Set(pinned.keys()) : undefined)
+    return reduced.current ? ns : grown(ns, (now - openedAt.current) / GROW_MS)
+  }, [])
+  const nodes = layoutNow(open, repos, performance.now())
 
   const lookup = useMemo(() => {
     const m = new Map<string, NodeInfo>()
@@ -196,10 +214,6 @@ export function FleetView() {
       drawRef.current()
     })
   }, [])
-  const reduced = useRef(
-    typeof window !== "undefined" &&
-      !!window.matchMedia?.("(prefers-reduced-motion: reduce)").matches,
-  )
   const glide = useRef(0)
   const moveTo = useCallback(
     (to: Camera, smooth: boolean, done?: () => void) => {
@@ -243,10 +257,11 @@ export function FleetView() {
     if (shownView.current !== viewId) {
       const first = shownView.current === null
       shownView.current = viewId
-      extent.current = bounds(nodes)
+      // (the layout grown out, not its first frame at the circle: the camera can reach it all)
+      extent.current = bounds(layoutNow(open, repos, Infinity))
       moveTo({ x: FLEET.cx, y: FLEET.cy }, !first && !!open)
     } else {
-      extent.current = unionBox(extent.current, bounds(nodes))
+      extent.current = unionBox(extent.current, bounds(layoutNow(open, repos, Infinity)))
       apply()
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- `open` only picks the glide
@@ -256,6 +271,7 @@ export function FleetView() {
     (key: string) => {
       const closing = openKey === key
       openRoots.current = closing ? [] : (repos.find((r) => r.key === key)?.roots ?? [])
+      if (!closing) openedAt.current = reduced.current ? 0 : performance.now()
       setOpenKey(closing ? null : key)
       setSel(closing ? null : { kind: "repo", key })
       setView((v) => v + 1)
@@ -397,11 +413,12 @@ export function FleetView() {
     [],
   )
   const paint = useCallback(
-    (now: number) => {
-      const repo = openRef.current
-      let ns = place(repo, reposRef.current)
-      if (repo && !reduced.current) ns = grown(ns, (now - openedAt.current) / GROW_MS)
+    (now: number, relayout = true) => {
+      if (!relayout) return drawRef.current() // (dots only: the cards haven't moved)
+      const ns = layoutNow(openRef.current, reposRef.current, now)
       nodesRef.current = ns
+      // (the turn carries cards past where they started: the camera can follow them)
+      extent.current = unionBox(extent.current, bounds(ns))
       const els = layer.current?.querySelectorAll<HTMLElement>("[data-node]") ?? []
       const at = new Map(ns.map((n) => [n.id, n]))
       for (const el of els) {
@@ -412,24 +429,32 @@ export function FleetView() {
       }
       drawRef.current()
     },
-    [place],
+    [layoutNow],
   )
   const wake = useCallback(() => {
     const m = motion.current
     if (m.on || !moving(state(performance.now()))) return
     m.on = true
     m.last = performance.now()
+    // Two paces: the slow turn relays the cards out about 15 times a second (it moves ~2 px a
+    // second); the dots and the brief grow-out run every frame, where 15 would stutter. A frame
+    // with only dots redraws just the canvas.
     const tick = (now: number) => {
-      if (now - m.last >= FRAME_MS) {
-        const st = state(now)
-        if (turning(st)) theta.current += Math.min(now - m.last, 250) * TURN_RAD_PER_MS
-        m.last = now
-        paint(now)
-        if (!moving(st)) {
-          m.on = false
-          return
-        }
+      const st = state(now)
+      if (!moving(st)) {
+        m.on = false
+        return
       }
+      const turns = turning(st)
+      if (st.growing) {
+        m.last = now
+        paint(now, true)
+      } else if (turns && now - m.last >= FRAME_MS) {
+        theta.current += Math.min(now - m.last, 250) * TURN_RAD_PER_MS
+        m.last = now
+        paint(now, true)
+      } else if (st.working && !st.reduced) paint(now, false)
+      else if (!turns) m.last = now // (a turn starting later counts from now, not from long ago)
       m.raf = requestAnimationFrame(tick)
     }
     m.raf = requestAnimationFrame(tick)
@@ -437,12 +462,19 @@ export function FleetView() {
   // A repo opening grows its cards out of its circle (and starts a turn from where it is).
   useLayoutEffect(() => {
     if (!open) return
-    openedAt.current = reduced.current ? 0 : performance.now()
+    paint(performance.now()) // (the first frame grown from the circle, before anything shows)
     wake()
     // eslint-disable-next-line react-hooks/exhaustive-deps -- once per open view
   }, [viewId])
   wakeRef.current = wake
   paintRef.current = paint
+  // Pins whose card left (its agent ended) go too.
+  useEffect(() => {
+    let gone = false
+    for (const id of pins.current.keys())
+      if (!nodes.some((n) => n.id === id)) gone = pins.current.delete(id) || gone
+    if (gone) setPinCount(pins.current.size)
+  }, [nodes])
   useEffect(() => wake(), [working, nodes, wake])
   useEffect(() => {
     let idle: ReturnType<typeof setTimeout> | undefined
@@ -513,9 +545,24 @@ export function FleetView() {
       const n = card && nodesRef.current.find((x) => x.id === card.dataset.node)
       if (e.button !== 0 || !n || n.kind === "root") return
       pin = { id: n.id, x: e.clientX, y: e.clientY, nx: n.x, ny: n.y, moved: false }
+      el.setPointerCapture?.(e.pointerId) // (a release anywhere ends it)
+    }
+    const onCardUp = (released: boolean) => {
+      if (pin?.moved) {
+        if (released) {
+          // (the click that ends a drag isn't one; none comes: the guard goes on the next task)
+          const eat = (e: MouseEvent) => e.stopPropagation()
+          el.addEventListener("click", eat, { capture: true, once: true })
+          setTimeout(() => el.removeEventListener("click", eat, { capture: true }), 0)
+        }
+        setPinCount(pins.current.size)
+        setPinVersion((v) => v + 1)
+      }
+      pin = null
     }
     const onCardMove = (e: PointerEvent) => {
       if (!pin) return
+      if ((e.buttons & 1) === 0) return onCardUp(false) // released where we didn't hear it
       const dx = e.clientX - pin.x
       const dy = e.clientY - pin.y
       if (!pin.moved && Math.hypot(dx, dy) < 5) return
@@ -523,14 +570,7 @@ export function FleetView() {
       pins.current.set(pin.id, { x: pin.nx + dx, y: pin.ny + dy })
       paintRef.current(performance.now())
     }
-    const onCardUp = () => {
-      if (pin?.moved) {
-        // (the click that ends a drag isn't one)
-        el.addEventListener("click", (e) => e.stopPropagation(), { capture: true, once: true })
-        setPinCount(pins.current.size)
-      }
-      pin = null
-    }
+
     let drag: { x: number; y: number; id: number } | null = null
     const onDown = (e: PointerEvent) => {
       onCardDown(e)
@@ -551,7 +591,7 @@ export function FleetView() {
       el.classList.remove("panning")
     }
     const onUp = (e: PointerEvent) => {
-      onCardUp()
+      onCardUp(e.type === "pointerup")
       if (drag && e.pointerId === drag.id) end()
     }
     // A card the keyboard (or anything else) focuses comes into view: the camera glides to it.
@@ -569,7 +609,13 @@ export function FleetView() {
       const view = { w: el.clientWidth, h: el.clientHeight, top: Math.max(0, top) }
       if (!cardInView(n, cam.current, view)) moveToRef.current({ x: n.x, y: n.y }, true)
     }
+    const unhover = () => {
+      hovered.current = false
+      wakeRef.current()
+    }
     el.addEventListener("pointerover", onOver)
+    el.addEventListener("pointerleave", unhover)
+    window.addEventListener("blur", unhover)
     el.addEventListener("focusin", onFocus)
     el.addEventListener("keydown", onKey)
     el.addEventListener("lostpointercapture", end)
@@ -584,6 +630,8 @@ export function FleetView() {
       cancelAnimationFrame(frame.current)
       cancelAnimationFrame(glide.current)
       el.removeEventListener("pointerover", onOver)
+      el.removeEventListener("pointerleave", unhover)
+      window.removeEventListener("blur", unhover)
       el.removeEventListener("focusin", onFocus)
       el.removeEventListener("keydown", onKey)
       el.removeEventListener("lostpointercapture", end)

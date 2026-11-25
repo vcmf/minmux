@@ -152,7 +152,7 @@ export function openLayout(repo: FleetRepo, theta = 0): FleetNode[] {
 // clears them on either axis. That's continuous in the cards' positions (no axis choice that
 // flips), so a layout turned a little moves its cards a little: it can run on every frame.
 /** Cards that overlap pushed apart (roots stay put), until still. */
-export function relax(nodes: FleetNode[], passes = 40): FleetNode[] {
+export function relax(nodes: FleetNode[], passes = 40, fixed?: Set<string>): FleetNode[] {
   const ns = nodes.map((n) => ({ ...n }))
   for (let pass = 0; pass < passes; pass++) {
     let moved = false
@@ -160,8 +160,8 @@ export function relax(nodes: FleetNode[], passes = 40): FleetNode[] {
       for (let j = i + 1; j < ns.length; j++) {
         const n = ns[i]!
         const m = ns[j]!
-        const nf = n.kind === "root"
-        const mf = m.kind === "root"
+        const nf = n.kind === "root" || !!fixed?.has(n.id)
+        const mf = m.kind === "root" || !!fixed?.has(m.id)
         if (nf && mf) continue
         const dx = m.x - n.x
         const dy = m.y - n.y
