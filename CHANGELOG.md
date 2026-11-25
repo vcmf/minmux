@@ -3,6 +3,12 @@
 What changed in each minmux release, newest first. Generated from the pull request titles by
 [git-cliff](https://git-cliff.org): edit `cliff.toml`, not this file.
 
+## [0.1.69](https://github.com/vcmf/minmux/releases/tag/v0.1.69) - 2026-11-25
+
+### Added
+
+- Zoom, richer agent cards, a context bar, PR links in the dialog ([#238](https://github.com/vcmf/minmux/pull/238))
+
 ## [0.1.68](https://github.com/vcmf/minmux/releases/tag/v0.1.68) - 2026-11-25
 
 ### Added
