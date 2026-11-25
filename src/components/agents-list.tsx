@@ -279,8 +279,11 @@ export function AgentsList() {
       }
     return undefined
   }
+  // The pane on screen (none behind a view): its row's border. The folder filter keeps the context
+  // tab's cwd, so opening a view doesn't change what "This folder" lists.
   const activePaneId = useStore((s) => shownTerminalTab(s)?.activeSessionId)
-  const activeCwd = activePaneId ? terminals[activePaneId]?.cwd : undefined
+  const contextPaneId = useStore((s) => s.tabs.find((t) => t.id === s.activeTabId)?.activeSessionId)
+  const activeCwd = contextPaneId ? terminals[contextPaneId]?.cwd : undefined
   const scheme = useStore((s) => activeTheme(s).scheme)
   const listed = platform !== "win32" // past sessions aren't listed on Windows yet
   const [result, setResult] = useState<PastSessionsResult | null>(null)

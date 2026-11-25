@@ -2032,4 +2032,20 @@ describe("store — view tabs (docs/design/FLEET_GRAPH.md)", () => {
     st().openView("fleet")
     expect(st().searchOpen).toBe(false)
   })
+  it("opening a file behind a view shows the context tab, even when it's already there", () => {
+    twoTabs()
+    st().openView("fleet")
+    st().openFile("/w/a.ts")
+    expect(st().activeView).toBeNull()
+    st().openView("fleet")
+    st().openFile("/w/a.ts", { line: 40 }) // already open and focused: still a request to show
+    expect(st().activeView).toBeNull()
+  })
+
+  it("focusing a pane in another tab doesn't show (or reveal) the context tab", () => {
+    const { a } = twoTabs()
+    st().openView("fleet")
+    st().setActivePane(a, st().tabs.find((t) => t.id === a)!.activeSessionId)
+    expect(st().activeView).toBe("fleet")
+  })
 })

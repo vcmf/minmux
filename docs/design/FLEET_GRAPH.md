@@ -57,9 +57,11 @@ kind of tab beside the terminal ones instead of living inside one.
   (drag spring, moving a terminal, new tab, `focusSession`). The context tab closing doesn't
   count: the next tab becomes the context, still behind the view. Choosing the context tab
   itself (a click, the drag spring) clears `activeView` explicitly.
-- Actions that put something in a pane or focus one (splits, new terminal, open folder or file,
-  Go to pane, moving a terminal) leave the view first, without counting the context tab as
-  seen; it's revealed only if it's the tab that ends up on screen.
+- Actions that put something in a pane (splits, new terminal, moving a terminal) run behind the
+  view and leave it afterwards only if they changed the context tab; one that did nothing keeps
+  the view. Navigation (Go to pane, focusing a pane, opening a folder or file) shows its target
+  in the context tab. A switch to another tab leaves the view in the same update, so the context
+  tab is never on screen (or counted as seen) in between.
 - A selector, `shownTerminalTab(state)`, returns the active terminal tab only when no view is
   shown. Readers that ask "what is on screen" (renderer, attention, highlights, the palette's
   tab list, find, the status bar's driving pane) check the view; readers that ask "which tab is

@@ -572,20 +572,26 @@ const SHOWS_TERMINALS = [
   "openFolderInSplit",
   "splitPaneAt",
   "newSurface",
-  "openFolder",
-  "openFile",
   "resumeInSplit",
   "moveTerminal",
   "moveSurface",
 ] as const satisfies readonly (keyof AppState)[]
 // Navigation: shows its target even when nothing else changes (it was already focused).
-const NAVIGATES = ["setActivePane", "focusSession"] as const satisfies readonly (keyof AppState)[]
+const NAVIGATES = [
+  "setActivePane",
+  "focusSession",
+  "openFile",
+  "openFolder",
+] as const satisfies readonly (keyof AppState)[]
 
-// Whether a navigation's target exists: focusSession(sessionId), setActivePane(tabId, sessionId).
-const navTarget = (state: AppState, name: (typeof NAVIGATES)[number], args: unknown[]) =>
-  name === "focusSession"
-    ? state.tabs.some((t) => allSessionIds(t.root).includes(args[0] as string))
-    : state.tabs.some((t) => t.id === args[0])
+// Whether a navigation landed on the context tab: an open entry or a focused pane there.
+const navTarget = (state: AppState, name: (typeof NAVIGATES)[number], args: unknown[]) => {
+  const tab = state.tabs.find((t) => t.id === state.activeTabId)
+  if (!tab) return false
+  if (name === "focusSession") return allSessionIds(tab.root).includes(args[0] as string)
+  if (name === "setActivePane") return args[0] === tab.id && !!findPane(tab.root, args[1] as string)
+  return true // openFile / openFolder: they open into (or focus in) the context tab
+}
 
 /** View tabs: every set goes through `leavingView`; pane actions leave a shown view after them. */
 const viewRule =
