@@ -37,4 +37,13 @@ describe("fleet-toolbox", () => {
     })
     expect(skillList({ mcp: {}, skills: null })).toBeNull()
   })
+
+  it("one call, a down server already used, nothing loaded", () => {
+    const l = mcpList({ mcp: { a: 1 }, mcpDown: ["a"], skills: {} })
+    expect(l.used).toEqual([{ name: "a", uses: 1 }])
+    expect(skillList({ mcp: {}, skills: { s: 1 } })).toEqual({
+      used: [{ name: "s", uses: 1 }],
+      unused: [],
+    })
+  })
 })
