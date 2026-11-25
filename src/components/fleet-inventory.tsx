@@ -29,9 +29,11 @@ const WINDOWS: { id: InventoryWindow; label: string }[] = [
 function useHistory(want: boolean): {
   inv: Inventory | null
   state: "idle" | "loading" | "failed"
+  retry: () => void
 } {
   const [inv, setInv] = useState<Inventory | null>(null)
   const [state, setState] = useState<"idle" | "loading" | "failed">("idle")
+  const [attempt, setAttempt] = useState(0)
   useEffect(() => {
     if (!want || inv) return
     let live = true
@@ -47,8 +49,8 @@ function useHistory(want: boolean): {
     return () => {
       live = false
     }
-  }, [want, inv])
-  return { inv, state }
+  }, [want, inv, attempt])
+  return { inv, state, retry: () => setAttempt((n) => n + 1) }
 }
 
 export function FleetInventory(props: {
@@ -56,7 +58,7 @@ export function FleetInventory(props: {
   onPick: (ids: string[], label: string) => void
 }) {
   const [win, setWin] = useState<InventoryWindow>("live")
-  const { inv, state } = useHistory(win !== "live")
+  const { inv, state, retry } = useHistory(win !== "live")
   const today = useMemo(() => new Date(), [])
   return (
     <div className="fleet-inventory">
@@ -66,7 +68,10 @@ export function FleetInventory(props: {
             key={w.id}
             className={`fleet-window${win === w.id ? " on" : ""}`}
             aria-pressed={win === w.id}
-            onClick={() => setWin(w.id)}
+            onClick={() => {
+              setWin(w.id)
+              if (state === "failed") retry() // (a window chosen again tries again)
+            }}
           >
             {w.label}
           </button>
@@ -92,7 +97,7 @@ export function FleetInventory(props: {
               kind={kind}
               mcp={tb && mcpList(tb)}
               skills={tb ? skillList(tb) : undefined}
-              pending={win !== "live" && !inv}
+              pending={win !== "live" && state === "loading"}
               live={win === "live"}
               onPick={(what, name) =>
                 props.onPick(

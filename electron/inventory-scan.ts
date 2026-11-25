@@ -7,6 +7,7 @@ import fs from "node:fs"
 import path from "node:path"
 import type { AgentKind } from "../src/lib/agent-graph"
 import type { Inventory, InventoryAgent, Uses } from "../src/lib/fleet-inventory"
+import { wireName } from "./agents/toolbox"
 
 /** What a file's lines added up to so far. */
 export interface DayAcc {
@@ -25,8 +26,14 @@ export interface InventorySource {
   line(acc: DayAcc, line: string, day: string): DayAcc
   /** What its config says it has now (servers; skills, null: not supported). */
   loaded(): Promise<{ mcp: string[]; skills: string[] | null }>
-  /** Uses kept elsewhere than in files (OpenCode's database), read from `after` on. */
-  store?(after: number): Promise<{ until: number; days: Record<string, Uses> }>
+  /** Uses kept elsewhere than in files (OpenCode's database), read on from `after`. */
+  store?(after: StoreMark): Promise<{ until: StoreMark; days: Record<string, Uses> }>
+}
+
+/** Where a store was read up to: a row's time, and its id among rows of that time. */
+export interface StoreMark {
+  t: number
+  id: string
 }
 
 interface FileEntry {
@@ -39,8 +46,11 @@ interface FileEntry {
 export interface InventoryCache {
   v: 1
   files: Record<string, FileEntry>
-  stores: Partial<Record<AgentKind, { until: number; days: Record<string, Uses> }>>
+  stores: Partial<Record<AgentKind, { until: StoreMark; days: Record<string, Uses> }>>
 }
+
+/** The cache's format; a file of a later one (a newer build's) is never written over. */
+const CACHE_V = 1
 
 const CHUNK = 1 << 18
 const MAX_LINE = 8 * 1024 * 1024 // (a line longer than this is no record we count: skipped)
@@ -58,6 +68,7 @@ export async function readLines(
     let pos = offset
     let done = offset
     let carry: Buffer = Buffer.alloc(0)
+    let skipping = false // (inside a giant line: up to its end is no line)
     const buf = Buffer.alloc(CHUNK)
     while (pos < size) {
       const { bytesRead } = await h.read(buf, 0, Math.min(CHUNK, size - pos), pos)
@@ -67,6 +78,17 @@ export async function readLines(
         ? Buffer.concat([carry, buf.subarray(0, bytesRead)])
         : buf.subarray(0, bytesRead)
       let start = 0
+      if (skipping) {
+        const nl = chunk.indexOf(0x0a)
+        if (nl < 0) {
+          done = pos
+          carry = Buffer.alloc(0)
+          await new Promise((r) => setImmediate(r))
+          continue
+        }
+        start = nl + 1
+        skipping = false
+      }
       for (let nl = chunk.indexOf(0x0a, start); nl >= 0; nl = chunk.indexOf(0x0a, start)) {
         onLine(chunk.toString("utf8", start, nl))
         start = nl + 1
@@ -74,7 +96,8 @@ export async function readLines(
       done = pos - (chunk.length - start)
       carry = Buffer.from(chunk.subarray(start))
       if (carry.length > MAX_LINE) {
-        carry = Buffer.alloc(0) // (past a giant line: what follows its end is read on)
+        carry = Buffer.alloc(0) // (a giant line: skipped to its end)
+        skipping = true
         done = pos
       }
       chunk = Buffer.alloc(0)
@@ -97,12 +120,14 @@ export function addInto(into: Uses, u: Uses) {
   add(into.skills, u.skills)
 }
 
-const emptyCache = (): InventoryCache => ({ v: 1, files: {}, stores: {} })
+const emptyCache = (): InventoryCache => ({ v: CACHE_V, files: {}, stores: {} })
 
-export async function readCache(file: string): Promise<InventoryCache> {
+/** The cache, or an empty one; `newer`: written by a later build (kept, never written over). */
+export async function readCache(file: string): Promise<InventoryCache & { newer?: true }> {
   try {
     const c = JSON.parse(await fs.promises.readFile(file, "utf8")) as InventoryCache
-    return c?.v === 1 && c.files && typeof c.files === "object"
+    if (typeof c?.v === "number" && c.v > CACHE_V) return { ...emptyCache(), newer: true }
+    return c?.v === CACHE_V && c.files && typeof c.files === "object"
       ? { ...c, stores: c.stores ?? {} }
       : emptyCache()
   } catch {
@@ -118,13 +143,23 @@ export async function writeCache(file: string, cache: InventoryCache) {
   await fs.promises.rename(tmp, file)
 }
 
-/** Scan every source's files (only what's new since the cache), and add it all up. */
+const SAVE_MS = 20_000 // (a long first scan keeps what it read even if it's stopped)
+
+/** Scan every source's files (only what's new since the cache), and add it all up. Files are
+ *  taken to be append-only: one that shrank is read again from the start. */
 export async function scanInventory(
   sources: InventorySource[],
   cacheFile: string,
   signal?: AbortSignal,
 ): Promise<Inventory> {
   const cache = await readCache(cacheFile)
+  const { newer } = cache
+  delete cache.newer
+  let saved = Date.now()
+  const save = async () => {
+    saved = Date.now()
+    if (!newer) await writeCache(cacheFile, cache).catch(() => {})
+  }
   const seen = new Set<string>()
   const out: Inventory = {}
   for (const src of sources) {
@@ -135,39 +170,45 @@ export async function scanInventory(
     try {
       files = await src.files()
     } catch {
-      // can't list them: none
+      // can't list them: what the cache has stays (its entries are kept, below)
     }
     for (const f of files) {
       if (signal?.aborted) break
       seen.add(f.file)
-      let e = cache.files[f.file]
-      // A file that shrank or was replaced is read again from the start.
-      if (!e || f.size < e.offset) e = { size: 0, mtime: 0, offset: 0, acc: emptyAcc() }
+      const had = cache.files[f.file]
+      let e = had && f.size >= had.offset ? had : { size: 0, mtime: 0, offset: 0, acc: emptyAcc() }
       if (f.size > e.offset) {
         const day = new Date(f.mtimeMs).toISOString().slice(0, 10)
-        let acc = e.acc
+        // (the cached tally is copied first: a read that fails keeps it as it was)
+        let acc: DayAcc = structuredClone(e.acc)
         try {
           const offset = await readLines(f.file, e.offset, f.size, (l) => {
             acc = src.line(acc, l, day)
           })
           e = { size: f.size, mtime: f.mtimeMs, offset, acc }
         } catch {
-          continue // (gone or unreadable meanwhile: next scan)
+          // unreadable for now: what was read before counts, the rest next scan
         }
       }
-      cache.files[f.file] = e
+      if (e.offset) cache.files[f.file] = e
       for (const [d, u] of Object.entries(e.acc.days))
         addInto((agent.days[d] ??= { mcp: {}, skills: {} }), u)
       for (const s of e.acc.mcpLoaded) mcpLoaded.add(s)
       for (const s of e.acc.skillsLoaded) skillsLoaded.add(s)
+      if (Date.now() - saved > SAVE_MS) await save()
     }
     if (src.store) {
-      const had = cache.stores[src.kind] ?? { until: 0, days: {} }
+      const kept = cache.stores[src.kind]
+      // (a mark of another shape is no place to read on from: read it all again)
+      const had =
+        kept && typeof kept.until === "object" && typeof kept.until?.t === "number"
+          ? kept
+          : { until: { t: 0, id: "" }, days: {} }
       try {
         const more = await src.store(had.until)
-        const days = { ...had.days }
+        const days = structuredClone(had.days)
         for (const [d, u] of Object.entries(more.days))
-          addInto((days[d] = days[d] ? structuredClone(days[d]) : { mcp: {}, skills: {} }), u)
+          addInto((days[d] ??= { mcp: {}, skills: {} }), u)
         cache.stores[src.kind] = { until: more.until, days }
       } catch {
         // its store can't be read now: what the cache had
@@ -176,8 +217,21 @@ export async function scanInventory(
         addInto((agent.days[d] ??= { mcp: {}, skills: {} }), u)
     }
     const now = await src.loaded().catch(() => ({ mcp: [], skills: [] as string[] | null }))
+    // A server seen in tool names under its wire name (`my_server`) is shown by its configured
+    // one (`my.server`), as the live lists do.
+    const alias = new Map(now.mcp.map((c) => [wireName(c), c]))
+    const named = (m: Record<string, number> | undefined) => {
+      if (!m) return m
+      const o: Record<string, number> = {}
+      for (const [k, n] of Object.entries(m)) o[alias.get(k) ?? k] = (o[alias.get(k) ?? k] ?? 0) + n
+      return o
+    }
+    for (const u of Object.values(agent.days)) {
+      u.mcp = named(u.mcp)!
+      if (u.mcpFailed) u.mcpFailed = named(u.mcpFailed)
+    }
     for (const s of now.mcp) mcpLoaded.add(s)
-    agent.mcpLoaded = [...mcpLoaded]
+    agent.mcpLoaded = [...new Set([...mcpLoaded].map((s) => alias.get(s) ?? s))]
     if (now.skills === null) agent.skillsLoaded = null
     else {
       for (const s of now.skills) skillsLoaded.add(s)
@@ -185,9 +239,17 @@ export async function scanInventory(
     }
     out[src.kind] = agent
   }
-  // Files gone from disk leave the cache (their counts went with them).
+  // A file no longer on disk leaves the cache (its counts went with it); one that just wasn't
+  // listed this time (a folder unreadable for a moment) stays.
   if (!signal?.aborted)
-    for (const f of Object.keys(cache.files)) if (!seen.has(f)) delete cache.files[f]
-  await writeCache(cacheFile, cache).catch(() => {})
+    for (const f of Object.keys(cache.files))
+      if (!seen.has(f)) {
+        const gone = await fs.promises.access(f).then(
+          () => false,
+          (e: NodeJS.ErrnoException) => e.code === "ENOENT",
+        )
+        if (gone) delete cache.files[f]
+      }
+  await save()
   return out
 }

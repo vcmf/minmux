@@ -6,7 +6,7 @@ import path from "node:path"
 import { DatabaseSync } from "node:sqlite"
 import type { Uses } from "../../src/lib/fleet-inventory"
 import { jsonlFiles, mapLimit } from "../history-read"
-import type { DayAcc, InventorySource } from "../inventory-scan"
+import type { DayAcc, InventorySource, StoreMark } from "../inventory-scan"
 import { claudeHome } from "./claude-history"
 import { ClaudeMcpConfig, addClaudeKitLine } from "./claude-toolbox"
 import { codexHome, rollouts } from "./codex-history"
@@ -106,45 +106,63 @@ export function opencodeInventory(db = opencodeDb, config = new OpencodeConfig()
         skills: await config.skills(undefined),
       }
     },
-    async store(after: number) {
+    async store(after: StoreMark) {
       const file = db()
       if (!fs.existsSync(file)) return { until: after, days: {} }
-      const servers = (await config.servers(undefined)) ?? []
       const d = new DatabaseSync(file, { readOnly: true, timeout: 1000 })
+      let rows: Row[]
       try {
-        const rows = d
+        rows = d
           .prepare(
-            `select time_created t, json_extract(data, '$.tool') tool,
-               json_extract(data, '$.state.input.name') name
-             from part where time_created > ? and json_extract(data, '$.type') = 'tool'
-             order by time_created limit 200000`,
+            `select p.time_created t, p.id id, s.directory dir,
+               json_extract(p.data, '$.tool') tool,
+               json_extract(p.data, '$.state.status') status,
+               json_extract(p.data, '$.state.input.name') name
+             from part p left join session s on s.id = p.session_id
+             where (p.time_created > ? or (p.time_created = ? and p.id > ?))
+               and json_extract(p.data, '$.type') = 'tool'
+             order by p.time_created, p.id`,
           )
-          .all(after) as { t: number; tool: unknown; name: unknown }[]
-        const days: Record<string, Uses> = {}
-        let until = after
-        for (const r of rows) {
-          until = Math.max(until, r.t)
-          const tool = kitName(r.tool)
-          if (!tool) continue
-          const day = new Date(r.t).toISOString().slice(0, 10)
-          if (tool === "skill") {
-            const n = kitName(r.name)
-            if (!n) continue
-            const u = (days[day] ??= { mcp: {}, skills: {} })
-            u.skills[n] = (u.skills[n] ?? 0) + 1
-          } else {
-            const s = opencodeServerOf(tool, servers)
-            if (!s) continue
-            const u = (days[day] ??= { mcp: {}, skills: {} })
-            u.mcp[s] = (u.mcp[s] ?? 0) + 1
-          }
-        }
-        return { until, days }
+          .all(after.t, after.t, after.id) as unknown as Row[]
       } finally {
         d.close()
       }
+      const days: Record<string, Uses> = {}
+      let until = after
+      for (const r of rows) {
+        // A call still running stops the read here: it (and what follows) is read next time.
+        if (r.status !== "completed" && r.status !== "error") break
+        until = { t: r.t, id: r.id }
+        const tool = kitName(r.tool)
+        if (!tool) continue
+        const day = new Date(r.t).toISOString().slice(0, 10)
+        const ok = r.status === "completed"
+        if (tool === "skill") {
+          const n = kitName(r.name)
+          if (!n || !ok) continue
+          const u = (days[day] ??= { mcp: {}, skills: {} })
+          u.skills[n] = (u.skills[n] ?? 0) + 1
+          continue
+        }
+        // (servers as configured where the session ran: a project's own count)
+        const s = opencodeServerOf(tool, (await config.servers(r.dir ?? undefined)) ?? [])
+        if (!s) continue
+        const u = (days[day] ??= { mcp: {}, skills: {} })
+        const into = ok ? u.mcp : (u.mcpFailed ??= {})
+        into[s] = (into[s] ?? 0) + 1
+      }
+      return { until, days }
     },
   }
+}
+
+interface Row {
+  t: number
+  id: string
+  dir: string | null
+  tool: unknown
+  status: unknown
+  name: unknown
 }
 
 /** The sources the sessions worker scans. */

@@ -41,6 +41,16 @@ describe("readLines", () => {
   })
 })
 
+describe("readLines, a giant line", () => {
+  it("is skipped to its end, the lines after it read", async () => {
+    const f = path.join(tmp(), "g.jsonl")
+    fs.writeFileSync(f, `a\n${"x".repeat(9 * 1024 * 1024)}"mcp__x__y"\nb\n`)
+    const got: string[] = []
+    await readLines(f, 0, fs.statSync(f).size, (l) => got.push(l))
+    expect(got).toEqual(["a", "b"])
+  })
+})
+
 describe("dayFold", () => {
   it("a line's uses go to its own day; loaded lists gather", () => {
     const fold = dayFold(addClaudeKitLine)
@@ -124,9 +134,12 @@ describe("scanInventory", () => {
       line: (a) => a,
       loaded: async () => ({ mcp: [], skills: null }),
       store: async (after) => {
-        calls.push(after)
+        calls.push(after.t)
         if (fail) throw new Error("locked")
-        return { until: after + 10, days: { "2026-11-25": { mcp: { e: 1 }, skills: {} } } }
+        return {
+          until: { t: after.t + 10, id: "x" },
+          days: { "2026-11-25": { mcp: { e: 1 }, skills: {} } },
+        }
       },
     }
     await scanInventory([src], cache)
@@ -137,6 +150,51 @@ describe("scanInventory", () => {
     fail = true
     calls = []
     expect((await scanInventory([src], cache)).opencode!.days["2026-11-25"]!.mcp).toEqual({ e: 2 })
+  })
+
+  it("keeps what it had: a failed read, a file not listed this time, a newer build's cache", async () => {
+    const dir = tmp()
+    const cache = path.join(dir, "c.json")
+    const f = path.join(dir, "s.jsonl")
+    fs.writeFileSync(f, use("mcp__gh__x", "2026-11-20"))
+    let list = true
+    let broken = false
+    const src: InventorySource = {
+      kind: "claude",
+      files: async () =>
+        list ? [{ file: f, size: fs.statSync(f).size, mtimeMs: fs.statSync(f).mtimeMs }] : [],
+      line: (acc, l, day) => {
+        if (broken) throw new Error("EBUSY")
+        return dayFold(addClaudeKitLine)(acc, l, day)
+      },
+      loaded: async () => ({ mcp: [], skills: [] }),
+    }
+    await scanInventory([src], cache)
+    fs.appendFileSync(f, use("mcp__gh__y", "2026-11-21"))
+    broken = true // (its new tail can't be read: the cached count still counts)
+    expect((await scanInventory([src], cache)).claude!.days["2026-11-20"]!.mcp).toEqual({ gh: 1 })
+    broken = false
+    list = false // (its folder unreadable for a moment: the file stays in the cache)
+    await scanInventory([src], cache)
+    expect(Object.keys((await readCache(cache)).files)).toEqual([f])
+    fs.writeFileSync(cache, JSON.stringify({ v: 2, files: {}, stores: {} }))
+    await scanInventory([src], cache)
+    expect(JSON.parse(fs.readFileSync(cache, "utf8")).v).toBe(2) // never written over
+  })
+
+  it("a server seen by its wire name is counted under its configured one", async () => {
+    const dir = tmp()
+    const f = path.join(dir, "s.jsonl")
+    fs.writeFileSync(f, use("mcp__my_server__q", "2026-11-20"))
+    const src: InventorySource = {
+      kind: "claude",
+      files: async () => [{ file: f, size: fs.statSync(f).size, mtimeMs: 0 }],
+      line: dayFold(addClaudeKitLine),
+      loaded: async () => ({ mcp: ["my.server"], skills: [] }),
+    }
+    const inv = await scanInventory([src], path.join(dir, "c.json"))
+    expect(inv.claude!.days["2026-11-20"]!.mcp).toEqual({ "my.server": 1 })
+    expect(inv.claude!.mcpLoaded).toEqual(["my.server"])
   })
 })
 
@@ -170,28 +228,49 @@ describe("the agents' sources", () => {
     expect(await src.loaded()).toEqual({ mcp: [], skills: null })
   })
 
-  it("OpenCode: its database's tool calls from a time on", async () => {
+  it("OpenCode: finished tool calls from a mark on, servers as configured where each ran", async () => {
     const dir = tmp()
     const file = path.join(dir, "opencode.db")
+    const proj = path.join(dir, "proj")
+    fs.mkdirSync(proj)
+    fs.writeFileSync(path.join(proj, "opencode.json"), j({ mcp: { linear: {} } }))
     const db = new DatabaseSync(file)
-    db.exec("create table part (id text, time_created integer, data text)")
-    const ins = db.prepare("insert into part values (?, ?, ?)")
+    db.exec("create table part (id text, session_id text, time_created integer, data text)")
+    db.exec("create table session (id text, directory text)")
+    db.prepare("insert into session values (?, ?)").run("s1", proj)
+    const ins = db.prepare("insert into part values (?, ?, ?, ?)")
     const t = Date.parse("2026-11-25T10:00:00Z")
-    ins.run("1", t, j({ type: "tool", tool: "echo_ping", state: { input: {} } }))
-    ins.run("2", t + 1, j({ type: "tool", tool: "skill", state: { input: { name: "fleet" } } }))
-    ins.run("3", t + 2, j({ type: "tool", tool: "bash", state: { input: {} } }))
-    ins.run("4", t + 3, j({ type: "text", text: "hi" }))
+    const tool = (tool: string, status: string, input: unknown = {}) =>
+      j({ type: "tool", tool, state: { status, input } })
+    ins.run("a", "s1", t, tool("echo_ping", "completed"))
+    ins.run("b", "s1", t, tool("linear_issue", "completed")) // (same ms: paged by id)
+    ins.run("c", "s1", t + 1, tool("echo_ping", "error"))
+    ins.run("d", "s1", t + 2, tool("skill", "completed", { name: "fleet" }))
+    ins.run("e", "s1", t + 3, tool("skill", "running"))
+    ins.run("f", "s1", t + 4, tool("echo_ping", "completed"))
+    ins.run("g", "s1", t + 5, j({ type: "text", text: "hi" }))
     db.close()
     const cfg = path.join(dir, "cfg")
     fs.mkdirSync(path.join(cfg, "opencode"), { recursive: true })
     fs.writeFileSync(path.join(cfg, "opencode", "opencode.json"), j({ mcp: { echo: {} } }))
     const src = opencodeInventory(() => file, new OpencodeConfig(dir, { XDG_CONFIG_HOME: cfg }))
-    const got = await src.store!(0)
-    expect(got.until).toBe(t + 2)
-    expect(got.days).toEqual({ "2026-11-25": { mcp: { echo: 1 }, skills: { fleet: 1 } } })
-    expect((await src.store!(got.until)).days).toEqual({})
-    expect(await opencodeInventory(() => path.join(dir, "none.db")).store!(5)).toEqual({
-      until: 5,
+    const got = await src.store!({ t: 0, id: "" })
+    expect(got.until).toEqual({ t: t + 2, id: "d" }) // (stopped before the running one)
+    expect(got.days).toEqual({
+      "2026-11-25": { mcp: { echo: 1, linear: 1 }, mcpFailed: { echo: 1 }, skills: { fleet: 1 } },
+    })
+    // Once it finishes, the read goes on from the mark.
+    const d2 = new DatabaseSync(file)
+    d2.prepare("update part set data = ? where id = 'e'").run(
+      tool("skill", "completed", { name: "x" }),
+    )
+    d2.close()
+    const more = await src.store!(got.until)
+    expect(more.days).toEqual({ "2026-11-25": { mcp: { echo: 1 }, skills: { x: 1 } } })
+    expect(
+      await opencodeInventory(() => path.join(dir, "none.db")).store!({ t: 5, id: "" }),
+    ).toEqual({
+      until: { t: 5, id: "" },
       days: {},
     })
   })
