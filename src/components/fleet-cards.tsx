@@ -1,12 +1,13 @@
 // The Fleet view's cards and side panel (docs/design/FLEET_GRAPH.md, "Cards", "Side panel"): what
 // each node and the selection show. Placement and motion stay in fleet-view.tsx.
 import { ArrowSquareOut, GitBranch, GitPullRequest } from "@phosphor-icons/react"
-import { useStore } from "../store"
+import { useStore, activeTheme } from "../store"
 import { type FleetNode } from "../lib/fleet-layout"
 import { DETACHED, type FleetAgent, type FleetPr, type FleetRepo } from "../lib/fleet-model"
 import { cardLook } from "../lib/pr-graph"
 import { AGENT_STATUS_UI } from "../lib/agent-status-ui"
-import { agentInfo } from "../lib/agent-kinds"
+import { agentColor, agentInfo } from "../lib/agent-kinds"
+import type { AgentKind } from "../lib/agent-graph"
 import { agentIcon } from "./agent-icon"
 import { ipc } from "../lib/ipc"
 import { TerminalManager } from "../terminal/terminal-manager"
@@ -74,6 +75,13 @@ export function RepoCounts({ repo }: { repo: FleetRepo }) {
       {!working && !waiting && <span>{plural(repo.counts.agents, "agent")}</span>}
     </span>
   )
+}
+
+/** An agent's icon in its own colour (Claude terracotta, Codex blue, OpenCode the text's). */
+function AgentMark({ kind, size }: { kind: AgentKind; size: number }) {
+  const scheme = useStore((s) => activeTheme(s).scheme)
+  const Icon = agentIcon(kind)
+  return <Icon size={size} color={agentColor(kind, scheme)} />
 }
 
 export function FleetCard(props: {
@@ -156,11 +164,10 @@ export function FleetCard(props: {
   }
   if (n.kind === "sub" && info.sub) {
     const st = AGENT_STATUS_UI[info.sub.status]
-    const Icon = agentIcon(info.agent?.kind ?? "claude")
     return (
       <div className="fleet-card fleet-sub" style={style} data-node={n.id}>
         <span className="fleet-kind">
-          <Icon size={12} />
+          <AgentMark kind={info.agent?.kind ?? "claude"} size={12} />
         </span>
         <span className="one">
           {info.sub.type} <span className={statusTone(info.sub.status)}>· {st.word}</span>
@@ -170,7 +177,6 @@ export function FleetCard(props: {
   }
   if (n.kind === "agent" && info.agent) {
     const a = info.agent
-    const Icon = agentIcon(a.kind)
     const st = AGENT_STATUS_UI[a.status]
     return (
       <button
@@ -183,7 +189,7 @@ export function FleetCard(props: {
       >
         <span className="one">
           <span className="fleet-kind">
-            <Icon size={13} />
+            <AgentMark kind={a.kind} size={13} />
           </span>{" "}
           <b>{agentName(a)}</b>{" "}
           <span className="faint">· {a.subs.length ? plural(a.subs.length, "sub") : st.word}</span>
@@ -224,10 +230,7 @@ export function FleetPanel(props: {
         <h2 className="one">{agentName(a)}</h2>
         <div className="fleet-panel-row">
           <span className="fleet-kind">
-            {(() => {
-              const I = agentIcon(a.kind)
-              return <I size={13} />
-            })()}
+            <AgentMark kind={a.kind} size={13} />
           </span>
           {agentInfo(a.kind).label} · <span className={statusTone(a.status)}>{agentDoing(a)}</span>
         </div>
@@ -319,14 +322,13 @@ export function FleetPanel(props: {
         )}
         <h3>Agent sessions</h3>
         {agents.map((a) => {
-          const Icon = agentIcon(a.kind)
           return (
             <button
               key={a.id}
               className="fleet-panel-row fleet-pick"
               onClick={() => props.onAgent(a.id)}
             >
-              <Icon size={13} /> <span className="one">{agentName(a)}</span>{" "}
+              <AgentMark kind={a.kind} size={13} /> <span className="one">{agentName(a)}</span>{" "}
               <span className="faint">· {agentDoing(a)}</span>
             </button>
           )

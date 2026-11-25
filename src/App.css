@@ -4589,3 +4589,11 @@ body.resizing-col {
   flex-direction: column;
   align-items: center;
 }
+/* The open repo's circle glows faintly into the graph. */
+.fleet-root.open {
+  box-shadow:
+    0 0 0 7px color-mix(in srgb, var(--text) 5%, transparent),
+    0 0 0 8px color-mix(in srgb, var(--text) 14%, transparent),
+    0 0 0 16px color-mix(in srgb, var(--text) 3%, transparent),
+    0 0 90px 40px color-mix(in srgb, var(--text) 7%, transparent);
+}
