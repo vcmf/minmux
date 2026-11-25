@@ -129,7 +129,7 @@ describe("relax", () => {
       branches: [{ name: "x", agents: [agent("g")] }],
       agents: [agent("h")],
     })
-    const ns = relax(openLayout(r), 12)
+    const ns = relax(openLayout(r)) // (the default the view uses)
     for (let i = 0; i < ns.length; i++)
       for (let j = i + 1; j < ns.length; j++)
         expect(overlaps(ns[i]!, ns[j]!), `${ns[i]!.id} / ${ns[j]!.id}`).toBe(false)

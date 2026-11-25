@@ -81,6 +81,13 @@ export function FleetView() {
   const [openKey, setOpenKey] = useState<string | null>(null)
   const [sel, setSel] = useState<Selection>(null)
   const open = repos.find((r) => r.key === openKey) ?? null
+  // A repo that left the model (its last agent ended) closes; it doesn't reopen by itself later.
+  useEffect(() => {
+    if (openKey && !open) {
+      setOpenKey(null)
+      setSel(null)
+    }
+  }, [openKey, open])
 
   const nodes = useMemo(
     () => (open ? relax(openLayout(open)) : overviewLayout(repos)),
@@ -132,6 +139,20 @@ export function FleetView() {
   const canvas = useRef<HTMLCanvasElement>(null)
   const selectedAgent = sel?.kind === "agent" ? sel.id : null
   const scheme = useStore((s) => activeTheme(s).scheme)
+  const themeName = useStore((s) => activeTheme(s).name)
+  // The theme's colours, read once per theme (never per frame).
+  const colors = useRef({ faint: "#3a3a42", red: "#f0625f", accent: "#4ec97a" })
+  useLayoutEffect(() => {
+    const c = canvas.current
+    if (!c) return
+    const css = getComputedStyle(c)
+    const v = (name: string, or: string) => css.getPropertyValue(name).trim() || or
+    colors.current = {
+      faint: v("--border2", "#3a3a42"),
+      red: v("--red", "#f0625f"),
+      accent: v("--accent", "#4ec97a"),
+    }
+  }, [themeName])
   const draw = useCallback(() => {
     const c = canvas.current
     const el = scroller.current
@@ -148,10 +169,7 @@ export function FleetView() {
     }
     ctx.setTransform(dpr, 0, 0, dpr, -el.scrollLeft * dpr, -el.scrollTop * dpr)
     ctx.clearRect(el.scrollLeft, el.scrollTop, w, h)
-    const css = getComputedStyle(c)
-    const faint = css.getPropertyValue("--border2").trim() || "#3a3a42"
-    const red = css.getPropertyValue("--red").trim() || "#f0625f"
-    const accent = css.getPropertyValue("--accent").trim() || "#4ec97a"
+    const { faint, red, accent } = colors.current
     const byId = new Map(nodes.map((n) => [n.id, n]))
     // The selected agent's way to its repo, drawn green.
     const path = new Set<string>()
@@ -183,37 +201,46 @@ export function FleetView() {
       ctx.stroke()
     }
     ctx.globalAlpha = 1
-  }, [nodes, lookup, selectedAgent, scheme])
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- a new theme redraws with its colours
+  }, [nodes, lookup, selectedAgent, scheme, themeName])
+  // Scroll and resize listeners, set up once: they draw through a ref (a new layout doesn't
+  // re-create them, so it can't interrupt a scroll).
+  const drawRef = useRef(draw)
+  drawRef.current = draw
+  const frame = useRef(0)
+  const redraw = useCallback(() => {
+    cancelAnimationFrame(frame.current)
+    frame.current = requestAnimationFrame(() => drawRef.current())
+  }, [])
+  useEffect(() => redraw(), [draw, redraw])
   useEffect(() => {
     const el = scroller.current
     if (!el) return
-    let frame = 0
-    const soon = () => {
-      cancelAnimationFrame(frame)
-      frame = requestAnimationFrame(draw)
-    }
-    soon()
     // The point in the middle of the view stays there when the view resizes (the agents panel
     // opening or closing, the window), as it does when scrolled.
     let mid = { x: el.scrollLeft + el.clientWidth / 2, y: el.scrollTop + el.clientHeight / 2 }
+    let size = { w: el.clientWidth, h: el.clientHeight }
     const onScroll = () => {
       mid = { x: el.scrollLeft + el.clientWidth / 2, y: el.scrollTop + el.clientHeight / 2 }
-      soon()
+      redraw()
     }
     const onResize = () => {
+      // (the observer's first call, and any call with no size change: nothing to keep)
+      if (el.clientWidth === size.w && el.clientHeight === size.h) return
+      size = { w: el.clientWidth, h: el.clientHeight }
       el.scrollLeft = mid.x - el.clientWidth / 2
       el.scrollTop = mid.y - el.clientHeight / 2
-      soon()
+      redraw()
     }
     el.addEventListener("scroll", onScroll, { passive: true })
     const ro = typeof ResizeObserver !== "undefined" ? new ResizeObserver(onResize) : null
     ro?.observe(el)
     return () => {
-      cancelAnimationFrame(frame)
+      cancelAnimationFrame(frame.current)
       el.removeEventListener("scroll", onScroll)
       ro?.disconnect()
     }
-  }, [draw])
+  }, [redraw])
 
   const docked = open ? repos.filter((r) => r.key !== open.key) : []
   return (

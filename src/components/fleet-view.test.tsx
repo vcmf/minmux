@@ -101,4 +101,19 @@ describe("FleetView", () => {
     view.unmount()
     vi.useRealTimers()
   })
+
+  it("a repo that leaves the model while open closes, and doesn't reopen by itself", async () => {
+    seed()
+    render(<FleetView />)
+    fireEvent.click(await screen.findByRole("button", { name: "Open o/r" }))
+    await screen.findAllByText("PR 7")
+    const agents = useStore.getState().agents
+    act(() => useStore.setState({ agents: reduceAgentEvents([]) })) // its session ended
+    await waitFor(() => expect(screen.queryByText("PR 7")).toBeNull(), { timeout: 3000 })
+    act(() => useStore.setState({ agents })) // an agent there again
+    expect(
+      await screen.findByRole("button", { name: "Open o/r" }, { timeout: 3000 }),
+    ).toBeInTheDocument()
+    expect(screen.queryByText("PR 7")).toBeNull() // still the overview
+  })
 })

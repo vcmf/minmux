@@ -144,7 +144,7 @@ export function openLayout(repo: FleetRepo, theta = 0): FleetNode[] {
 }
 
 /** Cards that overlap pushed apart along their shorter overlap (roots stay put), a few passes. */
-export function relax(nodes: FleetNode[], passes = 4): FleetNode[] {
+export function relax(nodes: FleetNode[], passes = 12): FleetNode[] {
   const ns = nodes.map((n) => ({ ...n }))
   for (let pass = 0; pass < passes; pass++) {
     let moved = false

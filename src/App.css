@@ -4407,6 +4407,10 @@ body.resizing-col {
   padding: 12px 20px 20px;
   overflow-x: auto;
   background: linear-gradient(var(--bg) 70%, transparent);
+  pointer-events: none; /* only its repos take clicks: cards scrolled under it stay clickable */
+}
+.fleet-dock-repo {
+  pointer-events: auto;
 }
 .fleet-dock-repo {
   display: flex;
