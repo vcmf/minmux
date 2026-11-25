@@ -4444,7 +4444,7 @@ body.resizing-col {
   right: 0;
   display: flex;
   gap: 24px;
-  padding: 8px 20px;
+  padding: 8px 190px 8px 20px; /* (its right end clear of the Graph | Inventory switch) */
   overflow-x: auto; /* one strip: it scrolls sideways, never grows over the graph */
   scrollbar-width: thin;
   background: color-mix(in srgb, var(--bg) 92%, transparent);

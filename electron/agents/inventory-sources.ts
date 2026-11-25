@@ -125,7 +125,7 @@ export function opencodeInventory(db = opencodeDb, config = new OpencodeConfig()
       const days: Record<string, Uses> = {}
       const count = (r: Row) => {
         const tool = kitName(r.tool)
-        if (!tool) return
+        if (!tool || !Number.isFinite(r.t)) return // (a row without a sane time: not counted)
         const u = (days[new Date(r.t).toISOString().slice(0, 10)] ??= { mcp: {}, skills: {} })
         const ok = r.status === "completed"
         if (tool === "skill") {
@@ -154,30 +154,58 @@ export function opencodeInventory(db = opencodeDb, config = new OpencodeConfig()
         }
       }
       // Calls running at the last read: counted once they've finished, kept a day at most.
+      const day = Date.now() - 24 * 60 * 60_000
       const pending: string[] = []
-      const was = (after.pending ?? []).slice(0, 1000)
+      const was = (after.pending ?? []).slice(-1000)
       if (was.length) {
         const rows = read(`${SELECT} where p.id in (${was.map(() => "?").join(",")})`, ...was)
-        const day = Date.now() - 24 * 60 * 60_000
         for (const r of rows)
           if (final(r)) count(r)
           else if (r.t > day) pending.push(r.id)
       }
-      let id = after.id
+      // Ids come from each OpenCode's own clock: a row another process writes a moment late can
+      // sort below the newest id read. So the last two minutes' ids are read from again (from
+      // `floor`), the ones already read skipped.
+      const recent = new Map(after.recent ?? [])
       let t = after.t
+      let last = after.id
+      let first = true
+      let cursor = after.floor ?? after.id
       for (;;) {
-        const rows = read(`${SELECT} where p.id > ? order by p.id limit ${PAGE}`, id)
+        const rows = first
+          ? read(
+              `${SELECT} where p.id ${after.floor ? ">=" : ">"} ? order by p.id limit ${PAGE}`,
+              cursor,
+            )
+          : read(`${SELECT} where p.id > ? order by p.id limit ${PAGE}`, cursor)
+        first = false
         for (const r of rows) {
-          id = r.id
-          t = r.t
+          cursor = r.id
+          if (recent.has(r.id)) continue
+          recent.set(r.id, Number.isFinite(r.t) ? r.t : t)
+          if (Number.isFinite(r.t)) t = Math.max(t, r.t)
+          if (r.id > last) last = r.id
           if (r.type !== "tool") continue
           if (final(r)) count(r)
-          else pending.push(r.id)
+          else if (r.t > day) pending.push(r.id)
         }
         if (rows.length < PAGE) break
         await new Promise((r) => setImmediate(r)) // (a page at a time: the worker answers others)
       }
-      return { until: { t, id, pending }, days }
+      // The window for next time: ids of the last two minutes, from the oldest of them on.
+      const since = t - 2 * 60_000
+      const inWindow = [...recent].filter(([, at]) => at >= since).map(([x]) => x)
+      const floor = inWindow.length ? inWindow.sort()[0]! : undefined
+      const keep = floor ? [...recent].filter(([x]) => x >= floor).slice(-5000) : []
+      return {
+        until: {
+          t,
+          id: last,
+          pending: pending.slice(-1000),
+          ...(floor ? { floor, recent: keep } : {}),
+        },
+        days,
+      }
     },
     // Raw tool calls → MCP servers, as configured where each session ran.
     async resolve(raw) {
@@ -191,7 +219,10 @@ export function opencodeInventory(db = opencodeDb, config = new OpencodeConfig()
           for (const [key, n] of Object.entries(from)) {
             const at = key.indexOf("\0")
             const dir = at > 0 ? key.slice(0, at) : undefined
-            const s = opencodeServerOf(key.slice(at + 1), (await config.servers(dir)) ?? [])
+            const tool = key.slice(at + 1)
+            // (a server no longer configured still was one: named by its tool's prefix)
+            const s =
+              opencodeServerOf(tool, (await config.servers(dir)) ?? []) ?? tool.split("_")[0]
             if (!s) continue
             const into = field === "mcp" ? o.mcp : (o.mcpFailed ??= {})
             into[s] = (into[s] ?? 0) + n

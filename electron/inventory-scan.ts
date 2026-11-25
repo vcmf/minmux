@@ -36,6 +36,8 @@ export interface StoreMark {
   t: number
   id: string
   pending?: string[]
+  floor?: string // the oldest id of the last minutes: read from again (a late writer's row)
+  recent?: [string, number][] // ids (and times) read from `floor` on: skipped when read again
 }
 
 interface FileEntry {
@@ -155,6 +157,7 @@ export async function writeCache(file: string, cache: InventoryCache) {
   await fs.promises.rename(tmp, file)
 }
 
+const inMemory = new Map<string, InventoryCache>()
 const SAVE_MS = 20_000 // (a long first scan keeps what it read even if it's stopped)
 
 /** Scan every source (only what's new since the cache) and add it all up. */
@@ -163,9 +166,13 @@ export async function scanInventory(
   cacheFile: string,
   signal?: AbortSignal,
 ): Promise<Inventory> {
-  const cache = await readCache(cacheFile)
-  const { newer } = cache
-  delete cache.newer
+  const read = await readCache(cacheFile)
+  const { newer } = read
+  delete read.newer
+  // A newer build's file isn't written over: this build's ledger lives in memory then (for the
+  // worker's life), so a scan doesn't start from nothing each time.
+  const cache = newer ? (inMemory.get(cacheFile) ?? read) : read
+  if (newer) inMemory.set(cacheFile, cache)
   let saved = Date.now()
   const save = async () => {
     saved = Date.now()
@@ -197,8 +204,9 @@ export async function scanInventory(
     const listed = new Set<string>()
     for (const f of files) {
       if (signal?.aborted) break
-      let key = `${src.kind}:${path.basename(f.file)}`
-      if (listed.has(key)) key = `${src.kind}:${f.file}` // (two of one name: by path)
+      const key = `${src.kind}:${path.basename(f.file)}`
+      // (one name listed twice, a file moved while the folders were walked: read once)
+      if (listed.has(key)) continue
       listed.add(key)
       const had = cache.files[key]
       let e: FileEntry =

@@ -105,6 +105,7 @@ export function FleetInventory(props: {
               mcp={tb && mcpList(tb)}
               skills={tb ? skillList(tb) : undefined}
               pending={win !== "live" && !inv && state === "loading"}
+              failed={win !== "live" && !inv && state === "failed"}
               live={win === "live"}
               onPick={(what, name) =>
                 props.onPick(
@@ -126,6 +127,7 @@ function InventoryColumn(props: {
   mcp: ToolList | undefined
   skills: ToolList | null | undefined
   pending: boolean
+  failed: boolean
   live: boolean
   onPick: (what: "mcp" | "skill", name: string) => void
   canPick: (what: "mcp" | "skill", name: string) => boolean
@@ -141,7 +143,9 @@ function InventoryColumn(props: {
         title="MCP servers"
         list={props.mcp}
         unit="call"
-        empty={props.pending ? "…" : props.live ? "no open session" : "none seen"}
+        empty={
+          props.pending ? "…" : props.failed ? "—" : props.live ? "no open session" : "none seen"
+        }
         onPick={(n) => props.onPick("mcp", n)}
         canPick={(n) => props.canPick("mcp", n)}
       />
@@ -150,7 +154,9 @@ function InventoryColumn(props: {
         list={props.skills}
         unit="use"
         unsupported={props.skills === null}
-        empty={props.pending ? "…" : props.live ? "no open session" : "none seen"}
+        empty={
+          props.pending ? "…" : props.failed ? "—" : props.live ? "no open session" : "none seen"
+        }
         onPick={(n) => props.onPick("skill", n)}
         canPick={(n) => props.canPick("skill", n)}
       />

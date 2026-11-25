@@ -208,6 +208,51 @@ describe("scanInventory", () => {
     expect(JSON.parse(fs.readFileSync(cache, "utf8")).v).toBe(3) // never written over
   })
 
+  it("one file listed twice in a scan (moved while the folders were walked) is read once", async () => {
+    const dir = tmp()
+    const f = path.join(dir, "rollout-x.jsonl")
+    fs.writeFileSync(f, use("mcp__gh__x", "2026-11-20"))
+    const g = path.join(dir, "archived", "rollout-x.jsonl")
+    fs.mkdirSync(path.dirname(g))
+    fs.copyFileSync(f, g)
+    const st = fs.statSync(f)
+    const src: InventorySource = {
+      kind: "codex",
+      files: async () => [
+        { file: f, size: st.size, mtimeMs: st.mtimeMs },
+        { file: g, size: st.size, mtimeMs: st.mtimeMs },
+      ],
+      line: dayFold(addClaudeKitLine, "last"),
+      loaded: async () => ({ mcp: [], skills: null }),
+    }
+    const cache = path.join(dir, "c.json")
+    const a = await scanInventory([src], cache)
+    expect(a.codex!.days["2026-11-20"]!.mcp).toEqual({ gh: 1 })
+    expect(Object.keys((await readCache(cache)).files)).toEqual(["codex:rollout-x.jsonl"])
+  })
+
+  it("a newer build's cache: this build's ledger in memory, never read from nothing again", async () => {
+    const dir = tmp()
+    const cache = path.join(dir, "c.json")
+    fs.writeFileSync(cache, JSON.stringify({ v: 99, files: {}, stores: {} }))
+    const f = path.join(dir, "s.jsonl")
+    fs.writeFileSync(f, use("mcp__gh__x", "2026-11-20"))
+    let lines = 0
+    const src: InventorySource = {
+      kind: "claude",
+      files: async () => [{ file: f, size: fs.statSync(f).size, mtimeMs: 0 }],
+      line: (acc, l, d) => {
+        lines++
+        return dayFold(addClaudeKitLine, "last")(acc, l, d)
+      },
+      loaded: async () => ({ mcp: [], skills: [] }),
+    }
+    await scanInventory([src], cache)
+    await scanInventory([src], cache)
+    expect(lines).toBe(1)
+    expect(JSON.parse(fs.readFileSync(cache, "utf8")).v).toBe(99)
+  })
+
   it("a server seen by its wire name is counted under its configured one", async () => {
     const dir = tmp()
     const f = path.join(dir, "s.jsonl")
@@ -283,7 +328,7 @@ describe("the agents' sources", () => {
     const src = opencodeInventory(() => file, new OpencodeConfig(dir, { XDG_CONFIG_HOME: cfg }))
     const got = await src.store!({ t: 0, id: "" })
     // Read to the end; the running call is kept to check again.
-    expect(got.until).toEqual({ t: t + 5, id: "g", pending: ["e"] })
+    expect(got.until).toMatchObject({ t: t + 5, id: "g", pending: ["e"], floor: "a" })
     // Kept raw (folder and tool), made into servers when the result is built.
     expect(got.days[today]!.mcp).toEqual({
       [`${proj}\0echo_ping`]: 2,
@@ -299,8 +344,27 @@ describe("the agents' sources", () => {
     )
     d2.close()
     const more = await src.store!(got.until)
-    expect(more.until).toEqual({ t: t + 5, id: "g", pending: [] })
+    expect(more.until).toMatchObject({ t: t + 5, id: "g", pending: [] })
+    // (the window read again: nothing counted twice)
     expect(await src.resolve!(more.days)).toEqual({ [today]: { mcp: {}, skills: { x: 1 } } })
+    // A row another OpenCode wrote a moment late, its id below the newest: still read, once.
+    const late = new DatabaseSync(file)
+    late
+      .prepare("insert into part values (?, ?, ?, ?)")
+      .run("bb", "s1", t + 1, tool("echo_ping", "completed"))
+    late
+      .prepare("insert into part values (?, ?, ?, ?)")
+      .run("z", "s1", null as never, tool("echo_ping", "completed"))
+    late
+      .prepare("insert into part values (?, ?, ?, ?)")
+      .run("zz", "s1", t + 9, tool("gone_q", "completed"))
+    late.close()
+    const after = await src.store!(more.until)
+    expect(await src.resolve!(after.days)).toEqual({
+      // (z: no sane time, not counted; gone: no longer configured, named by its prefix)
+      [today]: { mcp: { echo: 1, gone: 1 }, skills: {} },
+    })
+    expect(await src.store!(after.until)).toMatchObject({ days: {} })
     // A call still running a day on (its agent died) is let go.
     const d3 = new DatabaseSync(file)
     d3.prepare("insert into part values (?, ?, ?, ?)").run(

@@ -642,22 +642,25 @@ export function FleetView() {
       ]),
     [repos],
   )
-  // Back on the graph: its motion may go on.
+  // Back on the graph: its motion may go on. Leaving it, or a new mark, drops a glide not done.
   useEffect(() => {
     if (mode === "graph") wakeRef.current()
+    else toFind.current = null
   }, [mode])
   // The first marked session comes into view once its card is placed (its repo may be opening).
   const toFind = useRef<string | null>(null)
   useEffect(() => {
     const id = toFind.current
     if (!id) return
+    // (the session ended meanwhile: no glide later, out of nowhere)
+    if (!fleetAgents.some((a) => a.id === id)) return void (toFind.current = null)
     const n = nodes.find((x) => x.id === nodeId.agent(id))
     if (!n) return
     toFind.current = null
     // (where it ends up, not the grow-out's first frame)
     const at = layoutNow(open, repos, Infinity).find((x) => x.id === n.id) ?? n
     moveToRef.current({ x: at.x, y: at.y }, true)
-  }, [nodes, open, repos, layoutNow, marked])
+  }, [nodes, open, repos, layoutNow, marked, fleetAgents])
   /** An inventory row picked: back to the graph, its sessions marked, their repo open. */
   const pick = (ids: string[], label: string) => {
     setMode("graph")
@@ -718,6 +721,8 @@ export function FleetView() {
           className="fleet-viewport"
           ref={viewport}
           tabIndex={0}
+          // (under the inventory: no focus or keys reach the graph the user can't see)
+          inert={mode === "inventory"}
           aria-label="Fleet graph: arrows and Page Up/Down pan it, Home centres it"
         >
           <div className="fleet-layer" ref={layer}>
