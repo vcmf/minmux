@@ -90,6 +90,7 @@ export function FleetCard(props: {
   info: NodeInfo | undefined
   open: boolean
   selected: boolean
+  marked?: boolean // picked from the inventory (it used what was picked)
   onRoot: (key: string) => void
   onAgent: (id: string) => void
 }) {
@@ -181,7 +182,7 @@ export function FleetCard(props: {
     const st = AGENT_STATUS_UI[a.status]
     return (
       <button
-        className={`fleet-card fleet-agent ${a.status}${selected ? " sel" : ""}`}
+        className={`fleet-card fleet-agent ${a.status}${selected ? " sel" : ""}${props.marked ? " marked" : ""}`}
         style={style}
         data-node={n.id}
         aria-label={`${agentInfo(a.kind).label} agent ${agentName(a)}, ${st.word}`}

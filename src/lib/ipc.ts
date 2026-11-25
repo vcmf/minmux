@@ -6,6 +6,7 @@ import type { InstalledAgent } from "./agent-kinds"
 import type { SessionMeta } from "./session-color"
 import type { ResumePlan } from "./resume"
 import type { AgentProcsResult } from "./agent-processes"
+import type { Inventory } from "./fleet-inventory"
 import type { PastSession, PastSessionsResult, SearchEnd, SessionHit } from "./past-sessions"
 import type { GitRootRequest, PaneGitInfo, PaneGitRequest } from "./pane-git"
 import type { DirListing } from "./dir-listing"
@@ -76,6 +77,8 @@ export interface Ipc {
   onSessionHits: (cb: (id: number, hits: SessionHit[], end: SearchEnd | null) => void) => () => void
   /** The open lists' agent processes, and what's left running from panes whose agent ended. */
   agentProcesses: (open: string[]) => Promise<AgentProcsResult>
+  /** The Fleet inventory's history: each agent's MCP and skill uses per day (null: failed). */
+  fleetInventory: () => Promise<Inventory | null>
   /** Every enabled agent's past sessions, newest first (the Sessions tab). */
   pastSessions: () => Promise<PastSessionsResult>
   /** One past session's resume plan (null: not resumable from here). */

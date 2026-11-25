@@ -113,8 +113,8 @@ export function codexHead(text: string): { cwd?: string; firstPrompt?: string } 
   return { cwd: cwd ?? cwdField(text), firstPrompt }
 }
 
-/** Every rollout under `sessions/` (YYYY/MM/DD), with its size and mtime. */
-async function rollouts(dir: string) {
+/** Every rollout under `sessions/YYYY/MM/DD/`. */
+export async function rollouts(dir: string) {
   const sub = async (d: string) => {
     try {
       return (await fs.promises.readdir(d, { withFileTypes: true }))

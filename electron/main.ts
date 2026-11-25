@@ -1322,6 +1322,16 @@ function registerIpc() {
     }
   })
 
+  // The Fleet inventory's history (docs/design/FLEET_GRAPH.md, step 6): scanned in the worker,
+  // from where the cache file says the last scan stopped.
+  ipcMain.handle("fleet:inventory", async () => {
+    try {
+      return await historyWorker.inventory(path.join(configDir(), "inventory-cache.json"))
+    } catch {
+      return null
+    }
+  })
+
   // One past session → its resume plan, from main's own listing (its folder and transcript as
   // main read them, never renderer strings) and the agent's own rules; the renderer opens a
   // split there and types it at the first prompt.

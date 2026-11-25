@@ -8,6 +8,7 @@ import type { SessionHit } from "../src/lib/past-sessions"
 import type { ListedSession } from "./agents/types"
 import type { AgentProcsResult } from "../src/lib/agent-processes"
 import type { PaneRoots } from "./proc-snapshot"
+import type { Inventory } from "../src/lib/fleet-inventory"
 import {
   SEARCH_MS,
   type SearchDone,
@@ -37,6 +38,7 @@ type WithoutId<T> = T extends unknown ? Omit<T, "id"> : never
 const LIST_MS = 120_000
 const KILL_GRACE_MS = 2000
 const TOUCHED_MS = 5000
+const INVENTORY_MS = 30 * 60_000 // a first scan of all history (one rollout here is 16 GB)
 const PROCS_MS = 8000 // two ps runs (2 s each) and lsof (1.5 s), on a worker maybe just started
 
 const fail = (code: string) => Object.assign(new Error(code), { code })
@@ -99,6 +101,16 @@ export class SessionsWorkerClient {
       (this.opts.listMs ?? LIST_MS) + SEARCH_MS + 10_000, // its listing, then its own time
     ) as Promise<SearchDone>
     return { done, cancel: () => this.proc?.postMessage({ id, op: "cancel" }) }
+  }
+
+  /** The Fleet inventory's history (a first scan is long: only this call fails when late). */
+  inventory(cacheFile: string): Promise<Inventory> {
+    return this.call(
+      { op: "inventory", cacheFile },
+      undefined,
+      INVENTORY_MS,
+      true,
+    ) as Promise<Inventory>
   }
 
   /** Stop the worker (app quit). */

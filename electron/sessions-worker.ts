@@ -4,12 +4,14 @@ import { historyAgents } from "./agents/history-index"
 import { SessionsOps, type SessionsRequest } from "./sessions-ops"
 import { running } from "./session-search"
 import { listeningPorts, scan } from "./proc-scan"
+import { inventorySources } from "./agents/inventory-sources"
 
 const ops = new SessionsOps(
   historyAgents(),
   (reply) => process.parentPort.postMessage(reply),
   scan,
   listeningPorts,
+  inventorySources,
 )
 
 process.parentPort.on("message", (e) => ops.handle(e.data as SessionsRequest))

@@ -1,7 +1,7 @@
 // The Fleet view's camera, edges and panel states (fleet-view.tsx): panning by wheel, keys and
 // drag, the edges drawn through the camera, the dock, and what the side panel shows.
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest"
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react"
 import { FleetView } from "./fleet-view"
 import { useStore } from "../store"
 import { ipc } from "../lib/ipc"
@@ -89,6 +89,7 @@ function stubCanvas() {
 
 const layer = () => document.querySelector<HTMLElement>(".fleet-layer")!
 const viewport = () => document.querySelector<HTMLElement>(".fleet-viewport")!
+const panel = () => document.querySelector<HTMLElement>(".fleet-panel")!
 const frame = () => act(async () => void (await new Promise((r) => setTimeout(r, 30))))
 
 describe("FleetView: camera, edges, panel", () => {
@@ -181,11 +182,11 @@ describe("FleetView: camera, edges, panel", () => {
     expect(await screen.findByText("Sub-agents · 1")).toBeInTheDocument()
     expect(screen.getByText(/170k \/ 200k/)).toBeInTheDocument()
     // Its MCP servers and skills: used, failed, unused, and the rest folded.
-    expect(screen.getByText("used 1 / 3")).toBeInTheDocument()
-    expect(screen.getByText("· 3 calls")).toBeInTheDocument()
-    expect(screen.getByText("· failed to start")).toBeInTheDocument()
-    expect(screen.getByText("used 1 / 7")).toBeInTheDocument()
-    expect(screen.getByText("+2 loaded, unused")).toBeInTheDocument()
+    expect(within(panel()).getByText("used 1 / 3")).toBeInTheDocument()
+    expect(within(panel()).getByText("· 3 calls")).toBeInTheDocument()
+    expect(within(panel()).getByText("· failed to start")).toBeInTheDocument()
+    expect(within(panel()).getByText("used 1 / 7")).toBeInTheDocument()
+    expect(within(panel()).getByText("+2 loaded, unused")).toBeInTheDocument()
     // Back to the repo, then all repos.
     fireEvent.click(screen.getByRole("button", { name: /← o\/r/ }))
     await screen.findByRole("heading", { name: "o/r" })
@@ -219,5 +220,25 @@ describe("FleetView: camera, edges, panel", () => {
     await frame()
     expect(screen.queryByText("Unpin")).toBeNull()
     expect(at()).toBe(before)
+  })
+
+  it("Inventory: a used row back to the graph, its sessions marked, then cleared", async () => {
+    stubCanvas()
+    seed()
+    render(<FleetView />)
+    await screen.findByRole("button", { name: "Open o/r" })
+    fireEvent.click(screen.getByRole("button", { name: "Inventory" }))
+    // Live: the open session's MCP server (seeded: notion, 3 calls).
+    fireEvent.click(await screen.findByRole("button", { name: /^notion/ }))
+    expect(await screen.findByText(/1 session used/)).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "Graph" })).toHaveAttribute("aria-pressed", "true")
+    await frame()
+    expect(document.querySelectorAll(".fleet-card.marked").length).toBe(1)
+    fireEvent.click(screen.getByRole("button", { name: "Clear" }))
+    expect(screen.queryByText(/1 session used/)).toBeNull()
+    // Back to the inventory and to the graph again by its switch.
+    fireEvent.click(screen.getByRole("button", { name: "Inventory" }))
+    fireEvent.click(screen.getByRole("button", { name: "Graph" }))
+    expect(viewport()).not.toHaveAttribute("inert")
   })
 })
