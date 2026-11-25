@@ -234,6 +234,21 @@ export function FleetView() {
     const { border2: faint, red, accent } = ui
     const ns = nodesRef.current
     const byId = new Map(ns.map((n) => [n.id, n]))
+    // The open repo's orbits (PRs, agents, sub-agents): faint dashed rings under everything. They
+    // are round in the rings' own space, so the turn never moves them.
+    if (open) {
+      ctx.save()
+      ctx.globalAlpha = 0.55
+      ctx.setLineDash([3, 7])
+      ctx.lineWidth = 1
+      ctx.strokeStyle = faint
+      for (const r of [FLEET.r1, FLEET.r2, FLEET.r2 + FLEET.r3]) {
+        ctx.beginPath()
+        ctx.ellipse(FLEET.cx, FLEET.cy, r * FLEET.ex, r, 0, 0, Math.PI * 2)
+        ctx.stroke()
+      }
+      ctx.restore()
+    }
     // The selected agent's way to its repo, drawn green.
     const path = new Set<string>()
     for (
@@ -291,7 +306,7 @@ export function FleetView() {
         }
       }
     }
-  }, [ui, reduced, selectedAgent, lookup, scheme])
+  }, [ui, reduced, selectedAgent, lookup, scheme, open])
   drawRef.current = draw
   useEffect(() => apply(), [draw, nodes, apply])
 
