@@ -14,7 +14,7 @@ import { HOOK_WRITER } from "../hook-writer"
 import { TranscriptMeta } from "../transcript-meta"
 import { TranscriptFold } from "../transcript-fold"
 import { addLine as addTokenLine, emptyUsage } from "../transcript-tokens"
-import { ClaudeMcpConfig, addClaudeKitLine } from "./claude-toolbox"
+import { ClaudeMcpConfig, addClaudeKitLine, claudeSubagentUses } from "./claude-toolbox"
 import { SubUses, Tickets, addUses, emptyKit, toToolbox, type Kit } from "./toolbox"
 import type { AgentAdapter, AgentShell, AgentSpec, SessionRules } from "./types"
 import { cdPrefix, workedFolders } from "./worked"
@@ -206,12 +206,20 @@ export function createClaudeAdapter(): AgentAdapter {
       settingsPath ? { MINMUX_CLAUDE_SETTINGS: settingsPath } : {},
     normalize: normalizeClaudeEvent,
     usage: (batch, resolve) => {
-      for (const ev of batch) if (ev.event === "SessionEnd") subs.forget(ev.sessionId)
+      for (const ev of batch) subs.root(ev.sessionId, ev.cwd)
       return tokenEventsForBatch(reads, batch, resolve, {
         tokens: (r) => r.tokens,
         sub: (r, ev) => subs.add(ev.sessionId, r.kit), // (a sub-agent's uses are its session's)
-        toolbox: async (r, ev) =>
-          toToolbox(addUses(r.kit, subs.of(ev.sessionId)), await mcpConfig?.servers(ev.cwd)),
+        toolbox: async (r, ev) => {
+          // (the first time this run sees a session, its finished sub-agents are counted from
+          // their files: a resumed or reopened session keeps them)
+          if (subs.firstSight(ev.sessionId) && ev.transcriptPath && process.platform !== "win32")
+            subs.set(ev.sessionId, await claudeSubagentUses(ev.transcriptPath))
+          return toToolbox(
+            addUses(r.kit, subs.of(ev.sessionId)),
+            await mcpConfig?.servers(subs.root(ev.sessionId, ev.cwd)),
+          )
+        },
         tickets,
       })
     },

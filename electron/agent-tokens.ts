@@ -28,6 +28,16 @@ export function subagentTranscriptPath(
   return `${base}/subagents/agent-${agentId}.jsonl`
 }
 
+/** What a read of a transcript gives: its tokens and, for a session's Stop, its MCP servers and
+ *  skills (one read gives both). `sub` sees a sub-agent's read before it's forgotten; `tickets`
+ *  keeps a session's snapshots in order. */
+export interface ReadView<T> {
+  tokens: (v: T) => TokenUsage
+  toolbox?: (v: T, ev: AgentEvent) => Promise<Toolbox | undefined>
+  sub?: (v: T, ev: AgentEvent) => void
+  tickets?: Tickets
+}
+
 /** Which events to price, and which transcript to read for each:
  *   - Stop         → the session transcript  → the session root
  *   - SubagentStop → the sub-agent transcript → that sub-agent
@@ -42,16 +52,6 @@ export function subagentTranscriptPath(
  *     UserPromptSubmit prunes a finished sub-agent before its (slow) read lands, the reducer's
  *     no-resurrection guard drops it and no badge appears. Narrow — sub-agent transcripts are
  *     small so the read is fast; the session root is never pruned, only evicted on SessionEnd. */
-/** What a read of a transcript gives: its tokens and, for a session's Stop, its MCP servers and
- *  skills (one read gives both). `sub` sees a sub-agent's read before it's forgotten; `tickets`
- *  keeps a session's snapshots in order. */
-export interface ReadView<T> {
-  tokens: (v: T) => TokenUsage
-  toolbox?: (v: T, ev: AgentEvent) => Promise<Toolbox | undefined>
-  sub?: (v: T, ev: AgentEvent) => void
-  tickets?: Tickets
-}
-
 export async function tokenEventsForBatch<T = TokenUsage>(
   tracker: TranscriptFold<T>, // the agent's transcript reader (Claude's, Codex's…)
   batch: AgentEvent[],

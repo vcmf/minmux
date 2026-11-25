@@ -40,6 +40,7 @@ export function codexServersIn(toml: string): string[] {
   const bare = /^\[\s*mcp_servers\s*\]/
   const header = /^\[/
   const inline = new RegExp(String.raw`^${KEY}\s*=\s*\{(.*)`)
+  const under = new RegExp(String.raw`^${KEY}\s*\.\s*([A-Za-z_]+)\s*=\s*(.*)`)
   const dotted = new RegExp(String.raw`^mcp_servers\.${KEY}\s*\.\s*([A-Za-z_]+)\s*=\s*(.*)`)
   let where: { server?: string; bare?: boolean; root: boolean } = { root: true }
   for (const raw of toml.split(/\r?\n/)) {
@@ -57,6 +58,12 @@ export function codexServersIn(toml: string): string[] {
       if (n) {
         found.push(n)
         if (/\benabled\s*=\s*false\b/.test(m[4] ?? "")) off.add(n)
+      }
+    } else if (where.bare && (m = under.exec(line))) {
+      const n = pick(m)
+      if (n) {
+        found.push(n)
+        if (m[4] === "enabled" && /^false\b/.test(m[5] ?? "")) off.add(n)
       }
     } else if (where.root && (m = dotted.exec(line))) {
       const n = pick(m)
@@ -91,8 +98,9 @@ export class CodexMcpConfig {
       const servers = codexServersIn(await fs.promises.readFile(file, "utf8"))
       this.cache.set(file, { mtime: st.mtimeMs, servers })
       return servers
-    } catch {
-      return [] // (no config.toml: no servers configured)
+    } catch (e) {
+      // (no config.toml: none configured; one it can't read: unknown)
+      return (e as NodeJS.ErrnoException).code === "ENOENT" ? [] : undefined
     }
   }
 }

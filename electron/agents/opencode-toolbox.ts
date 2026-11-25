@@ -35,14 +35,26 @@ const PROJECT_CONFIG = ["opencode.json", "opencode.jsonc"]
 const GLOBAL_CONFIG = [...PROJECT_CONFIG, "config.json"]
 const SKILL_DIRS = ["skill", "skills"]
 
-/** The servers a parsed OpenCode config gives (an `enabled: false` one left out). */
-export function opencodeServersIn(o: unknown): string[] {
+type McpLayer = Record<string, { enabled?: unknown }>
+
+/** A parsed config's `mcp` entries (the layer they add). */
+export function mcpLayer(o: unknown): McpLayer {
   const mcp = (o as { mcp?: unknown } | null)?.mcp
-  if (!mcp || typeof mcp !== "object") return []
-  return Object.entries(mcp as Record<string, unknown>)
-    .filter(([, v]) => (v as { enabled?: unknown } | null)?.enabled !== false)
-    .map(([k]) => kitName(k))
-    .filter((n): n is string => !!n)
+  if (!mcp || typeof mcp !== "object" || Array.isArray(mcp)) return {}
+  const out: McpLayer = {}
+  for (const [k, v] of Object.entries(mcp as Record<string, unknown>)) {
+    const n = kitName(k)
+    if (n) out[n] = v && typeof v === "object" ? (v as { enabled?: unknown }) : {}
+  }
+  return out
+}
+
+/** The servers of config layers merged as OpenCode merges them (a later one's fields win, so
+ *  one can turn off, or back on, an earlier one's server). */
+export function opencodeServersOf(layers: McpLayer[]): string[] {
+  const merged: McpLayer = {}
+  for (const l of layers) for (const [k, v] of Object.entries(l)) merged[k] = { ...merged[k], ...v }
+  return Object.keys(merged).filter((k) => merged[k]!.enabled !== false)
 }
 
 /** OpenCode's config files and skill folders for a session's folder: the global ones
@@ -50,7 +62,7 @@ export function opencodeServersIn(o: unknown): string[] {
  *  the project's, from the folder up to its repo root (`opencode.json(c)`, `.opencode/`); skills
  *  also from Claude's folders, which OpenCode reads too. Files are parsed once per change. */
 export class OpencodeConfig {
-  private cache = new Map<string, { mtime: number; servers: string[] }>()
+  private cache = new Map<string, { mtime: number; layer: McpLayer }>()
   constructor(
     private readonly home: string = os.homedir(),
     private readonly env: NodeJS.ProcessEnv = process.env,
@@ -77,17 +89,16 @@ export class OpencodeConfig {
     return out
   }
 
-  private async serversIn(file: string): Promise<string[] | undefined> {
+  private async layerIn(file: string): Promise<McpLayer | undefined> {
     try {
       const st = await fs.promises.stat(file)
       const hit = this.cache.get(file)
-      if (hit && hit.mtime === st.mtimeMs) return hit.servers
+      if (hit && hit.mtime === st.mtimeMs) return hit.layer
       if (st.size > 4 * 1024 * 1024) return undefined
-      const servers = opencodeServersIn(
-        JSON.parse(stripJsonc(await fs.promises.readFile(file, "utf8"))),
-      )
-      this.cache.set(file, { mtime: st.mtimeMs, servers })
-      return servers
+      const layer = mcpLayer(JSON.parse(stripJsonc(await fs.promises.readFile(file, "utf8"))))
+      if (this.cache.size >= 128) this.cache.delete(this.cache.keys().next().value!)
+      this.cache.set(file, { mtime: st.mtimeMs, layer })
+      return layer
     } catch {
       return undefined
     }
@@ -120,32 +131,36 @@ export class OpencodeConfig {
     return (r.skills ??= await this.readSkills(cwd))
   }
 
+  // Lowest first, as OpenCode layers them: global, OPENCODE_CONFIG, the project from its repo
+  // root down to the folder (each `.opencode/` over its folder), OPENCODE_CONFIG_DIR, then
+  // OPENCODE_CONFIG_CONTENT.
   private async readServers(cwd: string | undefined): Promise<string[] | undefined> {
-    let read = false
-    const out: string[] = []
-    const add = (s: string[] | undefined) => {
-      if (!s) return
-      read = true
-      out.push(...s)
-    }
-    for (const n of GLOBAL_CONFIG) add(await this.serversIn(path.join(this.global(), n)))
-    if (this.env.OPENCODE_CONFIG) add(await this.serversIn(this.env.OPENCODE_CONFIG))
-    for (const d of await this.project(cwd))
+    const layers: McpLayer[] = []
+    const add = (l: McpLayer | undefined) => void (l && layers.push(l))
+    for (const n of GLOBAL_CONFIG) add(await this.layerIn(path.join(this.global(), n)))
+    if (this.env.OPENCODE_CONFIG) add(await this.layerIn(this.env.OPENCODE_CONFIG))
+    for (const d of (await this.project(cwd)).reverse())
       for (const dir of [d, path.join(d, ".opencode")])
-        for (const n of PROJECT_CONFIG) add(await this.serversIn(path.join(dir, n)))
+        for (const n of PROJECT_CONFIG) add(await this.layerIn(path.join(dir, n)))
+    if (this.env.OPENCODE_CONFIG_DIR)
+      for (const n of PROJECT_CONFIG)
+        add(await this.layerIn(path.join(this.env.OPENCODE_CONFIG_DIR, n)))
     const inline = this.env.OPENCODE_CONFIG_CONTENT
     if (inline)
       try {
-        add(opencodeServersIn(JSON.parse(stripJsonc(inline))))
+        add(mcpLayer(JSON.parse(stripJsonc(inline))))
       } catch {
         // not JSON: nothing from it
       }
-    return read ? nameList(out) : undefined
+    return layers.length ? nameList(opencodeServersOf(layers)) : undefined
   }
 
   private async readSkills(cwd: string | undefined): Promise<string[]> {
     const roots = [
       ...SKILL_DIRS.map((s) => path.join(this.global(), s)),
+      ...(this.env.OPENCODE_CONFIG_DIR
+        ? SKILL_DIRS.map((s) => path.join(this.env.OPENCODE_CONFIG_DIR!, s))
+        : []),
       path.join(this.home, ".claude", "skills"),
     ]
     for (const d of await this.project(cwd))
@@ -157,7 +172,7 @@ export class OpencodeConfig {
     for (const root of roots) {
       try {
         for (const e of await fs.promises.readdir(root, { withFileTypes: true }))
-          if (e.isDirectory()) {
+          if (e.isDirectory() || e.isSymbolicLink()) {
             const n = kitName(e.name)
             const has = await fs.promises.access(path.join(root, e.name, "SKILL.md")).then(
               () => true,

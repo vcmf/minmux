@@ -6,7 +6,9 @@
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
-import { bump, kitName, nameList, withTool, type Kit } from "./toolbox"
+import { Worker } from "node:worker_threads"
+import { TranscriptFold } from "../transcript-fold"
+import { addUses, bump, emptyKit, kitName, nameList, withTool, type Kit } from "./toolbox"
 
 /** `mcp__<server>__<tool>` → its server as the user knows it (`claude_ai_X` → `claude.ai X`). */
 export function mcpServerOf(tool: string): string | undefined {
@@ -90,8 +92,6 @@ export function addClaudeKitLine(acc: Kit, line: string): Kit {
   return out
 }
 
-const REUSE_MS = 30_000
-
 /** The MCP servers named in a parsed config object's `mcpServers`. */
 const serversIn = (o: unknown): string[] => {
   const m = (o as { mcpServers?: unknown } | null)?.mcpServers
@@ -102,50 +102,223 @@ const serversIn = (o: unknown): string[] => {
     : []
 }
 
-/** The servers Claude's config gives a folder: `~/.claude.json` (user-wide and per project)
- *  and the folder's `.mcp.json`. Each file parsed once per change (by mtime); undefined when
- *  none could be read. */
-export class ClaudeMcpConfig {
-  private cache = new Map<string, { mtime: number; json: unknown; at: number }>()
-  constructor(private readonly home: string = os.homedir()) {}
+/** The uses a session's sub-agents made, from their transcripts
+ *  (`<session>/subagents/agent-*.jsonl`): read once, in chunks, off the agent's loop. */
+export async function claudeSubagentUses(transcriptPath: string): Promise<Kit> {
+  const dir = transcriptPath.replace(/\.jsonl$/i, "")
+  if (dir === transcriptPath) return emptyKit
+  let files: string[]
+  try {
+    files = (await fs.promises.readdir(path.join(dir, "subagents")))
+      .filter((f) => f.endsWith(".jsonl"))
+      .slice(0, 512)
+  } catch {
+    return emptyKit
+  }
+  const fold = new TranscriptFold<Kit>(addClaudeKitLine, emptyKit)
+  let kit = emptyKit
+  for (const f of files) {
+    const p = path.join(dir, "subagents", f)
+    kit = addUses(kit, await fold.update(p))
+    fold.forget(p)
+  }
+  return kit
+}
 
-  // (Claude rewrites ~/.claude.json often, and a parse takes a few ms on main's thread, which
-  // forwards the terminals: a reading is reused for half a minute, staleness being harmless)
-  private async read(file: string): Promise<unknown> {
+/** What minmux needs from `~/.claude.json`: the user's servers and, per project, its servers
+ *  and the switches that turn them on or off. Small, whatever the file's size. */
+export interface ClaudeDigest {
+  user: string[]
+  projects: Record<string, ClaudeProject>
+}
+interface ClaudeProject {
+  servers: string[]
+  disabled: string[] // disabledMcpServers + disabledMcpjsonServers
+  approved: string[] // enabledMcpjsonServers
+  all?: boolean // enableAllProjectMcpServers
+}
+
+// The worker that reads and digests ~/.claude.json: the file can be many MB (Claude keeps each
+// project's history in it) and Claude rewrites it nearly every turn, so it's never parsed on
+// main's thread, which forwards the terminals. One worker, made when first needed, never
+// keeping the app alive.
+// (plain JS, self-contained: bundling renames whatever a function's source would refer to)
+const WORKER_SRC = String.raw`
+const { parentPort } = require("node:worker_threads")
+const fs = require("node:fs")
+const name = (v) => (typeof v === "string" && v.trim() ? v.trim().slice(0, 128) : undefined)
+const names = (v) =>
+  v && typeof v === "object" && !Array.isArray(v) ? Object.keys(v).map(name).filter(Boolean) : []
+const strs = (v) => (Array.isArray(v) ? v.map(name).filter(Boolean) : [])
+function digest(o) {
+  const root = o && typeof o === "object" ? o : {}
+  const projects = {}
+  if (root.projects && typeof root.projects === "object")
+    for (const [k, v] of Object.entries(root.projects)) {
+      const p = v && typeof v === "object" ? v : {}
+      projects[k] = {
+        servers: names(p.mcpServers),
+        disabled: [...strs(p.disabledMcpServers), ...strs(p.disabledMcpjsonServers)],
+        approved: strs(p.enabledMcpjsonServers),
+        all: p.enableAllProjectMcpServers === true,
+      }
+    }
+  return { user: names(root.mcpServers), projects }
+}
+parentPort.on("message", ({ id, file }) => {
+  let out = null
+  try {
+    out = digest(JSON.parse(fs.readFileSync(file, "utf8")))
+  } catch {}
+  parentPort.postMessage({ id, out })
+})
+`
+
+class DigestWorker {
+  private worker: Worker | null = null
+  private waiting = new Map<number, (d: ClaudeDigest | null) => void>()
+  private ids = 0
+  read(file: string): Promise<ClaudeDigest | null> {
+    try {
+      if (!this.worker) {
+        const w = new Worker(WORKER_SRC, { eval: true })
+        w.unref()
+        w.on("message", (m: { id: number; out: ClaudeDigest | null }) => {
+          this.waiting.get(m.id)?.(m.out)
+          this.waiting.delete(m.id)
+        })
+        const fail = () => {
+          for (const done of this.waiting.values()) done(null)
+          this.waiting.clear()
+          this.worker = null
+        }
+        w.on("error", fail)
+        w.on("exit", fail)
+        this.worker = w
+      }
+      const id = ++this.ids
+      return new Promise((done) => {
+        this.waiting.set(id, done)
+        this.worker!.postMessage({ id, file })
+      })
+    } catch {
+      return Promise.resolve(null)
+    }
+  }
+}
+
+const REUSE_MS = 30_000
+
+/** The servers Claude's config gives a session: user-wide and per project in `~/.claude.json`
+ *  (under CLAUDE_CONFIG_DIR when set), and the project's `.mcp.json` (the nearest, up to the
+ *  repo root) when approved there or in a settings file. Read off main's thread; a reading is
+ *  reused for half a minute (staleness is harmless). Undefined when nothing could be read. */
+export class ClaudeMcpConfig {
+  private digests = new Map<string, { mtime: number; at: number; d: ClaudeDigest | null }>()
+  private small = new Map<string, { mtime: number; json: unknown }>()
+  private worker = new DigestWorker()
+  constructor(
+    private readonly home: string = os.homedir(),
+    private readonly env: NodeJS.ProcessEnv = process.env,
+  ) {}
+
+  private configDir = () => this.env.CLAUDE_CONFIG_DIR || path.join(this.home, ".claude")
+  private userFile = () =>
+    this.env.CLAUDE_CONFIG_DIR
+      ? path.join(this.env.CLAUDE_CONFIG_DIR, ".claude.json")
+      : path.join(this.home, ".claude.json")
+
+  private async digest(): Promise<ClaudeDigest | null> {
+    const file = this.userFile()
     const now = Date.now()
-    const hit = this.cache.get(file)
-    if (hit && now - hit.at < REUSE_MS) return hit.json
+    const hit = this.digests.get(file)
+    if (hit && now - hit.at < REUSE_MS) return hit.d
     try {
       const st = await fs.promises.stat(file)
       if (hit && hit.mtime === st.mtimeMs) {
         hit.at = now
-        return hit.json
+        return hit.d
       }
-      if (st.size > 64 * 1024 * 1024) return undefined // (not a config)
-      const json = JSON.parse(await fs.promises.readFile(file, "utf8")) as unknown
-      this.cache.set(file, { mtime: st.mtimeMs, json, at: now })
-      return json
+      const d = await this.worker.read(file)
+      this.digests.set(file, { mtime: st.mtimeMs, at: now, d })
+      return d
     } catch {
-      this.cache.delete(file)
+      this.digests.delete(file)
+      return null
+    }
+  }
+
+  /** A small JSON file (a .mcp.json, a settings file), parsed once per change. */
+  private async json(file: string): Promise<Record<string, unknown> | undefined> {
+    try {
+      const st = await fs.promises.stat(file)
+      if (st.size > 1024 * 1024) return undefined
+      const hit = this.small.get(file)
+      if (hit && hit.mtime === st.mtimeMs) return hit.json as Record<string, unknown>
+      const json = JSON.parse(await fs.promises.readFile(file, "utf8")) as unknown
+      if (this.small.size >= 128) this.small.delete(this.small.keys().next().value!)
+      this.small.set(file, { mtime: st.mtimeMs, json })
+      return json as Record<string, unknown>
+    } catch {
       return undefined
     }
   }
 
-  async servers(cwd: string | undefined): Promise<string[] | undefined> {
-    const user = await this.read(path.join(this.home, ".claude.json"))
-    const project = cwd ? await this.read(path.join(cwd, ".mcp.json")) : undefined
-    if (user === undefined && project === undefined) return undefined
-    const projects = (user as { projects?: Record<string, unknown> } | undefined)?.projects
-    const here = (cwd && projects && typeof projects === "object" ? projects[cwd] : undefined) as
-      Record<string, unknown> | undefined
-    // (servers the user turned off or declined aren't loaded: a project's .mcp.json ones need
-    // approval, and any can be disabled per project)
-    const list = (k: string) => (Array.isArray(here?.[k]) ? (here[k] as unknown[]) : [])
-    const off = new Set([...list("disabledMcpServers"), ...list("disabledMcpjsonServers")])
-    const approved = new Set(list("enabledMcpjsonServers"))
-    const allJson = here?.enableAllProjectMcpServers === true
-    const fromJson = serversIn(project).filter((s) => allJson || approved.has(s))
-    return nameList([...serversIn(user), ...serversIn(here), ...fromJson]).filter(
+  /** `root` and its parents up to the repo root (the one with .git), nearest first. */
+  private async upward(root: string): Promise<string[]> {
+    const out: string[] = []
+    for (let d = path.resolve(root), i = 0; i < 32; i++) {
+      out.push(d)
+      const git = await fs.promises.access(path.join(d, ".git")).then(
+        () => true,
+        () => false,
+      )
+      const up = path.dirname(d)
+      if (git || up === d || d === this.home) break
+      d = up
+    }
+    return out
+  }
+
+  /** `root`: where the session started (its project). */
+  async servers(root: string | undefined): Promise<string[] | undefined> {
+    const d = await this.digest()
+    const dirs = root ? await this.upward(root) : []
+    // (Claude files a project under the folder it was started in: the nearest one it knows)
+    const here = d ? dirs.map((x) => d.projects[x]).find(Boolean) : undefined
+    let mcpJson: Record<string, unknown> | undefined
+    let projectDir: string | undefined
+    for (const x of dirs) {
+      mcpJson = await this.json(path.join(x, ".mcp.json"))
+      if (mcpJson) {
+        projectDir = x
+        break
+      }
+    }
+    if (!d && !mcpJson) return undefined
+    // Approval of the .mcp.json servers: ~/.claude.json's project entry, or a settings file.
+    const settings = [
+      await this.json(path.join(this.configDir(), "settings.json")),
+      ...(projectDir
+        ? [
+            await this.json(path.join(projectDir, ".claude", "settings.json")),
+            await this.json(path.join(projectDir, ".claude", "settings.local.json")),
+          ]
+        : []),
+    ]
+    const strs = (v: unknown) =>
+      Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : []
+    const off = new Set([
+      ...(here?.disabled ?? []),
+      ...settings.flatMap((s) => strs(s?.disabledMcpjsonServers)),
+    ])
+    const approved = new Set([
+      ...(here?.approved ?? []),
+      ...settings.flatMap((s) => strs(s?.enabledMcpjsonServers)),
+    ])
+    const all = !!here?.all || settings.some((s) => s?.enableAllProjectMcpServers === true)
+    const fromJson = serversIn(mcpJson).filter((s) => all || approved.has(s))
+    return nameList([...(d?.user ?? []), ...(here?.servers ?? []), ...fromJson]).filter(
       (s) => !off.has(s),
     )
   }

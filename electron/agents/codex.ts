@@ -387,7 +387,6 @@ export function createCodexAdapter(): AgentAdapter {
     normalize: normalizeCodexEvent,
     // Stop → the session's rollout; SubagentStop → the sub-agent's (its hook names it).
     usage: (batch, resolve) => {
-      for (const ev of batch) if (ev.event === "SessionEnd") subs.forget(ev.sessionId)
       return tokenEventsForBatch(reads, batch, resolve, {
         tokens: (r) => r.tokens,
         sub: (r, ev) => subs.add(ev.sessionId, r.kit), // (a sub-agent's uses are its session's)

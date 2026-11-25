@@ -112,6 +112,7 @@ export class Tickets {
   }
   /** May this ticket's result go out (nothing newer went first)? Marks it sent. */
   send(session: string, ticket: number): boolean {
+    if (!this.next.has(session)) return false // (it ended meanwhile)
     if (ticket < (this.sent.get(session) ?? 0)) return false
     this.sent.set(session, ticket)
     return true
@@ -123,9 +124,34 @@ export class Tickets {
 }
 
 /** Per session, the uses its finished sub-agents made (their transcripts are read once, when
- *  they stop): added into the session's next snapshot. */
+ *  they stop): added into the session's snapshots. Kept when a session ends (it may be resumed);
+ *  the oldest go past 256 sessions. Also where each session started (its project's config). */
 export class SubUses {
   private kits = new Map<string, Kit>()
+  private roots = new Map<string, string>()
+  /** Where `session` started: its first folder seen. */
+  root(session: string, cwd: string | undefined): string | undefined {
+    const had = this.roots.get(session)
+    if (had || !cwd) return had
+    if (this.roots.size >= MAX_KEYS) this.roots.delete(this.roots.keys().next().value!)
+    this.roots.set(session, cwd)
+    return cwd
+  }
+  /** Replace a session's sub-agent uses (counted again from its files). */
+  set(session: string, kit: Kit) {
+    if (!this.kits.has(session) && this.kits.size >= MAX_KEYS)
+      this.kits.delete(this.kits.keys().next().value!)
+    this.kits.set(session, kit)
+  }
+  private seen = new Set<string>()
+  /** True the first time it's asked about a session (this run): count its sub-agents from
+   *  their files then (`set` replaces whatever stops counted before). */
+  firstSight(session: string): boolean {
+    if (this.seen.has(session)) return false
+    if (this.seen.size >= MAX_KEYS * 4) this.seen.clear()
+    this.seen.add(session)
+    return true
+  }
   add(session: string, kit: Kit) {
     if (!this.kits.has(session) && this.kits.size >= MAX_KEYS)
       this.kits.delete(this.kits.keys().next().value!)
