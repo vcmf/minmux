@@ -36,7 +36,7 @@ const pick = (m: RegExpExecArray, at = 1) => kitName(m[at] ?? m[at + 1] ?? m[at 
 export function codexServersIn(toml: string): string[] {
   const found: string[] = []
   const off = new Set<string>()
-  const table = new RegExp(String.raw`^\[\s*mcp_servers\.${KEY}`)
+  const table = new RegExp(String.raw`^\[\s*mcp_servers\.${KEY}\s*(\]|\.)`)
   const bare = /^\[\s*mcp_servers\s*\]/
   const header = /^\[/
   const inline = new RegExp(String.raw`^${KEY}\s*=\s*\{(.*)`)
@@ -50,7 +50,8 @@ export function codexServersIn(toml: string): string[] {
     if ((m = table.exec(line))) {
       const n = pick(m)
       if (n) found.push(n)
-      where = { server: n, root: false }
+      // (a sub-table's `enabled` is a tool's or an env's, not the server's)
+      where = { server: m[4] === "]" ? n : undefined, root: false }
     } else if (bare.test(line)) where = { bare: true, root: false }
     else if (header.test(line)) where = { root: false }
     else if (where.bare && (m = inline.exec(line))) {

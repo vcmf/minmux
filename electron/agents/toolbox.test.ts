@@ -278,6 +278,10 @@ describe("Codex's rollout", () => {
     expect(codexServersIn('[mcp_servers]\nfoo.command = "npx"\nbar.enabled = false\n')).toEqual([
       "foo",
     ])
+    // (a tool's `enabled` under a sub-table isn't the server's)
+    expect(
+      codexServersIn("[mcp_servers.docs]\n[mcp_servers.docs.tools.search]\nenabled = false\n"),
+    ).toEqual(["docs"])
     expect(codexHomeOf("/h/.codex/sessions/2026/11/25/rollout-x.jsonl")).toBe("/h/.codex")
     expect(codexHomeOf("/elsewhere/x.jsonl")).toBeNull()
     const home = tmp()

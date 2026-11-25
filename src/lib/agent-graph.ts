@@ -32,7 +32,7 @@ export interface Toolbox {
   mcp: Record<string, number> // server → calls
   mcpFailed?: Record<string, number> // server → calls that failed (Codex: refused, errored)
   mcpLoaded?: string[] // servers it had (undefined: unknown)
-  mcpDown?: string[] // servers that failed to start or need sign-in
+  mcpDown?: string[] // servers that failed to start
   skills: Record<string, number> | null // skill → uses; null: not supported for this agent
   skillsLoaded?: string[] // skills it had (undefined: unknown)
 }

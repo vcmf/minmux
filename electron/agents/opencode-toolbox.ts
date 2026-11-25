@@ -103,7 +103,7 @@ export class OpencodeConfig {
       const st = await fs.promises.stat(file)
       const hit = this.cache.get(file)
       if (hit && hit.mtime === st.mtimeMs) return hit.layer
-      if (st.size > 4 * 1024 * 1024) return undefined
+      if (st.size > 256 * 1024) return undefined // (parsed on main's thread: configs are small)
       const layer = mcpLayer(JSON.parse(stripJsonc(await fs.promises.readFile(file, "utf8"))))
       if (this.cache.size >= 128) this.cache.delete(this.cache.keys().next().value!)
       this.cache.set(file, { mtime: st.mtimeMs, layer })
@@ -120,6 +120,7 @@ export class OpencodeConfig {
     const now = Date.now()
     let r = this.recent.get(key)
     if (!r || now - r.at >= 30_000) {
+      this.recent.delete(key)
       if (this.recent.size >= 64) this.recent.delete(this.recent.keys().next().value!)
       this.recent.set(key, (r = { at: now }))
     }

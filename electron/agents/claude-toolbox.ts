@@ -218,7 +218,11 @@ export class ClaudeMcpConfig {
       const d = await this.worker.read(file)
       // (a read that failed, most likely of a file Claude was rewriting, keeps the last good
       // one; the next read tries again)
-      if (!d) return hit?.d ?? null
+      if (!d) {
+        // (and waits like a good one: no read on every Stop of a file that can't be read)
+        this.digests.set(file, { mtime: st.mtimeMs, at: now, d: hit?.d ?? null })
+        return hit?.d ?? null
+      }
       this.digests.set(file, { mtime: st.mtimeMs, at: now, d })
       return d
     } catch {
