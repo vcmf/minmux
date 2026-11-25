@@ -151,7 +151,7 @@ export function FleetView() {
   const [, setPinVersion] = useState(0) // a pin moved: render with it
   const reduced = useRef(
     typeof window !== "undefined" &&
-      !!window.matchMedia?.("(prefers-reduced-motion: reduce)").matches,
+      !!window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches,
   )
   // The one place positions come from, for React and the motion loop alike. The open repo turns
   // through keyframes, one a second (lib/fleet-motion KEY_MS), each laid out at its angle with the
@@ -181,7 +181,10 @@ export function FleetView() {
     const key = (i: number) => {
       let ns = c.keys.get(i)
       if (!ns) {
-        ns = relax(withPins(openLayout(repo, i * KEY_RAD), pinned), 40, fixed)
+        // (pins are where a card was left in the settled layout: what hangs off a pinned card
+        // moves by its offset from there, then the pass runs again around the pins)
+        ns = relax(openLayout(repo, i * KEY_RAD))
+        if (fixed) ns = relax(withPins(ns, pinned), 40, fixed)
         if (c.keys.size >= 4) c.keys.delete(c.keys.keys().next().value!)
         c.keys.set(i, ns)
       }
@@ -252,7 +255,7 @@ export function FleetView() {
   const moveTo = useCallback(
     (to: Camera, smooth: boolean, done?: () => void) => {
       cancelAnimationFrame(glide.current)
-      if (!smooth || window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) {
+      if (!smooth || window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches) {
         cam.current = to
         apply()
         done?.()
@@ -421,6 +424,7 @@ export function FleetView() {
   // cards' places straight to the DOM and redraws the canvas; it never renders React.
   const lastInput = useRef(performance.now())
   const hovered = useRef(false)
+  const pointer = useRef<{ x: number; y: number } | null>(null) // (where it was last seen)
   const openRef = useRef(open)
   openRef.current = open
   const reposRef = useRef(repos)
@@ -531,23 +535,40 @@ export function FleetView() {
   useEffect(() => wake(), [working, nodes, wake])
   useEffect(() => {
     let idle: ReturnType<typeof setTimeout> | undefined
+    // Still again: is a card under the pointer now? (the one it was on may have moved away, as a
+    // repo circle does when it opens, with no pointer event to say so)
+    const settle = () => {
+      const p = pointer.current
+      if (p) hovered.current = !!document.elementFromPoint?.(p.x, p.y)?.closest?.("[data-node]")
+      wake()
+    }
     // Any input: the turn stops (where it is); once still again, it starts.
-    const input = () => {
+    const input = (e: Event) => {
+      if (e instanceof MouseEvent) pointer.current = { x: e.clientX, y: e.clientY }
       lastInput.current = performance.now()
       clearTimeout(idle)
-      idle = setTimeout(wake, IDLE_MS + 20)
+      idle = setTimeout(settle, IDLE_MS + 20)
       wake()
     }
     const events = ["pointermove", "wheel", "keydown", "pointerdown"] as const
     for (const e of events) window.addEventListener(e, input, { passive: true, capture: true })
     window.addEventListener("focus", wake)
     document.addEventListener("visibilitychange", wake)
-    idle = setTimeout(wake, IDLE_MS + 20)
+    idle = setTimeout(settle, IDLE_MS + 20)
+    // Reduce Motion switched on (or off) while the tab is open.
+    const mq = window.matchMedia?.("(prefers-reduced-motion: reduce)")
+    const onReduced = (e: MediaQueryListEvent) => {
+      reduced.current = e.matches
+      paintRef.current(performance.now())
+      wake()
+    }
+    mq?.addEventListener?.("change", onReduced)
     const m = motion.current
     return () => {
       for (const e of events) window.removeEventListener(e, input, { capture: true })
       window.removeEventListener("focus", wake)
       document.removeEventListener("visibilitychange", wake)
+      mq?.removeEventListener?.("change", onReduced)
       clearTimeout(idle)
       cancelAnimationFrame(m.raf)
       m.on = false
@@ -622,11 +643,18 @@ export function FleetView() {
         if (Math.hypot(dx, dy) < 5) return
         pin.moved = true
         el.setPointerCapture?.(e.pointerId) // (a drag now: a release anywhere ends it)
+        // (on a keyframe while it drags: one layout a move, not two to blend; under 3px away)
+        theta.current = Math.round(theta.current / KEY_RAD) * KEY_RAD
       }
       pins.current.set(pin.id, { x: pin.nx + dx, y: pin.ny + dy })
       pinsRev.current++
-      paintRef.current(performance.now())
+      // (one layout a frame, however fast the pointer reports)
+      dragFrame ||= requestAnimationFrame(() => {
+        dragFrame = 0
+        paintRef.current(performance.now())
+      })
     }
+    let dragFrame = 0
 
     let drag: { x: number; y: number; id: number } | null = null
     const onDown = (e: PointerEvent) => {
@@ -697,6 +725,7 @@ export function FleetView() {
       el.removeEventListener("pointermove", onMove)
       el.removeEventListener("pointerup", onUp)
       el.removeEventListener("pointercancel", onUp)
+      cancelAnimationFrame(dragFrame)
       ro?.disconnect()
     }
   }, [apply])

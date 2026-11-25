@@ -117,6 +117,18 @@ describe("withPins", () => {
     expect(moved(nodeId.agent("a2"))).toEqual([0, 0]) // another PR's
     expect(withPins(ns, new Map())).toBe(ns)
   })
+
+  it("a short drag of a settled PR moves what hangs off it by as much, not by the overlap pass's own push", () => {
+    const base = relax(openLayout(busy))
+    const pr = base.find((n) => n.id === nodeId.pr("u/1"))!
+    const out = relax(
+      withPins(base, new Map([[pr.id, { x: pr.x + 6, y: pr.y }]])),
+      40,
+      new Set([pr.id]),
+    )
+    const a = (ns: FleetNode[]) => ns.find((n) => n.id === nodeId.agent("a1"))!
+    expect(Math.hypot(a(out).x - a(base).x, a(out).y - a(base).y)).toBeLessThan(10)
+  })
 })
 
 describe("grown", () => {
