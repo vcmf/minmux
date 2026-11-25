@@ -5,104 +5,36 @@
 // with a transform: no native scrolling. The edges are one viewport-sized 2D canvas under the
 // cards. The open repo turns slowly while the mouse is still (lib/fleet-motion).
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
-import {
-  ArrowSquareOut,
-  GitBranch,
-  GitPullRequest,
-  Graph,
-  PushPinSlash,
-} from "@phosphor-icons/react"
+import { Graph, PushPinSlash } from "@phosphor-icons/react"
 import { useStore, activeTheme } from "../store"
 import { useFleetModel } from "./use-fleet-data"
 import {
   FLEET,
   clampCamera,
   nodeId,
-  openLayout,
-  overviewLayout,
-  relax,
   toScreen,
   unionBox,
   bounds,
   type Camera,
-  type FleetNode,
 } from "../lib/fleet-layout"
-import { DETACHED, type FleetAgent, type FleetPr, type FleetRepo } from "../lib/fleet-model"
+import { type FleetAgent } from "../lib/fleet-model"
 import { cardLook } from "../lib/pr-graph"
-import { AGENT_STATUS_UI } from "../lib/agent-status-ui"
-import { agentColor, agentInfo } from "../lib/agent-kinds"
-import { agentIcon } from "./agent-icon"
-import { ipc } from "../lib/ipc"
+import { agentColor } from "../lib/agent-kinds"
 import { cardInView, keyPan, wheelPan } from "../lib/fleet-camera"
 import {
   FRAME_MS,
   GROW_MS,
   KEY_RAD,
-  between,
-  withPins,
   IDLE_MS,
   TURN_RAD_PER_MS,
   dotAt,
-  grown,
   moving,
   turning,
   type MotionState,
 } from "../lib/fleet-motion"
-import { TerminalManager } from "../terminal/terminal-manager"
 
-type Selection = { kind: "repo"; key: string } | { kind: "agent"; id: string } | null
-
-/** What a node stands for: its repo and, by kind, its PR, branch, agent or sub-agent. */
-interface NodeInfo {
-  repo: FleetRepo
-  pr?: FleetPr
-  agent?: FleetAgent
-  branch?: string
-  sub?: FleetAgent["subs"][number]
-}
-
-const plural = (n: number, w: string) => `${n} ${w}${n === 1 ? "" : "s"}`
-const shortName = (label: string) => (label.split("/").pop() ?? label).toUpperCase()
-
-/** What a PR card says under its title, and its tone. */
-function prStatus(p: FleetPr): { word: string; cls: string } {
-  if (!p.row) return { word: p.state === "draft" ? "draft" : "open", cls: "" }
-  const look = cardLook(p.row)
-  const word =
-    p.row.merge === "conflicts"
-      ? "conflicts"
-      : p.row.ci === "failure"
-        ? "CI failing"
-        : p.row.review === "changes"
-          ? "changes requested"
-          : p.row.ci === "pending"
-            ? "CI running"
-            : look.approved
-              ? "✓ approved"
-              : look.draft
-                ? "draft"
-                : "ready"
-  return { word, cls: look.tone ?? (look.approved ? "ok" : "") }
-}
-
-const agentName = (a: FleetAgent) => a.name || agentInfo(a.kind).label
-const agentDoing = (a: FleetAgent) =>
-  a.status === "waiting"
-    ? "needs you"
-    : a.status === "working"
-      ? a.currentTool
-        ? `running ${a.currentTool}`
-        : "working"
-      : AGENT_STATUS_UI[a.status].word
-
-/** The class a status's word takes (no dot: the agent's icon says which agent it is). */
-const statusTone = (status: FleetAgent["status"]) =>
-  status === "working" ? "ok" : status === "waiting" ? "warn" : status === "done" ? "done" : "dim"
-
-const goToPane = (paneId: string) => {
-  useStore.getState().focusSession(paneId)
-  requestAnimationFrame(() => TerminalManager.focus(paneId))
-}
+import { type Selection, type NodeInfo, RepoCounts, FleetCard, FleetPanel } from "./fleet-cards"
+import { useFleetLayout } from "./use-fleet-layout"
 
 export function FleetView() {
   const repos = useFleetModel()
@@ -119,13 +51,20 @@ export function FleetView() {
     : null
   const shownSel: Selection =
     sel?.kind === "repo" && open && sel.key === openKey ? { kind: "repo", key: open.key } : sel
-  // The cards pinned by a drag, where they were left.
-  const pins = useRef(new Map<string, { x: number; y: number }>())
-  const pinsRev = useRef(0) // (any pin change: the cached keyframes go)
-  const clearPins = useCallback(() => {
-    if (pins.current.size) pinsRev.current++
-    pins.current.clear()
-  }, [])
+  // Positions: the layout, its turn and grow-out, and the pins (use-fleet-layout).
+  const {
+    pins,
+    pinsRev,
+    clearPins,
+    pinCount,
+    setPinCount,
+    setPinVersion,
+    theta,
+    openedAt,
+    grewOut,
+    reduced,
+    layoutNow,
+  } = useFleetLayout()
   useEffect(() => {
     if (open) openRoots.current = open.roots
     if (openKey && !open) {
@@ -139,70 +78,8 @@ export function FleetView() {
       setOpenKey(open.key)
       setSel((s) => (s?.kind === "repo" && s.key === openKey ? { kind: "repo", key: open.key } : s))
     }
-  }, [openKey, open, clearPins])
+  }, [openKey, open, clearPins, setPinCount])
 
-  // Motion (lib/fleet-motion): the open repo's angle, the nodes pinned by a drag, when it opened
-  // (its cards grow out). React lays the graph out at the current angle with the pins on, so a
-  // model update mid-turn never makes a card jump; the motion loop below moves them in between.
-  const theta = useRef(0)
-  const [pinCount, setPinCount] = useState(0)
-  const openedAt = useRef(0)
-  const grewOut = useRef(true) // (the grow-out's last frame painted: a cut-short one is finished)
-  const [, setPinVersion] = useState(0) // a pin moved: render with it
-  const reduced = useRef(
-    typeof window !== "undefined" &&
-      !!window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches,
-  )
-  // The one place positions come from, for React and the motion loop alike. The open repo turns
-  // through keyframes, one a second (lib/fleet-motion KEY_MS), each laid out at its angle with the
-  // pinned cards where they were left (fixed in the overlap pass, what hangs off them moved
-  // along); a frame blends the two around it and scales them while they grow out. So the overlap
-  // pass (O(n²)) runs about once a second while turning and never per frame, and a render that
-  // changes nothing gets the same array back (the effects keyed on it stay quiet).
-  const cache = useRef<{
-    repo: FleetRepo | null
-    all: FleetRepo[] | null
-    rev: number
-    keys: Map<number, FleetNode[]>
-    over: { all: FleetRepo[]; ns: FleetNode[] } | null
-    mix: { a: FleetNode[]; b: FleetNode[]; k: number; ns: FleetNode[] } | null
-  }>({ repo: null, all: null, rev: 0, keys: new Map(), over: null, mix: null })
-  const layoutNow = useCallback((repo: FleetRepo | null, all: FleetRepo[], now: number) => {
-    const c = cache.current
-    if (!repo) {
-      if (c.over?.all !== all) c.over = { all, ns: overviewLayout(all) }
-      return c.over.ns
-    }
-    if (c.repo !== repo || c.all !== all || c.rev !== pinsRev.current) {
-      Object.assign(c, { repo, all, rev: pinsRev.current, keys: new Map(), mix: null })
-    }
-    const pinned = pins.current
-    const fixed = pinned.size ? new Set(pinned.keys()) : undefined
-    const key = (i: number) => {
-      let ns = c.keys.get(i)
-      if (!ns) {
-        // (pins are where a card was left in the settled layout: what hangs off a pinned card
-        // moves by its offset from there, then the pass runs again around the pins)
-        ns = relax(openLayout(repo, i * KEY_RAD))
-        if (fixed) ns = relax(withPins(ns, pinned), 40, fixed)
-        if (c.keys.size >= 4) c.keys.delete(c.keys.keys().next().value!)
-        c.keys.set(i, ns)
-      }
-      return ns
-    }
-    const step = theta.current / KEY_RAD
-    const i = Math.floor(step)
-    const k = step - i
-    const a = key(i)
-    let ns = a
-    if (k > 1e-9) {
-      const b = key(i + 1)
-      if (c.mix?.a !== a || c.mix.b !== b || c.mix.k !== k)
-        c.mix = { a, b, k, ns: between(a, b, k) }
-      ns = c.mix.ns
-    }
-    return reduced.current ? ns : grown(ns, (now - openedAt.current) / GROW_MS, fixed)
-  }, [])
   const nodes = layoutNow(open, repos, performance.now())
 
   const lookup = useMemo(() => {
@@ -318,7 +195,7 @@ export function FleetView() {
       clearPins() // (pins belong to the view they were made in)
       setPinCount(0)
     },
-    [openKey, repos, clearPins],
+    [openKey, repos, clearPins, setPinCount, openedAt, reduced, grewOut],
   )
   const closeAll = useCallback(() => {
     openRoots.current = []
@@ -327,7 +204,7 @@ export function FleetView() {
     setView((v) => v + 1)
     clearPins()
     setPinCount(0)
-  }, [clearPins])
+  }, [clearPins, setPinCount])
 
   // The edges: one canvas the size of the viewport, drawn through the camera.
   const selectedAgent = shownSel?.kind === "agent" ? shownSel.id : null
@@ -357,6 +234,21 @@ export function FleetView() {
     const { border2: faint, red, accent } = ui
     const ns = nodesRef.current
     const byId = new Map(ns.map((n) => [n.id, n]))
+    // The open repo's orbits (PRs, agents, sub-agents): faint dashed rings under everything. They
+    // are round in the rings' own space, so the turn never moves them.
+    if (open) {
+      ctx.save()
+      ctx.globalAlpha = 0.55
+      ctx.setLineDash([3, 7])
+      ctx.lineWidth = 1
+      ctx.strokeStyle = faint
+      for (const r of [FLEET.r1, FLEET.r2, FLEET.r2 + FLEET.r3]) {
+        ctx.beginPath()
+        ctx.ellipse(FLEET.cx, FLEET.cy, r * FLEET.ex, r, 0, 0, Math.PI * 2)
+        ctx.stroke()
+      }
+      ctx.restore()
+    }
     // The selected agent's way to its repo, drawn green.
     const path = new Set<string>()
     for (
@@ -414,7 +306,7 @@ export function FleetView() {
         }
       }
     }
-  }, [lookup, selectedAgent, scheme, ui])
+  }, [ui, reduced, selectedAgent, lookup, scheme, open])
   drawRef.current = draw
   useEffect(() => apply(), [draw, nodes, apply])
 
@@ -453,7 +345,7 @@ export function FleetView() {
       working: workingRef.current,
       growing: !!openRef.current && now - openedAt.current < GROW_MS,
     }),
-    [],
+    [openedAt, reduced],
   )
   const paint = useCallback(
     (now: number, relayout = true) => {
@@ -483,7 +375,7 @@ export function FleetView() {
       paint(now)
       return true
     },
-    [paint],
+    [grewOut, openedAt, paint],
   )
   const wake = useCallback(() => {
     const m = motion.current
@@ -514,7 +406,7 @@ export function FleetView() {
       m.raf = requestAnimationFrame(tick)
     }
     m.raf = requestAnimationFrame(tick)
-  }, [state, paint, finishGrow])
+  }, [finishGrow, state, paint, theta])
   // A repo opening grows its cards out of its circle (and starts a turn from where it is).
   useLayoutEffect(() => {
     if (!open) return
@@ -531,7 +423,7 @@ export function FleetView() {
       if (!nodes.some((n) => n.id === id)) gone = pins.current.delete(id) || gone
     if (gone) pinsRev.current++
     if (gone) setPinCount(pins.current.size)
-  }, [nodes])
+  }, [nodes, pins, pinsRev, setPinCount])
   useEffect(() => wake(), [working, nodes, wake])
   useEffect(() => {
     let idle: ReturnType<typeof setTimeout> | undefined
@@ -573,7 +465,7 @@ export function FleetView() {
       cancelAnimationFrame(m.raf)
       m.on = false
     }
-  }, [wake])
+  }, [reduced, wake])
 
   // Panning: the wheel / trackpad, or dragging empty space. A resize needs nothing: the camera is
   // the middle, so the graph stays centred on it.
@@ -728,7 +620,7 @@ export function FleetView() {
       cancelAnimationFrame(dragFrame)
       ro?.disconnect()
     }
-  }, [apply])
+  }, [apply, pins, pinsRev, setPinCount, setPinVersion, theta])
 
   const docked = open ? repos.filter((r) => r.key !== open.key) : []
   return (
@@ -786,7 +678,9 @@ export function FleetView() {
                 onClick={() => toggle(r.key)}
                 title={`Open ${r.label}`}
               >
-                <span className="fleet-dock-dot">{shortName(r.label).charAt(0)}</span>
+                <span className="fleet-dock-dot">
+                  {(r.label.split("/").pop() ?? r.label).charAt(0).toUpperCase()}
+                </span>
                 <span className="fleet-dock-name">{r.label}</span>
                 <RepoCounts repo={r} />
               </button>
@@ -807,294 +701,5 @@ export function FleetView() {
         onAll={closeAll}
       />
     </div>
-  )
-}
-
-function RepoCounts({ repo }: { repo: FleetRepo }) {
-  const { working, waiting } = repo.counts
-  return (
-    <span className="fleet-counts">
-      {working > 0 && <span className="ok">● {working} working</span>}
-      {waiting > 0 && <span className="warn">● {waiting} need you</span>}
-      {!working && !waiting && <span>{plural(repo.counts.agents, "agent")}</span>}
-    </span>
-  )
-}
-
-function FleetCard(props: {
-  node: FleetNode
-  info: NodeInfo | undefined
-  open: boolean
-  selected: boolean
-  onRoot: (key: string) => void
-  onAgent: (id: string) => void
-}) {
-  const { node: n, info, open, selected } = props
-  if (!info) return null
-  const style = { left: n.x - n.w / 2, top: n.y - n.h / 2, width: n.w, height: n.h }
-  if (n.kind === "root") {
-    const r = info.repo
-    return (
-      <>
-        <button
-          className={`fleet-root${open ? " open" : ""}${selected ? " sel" : ""}`}
-          style={style}
-          data-node={n.id}
-          aria-label={`${open ? "Close" : "Open"} ${r.label}`}
-          aria-expanded={open}
-          onClick={() => props.onRoot(r.key)}
-        >
-          {shortName(r.label).slice(0, 10)}
-        </button>
-        {!open && (
-          <div className="fleet-root-label" style={{ left: n.x - 120, top: n.y + n.h / 2 + 12 }}>
-            <span className="one">
-              {r.label}
-              {r.defaultBranch && <span className="faint"> ⑂ {r.defaultBranch}</span>}
-            </span>
-            <span className="one faint">
-              {plural(r.counts.prs, "PR")} · {plural(r.counts.agents, "agent")}
-            </span>
-            <RepoCounts repo={r} />
-          </div>
-        )}
-      </>
-    )
-  }
-  if (n.kind === "pr" && info.pr) {
-    const p = info.pr
-    const st = prStatus(p)
-    return (
-      <div
-        className={`fleet-card fleet-pr${st.cls === "ok" ? "" : ` ${st.cls}`}${p.state === "draft" ? " draft" : ""}`}
-        style={style}
-        data-node={n.id}
-      >
-        <span className="one">
-          <span className={`fleet-pr-icon${p.state === "draft" ? " draft" : ""}`}>
-            <GitPullRequest size={13} weight="bold" />
-          </span>{" "}
-          <span className="faint">#{p.number}</span> <b>{p.row?.title ?? ""}</b>
-        </span>
-        <span className={`one fleet-st ${st.cls}`}>{st.word}</span>
-        <button
-          className="fleet-link"
-          title="Open on GitHub"
-          aria-label={`Open #${p.number} on GitHub`}
-          onClick={() => ipc.openExternal(p.url)}
-        >
-          <ArrowSquareOut size={11} />
-        </button>
-      </div>
-    )
-  }
-  if (n.kind === "branch") {
-    return (
-      <div className="fleet-card fleet-branch" style={style} data-node={n.id}>
-        <GitBranch size={12} />
-        <span className="one">
-          {info.branch === DETACHED ? "detached HEAD" : info.branch}{" "}
-          <span className="faint">· no PR</span>
-        </span>
-      </div>
-    )
-  }
-  if (n.kind === "sub" && info.sub) {
-    const st = AGENT_STATUS_UI[info.sub.status]
-    const Icon = agentIcon(info.agent?.kind ?? "claude")
-    return (
-      <div className="fleet-card fleet-sub" style={style} data-node={n.id}>
-        <span className="fleet-kind">
-          <Icon size={12} />
-        </span>
-        <span className="one">
-          {info.sub.type} <span className={statusTone(info.sub.status)}>· {st.word}</span>
-        </span>
-      </div>
-    )
-  }
-  if (n.kind === "agent" && info.agent) {
-    const a = info.agent
-    const Icon = agentIcon(a.kind)
-    const st = AGENT_STATUS_UI[a.status]
-    return (
-      <button
-        className={`fleet-card fleet-agent ${a.status}${selected ? " sel" : ""}`}
-        style={style}
-        data-node={n.id}
-        aria-label={`${agentInfo(a.kind).label} agent ${agentName(a)}, ${st.word}`}
-        onClick={() => props.onAgent(a.id)}
-        onDoubleClick={() => goToPane(a.paneId)}
-      >
-        <span className="one">
-          <span className="fleet-kind">
-            <Icon size={13} />
-          </span>{" "}
-          <b>{agentName(a)}</b>{" "}
-          <span className="faint">· {a.subs.length ? plural(a.subs.length, "sub") : st.word}</span>
-        </span>
-        <span className={`one ${statusTone(a.status)}`}>{agentDoing(a)}</span>
-      </button>
-    )
-  }
-  return null
-}
-
-function FleetPanel(props: {
-  repos: FleetRepo[]
-  open: FleetRepo | null
-  sel: Selection
-  agentOf: (id: string) => NodeInfo | undefined
-  onRepo: (key: string) => void
-  onAgent: (id: string) => void
-  onAll: () => void
-}) {
-  const { repos, sel } = props
-  const agent = sel?.kind === "agent" ? props.agentOf(sel.id) : undefined
-  const repo =
-    sel?.kind === "repo"
-      ? repos.find((r) => r.key === sel.key)
-      : (agent?.repo ?? props.open ?? undefined)
-
-  if (agent?.agent) {
-    const a = agent.agent
-    const pr = agent.repo.prs.find((p) => p.agents.some((x) => x.id === a.id))
-    const ctx = a.tokens?.window ? Math.round((a.tokens.context / a.tokens.window) * 100) : null
-    return (
-      <aside className="fleet-panel" aria-label="Agent">
-        <button className="fleet-back" onClick={() => props.onRepo(agent.repo.key)}>
-          ← {agent.repo.label}
-          {pr ? ` › #${pr.number}` : ""}
-        </button>
-        <h2 className="one">{agentName(a)}</h2>
-        <div className="fleet-panel-row">
-          <span className="fleet-kind">
-            {(() => {
-              const I = agentIcon(a.kind)
-              return <I size={13} />
-            })()}
-          </span>
-          {agentInfo(a.kind).label} · <span className={statusTone(a.status)}>{agentDoing(a)}</span>
-        </div>
-        <button className="btn primary" onClick={() => goToPane(a.paneId)}>
-          Go to pane
-        </button>
-        <dl className="fleet-facts">
-          <dt>PR</dt>
-          <dd className="one">{pr ? `#${pr.number} ${pr.row?.title ?? ""}` : "none"}</dd>
-          <dt>branch</dt>
-          <dd className="one">{a.branch ?? "—"}</dd>
-          {a.cwd && (
-            <>
-              <dt>cwd</dt>
-              <dd className="one">{a.cwd}</dd>
-            </>
-          )}
-          {a.tokens && (
-            <>
-              <dt>context</dt>
-              <dd>
-                {Math.round(a.tokens.context / 1000)}k
-                {a.tokens.window ? ` / ${Math.round(a.tokens.window / 1000)}k` : ""}
-                {ctx !== null && (
-                  <span className="fleet-meter">
-                    <span
-                      style={{ width: `${Math.min(100, ctx)}%` }}
-                      className={ctx > 80 ? "warn" : ""}
-                    />
-                  </span>
-                )}
-              </dd>
-            </>
-          )}
-        </dl>
-        <h3>Sub-agents · {a.subs.length}</h3>
-        {a.subs.length ? (
-          a.subs.map((s) => (
-            <div key={s.id} className="fleet-panel-row">
-              {s.type}{" "}
-              <span className={statusTone(s.status)}>· {AGENT_STATUS_UI[s.status].word}</span>
-            </div>
-          ))
-        ) : (
-          <div className="faint">none</div>
-        )}
-      </aside>
-    )
-  }
-
-  if (repo) {
-    const agents = [
-      ...repo.prs.flatMap((p) => p.agents),
-      ...repo.branches.flatMap((b) => b.agents),
-      ...repo.agents,
-    ]
-    return (
-      <aside className="fleet-panel" aria-label="Repo">
-        <button className="fleet-back" onClick={props.onAll}>
-          ← all repos
-        </button>
-        <h2 className="one">{repo.label}</h2>
-        <div className="faint">
-          {repo.defaultBranch ? `⑂ ${repo.defaultBranch} · ` : ""}
-          {plural(repo.counts.prs, "PR")} · {plural(repo.counts.agents, "agent")}
-        </div>
-        {repo.repo && (
-          <button
-            className="btn"
-            onClick={() => ipc.openExternal(`https://github.com/${repo.repo}`)}
-          >
-            Open on GitHub ↗
-          </button>
-        )}
-        <h3>Pull requests</h3>
-        {repo.prs.length ? (
-          repo.prs.map((p) => {
-            const st = prStatus(p)
-            return (
-              <div key={p.url} className="fleet-panel-row">
-                <span className="faint">#{p.number}</span>{" "}
-                <span className="one">{p.row?.title ?? ""}</span>{" "}
-                <span className={`fleet-st ${st.cls}`}>{st.word}</span>
-              </div>
-            )
-          })
-        ) : (
-          <div className="faint">none open</div>
-        )}
-        <h3>Agent sessions</h3>
-        {agents.map((a) => {
-          const Icon = agentIcon(a.kind)
-          return (
-            <button
-              key={a.id}
-              className="fleet-panel-row fleet-pick"
-              onClick={() => props.onAgent(a.id)}
-            >
-              <Icon size={13} /> <span className="one">{agentName(a)}</span>{" "}
-              <span className="faint">· {agentDoing(a)}</span>
-            </button>
-          )
-        })}
-      </aside>
-    )
-  }
-
-  return (
-    <aside className="fleet-panel" aria-label="Repos">
-      <h3>Repos · {repos.length}</h3>
-      {repos.map((r) => (
-        <button key={r.key} className="fleet-repo-row" onClick={() => props.onRepo(r.key)}>
-          <b className="one">{r.label}</b>
-          <span className="faint">
-            {plural(r.counts.prs, "PR")} · {plural(r.counts.agents, "agent")}
-          </span>
-          <RepoCounts repo={r} />
-        </button>
-      ))}
-      <div className="fleet-hint faint">
-        Repos with a live agent session. Open one to see its PRs and the agents on them.
-      </div>
-    </aside>
   )
 }

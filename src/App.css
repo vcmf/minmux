@@ -4353,6 +4353,15 @@ body.resizing-col {
 .fleet-pr.draft {
   border-style: dashed;
 }
+/* A status word stays on one line: the title beside it gives way. */
+.fleet-panel-row .fleet-st {
+  flex: none;
+  white-space: nowrap;
+  margin-left: auto;
+}
+.fleet-panel-row .one {
+  min-width: 0;
+}
 .fleet-st.amber {
   color: var(--amber);
 }
@@ -4588,4 +4597,12 @@ body.resizing-col {
   display: flex;
   flex-direction: column;
   align-items: center;
+}
+/* The open repo's circle glows faintly into the graph. */
+.fleet-root.open {
+  box-shadow:
+    0 0 0 7px color-mix(in srgb, var(--text) 5%, transparent),
+    0 0 0 8px color-mix(in srgb, var(--text) 14%, transparent),
+    0 0 0 16px color-mix(in srgb, var(--text) 3%, transparent),
+    0 0 90px 40px color-mix(in srgb, var(--text) 7%, transparent);
 }
