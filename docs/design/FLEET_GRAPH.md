@@ -53,11 +53,17 @@ kind of tab beside the terminal ones instead of living inside one.
   pulls epic), when a bar order would earn its keep.
 - `activeTabId` keeps its meaning: the terminal tab in context (the last one shown). A separate
   `activeView` says a view covers the pane area. **One store-level rule** clears `activeView`
-  whenever `activeTabId` is set, whatever path sets it (tab click, drag spring, moving a
-  terminal, new tab, `focusSession`, Go to pane).
+  when an update moves `activeTabId` to another tab that still exists, whatever path does it
+  (drag spring, moving a terminal, new tab, `focusSession`). The context tab closing doesn't
+  count: the next tab becomes the context, still behind the view. Choosing the context tab
+  itself (a click, the drag spring) clears `activeView` explicitly.
+- Actions that put something in a pane or focus one (splits, new terminal, open folder or file,
+  Go to pane, moving a terminal) leave the view first, without counting the context tab as
+  seen; it's revealed only if it's the tab that ends up on screen.
 - A selector, `shownTerminalTab(state)`, returns the active terminal tab only when no view is
-  shown. Every reader that asks "what is on screen" uses it; readers that ask "which tab is in
-  context" keep `activeTabId`.
+  shown. Readers that ask "what is on screen" (renderer, attention, highlights, the palette's
+  tab list, find, the status bar's driving pane) check the view; readers that ask "which tab is
+  in context" (new-tab cwd, `focusedTerminal`, `useGhMissing`) keep `activeTabId`.
 - A view tab closes with its ×. No new keyboard shortcuts:
   ⌘W stays the window's Close.
 - The tab's dot follows the fleet: amber when any agent needs you, green while any works.

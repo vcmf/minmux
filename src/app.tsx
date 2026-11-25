@@ -695,6 +695,7 @@ function App() {
       } else if ((e.metaKey && k === "f") || (e.ctrlKey && e.shiftKey && k === "f")) {
         e.preventDefault()
         const s = useStore.getState()
+        if (s.activeView && !s.searchOpen) return // no terminal on screen to search
         s.setSearchOpen(!s.searchOpen)
       }
     }

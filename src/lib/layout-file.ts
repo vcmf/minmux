@@ -210,7 +210,11 @@ export function restoreLayout(
     })
     activeTabId = ws.activeTabId
   }
-  if (!tabs.length) return { state: ws, blocked: false }
+  // No tab to place: workspace.json as is, plus the view tabs (they need no pane).
+  if (!tabs.length) {
+    const views = parseViews(file.views)
+    return { state: ws && views.length ? { ...ws, views } : ws, blocked: false }
+  }
 
   const used = new Set(tabs.flatMap((t) => allPanes(t.root).flatMap((p: PaneLeaf) => p.entryIds)))
   const kept: Record<string, ObjectEntry> = {}

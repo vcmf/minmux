@@ -61,5 +61,9 @@ export function leavingView<T extends Partial<TabState>>(
   if (!state.activeView || !next || typeof next !== "object") return next
   if (!("activeTabId" in next) || "activeView" in next) return next
   if (next.activeTabId === state.activeTabId) return next
+  // The context tab closed (its × or its last shell exiting): another tab takes over as context,
+  // still behind the view. Only a switch to a tab that still exists leaves the view.
+  const tabs = (next as { tabs?: Tab[] }).tabs
+  if (tabs && !tabs.some((t) => t.id === state.activeTabId)) return next
   return { ...next, activeView: null }
 }

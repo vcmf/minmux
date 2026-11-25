@@ -273,4 +273,13 @@ describe("layout.json", () => {
       expect(r.views).toEqual(["fleet"])
     })
   })
+
+  it("come back even when no terminal tab was saved", () => {
+    const s = { ...state(), views: ["fleet" as const] }
+    const { ws, layout } = save(s)
+    const file = JSON.parse(layout)
+    file.tabs = []
+    const r = restoreLayout(deserializeWorkspace(JSON.parse(ws)), ws, JSON.stringify(file)).state!
+    expect(r.views).toEqual(["fleet"])
+  })
 })

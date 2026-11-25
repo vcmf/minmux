@@ -576,6 +576,8 @@ const SHOWS_TERMINALS = [
   "resumeInSplit",
   "setActivePane",
   "focusSession",
+  "moveTerminal",
+  "moveSurface",
 ] as const satisfies readonly (keyof AppState)[]
 
 /** Store middleware for view tabs: every `set` (and `setState`) goes through `leavingView`, and
@@ -600,8 +602,14 @@ const viewRule =
       const run = store[name] as (...args: unknown[]) => unknown
       Object.assign(store, {
         [name]: (...args: unknown[]) => {
-          if (get().activeView) get().showTerminals()
-          return run(...args)
+          const context = get().activeView ? get().activeTabId : null
+          if (!context) return run(...args)
+          // Leave the view without revealing: the action may go to another tab, and the context
+          // tab's panes only count as seen if they're what ends up on screen.
+          ruled({ activeView: null })
+          const result = run(...args)
+          if (get().activeTabId === context && !get().activeView) get().revealTab(context)
+          return result
         },
       })
     }

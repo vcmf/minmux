@@ -1940,4 +1940,50 @@ describe("store — view tabs (docs/design/FLEET_GRAPH.md)", () => {
     expect(st().activeView).toBeNull()
     expect(st().activeTabId).toBe("t")
   })
+
+  it("closing the context tab keeps the view; the next tab becomes the context", () => {
+    const { a, b } = twoTabs()
+    st().openView("fleet")
+    st().closeTab(b) // b is the context
+    expect(st().activeView).toBe("fleet")
+    expect(st().activeTabId).toBe(a)
+    st().closeTab(a) // the last one
+    expect(st().activeView).toBe("fleet")
+    expect(st().activeTabId).toBeNull()
+  })
+
+  it("an action that goes to another tab doesn't count the context tab as seen", () => {
+    const { a, b } = twoTabs()
+    const hidden = st().tabs.find((t) => t.id === b)!.activeSessionId // b is the context
+    const other = st().tabs.find((t) => t.id === a)!.activeSessionId
+    st().openView("fleet")
+    useStore.setState({ windowFocused: false })
+    st().signalSession(hidden, { type: "attention" })
+    useStore.setState({ windowFocused: true })
+    st().focusSession(other) // Go to pane, in tab a
+    expect(st().activeView).toBeNull()
+    expect(st().activeTabId).toBe(a)
+    expect(st().sessions[hidden]!.status).toBe("attention") // never on screen
+  })
+
+  it("an action that lands in the context tab reveals it", () => {
+    const { b } = twoTabs()
+    const id = st().tabs.find((t) => t.id === b)!.activeSessionId
+    st().openView("fleet")
+    useStore.setState({ windowFocused: false })
+    st().signalSession(id, { type: "attention" })
+    useStore.setState({ windowFocused: true })
+    st().splitActive("row", shell) // both panes on screen (a new surface would cover it)
+    expect(st().activeView).toBeNull()
+    expect(st().sessions[id]!.status).not.toBe("attention")
+  })
+
+  it("moving a terminal into the context tab shows it", () => {
+    const { a, b } = twoTabs()
+    const moved = st().tabs.find((t) => t.id === a)!.activeSessionId
+    st().openView("fleet")
+    st().moveTerminal(moved, { kind: "join", tabId: b })
+    expect(st().activeView).toBeNull()
+    expect(st().activeTabId).toBe(b)
+  })
 })
