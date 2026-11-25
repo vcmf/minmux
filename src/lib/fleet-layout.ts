@@ -148,7 +148,7 @@ export function openLayout(repo: FleetRepo, theta = 0): FleetNode[] {
   return out
 }
 
-/** Cards that overlap pushed apart along their shorter overlap (roots stay put), a few passes. */
+/** Cards that overlap pushed apart along their shorter overlap (roots stay put), until still. */
 export function relax(nodes: FleetNode[], passes = 40): FleetNode[] {
   const ns = nodes.map((n) => ({ ...n }))
   for (let pass = 0; pass < passes; pass++) {
@@ -184,35 +184,63 @@ export function relax(nodes: FleetNode[], passes = 40): FleetNode[] {
   return ns
 }
 
-/** The area the nodes need (at least the default one), and the nodes moved into it; `cx`/`cy`:
- *  where the layout's centre landed (the view scrolls it to the middle). */
-export function fit(nodes: FleetNode[]): {
+/** Where a layout sits in its area: the shift applied to it, the area's size, its centre. */
+export interface Fitted {
   nodes: FleetNode[]
+  dx: number
+  dy: number
   w: number
   h: number
   cx: number
   cy: number
-} {
+}
+
+/** The area the nodes need (at least the default one), and the nodes moved into it. */
+export function fit(nodes: FleetNode[]): Fitted {
   const pad = 40
   let minX = Infinity
   let minY = Infinity
   let maxX = -Infinity
   let maxY = -Infinity
   for (const n of nodes) {
-    minX = Math.min(minX, n.x - n.w / 2)
+    // (a root's 240px label is wider than its circle)
+    const half = n.kind === "root" ? Math.max(n.w, 240) / 2 : n.w / 2
+    minX = Math.min(minX, n.x - half)
     minY = Math.min(minY, n.y - n.h / 2)
-    maxX = Math.max(maxX, n.x + n.w / 2)
+    maxX = Math.max(maxX, n.x + half)
     maxY = Math.max(maxY, n.y + n.h / 2 + 60) // (a root's label hangs below it)
   }
-  if (!nodes.length) return { nodes, w: FLEET.w, h: FLEET.h, cx: FLEET.cx, cy: FLEET.cy }
+  if (!nodes.length)
+    return { nodes, dx: 0, dy: 0, w: FLEET.w, h: FLEET.h, cx: FLEET.cx, cy: FLEET.cy }
   const dx = Math.max(0, pad - minX)
   const dy = Math.max(0, pad - minY)
   const moved = dx || dy ? nodes.map((n) => ({ ...n, x: n.x + dx, y: n.y + dy })) : nodes
   return {
     nodes: moved,
+    dx,
+    dy,
     w: Math.max(FLEET.w, maxX + dx + pad),
     h: Math.max(FLEET.h, maxY + dy + pad),
     cx: FLEET.cx + dx,
     cy: FLEET.cy + dy,
+  }
+}
+
+/** A fitted layout on a steady origin: while the same view shows, its shift and size only grow
+ *  (`prev`: the last one shown), so a node never moves because another one came or went. */
+export function steady(prev: Fitted | null, f: Fitted): Fitted {
+  if (!prev) return f
+  const dx = Math.max(prev.dx, f.dx)
+  const dy = Math.max(prev.dy, f.dy)
+  const ox = dx - f.dx
+  const oy = dy - f.dy
+  return {
+    nodes: ox || oy ? f.nodes.map((n) => ({ ...n, x: n.x + ox, y: n.y + oy })) : f.nodes,
+    dx,
+    dy,
+    w: Math.max(prev.w, f.w + ox),
+    h: Math.max(prev.h, f.h + oy),
+    cx: f.cx + ox,
+    cy: f.cy + oy,
   }
 }

@@ -4406,14 +4406,11 @@ body.resizing-col {
   right: 0;
   display: flex;
   gap: 24px;
-  padding: 12px 20px 20px;
-  flex-wrap: wrap;
-  row-gap: 10px;
-  background: linear-gradient(var(--bg) 70%, transparent);
-  pointer-events: none; /* only its repos take clicks: cards scrolled under it stay clickable */
-}
-.fleet-dock-repo {
-  pointer-events: auto;
+  padding: 8px 20px;
+  overflow-x: auto; /* one strip: it scrolls sideways, never grows over the graph */
+  scrollbar-width: thin;
+  background: color-mix(in srgb, var(--bg) 92%, transparent);
+  border-bottom: 1px solid var(--border);
 }
 .fleet-dock-repo {
   display: flex;

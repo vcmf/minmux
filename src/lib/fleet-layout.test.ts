@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest"
 import {
   FLEET,
   fit,
+  steady,
   nodeId,
   openLayout,
   overviewLayout,
@@ -169,5 +170,40 @@ describe("relax", () => {
       for (let j = i + 1; j < ns.length; j++) if (overlaps(ns[i]!, ns[j]!)) bad++
     expect(bad).toBe(0)
     expect(area.w).toBeGreaterThan(FLEET.w) // the area grew (it scrolls)
+  })
+})
+
+describe("steady", () => {
+  const node = (id: string, x: number, y: number): FleetNode => ({
+    id,
+    kind: "agent",
+    x,
+    y,
+    w: 100,
+    h: 40,
+  })
+
+  it("a node keeps its place in the area when the layout grows on the left", () => {
+    const first = fit([node("a", 500, 500)])
+    const grown = fit([node("a", 500, 500), node("b", -300, 500)]) // fit shifts everything right
+    const kept = steady(first, grown)
+    const a1 = first.nodes.find((n) => n.id === "a")!
+    const a2 = kept.nodes.find((n) => n.id === "a")!
+    expect(a2.x).toBe(a1.x + (kept.dx - first.dx)) // moved exactly by the origin's growth…
+    expect(kept.dx).toBe(grown.dx) // …which the view adds to its scroll: same place on screen
+  })
+
+  it("never shrinks while the same view shows, so the scroll never has to jump back", () => {
+    const big = fit([node("a", 500, 500), node("b", -300, 500)])
+    const small = fit([node("a", 500, 500)])
+    const kept = steady(big, small)
+    expect(kept.dx).toBe(big.dx)
+    expect(kept.w).toBeGreaterThanOrEqual(big.w)
+    expect(kept.nodes.find((n) => n.id === "a")!.x).toBe(big.nodes.find((n) => n.id === "a")!.x)
+  })
+
+  it("a new view starts from its own fit", () => {
+    const f = fit([node("a", 500, 500)])
+    expect(steady(null, f)).toBe(f)
   })
 })

@@ -7,7 +7,16 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { ArrowSquareOut, GitBranch, Graph } from "@phosphor-icons/react"
 import { useStore, activeTheme } from "../store"
 import { useFleetModel } from "./use-fleet-data"
-import { fit, nodeId, openLayout, overviewLayout, relax, type FleetNode } from "../lib/fleet-layout"
+import {
+  fit,
+  nodeId,
+  openLayout,
+  overviewLayout,
+  relax,
+  steady,
+  type Fitted,
+  type FleetNode,
+} from "../lib/fleet-layout"
 import { DETACHED, type FleetAgent, type FleetPr, type FleetRepo } from "../lib/fleet-model"
 import { cardLook } from "../lib/pr-graph"
 import { AGENT_STATUS_UI } from "../lib/agent-status-ui"
@@ -73,34 +82,32 @@ export function FleetView() {
   const repos = useFleetModel()
   const [openKey, setOpenKey] = useState<string | null>(null)
   const [sel, setSel] = useState<Selection>(null)
-  // The open repo, by key, or by its checkout roots when its key moved (a folder's key becomes
-  // owner/name once the repo lookup answers).
+  // What's open is also held by its checkout roots: a folder's key becomes owner/name once the
+  // repo lookup answers, and the open repo follows it. Worked out here, in render, so the old key
+  // never reaches the panel or the highlight.
   const openRoots = useRef<string[]>([])
-  const open =
-    repos.find((r) => r.key === openKey) ??
-    (openKey ? repos.find((r) => r.roots.some((x) => openRoots.current.includes(x))) : undefined) ??
-    null
+  const open = openKey
+    ? (repos.find((r) => r.key === openKey) ??
+      repos.find((r) => r.roots.some((x) => openRoots.current.includes(x))) ??
+      null)
+    : null
+  const shownSel: Selection =
+    sel?.kind === "repo" && open && sel.key === openKey ? { kind: "repo", key: open.key } : sel
   useEffect(() => {
-    if (!openKey) return
-    if (!open) {
+    if (open) openRoots.current = open.roots
+    if (openKey && !open) {
       // It left the model (its last agent ended): closed; it doesn't reopen by itself later.
+      openRoots.current = []
       setOpenKey(null)
       setSel(null)
-      return
-    }
-    openRoots.current = open.roots
-    if (open.key !== openKey) {
+    } else if (open && open.key !== openKey) {
       setOpenKey(open.key)
-      setSel((s) => (s?.kind === "repo" ? { kind: "repo", key: open.key } : s))
+      setSel((s) => (s?.kind === "repo" && s.key === openKey ? { kind: "repo", key: open.key } : s))
     }
   }, [openKey, open])
 
-  // The layout, moved into an area as big as it needs (a busy repo makes it scroll).
-  const placed = useMemo(
-    () => fit(open ? relax(openLayout(open)) : overviewLayout(repos)),
-    [open, repos],
-  )
-  const nodes = placed.nodes
+  // Each open or close is a new view: it starts its own steady origin and is centred once.
+  const [view, setView] = useState(0)
 
   const lookup = useMemo(() => {
     const m = new Map<string, NodeInfo>()
@@ -123,35 +130,60 @@ export function FleetView() {
     return m
   }, [repos])
 
+  // The layout on a steady origin (lib/fleet-layout `steady`): while the same view shows, the
+  // area only grows, and a growth on the left or top moves the scroll with it, so nothing slides
+  // under the viewport when an agent comes or goes.
+  const shown = useRef<{ view: number; placed: Fitted } | null>(null)
+  const placed = useMemo(() => {
+    const f = fit(open ? relax(openLayout(open)) : overviewLayout(repos))
+    const prev = shown.current?.view === view ? shown.current.placed : null
+    return steady(prev, f)
+  }, [open, repos, view])
+  const nodes = placed.nodes
+
   const area = useRef<HTMLDivElement>(null)
-  const centre = useRef({ cx: placed.cx, cy: placed.cy })
-  centre.current = { cx: placed.cx, cy: placed.cy }
+  const scroller = useRef<HTMLDivElement>(null)
   const offset = () => ({ x: area.current?.offsetLeft ?? 0, y: area.current?.offsetTop ?? 0 })
+  useLayoutEffect(() => {
+    const el = scroller.current
+    const was = shown.current
+    shown.current = { view, placed }
+    if (!el) return
+    if (!was || was.view !== view) {
+      // A new view: its centre in the middle (smooth when opening a repo).
+      const o = offset()
+      el.scrollTo?.({
+        left: o.x + placed.cx - el.clientWidth / 2,
+        top: o.y + placed.cy - el.clientHeight / 2,
+        behavior: was && openKey ? "smooth" : "auto",
+      })
+    } else if (placed.dx !== was.placed.dx || placed.dy !== was.placed.dy) {
+      el.scrollLeft += placed.dx - was.placed.dx
+      el.scrollTop += placed.dy - was.placed.dy
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- runs per layout; openKey only picks the scroll's style
+  }, [placed, view])
 
   const toggle = useCallback(
     (key: string) => {
       const closing = openKey === key
+      openRoots.current = closing ? [] : (repos.find((r) => r.key === key)?.roots ?? [])
       setOpenKey(closing ? null : key)
       setSel(closing ? null : { kind: "repo", key })
+      setView((v) => v + 1)
     },
-    [openKey],
+    [openKey, repos],
   )
-
-  // Opening or closing a repo scrolls its centre into the middle.
-  const scroller = useRef<HTMLDivElement>(null)
-  useLayoutEffect(() => {
-    const el = scroller.current
-    const o = offset()
-    el?.scrollTo?.({
-      left: o.x + centre.current.cx - el.clientWidth / 2,
-      top: o.y + centre.current.cy - el.clientHeight / 2,
-      behavior: openKey ? "smooth" : "auto",
-    })
-  }, [openKey])
+  const closeAll = useCallback(() => {
+    openRoots.current = []
+    setOpenKey(null)
+    setSel(null)
+    setView((v) => v + 1)
+  }, [])
 
   // The edges: one canvas the size of the viewport, drawn with the scroll offset.
   const canvas = useRef<HTMLCanvasElement>(null)
-  const selectedAgent = sel?.kind === "agent" ? sel.id : null
+  const selectedAgent = shownSel?.kind === "agent" ? shownSel.id : null
   const scheme = useStore((s) => activeTheme(s).scheme)
   // The theme's colours, from the theme itself (its CSS variables may not be applied yet).
   const ui = useStore((s) => activeTheme(s).ui)
@@ -259,8 +291,8 @@ export function FleetView() {
                 info={lookup.get(n.id)}
                 open={!!open}
                 selected={
-                  (sel?.kind === "agent" && n.id === nodeId.agent(sel.id)) ||
-                  (sel?.kind === "repo" && n.id === nodeId.root(sel.key))
+                  (shownSel?.kind === "agent" && n.id === nodeId.agent(shownSel.id)) ||
+                  (shownSel?.kind === "repo" && n.id === nodeId.root(shownSel.key))
                 }
                 onRoot={toggle}
                 onAgent={(id) => setSel({ kind: "agent", id })}
@@ -296,17 +328,14 @@ export function FleetView() {
       <FleetPanel
         repos={repos}
         open={open}
-        sel={sel}
+        sel={shownSel}
         agentOf={(id) => lookup.get(nodeId.agent(id))}
         onRepo={(key) => {
           if (openKey !== key) toggle(key)
           else setSel({ kind: "repo", key })
         }}
         onAgent={(id) => setSel({ kind: "agent", id })}
-        onAll={() => {
-          setOpenKey(null)
-          setSel(null)
-        }}
+        onAll={closeAll}
       />
     </div>
   )
