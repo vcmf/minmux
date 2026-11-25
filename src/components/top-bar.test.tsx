@@ -411,6 +411,21 @@ describe("TopBar pull requests button", () => {
       expect(st().activeView).toBeNull()
     })
 
+    it("Agents in a view: shown off (the panel is set aside); a click goes back with it open", () => {
+      st().newTab(testShell)
+      st().setRightView("agents")
+      st().openView("fleet")
+      render(<TopBar />)
+      const btn = screen.getByRole("button", { name: "Agents" })
+      expect(btn).not.toHaveClass("on")
+      fireEvent.click(btn)
+      expect(st().activeView).toBeNull()
+      expect(st().rightView).toBe("agents")
+      expect(btn).toHaveClass("on")
+      fireEvent.click(btn) // (on the panes: it toggles as ever)
+      expect(st().rightView).toBeNull()
+    })
+
     it("its × closes it", () => {
       st().newTab(testShell)
       st().openView("fleet")

@@ -6,11 +6,14 @@ import { type FleetNode } from "../lib/fleet-layout"
 import { DETACHED, type FleetAgent, type FleetPr, type FleetRepo } from "../lib/fleet-model"
 import { cardLook } from "../lib/pr-graph"
 import { mcpList, skillList, type ToolList } from "../lib/fleet-toolbox"
+import { contextWindow, folderName, shortModel } from "../lib/fleet-facts"
+import { formatTokens } from "../lib/tokens"
 import { AGENT_STATUS_UI } from "../lib/agent-status-ui"
 import { agentColor, agentInfo } from "../lib/agent-kinds"
 import type { AgentKind } from "../lib/agent-graph"
 import { agentIcon } from "./agent-icon"
 import { ipc } from "../lib/ipc"
+import { openLink } from "../lib/open-link"
 import { TerminalManager } from "../terminal/terminal-manager"
 
 export type Selection = { kind: "repo"; key: string } | { kind: "agent"; id: string } | null
@@ -144,9 +147,10 @@ export function FleetCard(props: {
         <span className={`one fleet-st ${st.cls}`}>{st.word}</span>
         <button
           className="fleet-link"
-          title="Open on GitHub"
-          aria-label={`Open #${p.number} on GitHub`}
-          onClick={() => ipc.openExternal(p.url)}
+          title={`Open #${p.number}`}
+          aria-label={`Open #${p.number}`}
+          // (as a PR link clicked in a pane: the dialog, looked up with that pane's gh)
+          onClick={() => openLink(p.url, p.agents[0]?.paneId)}
         >
           <ArrowSquareOut size={11} />
         </button>
@@ -197,10 +201,23 @@ export function FleetCard(props: {
           <span className="faint">· {a.subs.length ? plural(a.subs.length, "sub") : st.word}</span>
         </span>
         <span className={`one ${statusTone(a.status)}`}>{agentDoing(a)}</span>
+        <AgentFacts a={a} />
       </button>
     )
   }
   return null
+}
+
+/** An agent card's third line: its folder, its context and its model. */
+function AgentFacts({ a }: { a: FleetAgent }) {
+  const facts = [
+    folderName(a.cwd),
+    a.tokens?.context ? `${formatTokens(a.tokens.context)} ctx` : undefined,
+    shortModel(a.kind, a.tokens?.model),
+  ].filter(Boolean)
+  return facts.length ? (
+    <span className="one faint fleet-facts-line">{facts.join(" · ")}</span>
+  ) : null
 }
 
 export function FleetPanel(props: {
@@ -222,7 +239,8 @@ export function FleetPanel(props: {
   if (agent?.agent) {
     const a = agent.agent
     const pr = agent.repo.prs.find((p) => p.agents.some((x) => x.id === a.id))
-    const ctx = a.tokens?.window ? Math.round((a.tokens.context / a.tokens.window) * 100) : null
+    const window = contextWindow(a.kind, a.tokens)
+    const ctx = a.tokens && window ? Math.round((a.tokens.context / window.size) * 100) : null
     return (
       <aside className="fleet-panel" aria-label="Agent">
         <button className="fleet-back" onClick={() => props.onRepo(agent.repo.key)}>
@@ -250,24 +268,40 @@ export function FleetPanel(props: {
               <dd className="one">{a.cwd}</dd>
             </>
           )}
-          {a.tokens && (
+          {a.tokens?.model && (
             <>
-              <dt>context</dt>
-              <dd>
-                {Math.round(a.tokens.context / 1000)}k
-                {a.tokens.window ? ` / ${Math.round(a.tokens.window / 1000)}k` : ""}
-                {ctx !== null && (
-                  <span className="fleet-meter">
-                    <span
-                      style={{ width: `${Math.min(100, ctx)}%` }}
-                      className={ctx > 80 ? "warn" : ""}
-                    />
-                  </span>
-                )}
-              </dd>
+              <dt>model</dt>
+              <dd className="one">{a.tokens.model}</dd>
             </>
           )}
         </dl>
+        {!!a.tokens?.context && (
+          <div className="fleet-context">
+            <div className="fleet-context-head">
+              <span className="faint">context</span>
+              <span>
+                {formatTokens(a.tokens.context)}
+                {window ? ` / ${window.guess ? "~" : ""}${formatTokens(window.size)}` : ""}
+              </span>
+            </div>
+            {ctx !== null && (
+              <div
+                className="fleet-meter"
+                role="meter"
+                aria-label="context used"
+                aria-valuenow={Math.min(100, ctx)}
+                aria-valuemin={0}
+                aria-valuemax={100}
+              >
+                <span
+                  style={{ width: `${Math.min(100, ctx)}%` }}
+                  // (a guessed window may be too small: no alarm on a guess)
+                  className={window?.guess ? "" : ctx > 90 ? "bad" : ctx > 75 ? "warn" : ""}
+                />
+              </div>
+            )}
+          </div>
+        )}
         <h3>Sub-agents · {a.subs.length}</h3>
         {a.subs.length ? (
           a.subs.map((s) => (

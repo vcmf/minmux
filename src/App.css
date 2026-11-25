@@ -4274,7 +4274,49 @@ body.resizing-col {
   position: absolute;
   left: 0;
   top: 0;
-  will-change: transform;
+  transform-origin: 0 0; /* (the zoom scales about the world's origin) */
+  /* (no will-change: with it, a zoomed layer is a stretched bitmap of its 100%, blurry) */
+}
+/* Zoom out | level | in, at the graph's bottom left. */
+.fleet-zoom {
+  position: absolute;
+  left: 14px;
+  bottom: 14px;
+  z-index: 6;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--border2);
+  border-radius: 8px;
+  background: var(--bg);
+  box-shadow: 0 2px 8px -3px var(--shadow);
+}
+.fleet-zoom-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 26px;
+  height: 24px;
+  padding: 0 6px;
+  border: none;
+  border-radius: 6px;
+  background: none;
+  color: var(--dim);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+.fleet-zoom-btn:hover:not(:disabled) {
+  background: var(--border2);
+  color: var(--text);
+}
+.fleet-zoom-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.fleet-zoom-level {
+  min-width: 44px;
 }
 .fleet-view .one {
   display: block;
@@ -4343,6 +4385,8 @@ body.resizing-col {
   font-size: 12px;
   line-height: 17px;
   text-align: left;
+  /* (a small, still shadow: cheap to paint as cards move) */
+  box-shadow: 0 2px 8px -3px var(--shadow);
 }
 .fleet-pr.amber {
   border-color: color-mix(in srgb, var(--amber) 60%, transparent);
@@ -4408,7 +4452,8 @@ body.resizing-col {
   border-color: color-mix(in srgb, var(--amber) 55%, transparent);
 }
 .fleet-agent.idle {
-  opacity: 0.75;
+  /* (dimmed by its colour, not see-through: the edges behind it stay hidden) */
+  color: var(--dim);
 }
 .fleet-agent.sel,
 .fleet-agent:focus-visible {
@@ -4562,21 +4607,38 @@ body.resizing-col {
   margin: 0;
   min-width: 0;
 }
+/* The agent panel's context: a label row, then a bar of how full the window is. */
+.fleet-context {
+  margin: 12px 0 4px;
+}
+.fleet-context-head {
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+  margin-bottom: 6px;
+}
 .fleet-meter {
   display: block;
-  height: 4px;
-  margin-top: 4px;
-  border-radius: 2px;
+  height: 6px;
+  border-radius: 3px;
   background: var(--elev);
+  overflow: hidden;
 }
 .fleet-meter > span {
   display: block;
-  height: 4px;
-  border-radius: 2px;
+  height: 100%;
+  border-radius: 3px;
   background: var(--dim);
 }
 .fleet-meter > span.warn {
   background: var(--amber);
+}
+.fleet-meter > span.bad {
+  background: var(--red);
+}
+/* An agent card's third line: folder, context, model. */
+.fleet-facts-line {
+  font-size: 11px;
 }
 .fleet-hint {
   margin-top: auto;
@@ -4605,6 +4667,14 @@ body.resizing-col {
     0 0 0 8px color-mix(in srgb, var(--text) 14%, transparent),
     0 0 0 16px color-mix(in srgb, var(--text) 3%, transparent),
     0 0 90px 40px color-mix(in srgb, var(--text) 7%, transparent);
+}
+/* (on a light background a 7% haze doesn't show: stronger) */
+html[data-scheme="light"] .fleet-root.open {
+  box-shadow:
+    0 0 0 7px color-mix(in srgb, var(--text) 8%, transparent),
+    0 0 0 8px color-mix(in srgb, var(--text) 22%, transparent),
+    0 0 0 16px color-mix(in srgb, var(--text) 6%, transparent),
+    0 0 90px 40px color-mix(in srgb, var(--text) 14%, transparent);
 }
 /* A session's MCP servers and skills in the panel. */
 .fleet-tools-head {
@@ -4769,6 +4839,9 @@ button.fleet-row:not(:disabled):hover {
   /* (an outline: the selection and focus rings, box shadows, still show) */
   outline: 2px solid var(--accent);
   outline-offset: 3px;
+}
+.rightpanel[hidden] {
+  display: none;
 }
 .fleet-panel-host {
   display: contents; /* (only there to make the panel inert under the inventory) */

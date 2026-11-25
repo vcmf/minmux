@@ -31,7 +31,7 @@ export const FLEET = {
   r3: 110, // sub-agents, beyond their agent
   pr: [196, 56] as const,
   branch: [270, 34] as const,
-  agent: [224, 64] as const,
+  agent: [236, 80] as const, // (three lines: name, what it does, folder · context · model)
   sub: [168, 28] as const,
 }
 

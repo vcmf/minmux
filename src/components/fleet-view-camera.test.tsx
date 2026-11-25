@@ -135,7 +135,19 @@ describe("FleetView: camera, edges, panel", () => {
     await frame()
     const wheeled = at()
     expect(wheeled).not.toBe(start)
-    fireEvent.wheel(viewport(), { deltaY: 10, ctrlKey: true }) // a pinch: no pan
+    fireEvent.wheel(viewport(), { deltaY: 10, ctrlKey: true }) // a pinch: a zoom, not a pan
+    await frame()
+    expect(at()).toMatch(/scale\(0\.9/)
+    fireEvent.keyDown(viewport(), { key: "0" }) // back to 100%, about the middle
+    await frame()
+    expect(at()).toContain("scale(1)")
+    // The buttons zoom too, and say how far.
+    fireEvent.click(screen.getByRole("button", { name: "Zoom in" }))
+    await frame() // (the level shown once a frame)
+    expect(screen.getByRole("button", { name: "Zoom to 100%" })).toHaveTextContent("120%")
+    expect(document.activeElement).toBe(viewport()) // (the keys still reach the graph)
+    fireEvent.click(screen.getByRole("button", { name: "Zoom out" }))
+    fireEvent.click(screen.getByRole("button", { name: "Zoom to 100%" }))
     await frame()
     expect(at()).toBe(wheeled)
     fireEvent.keyDown(viewport(), { key: "ArrowDown" })

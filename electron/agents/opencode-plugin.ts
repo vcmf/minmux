@@ -174,8 +174,10 @@ export const MinmuxPlugin = async (ctx) => {
     if (s.context === undefined) return o
     o.context = s.context
     o.output = s.output || 0
+    if (s.model) o.model = s.model
     s.sentContext = o.context
     s.sentOutput = o.output
+    s.sentModel = s.model
     return o
   }
   const tokens = (id, s) => {
@@ -184,10 +186,13 @@ export const MinmuxPlugin = async (ctx) => {
     if (!s.started || s.context === undefined) return
     const context = s.context || 0
     const output = s.output || 0
-    if (s.sentContext === context && s.sentOutput === output) return
+    if (s.sentContext === context && s.sentOutput === output && s.sentModel === s.model) return
     s.sentContext = context
     s.sentOutput = output
-    drop(Object.assign({ e: "tokens", sessionID: id, context, output }, where(id)))
+    s.sentModel = s.model
+    const o = { e: "tokens", sessionID: id, context, output }
+    if (s.model) o.model = s.model
+    drop(Object.assign(o, where(id)))
   }
   const onSession = (info, created) => {
     const id = str(info && info.id, MAX_TEXT)
@@ -296,6 +301,7 @@ export const MinmuxPlugin = async (ctx) => {
               const c = t.cache || {}
               const s = session(m.sessionID)
               const context = num(t.input) + num(c.read) + num(c.write)
+              if (typeof m.modelID === "string" && m.modelID) s.model = str(m.modelID, 64)
               if (context > 0) {
                 s.context = context
                 tokens(m.sessionID, s)
