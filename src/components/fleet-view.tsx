@@ -107,8 +107,10 @@ export function FleetView() {
     }
   }, [openKey, open])
 
-  // Each open or close is a new view: it starts its own steady origin and is centred once.
+  // Each open or close is a new view: it starts its own steady origin and is centred once. A repo
+  // that vanished is a new view in this very render (no frame drawn on its old origin).
   const [view, setView] = useState(0)
+  const viewId = `${view}:${open ? "open" : "all"}`
 
   const lookup = useMemo(() => {
     const m = new Map<string, NodeInfo>()
@@ -132,50 +134,56 @@ export function FleetView() {
   }, [repos])
 
   // The layout on a steady origin (lib/fleet-layout `steady`): while the same view shows, the
-  // area only grows, and a growth on the left or top moves the scroll with it, so nothing slides
-  // under the viewport when an agent comes or goes.
-  const shown = useRef<{ view: number; placed: Fitted; off: { x: number; y: number } } | null>(null)
-  const centring = useRef(0) // until when the opening's smooth scroll runs
+  // area only grows, so a node never moves in it because another one came or went.
+  const shown = useRef<{ viewId: string; placed: Fitted } | null>(null)
   const placed = useMemo(() => {
     const f = fit(open ? relax(openLayout(open)) : overviewLayout(repos))
-    const prev = shown.current?.view === view ? shown.current.placed : null
+    const prev = shown.current?.viewId === viewId ? shown.current.placed : null
     return steady(prev, f)
-  }, [open, repos, view])
+  }, [open, repos, viewId])
   const nodes = placed.nodes
 
-  const area = useRef<HTMLDivElement>(null)
+  // Scrolling. A viewport bigger than the graph gets padding, so the graph's centre can still be
+  // scrolled to the middle (no CSS centring: every offset is ours). The view keeps one point of
+  // the layout ("world": before the origin's shift) in its middle; after any change (the origin
+  // growing, a resize, a new layout) the scroll is set so that point is back there, so the cards
+  // stay put on screen.
   const scroller = useRef<HTMLDivElement>(null)
-  const offset = () => ({ x: area.current?.offsetLeft ?? 0, y: area.current?.offsetTop ?? 0 })
+  const [vp, setVp] = useState({ w: 0, h: 0 })
+  const pad = {
+    x: Math.max(0, Math.round(vp.w / 2 - placed.cx)),
+    y: Math.max(0, Math.round(vp.h / 2 - placed.cy)),
+  }
+  const areaW = Math.max(placed.w + pad.x, pad.x + placed.cx + Math.ceil(vp.w / 2))
+  const areaH = Math.max(placed.h + pad.y, pad.y + placed.cy + Math.ceil(vp.h / 2))
+  const origin = useRef({ x: 0, y: 0, padX: 0, padY: 0 }) // world → area, for the listeners
+  const mid = useRef<{ x: number; y: number } | null>(null) // the world point in the middle
+  const centring = useRef(false) // the opening's smooth scroll runs: it owns the scroll
   useLayoutEffect(() => {
     const el = scroller.current
     const was = shown.current
-    // (the area as laid out now: when it's smaller than the view, it sits centred in it)
-    const off = offset()
-    shown.current = { view, placed, off }
+    shown.current = { viewId, placed }
+    const o = { x: placed.dx + pad.x, y: placed.dy + pad.y }
+    origin.current = { ...o, padX: pad.x, padY: pad.y }
     if (!el) return
-    const centre = (smooth: boolean) =>
-      el.scrollTo?.({
-        left: off.x + placed.cx - el.clientWidth / 2,
-        top: off.y + placed.cy - el.clientHeight / 2,
-        behavior: smooth ? "smooth" : "auto",
-      })
-    if (!was || was.view !== view) {
-      // A new view: its centre in the middle (smooth when opening a repo).
-      const smooth = !!was && !!openKey
-      centring.current = smooth ? Date.now() + 800 : 0
-      centre(smooth)
-    } else if (Date.now() < centring.current) {
-      centre(true) // the opening's scroll is still going: aim it at the centre as it is now
-    } else {
-      // Same view: whatever moved the content on screen (the origin, the area's centring), the
-      // scroll moves too, so the cards stay where they were.
-      const ddx = placed.dx - was.placed.dx + off.x - was.off.x
-      const ddy = placed.dy - was.placed.dy + off.y - was.off.y
-      if (ddx) el.scrollLeft += ddx
-      if (ddy) el.scrollTop += ddy
+    const at = (m: { x: number; y: number }) => ({
+      left: m.x + o.x - el.clientWidth / 2,
+      top: m.y + o.y - el.clientHeight / 2,
+    })
+    if (!was || was.viewId !== viewId || centring.current) {
+      // A new view (or its opening scroll still going): the layout's centre in the middle.
+      const isNew = !was || was.viewId !== viewId
+      const smooth = isNew ? !!was && !!open : true
+      if (isNew) centring.current = smooth
+      mid.current = { x: placed.cx - placed.dx, y: placed.cy - placed.dy }
+      el.scrollTo?.({ ...at(mid.current), behavior: smooth ? "smooth" : "auto" })
+    } else if (mid.current) {
+      const t = at(mid.current)
+      if (Math.abs(el.scrollLeft - t.left) >= 1) el.scrollLeft = t.left
+      if (Math.abs(el.scrollTop - t.top) >= 1) el.scrollTop = t.top
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- runs per layout; openKey only picks the scroll's style
-  }, [placed, view])
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `open` only picks the scroll's style
+  }, [placed, viewId, pad.x, pad.y, vp.w, vp.h])
 
   const toggle = useCallback(
     (key: string) => {
@@ -214,8 +222,8 @@ export function FleetView() {
       c.style.width = `${w}px`
       c.style.height = `${h}px`
     }
-    // (the area is centred in a view bigger than it: its offset moves the edges with it)
-    const o = offset()
+    // (the padding of a view bigger than the graph moves the edges with the cards)
+    const o = { x: pad.x, y: pad.y }
     ctx.setTransform(dpr, 0, 0, dpr, (o.x - el.scrollLeft) * dpr, (o.y - el.scrollTop) * dpr)
     ctx.clearRect(el.scrollLeft - o.x, el.scrollTop - o.y, w, h)
     const { border2: faint, red, accent } = ui
@@ -250,7 +258,7 @@ export function FleetView() {
       ctx.stroke()
     }
     ctx.globalAlpha = 1
-  }, [nodes, lookup, selectedAgent, scheme, ui])
+  }, [nodes, lookup, selectedAgent, scheme, ui, pad.x, pad.y])
   // Scroll and resize listeners, set up once: they draw through a ref (a new layout doesn't
   // re-create them, so it can't interrupt a scroll).
   const drawRef = useRef(draw)
@@ -261,34 +269,49 @@ export function FleetView() {
     frame.current = requestAnimationFrame(() => drawRef.current())
   }, [])
   useEffect(() => redraw(), [draw, redraw])
-  useEffect(() => {
+  useLayoutEffect(() => {
     const el = scroller.current
     if (!el) return
-    // The point in the middle of the view stays there when the view resizes (the agents panel
-    // opening or closing, the window), as it does when scrolled.
-    let mid = { x: el.scrollLeft + el.clientWidth / 2, y: el.scrollTop + el.clientHeight / 2 }
-    let size = { w: el.clientWidth, h: el.clientHeight }
+    setVp({ w: el.clientWidth, h: el.clientHeight })
     const onScroll = () => {
-      mid = { x: el.scrollLeft + el.clientWidth / 2, y: el.scrollTop + el.clientHeight / 2 }
+      // Where the user scrolled is the point kept in the middle (not while the opening's scroll
+      // runs: it isn't the user's).
+      if (!centring.current) {
+        const o = origin.current
+        mid.current = {
+          x: el.scrollLeft + el.clientWidth / 2 - o.x,
+          y: el.scrollTop + el.clientHeight / 2 - o.y,
+        }
+      }
       redraw()
     }
+    const done = () => {
+      centring.current = false
+    }
     const onResize = () => {
-      // (the observer's first call, and any call with no size change: nothing to keep)
-      if (el.clientWidth === size.w && el.clientHeight === size.h) return
-      size = { w: el.clientWidth, h: el.clientHeight }
-      el.scrollLeft = mid.x - el.clientWidth / 2
-      el.scrollTop = mid.y - el.clientHeight / 2
+      setVp((v) =>
+        v.w === el.clientWidth && v.h === el.clientHeight
+          ? v
+          : { w: el.clientWidth, h: el.clientHeight },
+      )
       redraw()
     }
     el.addEventListener("scroll", onScroll, { passive: true })
+    el.addEventListener("scrollend", done) // the opening's scroll arrived
+    el.addEventListener("wheel", done, { passive: true }) // the user takes over
+    el.addEventListener("pointerdown", done)
     const ro = typeof ResizeObserver !== "undefined" ? new ResizeObserver(onResize) : null
     ro?.observe(el)
     return () => {
       cancelAnimationFrame(frame.current)
       el.removeEventListener("scroll", onScroll)
+      el.removeEventListener("scrollend", done)
+      el.removeEventListener("wheel", done)
+      el.removeEventListener("pointerdown", done)
       ro?.disconnect()
     }
   }, [redraw])
+  // A resize re-runs the layout effect above (vp → pad): the middle point is restored there.
 
   const docked = open ? repos.filter((r) => r.key !== open.key) : []
   return (
@@ -296,21 +319,23 @@ export function FleetView() {
       <div className="fleet-graph">
         <canvas className="fleet-edges" ref={canvas} aria-hidden="true" />
         <div className="fleet-scroll" ref={scroller}>
-          <div className="fleet-area" ref={area} style={{ width: placed.w, height: placed.h }}>
-            {nodes.map((n) => (
-              <FleetCard
-                key={n.id}
-                node={n}
-                info={lookup.get(n.id)}
-                open={!!open}
-                selected={
-                  (shownSel?.kind === "agent" && n.id === nodeId.agent(shownSel.id)) ||
-                  (shownSel?.kind === "repo" && n.id === nodeId.root(shownSel.key))
-                }
-                onRoot={toggle}
-                onAgent={(id) => setSel({ kind: "agent", id })}
-              />
-            ))}
+          <div className="fleet-area" style={{ width: areaW, height: areaH }}>
+            <div className="fleet-origin" style={{ left: pad.x, top: pad.y }}>
+              {nodes.map((n) => (
+                <FleetCard
+                  key={n.id}
+                  node={n}
+                  info={lookup.get(n.id)}
+                  open={!!open}
+                  selected={
+                    (shownSel?.kind === "agent" && n.id === nodeId.agent(shownSel.id)) ||
+                    (shownSel?.kind === "repo" && n.id === nodeId.root(shownSel.key))
+                  }
+                  onRoot={toggle}
+                  onAgent={(id) => setSel({ kind: "agent", id })}
+                />
+              ))}
+            </div>
           </div>
         </div>
         {repos.length === 0 && (

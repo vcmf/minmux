@@ -4259,8 +4259,9 @@ body.resizing-col {
   position: absolute;
   inset: 0;
   overflow: auto;
-  display: grid;
-  place-items: safe center; /* a view bigger than the area: the area in its middle */
+}
+.fleet-origin {
+  position: absolute; /* the padding of a view bigger than the graph (fleet-view) */
 }
 .fleet-area {
   position: relative;
