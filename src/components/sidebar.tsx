@@ -74,7 +74,7 @@ import {
 export function Sidebar() {
   const tabDrag = useTabDrag("y") // reorder sessions: same order as the top bar
   const tabs = useStore((s) => s.tabs)
-  const activeTabId = useStore((s) => s.activeTabId)
+  const activeTabId = useStore((s) => (s.activeView ? null : s.activeTabId)) // none behind a view
   const sessions = useStore((s) => s.sessions)
   const objects = useStore((s) => s.objects)
   const shells = useStore((s) => s.shells)

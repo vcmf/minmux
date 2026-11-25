@@ -58,7 +58,8 @@ export function CommandPalette() {
   const shells = useStore((s) => s.shells)
   const sshHosts = useStore((s) => s.sshHosts)
   const tabs = useStore((s) => s.tabs)
-  const activeTabId = useStore((s) => s.activeTabId)
+  // The tab on screen: behind a view, the context tab is listed too (to switch back to it).
+  const activeTabId = useStore((s) => (s.activeView ? null : s.activeTabId))
   const settings = useStore((s) => s.settings)
   const [query, setQuery] = useState("")
   // The selection is kept by command key, not index: the list can change under an open

@@ -11,6 +11,7 @@ import { AgentsPanel } from "./components/agents-panel"
 import { PaneLayout } from "./components/pane-layout"
 import { SettingsPanel } from "./components/settings-panel"
 import { PrDialog } from "./components/pr-dialog"
+import { FleetView } from "./components/fleet-view"
 import { FilePreview } from "./components/file-preview"
 import { CloseConfirmDialog } from "./components/close-confirm-dialog"
 import { RightPanelResizer } from "./components/right-panel-resizer"
@@ -58,6 +59,7 @@ const gitOffScreen = (s: { sidebarCollapsed: boolean; rightView: unknown }) =>
 function App() {
   const tabs = useStore((s) => s.tabs)
   const activeTabId = useStore((s) => s.activeTabId)
+  const activeView = useStore((s) => s.activeView)
   const settings = useStore((s) => s.settings)
   const settingsLoaded = useStore((s) => s.settingsLoaded)
   const theme = useStore(activeTheme) // stable object per variant — changes only on a real switch
@@ -221,6 +223,7 @@ function App() {
               activeTabId: s.activeTabId,
               objects: s.objects,
               folderViews: s.folderViews,
+              views: s.views,
             },
             json,
           )
@@ -236,7 +239,8 @@ function App() {
         state.activeTabId !== prev.activeTabId ||
         state.rightPanelWidth !== prev.rightPanelWidth ||
         state.objects !== prev.objects ||
-        state.folderViews !== prev.folderViews
+        state.folderViews !== prev.folderViews ||
+        state.views !== prev.views
       ) {
         clearTimeout(timer)
         timer = setTimeout(save, 600)
@@ -392,7 +396,13 @@ function App() {
   // close so background tabs release their GPU context and heavy splits use DOM.
   useEffect(() => {
     return useStore.subscribe((state, prev) => {
-      if (state.activeTabId !== prev.activeTabId || state.tabs !== prev.tabs) {
+      // A view shown or hidden counts too: its panes leave (or come back on) the screen, and the
+      // contexts must go BEFORE React parks the panes (moving a live canvas can lose it).
+      if (
+        state.activeTabId !== prev.activeTabId ||
+        state.tabs !== prev.tabs ||
+        state.activeView !== prev.activeView
+      ) {
         TerminalManager.reconcileRenderers()
       }
     })
@@ -685,6 +695,7 @@ function App() {
       } else if ((e.metaKey && k === "f") || (e.ctrlKey && e.shiftKey && k === "f")) {
         e.preventDefault()
         const s = useStore.getState()
+        if (s.activeView && !s.searchOpen) return // no terminal on screen to search
         s.setSearchOpen(!s.searchOpen)
       }
     }
@@ -718,7 +729,9 @@ function App() {
       <div className="body">
         {!sidebarCollapsed && <Sidebar />}
         <div className="content">
-          {activeTab ? (
+          {activeView === "fleet" ? (
+            <FleetView />
+          ) : activeTab ? (
             <PaneLayout key={activeTab.id} node={activeTab.root} tabId={activeTab.id} />
           ) : (
             <div className="empty">No sessions — open a tab.</div>

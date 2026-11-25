@@ -384,4 +384,41 @@ describe("TopBar pull requests button", () => {
     window.dispatchEvent(new Event("focus")) // installed it meanwhile
     await waitFor(() => expect(btn).not.toHaveClass("muted"))
   })
+
+  describe("view tabs", () => {
+    it("shows an open view tab after the terminal tabs, highlighted when shown", () => {
+      st().newTab(testShell)
+      st().renameTab(st().tabs[0]!.id, "build")
+      st().openView("fleet")
+      const { container } = render(<TopBar />)
+      const fleet = screen.getByText("Fleet").closest(".tab")!
+      expect(fleet).toHaveClass("active")
+      // The terminal tab isn't highlighted while the view covers it.
+      expect(screen.getByText("build").closest(".tab")).not.toHaveClass("active")
+      // Not in the terminal tabs' drag list (its gaps index into `tabs`).
+      expect(container.querySelector(".tab-list")!.contains(fleet)).toBe(false)
+    })
+
+    it("clicking it switches to the view; clicking a terminal tab leaves it", () => {
+      st().newTab(testShell)
+      st().renameTab(st().tabs[0]!.id, "build")
+      st().openView("fleet")
+      st().showTerminals()
+      render(<TopBar />)
+      fireEvent.mouseDown(screen.getByText("Fleet"))
+      expect(st().activeView).toBe("fleet")
+      fireEvent.mouseDown(screen.getByText("build"))
+      expect(st().activeView).toBeNull()
+    })
+
+    it("its × closes it", () => {
+      st().newTab(testShell)
+      st().openView("fleet")
+      render(<TopBar />)
+      const close = screen.getByText("Fleet").closest(".tab")!.querySelector(".tab-close")!
+      fireEvent.mouseDown(close)
+      expect(st().views).toEqual([])
+      expect(st().activeView).toBeNull()
+    })
+  })
 })

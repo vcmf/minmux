@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react"
 import { useTabDrag } from "./use-tab-drag"
 import { useTabRename } from "./use-tab-rename"
 import {
+  Graph,
   Plus,
   CaretDown,
   MagnifyingGlass,
@@ -19,7 +20,8 @@ import {
   Globe,
   Plugs,
 } from "@phosphor-icons/react"
-import { activeTheme, useStore } from "../store"
+import { VIEW_LABEL, viewDot } from "../lib/view-tabs"
+import { activeTheme, focusedTerminal, useStore } from "../store"
 import { ipc } from "../lib/ipc"
 import { AgentsIcon } from "./agent-marks"
 import { agentIcon } from "./agent-icon"
@@ -70,7 +72,14 @@ export function TopBar() {
   const tabDrag = useTabDrag("x") // reorder sessions by dragging a tab
   const ghMissing = useGhMissing()
   const tabs = useStore((s) => s.tabs)
-  const activeTabId = useStore((s) => s.activeTabId)
+  // The terminal tab on screen (none while a view covers the panes): its highlight, and the
+  // "driving" rule below (a hidden pane isn't being driven).
+  const activeTabId = useStore((s) => (s.activeView ? null : s.activeTabId))
+  const views = useStore((s) => s.views)
+  const activeView = useStore((s) => s.activeView)
+  const fleetDot = useStore((s) =>
+    viewDot("fleet", s.agents, s.windowFocused && !s.activeView ? focusedTerminal(s) : undefined),
+  )
   const shells = useStore((s) => s.shells)
   const sshHosts = useStore((s) => s.sshHosts)
   const sshPinned = useStore((s) => s.settings.ssh.pinned)
@@ -289,6 +298,34 @@ export function TopBar() {
             )
           })}
         </div>
+        {views.length > 0 && (
+          <div className="view-tabs">
+            {views.map((kind) => (
+              <div
+                key={kind}
+                className={`tab view-tab${activeView === kind ? " active" : ""}`}
+                onMouseDown={() => useStore.getState().openView(kind)}
+              >
+                {kind === "fleet" && fleetDot && (
+                  <span className={`dot ${fleetDot}${fleetDot === "accent" ? " pulse" : ""}`} />
+                )}
+                <Graph size={13} className="view-tab-icon" />
+                <span className="tab-title">{VIEW_LABEL[kind]}</span>
+                <button
+                  className="tab-close"
+                  title="Close tab"
+                  onMouseDown={(e) => {
+                    e.stopPropagation()
+                    e.preventDefault()
+                    useStore.getState().closeView(kind)
+                  }}
+                >
+                  <X size={11} />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
         <div className="newtab">
           <button
             className="iconbtn"

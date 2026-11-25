@@ -24,6 +24,14 @@ export function SearchBar() {
     return TerminalManager.onSearchResults(sessionId, setResults)
   }, [sessionId])
 
+  // However the bar goes away (Esc, a view opening over the panes), its matches go with it.
+  useEffect(
+    () => () => {
+      if (sessionId) TerminalManager.clearSearch(sessionId)
+    },
+    [sessionId],
+  )
+
   // Search as you type (incremental so it doesn't leap between matches per keystroke).
   useEffect(() => {
     if (!sessionId) return

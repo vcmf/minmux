@@ -238,4 +238,48 @@ describe("layout.json", () => {
     s.objects[F] = { kind: "file", path: "/w/a.ts" }
     expect(JSON.parse(save(s).layout).version).toBe(1)
   })
+  describe("view tabs", () => {
+    it("are saved in layout.json only, never in workspace.json", () => {
+      const s = { ...state(), views: ["fleet" as const] }
+      const { ws, layout } = save(s)
+      expect(JSON.parse(layout).views).toEqual(["fleet"])
+      expect(JSON.parse(ws).views).toBeUndefined()
+      expect(JSON.parse(save(state()).layout).views).toBeUndefined() // none: no key
+    })
+
+    it("come back with the layout", () => {
+      const s = { ...state(), views: ["fleet" as const] }
+      const { ws, layout } = save(s)
+      const r = restoreLayout(deserializeWorkspace(JSON.parse(ws)), ws, layout).state!
+      expect(r.views).toEqual(["fleet"])
+    })
+
+    it("come back even when another build saved workspace.json since", () => {
+      const s = { ...state(), views: ["fleet" as const] }
+      const { layout } = save(s)
+      const old = JSON.parse(save(s).ws)
+      old.tabs[0].title = "renamed elsewhere"
+      const text = JSON.stringify(old)
+      const r = restoreLayout(deserializeWorkspace(old), text, layout).state!
+      expect(r.views).toEqual(["fleet"])
+    })
+
+    it("drop kinds this build doesn't know", () => {
+      const s = state()
+      const { ws, layout } = save(s)
+      const file = JSON.parse(layout)
+      file.views = ["pulls", "fleet", "fleet"]
+      const r = restoreLayout(deserializeWorkspace(JSON.parse(ws)), ws, JSON.stringify(file)).state!
+      expect(r.views).toEqual(["fleet"])
+    })
+  })
+
+  it("come back even when no terminal tab was saved", () => {
+    const s = { ...state(), views: ["fleet" as const] }
+    const { ws, layout } = save(s)
+    const file = JSON.parse(layout)
+    file.tabs = []
+    const r = restoreLayout(deserializeWorkspace(JSON.parse(ws)), ws, JSON.stringify(file)).state!
+    expect(r.views).toEqual(["fleet"])
+  })
 })

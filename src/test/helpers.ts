@@ -20,6 +20,8 @@ export function resetStore() {
     sessions: {},
     tabs: [],
     activeTabId: null,
+    views: [],
+    activeView: null,
     shells: [testShell],
     sshHosts: [],
     sshHostsLoaded: false,

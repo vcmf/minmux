@@ -1816,3 +1816,236 @@ describe("store — folder entries", () => {
     expect(tab().activeEntryId).not.toBe(b)
   })
 })
+
+describe("store — view tabs (docs/design/FLEET_GRAPH.md)", () => {
+  beforeEach(resetStore)
+
+  const twoTabs = () => {
+    st().newTab(shell)
+    const a = firstTab().id
+    st().newTab(shell)
+    const b = st().tabs[1]!.id
+    return { a, b }
+  }
+
+  it("openView opens the tab once; a second open just shows it", () => {
+    twoTabs()
+    st().openView("fleet")
+    expect(st().views).toEqual(["fleet"])
+    expect(st().activeView).toBe("fleet")
+    st().showTerminals()
+    const views = st().views
+    st().openView("fleet")
+    expect(st().views).toBe(views) // not added twice
+    expect(st().activeView).toBe("fleet")
+  })
+
+  it("keeps the context tab: activeTabId doesn't move when a view is shown", () => {
+    const { b } = twoTabs()
+    st().openView("fleet")
+    expect(st().activeTabId).toBe(b)
+  })
+
+  it("choosing a terminal tab leaves the view, even the context tab itself", () => {
+    const { a, b } = twoTabs()
+    st().openView("fleet")
+    st().setActiveTab(b)
+    expect(st().activeView).toBeNull()
+    st().openView("fleet")
+    st().setActiveTab(a)
+    expect(st().activeView).toBeNull()
+    expect(st().views).toEqual(["fleet"]) // the tab stays open
+  })
+
+  it("any path that moves activeTabId leaves the view (one rule)", () => {
+    const { a } = twoTabs()
+    st().openView("fleet")
+    useStore.setState({ activeTabId: a }) // as the drag spring or a moved terminal would
+    expect(st().activeView).toBeNull()
+    st().openView("fleet")
+    st().newTab(shell)
+    expect(st().activeView).toBeNull()
+  })
+
+  it("closing another terminal tab keeps the view shown", () => {
+    const { a } = twoTabs()
+    st().openView("fleet")
+    st().closeTab(a)
+    expect(st().activeView).toBe("fleet")
+  })
+
+  it("actions on the context tab's panes bring it back first", () => {
+    twoTabs()
+    st().openView("fleet")
+    st().newSurface(shell)
+    expect(st().activeView).toBeNull()
+    st().openView("fleet")
+    st().splitActive("row", shell)
+    expect(st().activeView).toBeNull()
+    st().openView("fleet")
+    st().focusSession(allSessionIds(firstTab().root)[0]!)
+    expect(st().activeView).toBeNull()
+    expect(st().activeTabId).toBe(firstTab().id)
+  })
+
+  it("closeView removes the tab and shows the context tab again", () => {
+    const { b } = twoTabs()
+    st().openView("fleet")
+    st().closeView("fleet")
+    expect(st().views).toEqual([])
+    expect(st().activeView).toBeNull()
+    expect(st().activeTabId).toBe(b)
+  })
+
+  it("nobody is looking at a terminal while a view is shown", () => {
+    twoTabs()
+    const id = firstTab().activeSessionId
+    st().setActiveTab(firstTab().id)
+    expect(isVisibleIn(st(), id)).toBe(true)
+    st().openView("fleet")
+    expect(isVisibleIn(st(), id)).toBe(false)
+    st().signalSession(id, { type: "attention" })
+    expect(st().sessions[id]!.status).toBe("attention")
+  })
+
+  it("focusing the window with a view shown doesn't clear 'needs you' on hidden panes", () => {
+    twoTabs()
+    const id = firstTab().activeSessionId
+    st().setActiveTab(firstTab().id)
+    st().openView("fleet")
+    useStore.setState({ windowFocused: false })
+    st().signalSession(id, { type: "attention" })
+    st().setWindowFocused(true)
+    expect(st().sessions[id]!.status).toBe("attention")
+    st().showTerminals() // the pane is on screen again: now it's seen
+    expect(st().sessions[id]!.status).not.toBe("attention")
+  })
+
+  it("restoreWorkspace brings view tabs back, never shown", () => {
+    const tab = {
+      id: "t",
+      title: "",
+      root: { type: "leaf" as const, id: "p", entryIds: ["s"], activeEntryId: "s" },
+      activeEntryId: "s",
+      activeSessionId: "s",
+    }
+    st().openView("fleet")
+    st().restoreWorkspace({
+      sessions: { s: { id: "s", shell, cwd: "/", status: "idle", unread: false } as never },
+      tabs: [tab],
+      activeTabId: "t",
+      views: ["fleet"],
+    })
+    expect(st().views).toEqual(["fleet"])
+    expect(st().activeView).toBeNull()
+    expect(st().activeTabId).toBe("t")
+  })
+
+  it("closing the context tab keeps the view; the next tab becomes the context", () => {
+    const { a, b } = twoTabs()
+    st().openView("fleet")
+    st().closeTab(b) // b is the context
+    expect(st().activeView).toBe("fleet")
+    expect(st().activeTabId).toBe(a)
+    st().closeTab(a) // the last one
+    expect(st().activeView).toBe("fleet")
+    expect(st().activeTabId).toBeNull()
+  })
+
+  it("an action that goes to another tab doesn't count the context tab as seen", () => {
+    const { a, b } = twoTabs()
+    const hidden = st().tabs.find((t) => t.id === b)!.activeSessionId // b is the context
+    const other = st().tabs.find((t) => t.id === a)!.activeSessionId
+    st().openView("fleet")
+    useStore.setState({ windowFocused: false })
+    st().signalSession(hidden, { type: "attention" })
+    useStore.setState({ windowFocused: true })
+    st().focusSession(other) // Go to pane, in tab a
+    expect(st().activeView).toBeNull()
+    expect(st().activeTabId).toBe(a)
+    expect(st().sessions[hidden]!.status).toBe("attention") // never on screen
+  })
+
+  it("an action that lands in the context tab reveals it", () => {
+    const { b } = twoTabs()
+    const id = st().tabs.find((t) => t.id === b)!.activeSessionId
+    st().openView("fleet")
+    useStore.setState({ windowFocused: false })
+    st().signalSession(id, { type: "attention" })
+    useStore.setState({ windowFocused: true })
+    st().splitActive("row", shell) // both panes on screen (a new surface would cover it)
+    expect(st().activeView).toBeNull()
+    expect(st().sessions[id]!.status).not.toBe("attention")
+  })
+
+  it("moving a terminal into the context tab shows it", () => {
+    const { a, b } = twoTabs()
+    const moved = st().tabs.find((t) => t.id === a)!.activeSessionId
+    st().openView("fleet")
+    st().moveTerminal(moved, { kind: "join", tabId: b })
+    expect(st().activeView).toBeNull()
+    expect(st().activeTabId).toBe(b)
+  })
+  it("a new tab opened behind a view with no context tab is shown", () => {
+    twoTabs()
+    st().openView("fleet")
+    for (const t of [...st().tabs]) st().closeTab(t.id)
+    expect(st().activeTabId).toBeNull()
+    st().newTab(shell)
+    expect(st().activeView).toBeNull()
+  })
+
+  it("an action that does nothing keeps the view and reveals nothing", () => {
+    const { b } = twoTabs()
+    const id = st().tabs.find((t) => t.id === b)!.activeSessionId
+    st().openView("fleet")
+    useStore.setState({ windowFocused: false })
+    st().signalSession(id, { type: "attention" })
+    useStore.setState({ windowFocused: true })
+    st().moveTerminal("no-such-terminal", { kind: "join", tabId: b })
+    expect(st().activeView).toBe("fleet")
+    expect(st().sessions[id]!.status).toBe("attention")
+  })
+
+  it("Go to pane in the context tab shows it, even when that pane was already focused", () => {
+    const { b } = twoTabs()
+    st().openView("fleet")
+    st().focusSession(st().tabs.find((t) => t.id === b)!.activeSessionId)
+    expect(st().activeView).toBeNull()
+  })
+
+  it("jumping to another tab never puts the context tab on screen in between", () => {
+    const { a, b } = twoTabs()
+    const target = st().tabs.find((t) => t.id === a)!.activeSessionId
+    st().openView("fleet")
+    const seen: (string | undefined)[] = []
+    const unsub = useStore.subscribe((s) => seen.push(s.activeView ? undefined : s.activeTabId!))
+    st().focusSession(target)
+    unsub()
+    expect(seen).not.toContain(b) // renderers would have built WebGL for b's parked panes
+    expect(st().activeTabId).toBe(a)
+  })
+
+  it("opening a view closes find (nothing on screen to search)", () => {
+    twoTabs()
+    st().setSearchOpen(true)
+    st().openView("fleet")
+    expect(st().searchOpen).toBe(false)
+  })
+  it("opening a file behind a view shows the context tab, even when it's already there", () => {
+    twoTabs()
+    st().openView("fleet")
+    st().openFile("/w/a.ts")
+    expect(st().activeView).toBeNull()
+    st().openView("fleet")
+    st().openFile("/w/a.ts", { line: 40 }) // already open and focused: still a request to show
+    expect(st().activeView).toBeNull()
+  })
+
+  it("focusing a pane in another tab doesn't show (or reveal) the context tab", () => {
+    const { a } = twoTabs()
+    st().openView("fleet")
+    st().setActivePane(a, st().tabs.find((t) => t.id === a)!.activeSessionId)
+    expect(st().activeView).toBe("fleet")
+  })
+})

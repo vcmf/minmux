@@ -215,4 +215,15 @@ describe("AgentsPanel processes", () => {
       vi.useRealTimers()
     }
   })
+
+  it("Fleet view opens the fleet tab, and switches to it when it's already open", () => {
+    render(<AgentsPanel />)
+    fireEvent.click(screen.getByText("Fleet view"))
+    expect(useStore.getState().views).toEqual(["fleet"])
+    expect(useStore.getState().activeView).toBe("fleet")
+    useStore.getState().showTerminals()
+    fireEvent.click(screen.getByText("Fleet view"))
+    expect(useStore.getState().views).toEqual(["fleet"]) // not a second tab
+    expect(useStore.getState().activeView).toBe("fleet")
+  })
 })
