@@ -221,4 +221,24 @@ describe("FleetView: camera, edges, panel", () => {
     expect(screen.queryByText("Unpin")).toBeNull()
     expect(at()).toBe(before)
   })
+
+  it("Inventory: a used row back to the graph, its sessions marked, then cleared", async () => {
+    stubCanvas()
+    seed()
+    render(<FleetView />)
+    await screen.findByRole("button", { name: "Open o/r" })
+    fireEvent.click(screen.getByRole("button", { name: "Inventory" }))
+    // Live: the open session's MCP server (seeded: notion, 3 calls).
+    fireEvent.click(await screen.findByRole("button", { name: /^notion/ }))
+    expect(await screen.findByText(/1 session used/)).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "Graph" })).toHaveAttribute("aria-pressed", "true")
+    await frame()
+    expect(document.querySelectorAll(".fleet-card.marked").length).toBe(1)
+    fireEvent.click(screen.getByRole("button", { name: "Clear" }))
+    expect(screen.queryByText(/1 session used/)).toBeNull()
+    // Back to the inventory and to the graph again by its switch.
+    fireEvent.click(screen.getByRole("button", { name: "Inventory" }))
+    fireEvent.click(screen.getByRole("button", { name: "Graph" }))
+    expect(viewport()).not.toHaveAttribute("inert")
+  })
 })
