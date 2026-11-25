@@ -1,8 +1,10 @@
 // The pull requests dialog's local checkouts (docs/design/PR_GRAPH.md, steps 2 and 3): per repo
 // the panes are in (roots grouped by their git common dir), its worktrees, its GitHub repo,
-// and (graph view) how many PRs were merged into each listed PR's branch, from its commits.
-// Asked once per dialog refresh, only while the dialog is open; nothing is polled. git runs
-// async with a timeout and a small concurrency limit, nowhere near the PTY path.
+// its default branch, and (graph view) how many PRs were merged into each listed PR's branch.
+// Asked by the dialog once per refresh while it's open, and by the Fleet tab's refresher while
+// it's shown (at the dialog's cadence, when the tab opens, and on a change of the panes' roots;
+// docs/design/FLEET_GRAPH.md). git runs async with a timeout and a small concurrency limit,
+// nowhere near the PTY path.
 import { execFile } from "node:child_process"
 import { access } from "node:fs/promises"
 import path from "node:path"
@@ -34,13 +36,20 @@ const dirExists: DirExists = (p) =>
     () => false,
   )
 
+/** A folder as compared against git's list: resolved, case-blind on Windows and macOS. */
+const pathId = (p: string) => {
+  const r = path.resolve(p)
+  // (macOS volumes are case-blind by default too)
+  return process.platform === "win32" || process.platform === "darwin" ? r.toLowerCase() : r
+}
+
 /** The folders `git worktree list --porcelain` names, whatever their state. */
 const listed = (out: string) =>
   new Set(
     out
       .split(/\r?\n/)
       .filter((l) => l.startsWith("worktree "))
-      .map((l) => path.resolve(l.slice(9))),
+      .map((l) => pathId(l.slice(9))),
   )
 
 const defaultGit: GitRunner = async (args, cwd) =>
@@ -58,6 +67,8 @@ export class PrLocal {
   // root → its repo's common git dir (a worktree's root never moves to another repo)
   private common = new Map<string, string | null>()
   private remotes = new Map<string, { remote: Remote; at: number }>() // common dir → its remote
+  // `${common dir}\0${remote}` → its default branch
+  private heads = new Map<string, { branch: string | null; at: number }>()
   // (common dir, head tip, base tip, default tip) → merged units; -1: too long a range
   private units = new Map<string, number>()
   private unitsFailed = new Map<string, number>() // the same key → when git failed on it
@@ -112,18 +123,27 @@ export class PrLocal {
         if (list === null) return null
         // a root the repo no longer lists (removed, re-cloned as another repo): looked up again
         const named = listed(list)
-        for (const r of rs) if (!named.has(path.resolve(r))) this.common.delete(r)
+        for (const r of rs) if (!named.has(pathId(r))) this.common.delete(r)
         // (a locked worktree on a drive that's gone is never marked prunable)
         const all = parseWorktrees(list)
         const here = await Promise.all(all.map((w) => this.exists(w.path)))
         const worktrees = all.filter((_, i) => here[i])
         const remote = await this.remoteOf(dir, root)
-        const repo: LocalRepo = { repo: remote?.repo ?? null, worktrees }
+        // (only roots the repo still lists: one removed or re-cloned as another repo isn't its)
+        const repo: LocalRepo = {
+          repo: remote?.repo ?? null,
+          worktrees,
+          roots: rs.filter((r) => named.has(pathId(r))),
+        }
         const mine = remote
           ? prs.filter((p) => p.repo.toLowerCase() === remote.repo.toLowerCase())
           : []
-        if (remote && mine.length)
-          repo.merged = await this.mergedUnits(dir, root, remote.name, mine)
+        const [head, merged] = await Promise.all([
+          remote ? this.defaultOf(dir, root, remote.name) : null,
+          remote && mine.length ? this.mergedUnits(dir, root, remote.name, mine) : undefined,
+        ])
+        if (head) repo.defaultBranch = head
+        if (merged) repo.merged = merged
         return repo
       }),
     )
@@ -158,6 +178,39 @@ export class PrLocal {
       this.remotes.delete(this.remotes.keys().next().value!)
     this.remotes.set(dir, { remote, at: this.now() })
     return remote
+  }
+
+  /** The remote's default branch, from its HEAD ref (cached like the remote). */
+  private async defaultOf(dir: string, root: string, remote: string): Promise<string | null> {
+    const key = `${dir}\0${remote}`
+    const hit = this.heads.get(key)
+    if (hit && this.now() - hit.at < REPO_TTL) return hit.branch
+    // for-each-ref answers "" (exit 0) when the remote has no HEAD ref: an answer, kept; only a
+    // failing git keeps the last one and asks again next time.
+    const out = await this.git
+      .run(() =>
+        this.run(["for-each-ref", "--format=%(symref:short)", `refs/remotes/${remote}/HEAD`], root),
+      )
+      .catch(() => undefined)
+    let branch =
+      out === undefined ? (hit?.branch ?? null) : out.trim().replace(`${remote}/`, "") || null
+    // A remote added by hand (`upstream` in a fork) has no HEAD ref until `set-head`: origin's
+    // HEAD is the next best guess (a clone sets it).
+    if (out !== undefined && !branch && remote !== "origin") {
+      const o = await this.git
+        .run(() =>
+          this.run(["for-each-ref", "--format=%(symref:short)", "refs/remotes/origin/HEAD"], root),
+        )
+        .catch(() => undefined)
+      if (o === undefined) return hit?.branch ?? null // a failing git: not kept, asked again
+      branch = o.trim().replace("origin/", "") || null
+    }
+    if (out !== undefined) {
+      if (this.heads.size >= COMMON_MAX && !this.heads.has(key))
+        this.heads.delete(this.heads.keys().next().value!)
+      this.heads.set(key, { branch, at: this.now() })
+    }
+    return branch
   }
 
   // From the remote's refs (no checkout needed; a local branch not pulled doesn't lag): the

@@ -61,7 +61,6 @@ import { graphLayout, graphMove, type GraphKey } from "../lib/pr-graph"
 import { PrGraphView } from "./pr-graph-view"
 import {
   folderName,
-  hostPathOfWsl,
   openUnder,
   progressOf,
   unitsKey as mergedKey,
@@ -69,7 +68,7 @@ import {
   type LocalPr,
   type LocalRepo,
 } from "../lib/pr-local"
-import { paneOfGitKey } from "../lib/agent-dirs"
+import { forgetRoots, rootsOf, splitRoots } from "../lib/pane-roots"
 import { toDialog } from "./to-dialog"
 
 // gh's accounts as last answered (a failed answer too): the picker stays to pick another.
@@ -195,34 +194,6 @@ function paneFlatOf(
   return out
 }
 
-// The panes' checkout roots (their shells' and their agents'), as one primitive the shallow
-// compare can hold: host roots (asked about), then a tab, then every root a pane is in, a WSL
-// pane's `/mnt/c/…` as `C:/…` (a worktree a WSL pane has open isn't offered again).
-// Recomputed only when paneGit or sessions change.
-let rootsMemo: { args: unknown[]; out: string } | null = null
-function rootsOf(paneGit: Record<string, PaneGitInfo>, sessions: Record<string, Session>) {
-  const args = [paneGit, sessions]
-  if (rootsMemo && rootsMemo.args.every((a, i) => a === args[i])) return rootsMemo.out
-  const host = new Set<string>()
-  const known = new Set<string>()
-  for (const [key, info] of Object.entries(paneGit)) {
-    const session = sessions[paneOfGitKey(key)]
-    if (!info.root || !session || session.remote) continue // (an ssh pane: nothing local)
-    // (WSL's roots are Linux paths main's git can't read: host checkouts only, for now)
-    if (ghEnvOf(session, info.root).wsl) known.add(hostPathOfWsl(info.root) ?? info.root)
-    else {
-      host.add(info.root)
-      known.add(info.root)
-    }
-  }
-  rootsMemo = { args, out: `${[...host].sort().join("\n")}\t${[...known].sort().join("\n")}` }
-  return rootsMemo.out
-}
-const splitRoots = (key: string) => {
-  const [host = "", known = ""] = key.split("\t")
-  return { host: host ? host.split("\n") : [], known: known ? known.split("\n") : [] }
-}
-
 /** The focused pane (the active tab's focused terminal). */
 const useFocusedPane = () =>
   useStore((s) => s.tabs.find((t) => t.id === s.activeTabId)?.activeSessionId)
@@ -305,7 +276,7 @@ export function PrDialog() {
     () => () => {
       alive.current = false
       forgetFlat()
-      rootsMemo = null
+      forgetRoots()
     },
     [],
   )

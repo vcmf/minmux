@@ -4254,3 +4254,10 @@ body.resizing-col {
   flex-direction: column;
   align-items: center;
 }
+.fleet-list {
+  margin: 10px 0 0;
+  padding: 0;
+  list-style: none;
+  text-align: center;
+  line-height: 1.7;
+}

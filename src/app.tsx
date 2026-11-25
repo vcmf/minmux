@@ -52,9 +52,9 @@ let layoutBlocked = false
 /** How long after mount the host list is first fetched (the first tab spawns before). */
 const SSH_HOSTS_DELAY_MS = 800
 
-/** Branches and PRs aren't on screen: the sidebar is collapsed and the agents panel isn't shown. */
-const gitOffScreen = (s: { sidebarCollapsed: boolean; rightView: unknown }) =>
-  s.sidebarCollapsed && s.rightView !== "agents"
+/** Branches and PRs aren't on screen: sidebar collapsed, no agents panel, no fleet shown. */
+const gitOffScreen = (s: { sidebarCollapsed: boolean; rightView: unknown; activeView: unknown }) =>
+  s.sidebarCollapsed && s.rightView !== "agents" && s.activeView !== "fleet"
 
 function App() {
   const tabs = useStore((s) => s.tabs)
@@ -559,6 +559,7 @@ function App() {
     const unsub = useStore.subscribe((state, prev) => {
       if (state.sidebarCollapsed !== prev.sidebarCollapsed && !state.sidebarCollapsed) pollSoon()
       if (state.rightView !== prev.rightView && state.rightView === "agents") pollSoon()
+      if (state.activeView !== prev.activeView && state.activeView === "fleet") pollSoon()
       // Another checkout to show, or a folder to look up: the edits poll alone, soon.
       if (state.paneWork !== prev.paneWork) {
         const shown = Object.entries(state.paneWork)
