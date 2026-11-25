@@ -566,6 +566,7 @@ function writeRecent(ids: string[]) {
 // Actions that put something in the context tab's panes (or focus one): run while a view is
 // shown, they bring the tab back first so the result is on screen.
 const SHOWS_TERMINALS = [
+  "moveActiveTab",
   "splitWith",
   "splitActive",
   "openFolderInSplit",
@@ -574,14 +575,19 @@ const SHOWS_TERMINALS = [
   "openFolder",
   "openFile",
   "resumeInSplit",
-  "setActivePane",
-  "focusSession",
   "moveTerminal",
   "moveSurface",
 ] as const satisfies readonly (keyof AppState)[]
+// Navigation: shows its target even when nothing else changes (it was already focused).
+const NAVIGATES = ["setActivePane", "focusSession"] as const satisfies readonly (keyof AppState)[]
 
-/** Store middleware for view tabs: every `set` (and `setState`) goes through `leavingView`, and
- *  the SHOWS_TERMINALS actions leave a shown view before they run. */
+// Whether a navigation's target exists: focusSession(sessionId), setActivePane(tabId, sessionId).
+const navTarget = (state: AppState, name: (typeof NAVIGATES)[number], args: unknown[]) =>
+  name === "focusSession"
+    ? state.tabs.some((t) => allSessionIds(t.root).includes(args[0] as string))
+    : state.tabs.some((t) => t.id === args[0])
+
+/** View tabs: every set goes through `leavingView`; pane actions leave a shown view after them. */
 const viewRule =
   (config: StateCreator<AppState>): StateCreator<AppState> =>
   (set, get, api) => {
@@ -598,21 +604,27 @@ const viewRule =
       )) as typeof set
     api.setState = ruled
     const store = config(ruled, get, api)
-    for (const name of SHOWS_TERMINALS) {
+    // The action runs first, behind the view: a switch to another tab leaves it by the rule (in
+    // the same update, so renderers never see the context tab on screen in between); an action
+    // that did nothing keeps it; one that changed the context tab (or navigates) shows it.
+    const wrap = (name: keyof AppState, navigates: boolean) => {
       const run = store[name] as (...args: unknown[]) => unknown
       Object.assign(store, {
         [name]: (...args: unknown[]) => {
-          const context = get().activeView ? get().activeTabId : null
-          if (!context) return run(...args)
-          // Leave the view without revealing: the action may go to another tab, and the context
-          // tab's panes only count as seen if they're what ends up on screen.
-          ruled({ activeView: null })
+          const before = get()
+          if (!before.activeView) return run(...args)
           const result = run(...args)
-          if (get().activeTabId === context && !get().activeView) get().revealTab(context)
+          const after = get()
+          if (!after.activeView) return result
+          const changed = after.tabs !== before.tabs || after.activeTabId !== before.activeTabId
+          if (changed || (navigates && navTarget(after, name as (typeof NAVIGATES)[number], args)))
+            after.showTerminals()
           return result
         },
       })
     }
+    for (const name of SHOWS_TERMINALS) wrap(name, false)
+    for (const name of NAVIGATES) wrap(name, true)
     return store
   }
 
@@ -1113,19 +1125,16 @@ export const useStore = create<AppState>()(
       set((state) =>
         state.activeView === kind && state.views.includes(kind)
           ? state
-          : { views: withView(state.views, kind), activeView: kind },
+          : { views: withView(state.views, kind), activeView: kind, searchOpen: false },
       ),
 
     closeView: (kind) => {
       const shown = get().activeView === kind
       set((state) => {
         const views = withoutView(state.views, kind)
-        if (views === state.views && !shown) return state
-        return shown ? { views, activeView: null } : { views }
+        return views === state.views ? state : { views }
       })
-      // The context tab is on screen again: what it shows counts as seen (as setActiveTab).
-      const { activeTabId, revealTab } = get()
-      if (shown && activeTabId) revealTab(activeTabId)
+      if (shown) get().showTerminals()
     },
 
     showTerminals: () => {

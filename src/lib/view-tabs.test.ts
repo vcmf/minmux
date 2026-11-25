@@ -70,6 +70,13 @@ describe("view tabs", () => {
       expect(leavingView(shown, next)).toBe(next)
     })
 
+    it("a switch away from no context tab leaves the view", () => {
+      const next = { activeTabId: "b", tabs: [tab("b")] }
+      expect(leavingView({ activeTabId: null, activeView: "fleet" }, next)).toMatchObject({
+        activeView: null,
+      })
+    })
+
     it("does nothing when no view is shown", () => {
       const next = { activeTabId: "b" }
       expect(leavingView({ activeTabId: "a", activeView: null }, next)).toBe(next)
@@ -91,5 +98,7 @@ describe("view tabs", () => {
     ])
     expect(viewDot("fleet", waiting)).toBe("amber")
     expect(viewDot("fleet", reduceAgentEvents([]))).toBe("")
+    // Not for the agent in the pane you're driving.
+    expect(viewDot("fleet", waiting, "p2")).toBe("accent")
   })
 })

@@ -21,7 +21,7 @@ import {
   Plugs,
 } from "@phosphor-icons/react"
 import { VIEW_LABEL, viewDot } from "../lib/view-tabs"
-import { activeTheme, useStore } from "../store"
+import { activeTheme, focusedTerminal, useStore } from "../store"
 import { ipc } from "../lib/ipc"
 import { AgentsIcon } from "./agent-marks"
 import { agentIcon } from "./agent-icon"
@@ -77,7 +77,9 @@ export function TopBar() {
   const activeTabId = useStore((s) => (s.activeView ? null : s.activeTabId))
   const views = useStore((s) => s.views)
   const activeView = useStore((s) => s.activeView)
-  const fleetDot = useStore((s) => viewDot("fleet", s.agents))
+  const fleetDot = useStore((s) =>
+    viewDot("fleet", s.agents, s.windowFocused && !s.activeView ? focusedTerminal(s) : undefined),
+  )
   const shells = useStore((s) => s.shells)
   const sshHosts = useStore((s) => s.sshHosts)
   const sshPinned = useStore((s) => s.settings.ssh.pinned)

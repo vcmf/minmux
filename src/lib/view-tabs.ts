@@ -28,12 +28,19 @@ export function parseViews(v: unknown): ViewKind[] {
   return v.filter(isViewKind).filter((k, i, all) => all.indexOf(k) === i)
 }
 
-/** A view tab's dot: the fleet's, amber while any agent needs you, green while any works. */
-export function viewDot(kind: ViewKind, agents: AgentGraph): "amber" | "accent" | "" {
+// Not for an agent in the pane you're driving (the attention rule).
+/** The fleet tab's dot: amber when an agent needs you, green while one works. */
+export function viewDot(
+  kind: ViewKind,
+  agents: AgentGraph,
+  drivingPane?: string,
+): "amber" | "accent" | "" {
   if (kind !== "fleet") return ""
   let working = false
   for (const id of agents.rootIds) {
-    const status = agents.nodes[id]?.status
+    const node = agents.nodes[id]
+    if (node?.paneId && node.paneId === drivingPane) continue // the attention rule
+    const status = node?.status
     if (status === "waiting") return "amber"
     if (status === "working") working = true
   }
@@ -44,16 +51,16 @@ export const VIEW_LABEL: Record<ViewKind, string> = { fleet: "Fleet" }
 
 type TabState = { tabs: Tab[]; activeTabId: string | null; activeView: ViewKind | null }
 
-/** The terminal tab on screen: the context tab, unless a view covers it. Readers asking "what
- *  is the user looking at" use this; readers asking "which tab is in context" keep activeTabId. */
+// Readers asking "what is the user looking at" use this; "which tab is in context": activeTabId.
+/** The terminal tab on screen: the context tab, unless a view covers it. */
 export function shownTerminalTab(state: TabState): Tab | undefined {
   if (state.activeView) return undefined
   return state.tabs.find((t) => t.id === state.activeTabId)
 }
 
-/** A state update that moves `activeTabId` to another tab leaves the view, whatever action
- *  made it (a tab click, the drag spring, a new tab, a moved terminal): one rule, not one per
- *  action. An update that sets `activeView` itself is left alone. */
+// One rule for every path (drag spring, new tab, moved terminal); an update that sets activeView
+// itself is left alone.
+/** An update moving `activeTabId` to another tab leaves the view. */
 export function leavingView<T extends Partial<TabState>>(
   state: { activeTabId: string | null; activeView: ViewKind | null },
   next: T,
@@ -64,6 +71,6 @@ export function leavingView<T extends Partial<TabState>>(
   // The context tab closed (its × or its last shell exiting): another tab takes over as context,
   // still behind the view. Only a switch to a tab that still exists leaves the view.
   const tabs = (next as { tabs?: Tab[] }).tabs
-  if (tabs && !tabs.some((t) => t.id === state.activeTabId)) return next
+  if (state.activeTabId && tabs && !tabs.some((t) => t.id === state.activeTabId)) return next
   return { ...next, activeView: null }
 }

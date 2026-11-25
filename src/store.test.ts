@@ -1986,4 +1986,50 @@ describe("store — view tabs (docs/design/FLEET_GRAPH.md)", () => {
     expect(st().activeView).toBeNull()
     expect(st().activeTabId).toBe(b)
   })
+  it("a new tab opened behind a view with no context tab is shown", () => {
+    twoTabs()
+    st().openView("fleet")
+    for (const t of [...st().tabs]) st().closeTab(t.id)
+    expect(st().activeTabId).toBeNull()
+    st().newTab(shell)
+    expect(st().activeView).toBeNull()
+  })
+
+  it("an action that does nothing keeps the view and reveals nothing", () => {
+    const { b } = twoTabs()
+    const id = st().tabs.find((t) => t.id === b)!.activeSessionId
+    st().openView("fleet")
+    useStore.setState({ windowFocused: false })
+    st().signalSession(id, { type: "attention" })
+    useStore.setState({ windowFocused: true })
+    st().moveTerminal("no-such-terminal", { kind: "join", tabId: b })
+    expect(st().activeView).toBe("fleet")
+    expect(st().sessions[id]!.status).toBe("attention")
+  })
+
+  it("Go to pane in the context tab shows it, even when that pane was already focused", () => {
+    const { b } = twoTabs()
+    st().openView("fleet")
+    st().focusSession(st().tabs.find((t) => t.id === b)!.activeSessionId)
+    expect(st().activeView).toBeNull()
+  })
+
+  it("jumping to another tab never puts the context tab on screen in between", () => {
+    const { a, b } = twoTabs()
+    const target = st().tabs.find((t) => t.id === a)!.activeSessionId
+    st().openView("fleet")
+    const seen: (string | undefined)[] = []
+    const unsub = useStore.subscribe((s) => seen.push(s.activeView ? undefined : s.activeTabId!))
+    st().focusSession(target)
+    unsub()
+    expect(seen).not.toContain(b) // renderers would have built WebGL for b's parked panes
+    expect(st().activeTabId).toBe(a)
+  })
+
+  it("opening a view closes find (nothing on screen to search)", () => {
+    twoTabs()
+    st().setSearchOpen(true)
+    st().openView("fleet")
+    expect(st().searchOpen).toBe(false)
+  })
 })
