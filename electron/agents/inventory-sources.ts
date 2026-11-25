@@ -15,15 +15,27 @@ import { opencodeDb } from "./opencode-history"
 import { OpencodeConfig, opencodeServerOf } from "./opencode-toolbox"
 import { emptyKit, kitName, type Kit } from "./toolbox"
 
-// (the agents write ISO timestamps without spaces: the day is its first 10 characters)
-const DAY = /"timestamp":"(\d{4}-\d{2}-\d{2})/
+// (the agents write ISO timestamps without spaces: the day is a timestamp's first 10 characters)
+const DAY = /"timestamp":"(\d{4}-\d{2}-\d{2})/g
+
+/** A line's own day: its record's `timestamp`, which Claude writes last (a tool's input before
+ *  it may hold one too) and Codex first. */
+export function lineDay(line: string, which: "first" | "last"): string | undefined {
+  let day: string | undefined
+  DAY.lastIndex = 0
+  for (let m = DAY.exec(line); m; m = DAY.exec(line)) {
+    day = m[1]
+    if (which === "first") break
+  }
+  return day
+}
 
 /** A line folded with a step 5 line reader: what it adds goes to its day. */
-export function dayFold(kitLine: (acc: Kit, line: string) => Kit) {
+export function dayFold(kitLine: (acc: Kit, line: string) => Kit, which: "first" | "last") {
   return (acc: DayAcc, line: string, fileDay: string): DayAcc => {
     const k = kitLine(emptyKit, line)
     if (k === emptyKit) return acc
-    const day = DAY.exec(line)?.[1] ?? fileDay
+    const day = lineDay(line, which) ?? fileDay
     const add = (into: Record<string, number>, from: Record<string, number>) => {
       for (const [n, c] of Object.entries(from)) into[n] = (into[n] ?? 0) + c
     }
@@ -68,7 +80,7 @@ export function claudeInventory(
       })
       return out.flatMap((f) => f ?? [])
     },
-    line: dayFold(addClaudeKitLine),
+    line: dayFold(addClaudeKitLine, "last"),
     async loaded() {
       return { mcp: (await config.servers(undefined)) ?? [], skills: [] }
     },
@@ -86,7 +98,7 @@ export function codexInventory(home = codexHome, config = new CodexMcpConfig()):
       ])
       return [...live, ...archived]
     },
-    line: dayFold(addCodexKitLine),
+    line: dayFold(addCodexKitLine, "first"),
     async loaded() {
       return { mcp: (await config.servers(home())) ?? [], skills: null }
     },
@@ -106,55 +118,87 @@ export function opencodeInventory(db = opencodeDb, config = new OpencodeConfig()
         skills: await config.skills(undefined),
       }
     },
+    // The database's tool calls, kept raw (`<folder>\0<tool>` → calls) and made into servers
+    // only when the result is built: one whose config can't be read now isn't lost.
     async store(after: StoreMark) {
       const file = db()
       if (!fs.existsSync(file)) return { until: after, days: {} }
-      const d = new DatabaseSync(file, { readOnly: true, timeout: 1000 })
-      let rows: Row[]
-      try {
-        rows = d
-          .prepare(
-            `select p.time_created t, p.id id, s.directory dir,
-               json_extract(p.data, '$.tool') tool,
-               json_extract(p.data, '$.state.status') status,
-               json_extract(p.data, '$.state.input.name') name
-             from part p left join session s on s.id = p.session_id
-             where (p.time_created > ? or (p.time_created = ? and p.id > ?))
-               and json_extract(p.data, '$.type') = 'tool'
-             order by p.time_created, p.id`,
-          )
-          .all(after.t, after.t, after.id) as unknown as Row[]
-      } finally {
-        d.close()
-      }
       const days: Record<string, Uses> = {}
       let until = after
-      for (const r of rows) {
-        // A call still running stops the read here: it (and what follows) is read next time.
-        if (r.status !== "completed" && r.status !== "error") break
-        until = { t: r.t, id: r.id }
-        const tool = kitName(r.tool)
-        if (!tool) continue
-        const day = new Date(r.t).toISOString().slice(0, 10)
-        const ok = r.status === "completed"
-        if (tool === "skill") {
-          const n = kitName(r.name)
-          if (!n || !ok) continue
-          const u = (days[day] ??= { mcp: {}, skills: {} })
-          u.skills[n] = (u.skills[n] ?? 0) + 1
-          continue
+      const stale = Date.now() - 60 * 60_000
+      for (;;) {
+        const d = new DatabaseSync(file, { readOnly: true, timeout: 1000 })
+        let rows: Row[]
+        try {
+          rows = d
+            .prepare(
+              `select p.time_created t, p.id id, s.directory dir,
+                 json_extract(p.data, '$.tool') tool,
+                 json_extract(p.data, '$.state.status') status,
+                 json_extract(p.data, '$.state.input.name') name
+               from part p left join session s on s.id = p.session_id
+               where (p.time_created > ? or (p.time_created = ? and p.id > ?))
+                 and json_extract(p.data, '$.type') = 'tool'
+               order by p.time_created, p.id limit ${PAGE}`,
+            )
+            .all(until.t, until.t, until.id) as unknown as Row[]
+        } finally {
+          d.close()
         }
-        // (servers as configured where the session ran: a project's own count)
-        const s = opencodeServerOf(tool, (await config.servers(r.dir ?? undefined)) ?? [])
-        if (!s) continue
-        const u = (days[day] ??= { mcp: {}, skills: {} })
-        const into = ok ? u.mcp : (u.mcpFailed ??= {})
-        into[s] = (into[s] ?? 0) + 1
+        let stop = false
+        for (const r of rows) {
+          const final = r.status === "completed" || r.status === "error"
+          // A call still running stops the read here (read again next time); one left running
+          // over an hour (its agent died) is passed, uncounted.
+          if (!final && r.t > stale) {
+            stop = true
+            break
+          }
+          until = { t: r.t, id: r.id }
+          const tool = kitName(r.tool)
+          if (!final || !tool) continue
+          const day = new Date(r.t).toISOString().slice(0, 10)
+          const ok = r.status === "completed"
+          const u = (days[day] ??= { mcp: {}, skills: {} })
+          if (tool === "skill") {
+            const n = kitName(r.name)
+            if (n && ok) u.skills[n] = (u.skills[n] ?? 0) + 1
+            continue
+          }
+          const key = `${r.dir ?? ""}\0${tool}`
+          const into = ok ? u.mcp : (u.mcpFailed ??= {})
+          into[key] = (into[key] ?? 0) + 1
+        }
+        if (stop || rows.length < PAGE) break
+        await new Promise((r) => setImmediate(r)) // (a page at a time: the worker answers others)
       }
       return { until, days }
     },
+    // Raw tool calls → MCP servers, as configured where each session ran.
+    async resolve(raw) {
+      const out: Record<string, Uses> = {}
+      for (const [day, u] of Object.entries(raw)) {
+        const o: Uses = { mcp: {}, skills: { ...u.skills } }
+        for (const [field, from] of [
+          ["mcp", u.mcp],
+          ["mcpFailed", u.mcpFailed ?? {}],
+        ] as const)
+          for (const [key, n] of Object.entries(from)) {
+            const at = key.indexOf("\0")
+            const dir = at > 0 ? key.slice(0, at) : undefined
+            const s = opencodeServerOf(key.slice(at + 1), (await config.servers(dir)) ?? [])
+            if (!s) continue
+            const into = field === "mcp" ? o.mcp : (o.mcpFailed ??= {})
+            into[s] = (into[s] ?? 0) + n
+          }
+        if (Object.keys(o.mcp).length || o.mcpFailed || Object.keys(o.skills).length) out[day] = o
+      }
+      return out
+    },
   }
 }
+
+const PAGE = 5000
 
 interface Row {
   t: number

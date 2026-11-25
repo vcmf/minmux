@@ -26,8 +26,10 @@ export interface InventorySource {
   line(acc: DayAcc, line: string, day: string): DayAcc
   /** What its config says it has now (servers; skills, null: not supported). */
   loaded(): Promise<{ mcp: string[]; skills: string[] | null }>
-  /** Uses kept elsewhere than in files (OpenCode's database), read on from `after`. */
+  /** Uses kept elsewhere than in files (OpenCode's database), read on from `after`; kept raw
+   *  in the cache and made into uses by `resolve` when the result is built. */
   store?(after: StoreMark): Promise<{ until: StoreMark; days: Record<string, Uses> }>
+  resolve?(days: Record<string, Uses>): Promise<Record<string, Uses>>
 }
 
 /** Where a store was read up to: a row's time, and its id among rows of that time. */
@@ -37,6 +39,7 @@ export interface StoreMark {
 }
 
 interface FileEntry {
+  kind?: AgentKind // whose (a file not listed one time still counts for it)
   size: number
   mtime: number
   offset: number
@@ -81,7 +84,8 @@ export async function readLines(
       if (skipping) {
         const nl = chunk.indexOf(0x0a)
         if (nl < 0) {
-          done = pos
+          // (the saved place stays at the giant line's start: a scan stopped here skips it
+          // again next time)
           carry = Buffer.alloc(0)
           await new Promise((r) => setImmediate(r))
           continue
@@ -98,7 +102,6 @@ export async function readLines(
       if (carry.length > MAX_LINE) {
         carry = Buffer.alloc(0) // (a giant line: skipped to its end)
         skipping = true
-        done = pos
       }
       chunk = Buffer.alloc(0)
       // (yield: a scan of gigabytes never holds the worker for long)
@@ -162,41 +165,54 @@ export async function scanInventory(
   }
   const seen = new Set<string>()
   const out: Inventory = {}
+  const day = (ms: number) => new Date(ms).toISOString().slice(0, 10)
   for (const src of sources) {
-    const agent: InventoryAgent = { days: {}, mcpLoaded: [], skillsLoaded: [] }
-    const mcpLoaded = new Set<string>()
-    const skillsLoaded = new Set<string>()
+    const agent: InventoryAgent = { days: {}, loaded: {}, mcpNow: [], skillsNow: [] }
+    const take = (e: FileEntry) => {
+      for (const [d, u] of Object.entries(e.acc.days))
+        addInto((agent.days[d] ??= { mcp: {}, skills: {} }), u)
+      // (what a session had loaded counts on its file's last day)
+      if (e.acc.mcpLoaded.length || e.acc.skillsLoaded.length) {
+        const l = (agent.loaded[day(e.mtime)] ??= { mcp: [], skills: [] })
+        for (const s of e.acc.mcpLoaded) if (!l.mcp.includes(s)) l.mcp.push(s)
+        for (const s of e.acc.skillsLoaded) if (!l.skills.includes(s)) l.skills.push(s)
+      }
+    }
     let files: Awaited<ReturnType<InventorySource["files"]>> = []
     try {
       files = await src.files()
     } catch {
-      // can't list them: what the cache has stays (its entries are kept, below)
+      // can't list them: what the cache has stays and counts (below)
     }
+    const listed = new Set<string>()
     for (const f of files) {
       if (signal?.aborted) break
       seen.add(f.file)
+      listed.add(f.file)
       const had = cache.files[f.file]
-      let e = had && f.size >= had.offset ? had : { size: 0, mtime: 0, offset: 0, acc: emptyAcc() }
+      let e: FileEntry =
+        had && f.size >= had.offset
+          ? had
+          : { kind: src.kind, size: 0, mtime: 0, offset: 0, acc: emptyAcc() }
       if (f.size > e.offset) {
-        const day = new Date(f.mtimeMs).toISOString().slice(0, 10)
         // (the cached tally is copied first: a read that fails keeps it as it was)
         let acc: DayAcc = structuredClone(e.acc)
         try {
           const offset = await readLines(f.file, e.offset, f.size, (l) => {
-            acc = src.line(acc, l, day)
+            acc = src.line(acc, l, day(f.mtimeMs))
           })
-          e = { size: f.size, mtime: f.mtimeMs, offset, acc }
+          e = { kind: src.kind, size: f.size, mtime: f.mtimeMs, offset, acc }
         } catch {
           // unreadable for now: what was read before counts, the rest next scan
         }
       }
-      if (e.offset) cache.files[f.file] = e
-      for (const [d, u] of Object.entries(e.acc.days))
-        addInto((agent.days[d] ??= { mcp: {}, skills: {} }), u)
-      for (const s of e.acc.mcpLoaded) mcpLoaded.add(s)
-      for (const s of e.acc.skillsLoaded) skillsLoaded.add(s)
+      if (e.offset) cache.files[f.file] = { ...e, kind: src.kind }
+      take(e)
       if (Date.now() - saved > SAVE_MS) await save()
     }
+    // Its files the listing missed this time (a folder unreadable for a moment) still count.
+    for (const [file, e] of Object.entries(cache.files))
+      if (e.kind === src.kind && !listed.has(file)) take(e)
     if (src.store) {
       const kept = cache.stores[src.kind]
       // (a mark of another shape is no place to read on from: read it all again)
@@ -213,30 +229,33 @@ export async function scanInventory(
       } catch {
         // its store can't be read now: what the cache had
       }
-      for (const [d, u] of Object.entries(cache.stores[src.kind]?.days ?? {}))
+      const raw = cache.stores[src.kind]?.days ?? {}
+      const days = src.resolve
+        ? await src.resolve(raw).catch((): Record<string, Uses> => ({}))
+        : raw
+      for (const [d, u] of Object.entries(days))
         addInto((agent.days[d] ??= { mcp: {}, skills: {} }), u)
     }
     const now = await src.loaded().catch(() => ({ mcp: [], skills: [] as string[] | null }))
     // A server seen in tool names under its wire name (`my_server`) is shown by its configured
     // one (`my.server`), as the live lists do.
     const alias = new Map(now.mcp.map((c) => [wireName(c), c]))
-    const named = (m: Record<string, number> | undefined) => {
-      if (!m) return m
+    const named = (m: Record<string, number>) => {
       const o: Record<string, number> = {}
-      for (const [k, n] of Object.entries(m)) o[alias.get(k) ?? k] = (o[alias.get(k) ?? k] ?? 0) + n
+      for (const [k, n] of Object.entries(m)) {
+        const name = alias.get(k) ?? k
+        o[name] = (o[name] ?? 0) + n
+      }
       return o
     }
     for (const u of Object.values(agent.days)) {
-      u.mcp = named(u.mcp)!
+      u.mcp = named(u.mcp)
       if (u.mcpFailed) u.mcpFailed = named(u.mcpFailed)
     }
-    for (const s of now.mcp) mcpLoaded.add(s)
-    agent.mcpLoaded = [...new Set([...mcpLoaded].map((s) => alias.get(s) ?? s))]
-    if (now.skills === null) agent.skillsLoaded = null
-    else {
-      for (const s of now.skills) skillsLoaded.add(s)
-      agent.skillsLoaded = [...skillsLoaded]
-    }
+    for (const l of Object.values(agent.loaded))
+      l.mcp = [...new Set(l.mcp.map((s) => alias.get(s) ?? s))]
+    agent.mcpNow = now.mcp
+    agent.skillsNow = now.skills
     out[src.kind] = agent
   }
   // A file no longer on disk leaves the cache (its counts went with it); one that just wasn't

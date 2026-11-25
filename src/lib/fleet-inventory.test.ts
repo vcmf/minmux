@@ -15,8 +15,12 @@ const hist: InventoryAgent = {
     "2026-11-19": { mcp: { gh: 1 }, mcpFailed: { db: 1 }, skills: {} },
     "2026-10-01": { mcp: { old: 4 }, skills: { r: 2 } },
   },
-  mcpLoaded: ["gh", "db", "old", "idle"],
-  skillsLoaded: ["r", "s"],
+  loaded: {
+    "2026-11-24": { mcp: ["gh", "db"], skills: ["r"] },
+    "2026-10-01": { mcp: ["old"], skills: ["ancient"] },
+  },
+  mcpNow: ["idle"],
+  skillsNow: ["s"],
 }
 const agent = (id: string, toolbox: FleetAgent["toolbox"], kind: FleetAgent["kind"] = "claude") =>
   ({ id, sessionId: id, paneId: "p", kind, status: "idle", subs: [], toolbox }) as FleetAgent
@@ -31,12 +35,14 @@ describe("fleet-inventory", () => {
     expect(windowToolbox(hist, "7d", today)).toEqual({
       mcp: { gh: 3 },
       mcpFailed: { db: 1 },
-      mcpLoaded: ["gh", "db", "old", "idle"],
+      mcpLoaded: ["idle", "gh", "db"], // (not "old": loaded only long ago)
       skills: { r: 1 },
-      skillsLoaded: ["r", "s"],
+      skillsLoaded: ["s", "r"],
     })
-    expect(windowToolbox(hist, "all", today).mcp).toEqual({ gh: 3, old: 4 })
-    expect(windowToolbox({ ...hist, skillsLoaded: null }, "30d", today).skills).toBeNull()
+    const all = windowToolbox(hist, "all", today)
+    expect([all.mcp, all.mcpLoaded]).toEqual([{ gh: 3, old: 4 }, ["idle", "gh", "db", "old"]])
+    const codex = windowToolbox({ ...hist, skillsNow: null }, "30d", today)
+    expect([codex.skills, codex.skillsLoaded]).toEqual([null, undefined])
   })
 
   it("Live adds up the open sessions of a kind; who used what", () => {

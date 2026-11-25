@@ -46,7 +46,9 @@ export function FleetView() {
   const [mode, setMode] = useState<"graph" | "inventory">("graph")
   const modeRef = useRef(mode)
   modeRef.current = mode
-  const [marked, setMarked] = useState<{ ids: Set<string>; label: string } | null>(null)
+  const [marked, setMarked] = useState<{ ids: Set<string>; label: string; repos: number } | null>(
+    null,
+  )
   // What's open is also held by its checkout roots: a folder's key becomes owner/name once the
   // repo lookup answers, and the open repo follows it. Worked out here, in render, so the old key
   // never reaches the panel or the highlight.
@@ -659,7 +661,12 @@ export function FleetView() {
   /** An inventory row picked: back to the graph, its sessions marked, their repo open. */
   const pick = (ids: string[], label: string) => {
     setMode("graph")
-    setMarked({ ids: new Set(ids), label })
+    const repoCount = repos.filter((r) =>
+      [...r.prs.flatMap((p) => p.agents), ...r.branches.flatMap((b) => b.agents), ...r.agents].some(
+        (a) => ids.includes(a.id),
+      ),
+    ).length
+    setMarked({ ids: new Set(ids), label, repos: repoCount })
     toFind.current = ids[0] ?? null
     const repo = repos.find((r) =>
       [...r.prs.flatMap((p) => p.agents), ...r.branches.flatMap((b) => b.agents), ...r.agents].some(
@@ -692,6 +699,7 @@ export function FleetView() {
           <div className="fleet-marked">
             <span className="one">
               {marked.ids.size} {marked.ids.size === 1 ? "session" : "sessions"} used {marked.label}
+              {marked.repos > 1 ? `, in ${marked.repos} repos (the others in the strip above)` : ""}
             </span>
             <button className="btn" onClick={() => setMarked(null)}>
               Clear

@@ -11,11 +11,13 @@ export interface Uses {
   skills: Record<string, number>
 }
 
-/** One agent kind's history: its uses per day (`YYYY-MM-DD`) and what it has had loaded. */
+/** One agent kind's history: its uses per day (`YYYY-MM-DD`), what its sessions had loaded per
+ *  day, and what its config gives it now. */
 export interface InventoryAgent {
   days: Record<string, Uses>
-  mcpLoaded: string[]
-  skillsLoaded: string[] | null // null: not supported (Codex)
+  loaded: Record<string, { mcp: string[]; skills: string[] }>
+  mcpNow: string[]
+  skillsNow: string[] | null // null: skills not supported (Codex)
 }
 
 /** The history scan's answer. */
@@ -53,12 +55,21 @@ export function windowToolbox(
     add(mcpFailed, u.mcpFailed)
     add(skills, u.skills)
   }
+  // Loaded: what the window's sessions had, and what the config gives now (one removed long
+  // ago isn't this week's "unused").
+  const mcpLoaded = new Set(a.mcpNow)
+  const skillsLoaded = new Set(a.skillsNow ?? [])
+  for (const [day, l] of Object.entries(a.loaded)) {
+    if (day < from) continue
+    for (const s of l.mcp) mcpLoaded.add(s)
+    for (const s of l.skills) skillsLoaded.add(s)
+  }
   return {
     mcp,
     ...(Object.keys(mcpFailed).length ? { mcpFailed } : {}),
-    mcpLoaded: a.mcpLoaded,
-    skills: a.skillsLoaded === null ? null : skills,
-    ...(a.skillsLoaded ? { skillsLoaded: a.skillsLoaded } : {}),
+    mcpLoaded: [...mcpLoaded],
+    skills: a.skillsNow === null ? null : skills,
+    ...(a.skillsNow === null ? {} : { skillsLoaded: [...skillsLoaded] }),
   }
 }
 

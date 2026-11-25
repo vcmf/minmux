@@ -70,11 +70,14 @@ export class SessionsOps {
   // One history scan at a time (a call while one runs shares it); a result this recent is
   // reused: switching windows or reopening the view doesn't scan again.
   private scanned: { at: number; file: string; value: Promise<Inventory> } | null = null
+  private sources: InventorySource[] | null = null
   private inventory(cacheFile: string): Promise<Inventory> {
     const s = this.scanned
     if (s && s.file === cacheFile && (s.at === 0 || Date.now() - s.at < 30_000)) return s.value
     const entry = { at: 0, file: cacheFile, value: Promise.resolve({} as Inventory) }
-    entry.value = scanInventory(this.inventorySources(), cacheFile).then(
+    // (its sources once: their config readers, and Claude's reader thread, are kept)
+    this.sources ??= this.inventorySources()
+    entry.value = scanInventory(this.sources, cacheFile).then(
       (v) => {
         entry.at = Date.now()
         return v

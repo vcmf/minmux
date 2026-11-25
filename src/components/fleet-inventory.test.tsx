@@ -40,8 +40,9 @@ describe("FleetInventory", () => {
     const spy = vi.spyOn(ipc, "fleetInventory").mockResolvedValue({
       claude: {
         days: { [today]: { mcp: { old: 4 }, skills: {} } },
-        mcpLoaded: ["old"],
-        skillsLoaded: [],
+        loaded: {},
+        mcpNow: ["old"],
+        skillsNow: [],
       },
     })
     render(<FleetInventory agents={[]} onPick={() => {}} />)
