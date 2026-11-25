@@ -99,32 +99,42 @@ export class FleetRefresh {
     this.running = true
     const { local, mine } = this.want
     this.want = { local: false, mine: false }
-    const roots = local ? this.deps.roots() : []
-    const [loc, lists] = await Promise.all([
-      roots.length ? this.deps.prLocal({ roots }).catch(() => null) : null,
-      mine ? this.deps.prLists({ closed: false, part: "mine" }).catch(() => null) : null,
-    ])
+    // An ask in flight isn't due again: a remount or the window showing meanwhile waits for it.
+    if (mine) this.dueAt = Infinity
     let changed = false
-    // (the same answer as before: nothing to tell; the model and the view stay as they are)
-    if (loc?.ok && JSON.stringify(loc.repos) !== JSON.stringify(this.data.local)) {
-      this.data = { ...this.data, local: loc.repos }
-      changed = true
-    } else if (local && !roots.length && this.data.local.length) {
-      this.data = { ...this.data, local: [] } // no pane in a repo any more: nothing to keep
-      changed = true
-    }
-    if (mine) {
-      if (lists?.ok) {
+    try {
+      const roots = local ? this.deps.roots() : []
+      const [loc, lists] = await Promise.all([
+        roots.length ? this.deps.prLocal({ roots }).catch(() => null) : null,
+        mine ? this.deps.prLists({ closed: false, part: "mine" }).catch(() => null) : null,
+      ])
+      // (the same answer as before: nothing to tell; the model and the view stay as they are)
+      if (loc?.ok && JSON.stringify(loc.repos) !== JSON.stringify(this.data.local)) {
+        this.data = { ...this.data, local: loc.repos }
+        changed = true
+      } else if (local && !roots.length && this.data.local.length) {
+        this.data = { ...this.data, local: [] } // no pane in a repo any more: nothing to keep
+        changed = true
+      }
+      if (mine && lists?.ok) {
         this.failures = 0
         this.lists = lists.lists
-        this.data = { ...this.data, mine: lists.lists.mine }
-        changed = true
-      } else this.failures++
-      // From this ask, once: a later look (a remount, the window shown) doesn't move it.
-      const now = this.deps.now()
-      this.dueAt = now + nextRefreshMs(this.lists, this.failures, now)
+        if (JSON.stringify(lists.lists.mine) !== JSON.stringify(this.data.mine)) {
+          this.data = { ...this.data, mine: lists.lists.mine }
+          changed = true
+        }
+      } else if (mine) this.failures++
+    } catch {
+      // bad input (a malformed store entry): this run is skipped, the next one tries again
+    } finally {
+      // From this ask, once: a later look (a remount, the window shown) doesn't move it. Set
+      // whatever happened, so a throw can't leave the refresher stuck.
+      if (mine) {
+        const now = this.deps.now()
+        this.dueAt = now + nextRefreshMs(this.lists, this.failures, now)
+      }
+      this.running = false
     }
-    this.running = false
     if (changed) for (const fn of this.listeners) fn()
     if (this.want.local || this.want.mine) this.request({})
     else this.schedule()

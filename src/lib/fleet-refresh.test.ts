@@ -192,4 +192,34 @@ describe("FleetRefresh", () => {
     expect(h.prLocal).toHaveBeenCalledTimes(2)
     expect(heard.mock.calls.length).toBe(calls)
   })
+
+  it("an ask in flight isn't due again: coming back meanwhile doesn't ask twice", async () => {
+    let answer: (r: PrListsResult) => void = () => {}
+    const h = harness()
+    h.prLists.mockImplementationOnce(() => new Promise((ok) => (answer = ok)))
+    h.r.subscribe(() => {})()
+    await h.flush()
+    const off = h.r.subscribe(() => {}) // back while GitHub is still answering
+    await h.flush()
+    answer({ ok: true, lists: { mine: [], review: [] } } as PrListsResult)
+    await h.advance(10)
+    expect(h.prLists).toHaveBeenCalledTimes(1)
+    off()
+  })
+
+  it("a throw inside a run doesn't stop it for good", async () => {
+    let fail = true
+    const h = harness({
+      roots: () => {
+        if (fail) throw new Error("bad paneGit")
+        return ["/w/r"]
+      },
+    })
+    h.r.subscribe(() => {})
+    await h.flush()
+    fail = false
+    h.r.rootsChanged()
+    await h.advance(600)
+    expect(h.prLocal).toHaveBeenCalledTimes(1)
+  })
 })

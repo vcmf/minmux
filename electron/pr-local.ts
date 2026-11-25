@@ -1,8 +1,10 @@
 // The pull requests dialog's local checkouts (docs/design/PR_GRAPH.md, steps 2 and 3): per repo
 // the panes are in (roots grouped by their git common dir), its worktrees, its GitHub repo,
-// and (graph view) how many PRs were merged into each listed PR's branch, from its commits.
-// Asked once per dialog refresh, only while the dialog is open; nothing is polled. git runs
-// async with a timeout and a small concurrency limit, nowhere near the PTY path.
+// its default branch, and (graph view) how many PRs were merged into each listed PR's branch.
+// Asked by the dialog once per refresh while it's open, and by the Fleet tab's refresher while
+// it's shown (at the dialog's cadence, when the tab opens, and on a change of the panes' roots;
+// docs/design/FLEET_GRAPH.md). git runs async with a timeout and a small concurrency limit,
+// nowhere near the PTY path.
 import { execFile } from "node:child_process"
 import { access } from "node:fs/promises"
 import path from "node:path"
@@ -34,10 +36,11 @@ const dirExists: DirExists = (p) =>
     () => false,
   )
 
-/** A folder as compared against git's list: resolved, and case-blind on Windows (`c:` vs `C:`). */
+/** A folder as compared against git's list: resolved, case-blind on Windows and macOS. */
 const pathId = (p: string) => {
   const r = path.resolve(p)
-  return process.platform === "win32" ? r.toLowerCase() : r
+  // (macOS volumes are case-blind by default too)
+  return process.platform === "win32" || process.platform === "darwin" ? r.toLowerCase() : r
 }
 
 /** The folders `git worktree list --porcelain` names, whatever their state. */

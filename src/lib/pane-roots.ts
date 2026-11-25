@@ -1,4 +1,5 @@
-// The panes' checkout roots for `prs:local` (the PR dialog and the Fleet tab). Pure.
+// The panes' checkout roots for `prs:local` (the PR dialog and the Fleet tab), memoized on the
+// last paneGit and sessions maps (one slot, shared; `forgetRoots` drops it).
 import { paneOfGitKey } from "./agent-dirs"
 import { ghEnvOf } from "./open-link"
 import { hostPathOfWsl } from "./pr-local"
