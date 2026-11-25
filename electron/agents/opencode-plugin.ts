@@ -231,6 +231,8 @@ export const MinmuxPlugin = async (ctx) => {
     if (phase === "start") {
       const args = (output && output.args) || {}
       what = { paths: touched(args), workDir: workDirOf(args) }
+      // (a skill's name, never other args: the fleet counts which skills a session used)
+      if (o.tool === "skill") o.skill = str(args.name, MAX_TEXT)
       if (o.callID && (what.paths.length || what.workDir)) {
         if (calls.size >= MAX_CALLS) calls.delete(calls.keys().next().value)
         calls.set(o.callID, what)

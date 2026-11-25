@@ -44,6 +44,17 @@ function seed() {
         sessionId: "s1",
         tokens: { context: 170_000, output: 9_000, window: 200_000 },
       },
+      {
+        event: "Toolbox",
+        sessionId: "s1",
+        toolbox: {
+          mcp: { notion: 3 },
+          mcpLoaded: ["notion", "hexgate", "gh"],
+          mcpDown: ["hexgate"],
+          skills: { review: 1 },
+          skillsLoaded: ["review", "a", "b", "c", "d", "e", "f"],
+        },
+      },
       { event: "SessionStart", sessionId: "s2", cwd: "/w/b", paneId: "p2" },
       { event: "UserPromptSubmit", sessionId: "s2" },
       { event: "PermissionRequest", sessionId: "s2", toolName: "Bash" },
@@ -169,6 +180,12 @@ describe("FleetView: camera, edges, panel", () => {
     fireEvent.click(screen.getByRole("button", { name: /^Claude agent/ }))
     expect(await screen.findByText("Sub-agents · 1")).toBeInTheDocument()
     expect(screen.getByText(/170k \/ 200k/)).toBeInTheDocument()
+    // Its MCP servers and skills: used, failed, unused, and the rest folded.
+    expect(screen.getByText("used 1 / 3")).toBeInTheDocument()
+    expect(screen.getByText("· 3 calls")).toBeInTheDocument()
+    expect(screen.getByText("· failed to start")).toBeInTheDocument()
+    expect(screen.getByText("used 1 / 7")).toBeInTheDocument()
+    expect(screen.getByText("+2 loaded, unused")).toBeInTheDocument()
     // Back to the repo, then all repos.
     fireEvent.click(screen.getByRole("button", { name: /← o\/r/ }))
     await screen.findByRole("heading", { name: "o/r" })

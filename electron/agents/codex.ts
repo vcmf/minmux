@@ -20,6 +20,8 @@ import type { MetaReader } from "../agent-meta"
 import type { AgentAdapter, AgentShell, AgentSpec, SessionRules } from "./types"
 import { cdPrefix, workedFolders } from "./worked"
 import { codexHome } from "./codex-history"
+import { CodexMcpConfig, addCodexKitLine, codexHomeOf } from "./codex-toolbox"
+import { emptyKit, toToolbox, type Kit } from "./toolbox"
 
 // The events we consume; tool events take a matcher (S1-d).
 const EVENTS = [
@@ -219,6 +221,14 @@ export class CodexTokens extends TranscriptFold<TokenUsage> {
   }
 }
 
+/** One read of a rollout: its token totals and its MCP servers. */
+type Read = { tokens: TokenUsage; kit: Kit }
+const foldRead = (a: Read, line: string): Read => {
+  const tokens = addCodexTokenLine(a.tokens, line)
+  const kit = addCodexKitLine(a.kit, line)
+  return tokens === a.tokens && kit === a.kit ? a : { tokens, kit }
+}
+
 /** Codex's thread names: `<codex home>/session_index.jsonl`, one `{id, thread_name}` line per
  *  change, the latest per id winning (S1). Home comes from the rollout path the hooks report
  *  (`<home>/sessions/YYYY/MM/DD/rollout-…jsonl`), so a custom CODEX_HOME just works. */
@@ -354,7 +364,10 @@ export const codexShell: AgentShell = {
 export function createCodexAdapter(): AgentAdapter {
   let argsPath: string | null = null
   let trust: Map<string, string> | null = null // our hooks' trust hashes, as Codex records them
-  const tokens = new CodexTokens() // per-rollout totals across batches
+  // Per-rollout totals across batches (tokens and MCP servers: one read).
+  const reads = new TranscriptFold<Read>(foldRead, { tokens: emptyUsage, kit: emptyKit })
+  // (Windows runs Codex in WSL, whose config isn't reachable by this path: the rollout alone)
+  const mcpConfig = process.platform === "win32" ? null : new CodexMcpConfig()
   return {
     kind: "codex",
     install(cfgDir) {
@@ -371,7 +384,11 @@ export function createCodexAdapter(): AgentAdapter {
     env: (): Record<string, string> => (argsPath ? { MINMUX_CODEX_ARGS: argsPath } : {}),
     normalize: normalizeCodexEvent,
     // Stop → the session's rollout; SubagentStop → the sub-agent's (its hook names it).
-    usage: (batch, resolve) => tokenEventsForBatch(tokens, batch, resolve),
+    usage: (batch, resolve) =>
+      tokenEventsForBatch(reads, batch, resolve, async (r, ev) => ({
+        tokens: r.tokens,
+        toolbox: toToolbox(r.kit, await mcpConfig?.servers(codexHomeOf(ev.transcriptPath)), false),
+      })),
     meta: { file: (ev) => codexIndexFor(ev.transcriptPath), reader: threadNameReader },
     // Codex records each trusted hook in its config.toml; read it (async, read-only) and compare.
     approved: async () => {

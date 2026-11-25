@@ -26,6 +26,17 @@ export interface TokenUsage {
   window?: number // the model's context window, when the agent reports it (Codex)
 }
 
+/** A session's MCP servers and skills: what it had loaded and what it used (main reads them off
+ *  the hot path, from the agent's own records; docs/design/FLEET_GRAPH.md, step 5). */
+export interface Toolbox {
+  mcp: Record<string, number> // server → calls
+  mcpFailed?: Record<string, number> // server → calls that failed (Codex: refused, errored)
+  mcpLoaded?: string[] // servers it had (undefined: unknown)
+  mcpDown?: string[] // servers that failed to start or need sign-in
+  skills: Record<string, number> | null // skill → uses; null: not supported for this agent
+  skillsLoaded?: string[] // skills it had (undefined: unknown)
+}
+
 /** Which coding agent an event / node belongs to (one adapter each in main). */
 export type AgentKind = "claude" | "codex" | "opencode"
 
@@ -50,6 +61,7 @@ export type AgentEventName =
   | "WorktreeRemove"
   | "TokenUsage"
   | "SessionTitle"
+  | "Toolbox"
 
 /** The agent an event (or ledger entry) belongs to: absent means Claude's. */
 export const agentOf = (x: { agent?: AgentKind }): AgentKind => x.agent ?? "claude"
@@ -66,6 +78,7 @@ export interface AgentEvent {
   agentType?: string // e.g. "Explore", "general-purpose" (sub-agents only)
   cwd?: string
   toolName?: string // tool_name on Pre/PostToolUse
+  skill?: string // PreToolUse of a skill tool: the skill it loads (OpenCode's `skill`)
   toolKey?: string // one tool call: its name + a hash of its input (matches an approval to it)
   filePath?: string // extracted from a file tool's input, or a FileChanged path
   worked?: string[] // PostToolUse: absolute folders the call edited files in / `cd`-ed into
@@ -80,6 +93,7 @@ export interface AgentEvent {
   reason?: string // SessionEnd: prompt_input_exit | logout | clear | resume | other
   permissionMode?: string // permission_mode (default | acceptEdits | plan | bypassPermissions …)
   title?: string // SessionTitle: the session's name as the agent reports it
+  toolbox?: Toolbox // synthetic "Toolbox" event: the session's MCP servers and skills so far
 }
 
 /** A git worktree an agent created (WorktreeCreate), for the "open a terminal here" chip. */
@@ -104,6 +118,7 @@ export interface AgentNode {
   nested?: boolean // root: launched inside the pane's lead (background agent) — main decides
   lastMessage?: string
   tokens?: TokenUsage // cumulative token usage (session root or sub-agent), off-band via hooks
+  toolbox?: Toolbox // root: its MCP servers and skills (main's "Toolbox" events)
   parentId?: string // undefined for a root; the root or (explicit parent) a sub-agent
   childIds: string[] // direct sub-agents, in order of appearance
 }
@@ -152,6 +167,13 @@ export function reduceAgentEvent(graph: AgentGraph, ev: AgentEvent): AgentGraph 
     const node = graph.nodes[id]
     if (!node || !ev.tokens) return graph
     return { ...graph, nodes: { ...graph.nodes, [id]: { ...node, tokens: ev.tokens } } }
+  }
+  // The session's MCP servers and skills, the same way: on its existing root only.
+  if (ev.event === "Toolbox") {
+    const id = rootId(ev.sessionId)
+    const node = graph.nodes[id]
+    if (!node || !ev.toolbox) return graph
+    return { ...graph, nodes: { ...graph.nodes, [id]: { ...node, toolbox: ev.toolbox } } }
   }
 
   const nodes = { ...graph.nodes }

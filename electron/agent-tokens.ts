@@ -3,7 +3,7 @@
 // reducer folds onto the matching node. Runs on the hook channel in the main process, off the
 // terminal hot path — see startAgentObservability.
 
-import type { AgentEvent, TokenUsage } from "../src/lib/agent-graph"
+import type { AgentEvent, TokenUsage, Toolbox } from "../src/lib/agent-graph"
 import type { TranscriptFold } from "./transcript-fold"
 
 /** Host-fs candidate paths for a transcript path the agent reported. Identity on same-OS
@@ -41,10 +41,21 @@ export function subagentTranscriptPath(
  *     UserPromptSubmit prunes a finished sub-agent before its (slow) read lands, the reducer's
  *     no-resurrection guard drops it and no badge appears. Narrow — sub-agent transcripts are
  *     small so the read is fast; the session root is never pruned, only evicted on SessionEnd. */
-export async function tokenEventsForBatch(
-  tracker: TranscriptFold<TokenUsage>, // the agent's transcript reader (Claude's, Codex's…)
+export async function tokenEventsForBatch<T = TokenUsage>(
+  tracker: TranscriptFold<T>, // the agent's transcript reader (Claude's, Codex's…)
   batch: AgentEvent[],
   resolve: ResolvePath = identity,
+  // What a read holds: its tokens and, for a session, its MCP servers and skills (one read of
+  // the transcript gives both; `ev` is the Stop it's for)
+  view: (
+    v: T,
+    ev: AgentEvent,
+  ) =>
+    | Promise<{ tokens: TokenUsage; toolbox?: Toolbox }>
+    | {
+        tokens: TokenUsage
+        toolbox?: Toolbox
+      } = (v) => ({ tokens: v as TokenUsage }),
 ): Promise<AgentEvent[]> {
   const out: AgentEvent[] = []
   for (const ev of batch) {
@@ -54,15 +65,18 @@ export async function tokenEventsForBatch(
     }
     // Session turn finished → price the session transcript against the root.
     if (ev.event === "Stop" && ev.transcriptPath) {
-      const tokens = await tracker.update(ev.transcriptPath, resolve(ev.transcriptPath, ev.paneId))
+      const read = await tracker.update(ev.transcriptPath, resolve(ev.transcriptPath, ev.paneId))
+      const { tokens, toolbox } = await view(read, ev)
       out.push({ event: "TokenUsage", sessionId: ev.sessionId, tokens })
+      if (toolbox) out.push({ event: "Toolbox", sessionId: ev.sessionId, toolbox })
     }
     // Sub-agent finished → price its own transcript against that sub-agent, then free the
     // accumulator (a sub-agent stops exactly once, so its state is never read again).
     if (ev.event === "SubagentStop" && ev.agentId) {
       const txPath = ev.agentTranscriptPath ?? subagentTranscriptPath(ev.transcriptPath, ev.agentId)
       if (txPath) {
-        const tokens = await tracker.update(txPath, resolve(txPath, ev.paneId))
+        const read = await tracker.update(txPath, resolve(txPath, ev.paneId))
+        const { tokens } = await view(read, ev)
         out.push({ event: "TokenUsage", sessionId: ev.sessionId, agentId: ev.agentId, tokens })
         tracker.forget(txPath)
       }

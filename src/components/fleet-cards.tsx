@@ -5,6 +5,7 @@ import { useStore, activeTheme } from "../store"
 import { type FleetNode } from "../lib/fleet-layout"
 import { DETACHED, type FleetAgent, type FleetPr, type FleetRepo } from "../lib/fleet-model"
 import { cardLook } from "../lib/pr-graph"
+import { mcpList, skillList, type ToolList } from "../lib/fleet-toolbox"
 import { AGENT_STATUS_UI } from "../lib/agent-status-ui"
 import { agentColor, agentInfo } from "../lib/agent-kinds"
 import type { AgentKind } from "../lib/agent-graph"
@@ -277,6 +278,13 @@ export function FleetPanel(props: {
         ) : (
           <div className="faint">none</div>
         )}
+        <ToolSection title="MCP servers" list={a.toolbox && mcpList(a.toolbox)} unit="call" />
+        <ToolSection
+          title="Skills"
+          list={a.toolbox && skillList(a.toolbox)}
+          unit="use"
+          unsupported={!!a.toolbox && a.toolbox.skills === null}
+        />
       </aside>
     )
   }
@@ -353,5 +361,72 @@ export function FleetPanel(props: {
         Repos with a live agent session. Open one to see its PRs and the agents on them.
       </div>
     </aside>
+  )
+}
+
+const UNUSED_SHOWN = 4 // (a long list of unused ones folds into "+N loaded, unused")
+
+/** A session's MCP servers or skills: used ones (with their count), failed, then unused. */
+function ToolSection(props: {
+  title: string
+  list: ToolList | null | undefined
+  unit: string
+  unsupported?: boolean
+}) {
+  const { list } = props
+  const used = list?.used.filter((r) => r.uses > 0).length ?? 0
+  return (
+    <>
+      <h3 className="fleet-tools-head">
+        {props.title}
+        {list && list.total !== undefined && (
+          <span className="faint">
+            used {used} / {list.total}
+          </span>
+        )}
+      </h3>
+      {props.unsupported ? (
+        <div className="faint">not supported yet</div>
+      ) : !list ? (
+        <div className="faint">after its first turn</div>
+      ) : !list.used.length && !list.unused.length ? (
+        <div className="faint">{list.total === undefined ? "none seen" : "none"}</div>
+      ) : (
+        <div className="fleet-chips">
+          {list.used.map((r) => (
+            <span
+              key={r.name}
+              className={`fleet-chip${r.down || (r.failed && !r.uses) ? " bad" : ""}`}
+              title={r.failed ? `${r.failed} failed` : undefined}
+            >
+              {r.name}
+              <span className="faint">
+                {" · "}
+                {r.down
+                  ? "failed to start"
+                  : r.uses
+                    ? `${r.uses} ${props.unit}${r.uses === 1 ? "" : "s"}`
+                    : "failed"}
+              </span>
+            </span>
+          ))}
+          {list.unused
+            .slice(0, list.unused.length > UNUSED_SHOWN + 1 ? UNUSED_SHOWN : undefined)
+            .map((n) => (
+              <span key={n} className="fleet-chip unused">
+                {n} <span className="faint">· unused</span>
+              </span>
+            ))}
+          {list.unused.length > UNUSED_SHOWN + 1 && (
+            <span
+              className="fleet-chip unused more"
+              title={list.unused.slice(UNUSED_SHOWN).join(", ")}
+            >
+              +{list.unused.length - UNUSED_SHOWN} loaded, unused
+            </span>
+          )}
+        </div>
+      )}
+    </>
   )
 }

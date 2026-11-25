@@ -9,6 +9,7 @@ import { writeIfChanged } from "./files"
 import { workedFolders } from "./worked"
 import { OPENCODE_DROP_VERSION, OPENCODE_PLUGIN } from "./opencode-plugin"
 import { namesReader, OpencodeNames } from "./opencode-names"
+import { OpencodeToolbox } from "./opencode-toolbox"
 import type { AdapterContext, AgentAdapter, AgentShell, AgentSpec, SessionRules } from "./types"
 
 /** The plugin's file name: also how a stale copy from another minmux is recognised. */
@@ -194,7 +195,10 @@ export function normalizeOpencodeDrop(raw: unknown, paneId?: string): AgentEvent
     case "tool": {
       const paths = Array.isArray(d.paths) ? d.paths : []
       const more = { ...tool, toolKey: text(d.callID, 128), filePath: text(paths[0]) }
-      if (d.phase === "start") return at("PreToolUse", more)
+      if (d.phase === "start") {
+        const skill = tool.toolName === "skill" ? text(d.skill, 128) : undefined
+        return at("PreToolUse", skill ? { ...more, skill } : more)
+      }
       if (d.phase !== "end") return null
       // Where it worked, by tool name (`paths` also come with reads).
       const dir = tool.toolName === "bash" ? text(d.workDir) : undefined
@@ -227,6 +231,7 @@ export function createOpencodeAdapter(ctx?: AdapterContext): AgentAdapter {
     (id) => ctx?.userNamed(id),
     (id, user) => ctx?.setUserNamed(id, user),
   )
+  const toolbox = new OpencodeToolbox() // MCP servers and skills per session
   return {
     kind: "opencode",
     install(cfgDir) {
@@ -245,6 +250,8 @@ export function createOpencodeAdapter(ctx?: AdapterContext): AgentAdapter {
         : { OPENCODE_CONFIG_CONTENT: merged, MINMUX_OPENCODE_PLUGIN: url }
     },
     normalize: normalizeOpencodeDrop,
+    // (its tokens come in the drops; this is only its MCP servers and skills)
+    usage: (batch) => toolbox.events(batch),
     // Titles come in the plugin's drops: one store for every pane, keyed by session.
     meta: {
       file: () => NAMES_KEY,

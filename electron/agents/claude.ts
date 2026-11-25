@@ -6,13 +6,16 @@
 import { createHash } from "node:crypto"
 import fs from "node:fs"
 import path from "node:path"
-import type { AgentEvent } from "../../src/lib/agent-graph"
+import type { AgentEvent, TokenUsage } from "../../src/lib/agent-graph"
 import { cwdMatchesTranscript } from "../../src/lib/claude-project"
 import type { LedgerEntry } from "../agent-sessions"
 import { tokenEventsForBatch } from "../agent-tokens"
 import { HOOK_WRITER } from "../hook-writer"
 import { TranscriptMeta } from "../transcript-meta"
-import { TranscriptTokens } from "../transcript-tokens"
+import { TranscriptFold } from "../transcript-fold"
+import { addLine as addTokenLine, emptyUsage } from "../transcript-tokens"
+import { ClaudeMcpConfig, addClaudeKitLine } from "./claude-toolbox"
+import { emptyKit, toToolbox, type Kit } from "./toolbox"
 import type { AgentAdapter, AgentShell, AgentSpec, SessionRules } from "./types"
 import { cdPrefix, workedFolders } from "./worked"
 
@@ -172,10 +175,21 @@ export const claudeShell: AgentShell = {
   wslenv: ["MINMUX_CLAUDE_SETTINGS/p"], // /p path-translates it for claude-in-WSL to read
 }
 
+/** One read of a transcript: its token totals and its MCP servers and skills. */
+type Read = { tokens: TokenUsage; kit: Kit }
+const foldRead = (a: Read, line: string): Read => {
+  const tokens = addTokenLine(a.tokens, line)
+  const kit = addClaudeKitLine(a.kit, line)
+  return tokens === a.tokens && kit === a.kit ? a : { tokens, kit }
+}
+
 /** A Claude adapter: `install` writes the scoped hook settings, `env` points panes at them. */
 export function createClaudeAdapter(): AgentAdapter {
   let settingsPath: string | null = null
-  const tokens = new TranscriptTokens() // per-transcript totals across batches
+  // Per-transcript totals across batches (tokens, MCP servers and skills: one read).
+  const reads = new TranscriptFold<Read>(foldRead, { tokens: emptyUsage, kit: emptyKit })
+  // (Windows runs Claude in WSL, whose config isn't the host's: the transcript alone there)
+  const mcpConfig = process.platform === "win32" ? null : new ClaudeMcpConfig()
   return {
     kind: "claude",
     install(cfgDir) {
@@ -189,7 +203,11 @@ export function createClaudeAdapter(): AgentAdapter {
     env: (): Record<string, string> =>
       settingsPath ? { MINMUX_CLAUDE_SETTINGS: settingsPath } : {},
     normalize: normalizeClaudeEvent,
-    usage: (batch, resolve) => tokenEventsForBatch(tokens, batch, resolve),
+    usage: (batch, resolve) =>
+      tokenEventsForBatch(reads, batch, resolve, async (r, ev) => ({
+        tokens: r.tokens,
+        toolbox: toToolbox(r.kit, await mcpConfig?.servers(ev.cwd)),
+      })),
     meta: { file: (ev) => ev.transcriptPath ?? null, reader: () => new TranscriptMeta() },
   }
 }

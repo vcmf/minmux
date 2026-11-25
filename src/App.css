@@ -4606,3 +4606,37 @@ body.resizing-col {
     0 0 0 16px color-mix(in srgb, var(--text) 3%, transparent),
     0 0 90px 40px color-mix(in srgb, var(--text) 7%, transparent);
 }
+/* A session's MCP servers and skills in the panel. */
+.fleet-tools-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+.fleet-tools-head .faint {
+  text-transform: none;
+  letter-spacing: 0;
+}
+.fleet-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.fleet-chip {
+  border: 1px solid var(--border2);
+  border-radius: 6px;
+  padding: 3px 8px;
+  font-size: 12px;
+  line-height: 17px;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.fleet-chip.bad {
+  border-color: color-mix(in srgb, var(--red) 55%, transparent);
+  color: var(--red);
+}
+.fleet-chip.unused {
+  border-style: dashed;
+  color: var(--dim);
+}

@@ -4,7 +4,14 @@
 //    when it works elsewhere than the pane's shell, else the pane's.
 //  - Only repos with a live agent session are shown; in them, my open PRs with nobody on them
 //    show too.
-import type { AgentGraph, AgentKind, AgentNode, AgentStatus, TokenUsage } from "./agent-graph"
+import type {
+  AgentGraph,
+  AgentKind,
+  AgentNode,
+  AgentStatus,
+  TokenUsage,
+  Toolbox,
+} from "./agent-graph"
 import { paneLeads } from "./agent-graph"
 import { agentWorkDirs, gitKey, samePath, worksElsewhere } from "./agent-dirs"
 import type { PaneGitInfo, PrState } from "./pane-git"
@@ -31,6 +38,7 @@ export interface FleetAgent {
   branch?: string
   currentTool?: string
   tokens?: TokenUsage
+  toolbox?: Toolbox // its MCP servers and skills (after its first turn)
   subs: FleetSub[]
 }
 
@@ -123,6 +131,7 @@ function toAgent(
     ...(git?.branch ? { branch: git.branch } : {}),
     ...(n.currentTool ? { currentTool: n.currentTool } : {}),
     ...(n.tokens ? { tokens: n.tokens } : {}),
+    ...(n.toolbox ? { toolbox: n.toolbox } : {}),
     subs: n.childIds.flatMap((id) => {
       const c = graph.nodes[id]
       return c ? [{ id: c.id, type: c.agentType, status: c.status }] : []
