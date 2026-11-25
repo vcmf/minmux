@@ -68,6 +68,10 @@ export interface FleetInput {
 }
 
 const isLive = (s: PrState) => s === "open" || s === "draft"
+// The default branch when it's known; else the usual names (a branch node named `main` would be
+// wrong far more often than right).
+const isDefault = (branch: string, known?: string) =>
+  known ? branch === known : branch === "main" || branch === "master"
 const folderName = (p: string) =>
   p
     .replace(/[\\/]+$/, "")
@@ -141,14 +145,15 @@ export function fleetModel(input: FleetInput): FleetRepo[] {
     if (!root) continue // not in a repo (or not looked up yet)
     const loc = repoOfRoot(local, root)
     const gh = loc?.repo ?? undefined
-    const key = gh ? gh.toLowerCase() : root
+    // No GitHub remote: its main worktree stands for the repo (all its worktrees, one node).
+    const key = gh ? gh.toLowerCase() : (loc?.worktrees[0]?.path ?? root)
     let repo = repos.get(key)
     if (!repo) {
       const defaultBranch =
         loc?.defaultBranch ?? mine.find((r) => gh && r.repo.toLowerCase() === key)?.defaultBranch
       repo = {
         key,
-        label: gh ?? folderName(root),
+        label: gh ?? folderName(key),
         ...(gh ? { repo: gh } : {}),
         ...(defaultBranch ? { defaultBranch } : {}),
         prs: [],
@@ -178,7 +183,7 @@ export function fleetModel(input: FleetInput): FleetRepo[] {
         repo.prs.push(node)
       }
       node.agents.push(agent)
-    } else if (git?.branch && git.branch !== repo.defaultBranch) {
+    } else if (git?.branch && !isDefault(git.branch, repo.defaultBranch)) {
       let b = repo.branches.find((x) => x.name === git.branch)
       if (!b) repo.branches.push((b = { name: git.branch, agents: [] }))
       b.agents.push(agent)

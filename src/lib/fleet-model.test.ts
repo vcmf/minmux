@@ -193,4 +193,37 @@ describe("fleetModel", () => {
     const m = fleetModel(inp)
     expect(m[0]!.prs.map((p) => p.number)).toEqual([9])
   })
+
+  it("a repo with no GitHub remote stays one node across its worktrees", () => {
+    const local: LocalRepo[] = [
+      {
+        repo: null,
+        worktrees: [
+          { path: "/w/proj", branch: "main" },
+          { path: "/w/proj-feat", branch: "feat" },
+        ],
+      },
+    ]
+    const m = fleetModel(
+      input(
+        [...session("s1", "p1", "/w/proj"), ...session("s2", "p2", "/w/proj-feat")],
+        { p1: { root: "/w/proj", branch: "main" }, p2: { root: "/w/proj-feat", branch: "feat" } },
+        { local },
+      ),
+    )
+    expect(m).toHaveLength(1)
+    expect(m[0]).toMatchObject({ key: "/w/proj", label: "proj" })
+    expect(m[0]!.agents.map((a) => a.sessionId)).toEqual(["s1"]) // main: on the repo
+    expect(m[0]!.branches.map((b) => b.name)).toEqual(["feat"])
+  })
+
+  it("with no known default branch, main or master hangs off the repo", () => {
+    const local: LocalRepo[] = [{ ...localR, defaultBranch: undefined }]
+    const m = fleetModel(
+      input(session("s1", "p1", "/w/r"), { p1: { root: "/w/r", branch: "master" } }, { local }),
+    )
+    expect(m[0]!.defaultBranch).toBeUndefined()
+    expect(m[0]!.agents).toHaveLength(1)
+    expect(m[0]!.branches).toEqual([])
+  })
 })

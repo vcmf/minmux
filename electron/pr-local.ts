@@ -167,10 +167,13 @@ export class PrLocal {
   private async defaultOf(dir: string, root: string, remote: string): Promise<string | null> {
     const hit = this.heads.get(dir)
     if (hit && this.now() - hit.at < REPO_TTL) return hit.branch
+    // for-each-ref answers "" (exit 0) when the remote has no HEAD ref: an answer, kept; only a
+    // failing git keeps the last one and asks again next time.
     const out = await this.git
-      .run(() => this.run(["symbolic-ref", "--short", `refs/remotes/${remote}/HEAD`], root))
+      .run(() =>
+        this.run(["for-each-ref", "--format=%(symref:short)", `refs/remotes/${remote}/HEAD`], root),
+      )
       .catch(() => undefined)
-    // no HEAD ref (never fetched with it) is an answer too; a failing git keeps the last one
     const branch =
       out === undefined ? (hit?.branch ?? null) : out.trim().replace(`${remote}/`, "") || null
     if (out !== undefined) {

@@ -1,72 +1,96 @@
 // The fleet's data beyond the store (docs/design/FLEET_GRAPH.md, "Data"): each repo's GitHub
-// name and default branch (prs:local), and my open PRs (the lists' `mine`). Asked only while
-// the Fleet tab is mounted and the window is visible, at the PR dialog's cadence.
+// name, worktrees and default branch (prs:local), and my open PRs (the lists' `mine`). Asked
+// only while the Fleet tab is mounted and the window is visible, at the PR dialog's cadence.
 import { useEffect, useMemo, useRef, useState } from "react"
-import { useShallow } from "zustand/react/shallow"
 import { useStore } from "../store"
 import { ipc } from "../lib/ipc"
 import { fleetModel, type FleetRepo } from "../lib/fleet-model"
 import { nextRefreshMs, type PrLists, type PrRow } from "../lib/pr-dashboard"
 import type { LocalRepo } from "../lib/pr-local"
+import { rootsOf, splitRoots } from "../lib/pane-roots"
 
 interface FleetData {
   local: LocalRepo[]
   mine: PrRow[]
 }
 
-// The last answers, kept across mounts: reopening the tab shows them at once.
+// Kept across mounts: reopening the tab shows the last answers at once, and switching tabs back
+// and forth neither asks GitHub again before the cadence says so nor forgets a failure's backoff.
 let cache: FleetData = { local: [], mine: [] }
 let lastLists: PrLists | null = null
+let lastAsked = 0 // when the last refresh ran (0: never)
+let failures = 0
 
-/** The checkout roots the panes are in, sorted (a stable key for the repos request). */
-const rootsOf = (paneGit: Record<string, { root?: string }>) =>
-  [...new Set(Object.values(paneGit).flatMap((g) => (g.root ? [g.root] : [])))].sort()
+/** The panes' host checkout roots (WSL and ssh panes left out, as the PR dialog does). */
+const hostRoots = () => {
+  const s = useStore.getState()
+  return splitRoots(rootsOf(s.paneGit, s.sessions)).host
+}
+
+async function askLocal(roots: string[]): Promise<boolean> {
+  if (!roots.length) return false
+  const r = await ipc.prLocal({ roots }).catch(() => null)
+  if (!r?.ok) return false
+  cache = { ...cache, local: r.repos }
+  return true
+}
+
+async function askMine(): Promise<boolean> {
+  const r = await ipc.prLists({ closed: false, part: "mine" }).catch(() => null)
+  if (!r?.ok) {
+    failures++
+    return false
+  }
+  failures = 0
+  lastLists = r.lists
+  cache = { ...cache, mine: r.lists.mine }
+  return true
+}
 
 export function useFleetData(): FleetData {
   const [data, setData] = useState(cache)
-  const roots = useStore(useShallow((s) => rootsOf(s.paneGit)))
-  const rootsKey = roots.join("\0")
-  const failures = useRef(0)
+  const rootsKey = useStore((s) => rootsOf(s.paneGit, s.sessions).split("\t")[0]!)
 
-  // Repos: again whenever the set of roots changes (one `worktree list` per repo; cached names).
+  // Repos, as soon as the set of roots changes (main caches names; worktrees are re-read).
   useEffect(() => {
-    if (!roots.length) return
     let stale = false
-    void ipc
-      .prLocal({ roots })
-      .then((r) => {
-        if (stale || !r.ok) return
-        cache = { ...cache, local: r.repos }
-        setData(cache)
-      })
-      .catch(() => {})
+    void askLocal(rootsKey ? rootsKey.split("\n") : []).then((ok) => {
+      if (ok && !stale) setData(cache)
+    })
     return () => {
       stale = true
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- rootsKey stands for roots
   }, [rootsKey])
 
-  // My open PRs: at once, then by the dialog's cadence (slower on failures or a low budget).
+  // Both, at the dialog's cadence (slower after failures or on a low GraphQL budget): a failed
+  // repo lookup is retried there too. On mount, only once the cadence since the last refresh is
+  // up; on the window showing again, at once when it's overdue.
+  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   useEffect(() => {
     let stop = false
-    let timer: ReturnType<typeof setTimeout> | undefined
-    const loop = async () => {
-      if (document.visibilityState !== "hidden") {
-        const r = await ipc.prLists({ closed: false, part: "mine" }).catch(() => null)
-        if (stop) return
-        if (r?.ok) {
-          failures.current = 0
-          lastLists = r.lists
-          cache = { ...cache, mine: r.lists.mine }
-          setData(cache)
-        } else failures.current++
-      }
-      if (!stop) timer = setTimeout(() => void loop(), nextRefreshMs(lastLists, failures.current))
+    const due = () => lastAsked + nextRefreshMs(lastLists, failures) - Date.now()
+    const schedule = () => {
+      clearTimeout(timer.current)
+      if (!stop) timer.current = setTimeout(() => void tick(), Math.max(0, due()))
     }
-    void loop()
+    const tick = async () => {
+      if (document.visibilityState === "hidden") return // the visibility listener resumes it
+      lastAsked = Date.now()
+      await Promise.all([askLocal(hostRoots()), askMine()])
+      if (stop) return
+      setData(cache)
+      schedule()
+    }
+    const onVisible = () => {
+      if (document.visibilityState !== "hidden" && due() <= 0) void tick()
+    }
+    if (due() <= 0) void tick()
+    else schedule()
+    document.addEventListener("visibilitychange", onVisible)
     return () => {
       stop = true
-      clearTimeout(timer)
+      clearTimeout(timer.current)
+      document.removeEventListener("visibilitychange", onVisible)
     }
   }, [])
 
@@ -94,7 +118,7 @@ export function useThrottled<T>(value: T, ms: number): T {
   return shown
 }
 
-/** The fleet model, following the agent graph at most once a second (it moves per tool call). */
+/** The fleet model, following the store at most once a second (the agent graph moves per tool call). */
 export function useFleetModel(): FleetRepo[] {
   const { local, mine } = useFleetData()
   const graph = useThrottled(

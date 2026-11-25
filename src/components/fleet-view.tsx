@@ -4,6 +4,8 @@ import { useEffect, useRef } from "react"
 import { Graph } from "@phosphor-icons/react"
 import { useFleetModel } from "./use-fleet-data"
 
+const plural = (n: number, w: string) => `${n} ${w}${n === 1 ? "" : "s"}`
+
 export function FleetView() {
   // The keyboard comes here when the view shows (the parked terminals are inert).
   const ref = useRef<HTMLDivElement>(null)
@@ -21,8 +23,8 @@ export function FleetView() {
               {repos.map((r) => (
                 <li key={r.key}>
                   {r.label}
-                  {r.defaultBranch ? ` ⑂ ${r.defaultBranch}` : ""} · {r.counts.prs} PRs ·{" "}
-                  {r.counts.agents} agents
+                  {r.defaultBranch ? ` ⑂ ${r.defaultBranch}` : ""} · {plural(r.counts.prs, "PR")} ·{" "}
+                  {plural(r.counts.agents, "agent")}
                 </li>
               ))}
             </ul>

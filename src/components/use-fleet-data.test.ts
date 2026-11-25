@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, afterEach } from "vitest"
 import { act, renderHook } from "@testing-library/react"
 import { useThrottled } from "./use-fleet-data"
+import { ipc } from "../lib/ipc"
 
 afterEach(() => vi.useRealTimers())
 
@@ -28,5 +29,33 @@ describe("useThrottled", () => {
     expect(result.current).toBe(10) // a new window: still waiting
     act(() => void vi.advanceTimersByTime(1000))
     expect(result.current).toBe(20)
+  })
+})
+
+describe("useFleetData", () => {
+  it("switching the tab away and back doesn't ask GitHub again before the cadence is up", async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(100_000)
+    vi.resetModules() // its module state (last answers, when last asked) starts empty
+    const { useFleetData } = await import("./use-fleet-data")
+    const lists = vi
+      .spyOn(ipc, "prLists")
+      .mockResolvedValue({ ok: true, lists: { mine: [], review: [] } })
+    vi.spyOn(ipc, "prLocal").mockResolvedValue({ ok: true, repos: [] })
+    const first = renderHook(() => useFleetData())
+    await act(async () => void (await vi.advanceTimersByTimeAsync(10)))
+    expect(lists).toHaveBeenCalledTimes(1)
+    first.unmount()
+    for (let i = 0; i < 5; i++) {
+      const again = renderHook(() => useFleetData()) // back and forth
+      await act(async () => void (await vi.advanceTimersByTimeAsync(1000)))
+      again.unmount()
+    }
+    expect(lists).toHaveBeenCalledTimes(1)
+    const last = renderHook(() => useFleetData())
+    await act(async () => void (await vi.advanceTimersByTimeAsync(60_000)))
+    expect(lists).toHaveBeenCalledTimes(2) // the cadence, once
+    last.unmount()
+    vi.restoreAllMocks()
   })
 })
