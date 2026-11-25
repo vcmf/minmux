@@ -177,19 +177,21 @@ of plumbing.
 | Which checkout an agent works in                    | the sidebar's rule (`lib/agent-dirs`): Claude's `in` folder and the pane's work checkouts first, the pane's cwd otherwise                                                                    |
 | Branch and PR (number, state, url) of that checkout | `PaneGitInfo`, as the sidebar shows                                                                                                                                                          |
 | `owner/name`                                        | the repo lookup the PR dialog caches per root (`repoFromRemotes`)                                                                                                                            |
-| Default branch                                      | the remote's HEAD (`prs:local`, cached per repo); else `defaultBranchRef` on a listed PR                                                                                                     |
+| Default branch                                      | GitHub's `defaultBranchRef` on a listed PR; else the remote's HEAD (`prs:local`, cached; `origin`'s when the chosen remote has none); else `main`/`master`                                   |
 | PR titles, CI, review; my open PRs                  | the PR lists' `mine` list, refreshed while the Fleet tab is shown                                                                                                                            |
 | Context use                                         | the session's `tokens.context`; the window from Codex's report, from the model in Claude's transcript (200k, or 1M for a 1M-context model), none for OpenCode (tokens shown without a meter) |
 
 - An agent on its repo's default branch hangs off the repo. A branch with no PR shows as a
   branch node. A PR not in `mine` (someone else's, or past the list's 30) keeps the pane's
   number and state, without title or CI, in v1.
-- **PR refresh.** The Fleet tab asks for the `mine` list itself while it's shown (and the
-  window visible), at the dialog's cadence (`nextRefreshMs`: a minute, slower after failures or
-  on a low GraphQL budget). That's one query a refresh while both the tab and the dialog are
-  open; one loop shared with the dialog waits for the pulls epic, which reworks the dialog
-  into a tab anyway. The repos' names, worktrees and default branch come from `prs:local`
-  (the PR graph's request), asked again when the panes' checkout roots change.
+- **Refresh.** One serialized refresher (`lib/fleet-refresh`) runs while the Fleet tab is
+  mounted and the window visible: my `mine` list at the dialog's cadence (`nextRefreshMs`), the
+  repos' names, worktrees and default branch (`prs:local`) with it and, debounced, when the
+  panes' checkout roots change. One run at a time; anything asked meanwhile runs next. That's
+  one GitHub query a refresh while both the tab and the dialog are open; sharing the dialog's
+  loop waits for the pulls epic, which reworks the dialog into a tab.
+- WSL agents are shown, keyed by their folder, without GitHub data (main's git can't read their
+  roots in v1).
 - **PR lookups.** Pane PR lookups (`noPr`) run only while something on screen shows a PR (the
   sidebar or the agents panel). A shown Fleet tab counts, so the existing per-pane lookups run
   while it's shown; nothing new while it isn't.

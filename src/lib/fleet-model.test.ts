@@ -254,16 +254,12 @@ describe("fleetModel", () => {
     expect(m[0]!.agents).toHaveLength(1)
   })
 
-  it("leaves out checkouts main's git can't read (WSL, in v1)", () => {
+  it("keeps an agent in a checkout main's git can't read (WSL), keyed by its folder", () => {
     const m = fleetModel(
-      input(
-        session("s1", "p1", "/home/u/r"),
-        { p1: { root: "/home/u/r", branch: "main" } },
-        {
-          hostRoot: () => false,
-        },
-      ),
+      input(session("s1", "p1", "/home/u/r"), { p1: { root: "/home/u/r", branch: "main" } }),
     )
-    expect(m).toEqual([])
+    expect(m).toHaveLength(1)
+    expect(m[0]).toMatchObject({ key: "/home/u/r", label: "r" })
+    expect(m[0]!.repo).toBeUndefined()
   })
 })

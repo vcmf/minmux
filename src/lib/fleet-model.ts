@@ -65,7 +65,6 @@ export interface FleetInput {
   meta: Record<string, SessionMeta>
   local: LocalRepo[] // prs:local: each repo's GitHub name, worktrees, default branch
   mine: PrRow[] // my open PRs (the lists' `mine`)
-  hostRoot?: (root: string) => boolean // roots main's git can read (WSL ones aren't, in v1)
 }
 
 const isLive = (s: PrState) => s === "open" || s === "draft"
@@ -149,7 +148,6 @@ export function fleetModel(input: FleetInput): FleetRepo[] {
     const git = agentGit(graph, paneGit, paneId, sessions[paneId]?.cwd)
     const root = git?.root
     if (!root) continue // not in a repo (or not looked up yet)
-    if (input.hostRoot && !input.hostRoot(root)) continue // a WSL checkout: not shown in v1
     const loc = repoOfRoot(local, root)
     const gh = loc?.repo ?? undefined
     // No GitHub remote: its main worktree stands for the repo (all its worktrees, one node).

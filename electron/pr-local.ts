@@ -178,8 +178,18 @@ export class PrLocal {
         this.run(["for-each-ref", "--format=%(symref:short)", `refs/remotes/${remote}/HEAD`], root),
       )
       .catch(() => undefined)
-    const branch =
+    let branch =
       out === undefined ? (hit?.branch ?? null) : out.trim().replace(`${remote}/`, "") || null
+    // A remote added by hand (`upstream` in a fork) has no HEAD ref until `set-head`: origin's
+    // HEAD is the next best guess (a clone sets it).
+    if (out !== undefined && !branch && remote !== "origin") {
+      const o = await this.git
+        .run(() =>
+          this.run(["for-each-ref", "--format=%(symref:short)", "refs/remotes/origin/HEAD"], root),
+        )
+        .catch(() => "")
+      branch = o.trim().replace("origin/", "") || null
+    }
     if (out !== undefined) {
       if (this.heads.size >= COMMON_MAX && !this.heads.has(key))
         this.heads.delete(this.heads.keys().next().value!)

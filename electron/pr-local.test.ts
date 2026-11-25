@@ -56,6 +56,17 @@ describe("PrLocal", () => {
     expect(calls(run, "for-each-ref")).toBe(1)
   })
 
+  it("a remote with no HEAD ref (upstream added by hand): origin's HEAD instead", async () => {
+    const run = fakeGit({
+      "/w/r remote -v":
+        "origin\tgit@github.com:me/r.git (fetch)\nupstream\tgit@github.com:o/r.git (fetch)\n",
+      "/w/r for-each-ref --format=%(symref:short) refs/remotes/upstream/HEAD": "",
+      "/w/r for-each-ref --format=%(symref:short) refs/remotes/origin/HEAD": "origin/develop\n",
+    })
+    const res = await new PrLocal(run).checkouts({ roots: ["/w/r"] })
+    expect(res.ok && res.repos[0]).toMatchObject({ repo: "o/r", defaultBranch: "develop" })
+  })
+
   it("git failing: no default branch, asked again next time", async () => {
     const run = fakeGit()
     const local = new PrLocal(run)
