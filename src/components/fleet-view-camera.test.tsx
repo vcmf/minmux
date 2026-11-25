@@ -143,7 +143,9 @@ describe("FleetView: camera, edges, panel", () => {
     expect(at()).toContain("scale(1)")
     // The buttons zoom too, and say how far.
     fireEvent.click(screen.getByRole("button", { name: "Zoom in" }))
+    await frame() // (the level shown once a frame)
     expect(screen.getByRole("button", { name: "Zoom to 100%" })).toHaveTextContent("120%")
+    expect(document.activeElement).toBe(viewport()) // (the keys still reach the graph)
     fireEvent.click(screen.getByRole("button", { name: "Zoom out" }))
     fireEvent.click(screen.getByRole("button", { name: "Zoom to 100%" }))
     await frame()

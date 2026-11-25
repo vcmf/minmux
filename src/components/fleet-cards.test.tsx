@@ -4,6 +4,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest"
 import { fireEvent, render, screen } from "@testing-library/react"
 import { FleetCard, FleetPanel, type NodeInfo } from "./fleet-cards"
 import { ipc } from "../lib/ipc"
+import { useStore } from "../store"
 import { resetStore } from "../test/helpers"
 import { DETACHED, type FleetAgent, type FleetPr, type FleetRepo } from "../lib/fleet-model"
 import type { FleetNode } from "../lib/fleet-layout"
@@ -76,11 +77,16 @@ describe("FleetCard", () => {
     unmount()
   })
 
-  it("its link opens the PR on GitHub", () => {
-    const open = vi.spyOn(ipc, "openExternal").mockResolvedValue(undefined as never)
-    card("pr", { repo: repo(), pr: pr(3, {}) })
-    fireEvent.click(screen.getByRole("button", { name: "Open #3 on GitHub" }))
-    expect(open).toHaveBeenCalledWith("u/3")
+  it("its link opens the PR in the pull requests dialog", () => {
+    const p = {
+      ...pr(3, {}),
+      url: "https://github.com/o/r/pull/3",
+      agents: [agent({ paneId: "p9" })],
+    }
+    card("pr", { repo: repo(), pr: p })
+    fireEvent.click(screen.getByRole("button", { name: "Open #3" }))
+    expect(useStore.getState().prDialogOpen).toBe(true)
+    expect(useStore.getState().prLink).toMatchObject({ repo: "o/r", number: 3, pane: "p9" })
   })
 
   it("a branch, a detached checkout, a sub-agent", () => {

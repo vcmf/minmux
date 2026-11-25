@@ -174,8 +174,10 @@ export const MinmuxPlugin = async (ctx) => {
     if (s.context === undefined) return o
     o.context = s.context
     o.output = s.output || 0
+    if (s.model) o.model = s.model
     s.sentContext = o.context
     s.sentOutput = o.output
+    s.sentModel = s.model
     return o
   }
   const tokens = (id, s) => {

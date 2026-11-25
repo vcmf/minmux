@@ -130,6 +130,7 @@ export function FleetView() {
   // The zoom: the layer scaled about its top left, the edges drawn at the same scale.
   const zoom = useRef(1)
   const [zoomShown, setZoomShown] = useState(1)
+  const zoomFrame = useRef(0)
   /** Where the world's origin lands on screen, and the scale, for a view this size. */
   const origin = (w: number, h: number) => {
     const z = zoom.current
@@ -184,13 +185,25 @@ export function FleetView() {
       nz = clampZoom(nz)
       if (!el || nz === z) return
       cancelAnimationFrame(glide.current)
-      cam.current = zoomAt(cam.current, z, nz, { w: el.clientWidth, h: el.clientHeight }, at)
+      // (kept over the graph, as a pan is: the next pan doesn't jump back)
+      cam.current = clampCamera(
+        zoomAt(cam.current, z, nz, { w: el.clientWidth, h: el.clientHeight }, at),
+        nodesRef.current,
+        extent.current ?? undefined,
+      )
       zoom.current = nz
-      setZoomShown(nz)
+      // (the level shown once a frame: a pinch's many events don't render the graph each)
+      cancelAnimationFrame(zoomFrame.current)
+      zoomFrame.current = requestAnimationFrame(() => setZoomShown(zoom.current))
       apply()
     },
     [apply],
   )
+  // A zoom button: the keys go on reaching the graph after (focus back on it).
+  const zoomButton = (nz: number) => {
+    zoomTo(nz)
+    viewport.current?.focus({ focusVisible: false } as FocusOptions)
+  }
   const zoomToRef = useRef(zoomTo)
   zoomToRef.current = zoomTo
   const moveToRef = useRef(moveTo)
@@ -838,7 +851,7 @@ export function FleetView() {
               aria-label="Zoom out"
               title="Zoom out (−)"
               disabled={zoomShown <= ZOOM_MIN}
-              onClick={() => zoomTo(zoom.current / 1.2)}
+              onClick={() => zoomButton(zoom.current / 1.2)}
             >
               <Minus size={13} />
             </button>
@@ -846,7 +859,7 @@ export function FleetView() {
               className="fleet-zoom-btn fleet-zoom-level"
               aria-label="Zoom to 100%"
               title="Back to 100% (0)"
-              onClick={() => zoomTo(1)}
+              onClick={() => zoomButton(1)}
             >
               {Math.round(zoomShown * 100)}%
             </button>
@@ -855,7 +868,7 @@ export function FleetView() {
               aria-label="Zoom in"
               title="Zoom in (+)"
               disabled={zoomShown >= ZOOM_MAX}
-              onClick={() => zoomTo(zoom.current * 1.2)}
+              onClick={() => zoomButton(zoom.current * 1.2)}
             >
               <Plus size={13} />
             </button>

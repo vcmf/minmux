@@ -4840,6 +4840,9 @@ button.fleet-row:not(:disabled):hover {
   outline: 2px solid var(--accent);
   outline-offset: 3px;
 }
+.rightpanel[hidden] {
+  display: none;
+}
 .fleet-panel-host {
   display: contents; /* (only there to make the panel inert under the inventory) */
 }

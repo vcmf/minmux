@@ -12,6 +12,7 @@ import { agentColor, agentInfo } from "../lib/agent-kinds"
 import type { AgentKind } from "../lib/agent-graph"
 import { agentIcon } from "./agent-icon"
 import { ipc } from "../lib/ipc"
+import { openLink } from "../lib/open-link"
 import { TerminalManager } from "../terminal/terminal-manager"
 
 export type Selection = { kind: "repo"; key: string } | { kind: "agent"; id: string } | null
@@ -145,9 +146,10 @@ export function FleetCard(props: {
         <span className={`one fleet-st ${st.cls}`}>{st.word}</span>
         <button
           className="fleet-link"
-          title="Open on GitHub"
-          aria-label={`Open #${p.number} on GitHub`}
-          onClick={() => ipc.openExternal(p.url)}
+          title="Open in the pull requests dialog"
+          aria-label={`Open #${p.number}`}
+          // (as a PR link clicked in a pane: the dialog, looked up with that pane's gh)
+          onClick={() => openLink(p.url, p.agents[0]?.paneId)}
         >
           <ArrowSquareOut size={11} />
         </button>
@@ -210,7 +212,7 @@ function AgentFacts({ a }: { a: FleetAgent }) {
   const facts = [
     folderName(a.cwd),
     a.tokens ? `${kTokens(a.tokens.context)} ctx` : undefined,
-    shortModel(a.tokens?.model),
+    shortModel(a.kind, a.tokens?.model),
   ].filter(Boolean)
   return facts.length ? (
     <span className="one faint fleet-facts-line">{facts.join(" · ")}</span>
@@ -237,7 +239,7 @@ export function FleetPanel(props: {
     const a = agent.agent
     const pr = agent.repo.prs.find((p) => p.agents.some((x) => x.id === a.id))
     const window = contextWindow(a.kind, a.tokens)
-    const ctx = a.tokens && window ? Math.round((a.tokens.context / window) * 100) : null
+    const ctx = a.tokens && window ? Math.round((a.tokens.context / window.size) * 100) : null
     return (
       <aside className="fleet-panel" aria-label="Agent">
         <button className="fleet-back" onClick={() => props.onRepo(agent.repo.key)}>
@@ -278,7 +280,7 @@ export function FleetPanel(props: {
               <span className="faint">context</span>
               <span>
                 {kTokens(a.tokens.context)}
-                {window ? ` / ${kTokens(window)}` : ""}
+                {window ? ` / ${window.guess ? "~" : ""}${kTokens(window.size)}` : ""}
               </span>
             </div>
             {ctx !== null && (
@@ -292,7 +294,8 @@ export function FleetPanel(props: {
               >
                 <span
                   style={{ width: `${Math.min(100, ctx)}%` }}
-                  className={ctx > 90 ? "bad" : ctx > 75 ? "warn" : ""}
+                  // (a guessed window may be too small: no alarm on a guess)
+                  className={window?.guess ? "" : ctx > 90 ? "bad" : ctx > 75 ? "warn" : ""}
                 />
               </div>
             )}

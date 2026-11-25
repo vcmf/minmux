@@ -16,6 +16,10 @@ export interface AgentKindInfo {
   hookApproval?: true // minmux's hooks need the user's approval in the agent (Codex)
   history?: true // the Sessions tab lists its sessions (a reader in electron/agents/history-index)
   color?: { dark: string; light: string } // its icon's colour (none: the text colour)
+  // Its context window when it doesn't report one: the usual size, and the large one a context
+  // past the usual must be in (a guess, shown as one)
+  window?: { usual: number; large: number }
+  modelPrefix?: string // its model ids' vendor prefix, dropped when shown short
 }
 
 export const AGENT_KINDS: Record<AgentKind, AgentKindInfo> = {
@@ -26,6 +30,8 @@ export const AGENT_KINDS: Record<AgentKind, AgentKindInfo> = {
     installPaths: [".claude/local/claude"],
     resumePicker: "claude --resume",
     worktreeMarkers: ["/.claude/worktrees/"],
+    window: { usual: 200_000, large: 1_000_000 },
+    modelPrefix: "claude-",
     history: true,
     color: { dark: "#d97757", light: "#c15f3c" }, // terracotta
   },

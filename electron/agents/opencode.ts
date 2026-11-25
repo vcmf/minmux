@@ -184,8 +184,11 @@ export function normalizeOpencodeDrop(raw: unknown, paneId?: string): AgentEvent
       // The counts known when it starts come with it (one drop: never before its node).
       const context = count(d.context)
       const output = count(d.output)
+      const model = text(d.model, 64)
       const counts =
-        context !== undefined && output !== undefined ? { tokens: { context, output } } : {}
+        context !== undefined && output !== undefined
+          ? { tokens: { context, output, ...(model ? { model } : {}) } }
+          : {}
       if (child) return at("SubagentStart", { agentType: childType(d.title), ...counts })
       return base.cwd
         ? at("SessionStart", { source: d.source === "new" ? "startup" : "resume", ...counts })

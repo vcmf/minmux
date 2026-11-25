@@ -449,7 +449,7 @@ export function TopBar() {
             // In a view the panel is set aside: the button goes back to the panes, panel open.
             if (s.activeView) {
               s.setRightView("agents")
-              if (s.activeTabId) s.setActiveTab(s.activeTabId)
+              s.showTerminals()
               return
             }
             s.setRightView(rightView === "agents" ? null : "agents")
