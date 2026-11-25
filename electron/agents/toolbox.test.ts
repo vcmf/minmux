@@ -60,14 +60,18 @@ describe("toolbox", () => {
     expect(m).toEqual({ s: [] })
   })
 
-  it("sub-agents' uses add to the session's", () => {
+  it("sub-agents: one entry each, replaced by a fuller read, never added to", () => {
     const subs = new SubUses()
-    subs.add("s", { ...emptyKit, mcp: { gh: 2 }, skills: { r: 1 } })
-    subs.add("s", { ...emptyKit, mcp: { gh: 1 } })
-    const k = addUses({ ...emptyKit, mcp: { gh: 1, x: 1 } }, subs.of("s"))
-    expect([k.mcp, k.skills]).toEqual([{ gh: 4, x: 1 }, { r: 1 }])
-    subs.forget("s")
-    expect(subs.of("s")).toBeUndefined()
+    const k = (gh: number) => ({ ...emptyKit, mcp: { gh } })
+    subs.put("s", "x", k(3))
+    subs.put("s", "x", k(4)) // continued: its whole transcript again
+    expect(subs.of("s")!.mcp).toEqual({ gh: 4 })
+    subs.put("s", "x", k(2)) // an older read finishing last
+    expect(subs.of("s")!.mcp).toEqual({ gh: 4 })
+    subs.put("s", "y", { ...emptyKit, skills: { r: 1 } })
+    const all = addUses({ ...emptyKit, mcp: { gh: 1 } }, subs.of("s"))
+    expect([all.mcp, all.skills]).toEqual([{ gh: 5 }, { r: 1 }])
+    expect(subs.of("none")).toBeUndefined()
   })
 
   it("tickets: an older snapshot doesn't go out after a newer one", () => {
@@ -81,12 +85,30 @@ describe("toolbox", () => {
     expect(t.send("s", c)).toBe(false)
   })
 
-  it("sub-uses: set replaces; first sight is once; a session's root is its first folder", () => {
+  it("seeding: once per session, every caller waits for it; a running one counts once", async () => {
     const subs = new SubUses()
-    subs.add("s", { ...emptyKit, mcp: { gh: 1 } })
-    subs.set("s", { ...emptyKit, mcp: { gh: 3 } })
+    let loads = 0
+    let release!: () => void
+    const gate = new Promise<void>((r) => (release = r))
+    const load = async () => {
+      loads++
+      await gate
+      return new Map([["bg", { ...emptyKit, mcp: { gh: 2 } }]]) // still running: 2 so far
+    }
+    const first = subs.seed("s", load)
+    let second = false
+    const later = subs.seed("s", load).then(() => (second = true))
+    await Promise.resolve()
+    expect(second).toBe(false) // (waits for the one count)
+    release()
+    await Promise.all([first, later])
+    expect(loads).toBe(1)
+    subs.put("s", "bg", { ...emptyKit, mcp: { gh: 3 } }) // it stops: its whole transcript
     expect(subs.of("s")!.mcp).toEqual({ gh: 3 })
-    expect([subs.firstSight("s"), subs.firstSight("s")]).toEqual([true, false])
+  })
+
+  it("a session's root is its first folder", () => {
+    const subs = new SubUses()
     expect(subs.root("s", "/a")).toBe("/a")
     expect(subs.root("s", "/b")).toBe("/a")
     expect(subs.root("t", undefined)).toBeUndefined()
@@ -202,10 +224,15 @@ describe("Claude's transcript", () => {
       use("mcp__gh__x") + use("Skill"),
     )
     fs.writeFileSync(path.join(dir, "s", "subagents", "agent-2.jsonl"), use("mcp__gh__y"))
-    const k = await claudeSubagentUses(tx)
-    expect([k.mcp, k.skills]).toEqual([{ gh: 2 }, { r: 1 }])
-    expect(await claudeSubagentUses(path.join(dir, "none.jsonl"))).toBe(emptyKit)
-    expect(await claudeSubagentUses("not-a-transcript")).toBe(emptyKit)
+    const found = await claudeSubagentUses(tx)
+    expect([...found.keys()].sort()).toEqual(["1", "2"])
+    expect([found.get("1")!.mcp, found.get("1")!.skills, found.get("2")!.mcp]).toEqual([
+      { gh: 1 },
+      { r: 1 },
+      { gh: 1 },
+    ])
+    expect((await claudeSubagentUses(path.join(dir, "none.jsonl"))).size).toBe(0)
+    expect((await claudeSubagentUses("not-a-transcript")).size).toBe(0)
   })
 
   it("one read gives the tokens and the toolbox (on Stop; a sub-agent's gives tokens only)", async () => {

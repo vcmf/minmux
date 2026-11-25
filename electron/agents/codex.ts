@@ -389,7 +389,8 @@ export function createCodexAdapter(): AgentAdapter {
     usage: (batch, resolve) => {
       return tokenEventsForBatch(reads, batch, resolve, {
         tokens: (r) => r.tokens,
-        sub: (r, ev) => subs.add(ev.sessionId, r.kit), // (a sub-agent's uses are its session's)
+        // (a sub-agent's uses are its session's: its whole rollout, its own entry)
+        sub: (r, ev) => ev.agentId && subs.put(ev.sessionId, ev.agentId, r.kit),
         toolbox: async (r, ev) =>
           toToolbox(
             addUses(r.kit, subs.of(ev.sessionId)),

@@ -123,42 +123,80 @@ export class Tickets {
   }
 }
 
-/** Per session, the uses its finished sub-agents made (their transcripts are read once, when
- *  they stop): added into the session's snapshots. Kept when a session ends (it may be resumed);
- *  the oldest go past 256 sessions. Also where each session started (its project's config). */
+/** How many uses a kit holds: a sub-agent's transcript only grows, so a read with more is a
+ *  later (or fuller) read of it. */
+const weight = (k: Kit) =>
+  [k.mcp, k.mcpFailed, k.skills].reduce(
+    (n, m) => n + Object.values(m).reduce((a, b) => a + b, 0),
+    0,
+  )
+
+/** Per session, the uses each of its sub-agents made, one entry per sub-agent (its whole
+ *  transcript, read when it stops, or when a run first sees the session). A read replaces its
+ *  agent's entry, never adds to it, and only when it holds at least as many uses: a continued
+ *  sub-agent, one still running at the first read, or two reads finishing out of order all
+ *  count once. Sessions are kept when they end (one may be resumed); the least recently used go
+ *  past 256. Also where each session started (its project's config). */
 export class SubUses {
-  private kits = new Map<string, Kit>()
+  private agents = new Map<string, Map<string, Kit>>()
   private roots = new Map<string, string>()
+  private seen = new Set<string>()
+
+  /** `m`'s entry for `k`, moved to the newest end (least recently used go first). */
+  private touch<V>(m: Map<string, V>, k: string, v: V) {
+    m.delete(k)
+    if (m.size >= MAX_KEYS) {
+      const old = m.keys().next().value!
+      m.delete(old)
+      if (m === (this.agents as unknown)) this.seen.delete(old) // (counted again if it comes back)
+    }
+    m.set(k, v)
+  }
+
   /** Where `session` started: its first folder seen. */
   root(session: string, cwd: string | undefined): string | undefined {
     const had = this.roots.get(session)
+    if (had) this.touch(this.roots, session, had)
     if (had || !cwd) return had
-    if (this.roots.size >= MAX_KEYS) this.roots.delete(this.roots.keys().next().value!)
-    this.roots.set(session, cwd)
+    this.touch(this.roots, session, cwd)
     return cwd
   }
-  /** Replace a session's sub-agent uses (counted again from its files). */
-  set(session: string, kit: Kit) {
-    if (!this.kits.has(session) && this.kits.size >= MAX_KEYS)
-      this.kits.delete(this.kits.keys().next().value!)
-    this.kits.set(session, kit)
-  }
-  private seen = new Set<string>()
-  /** True the first time it's asked about a session (this run): count its sub-agents from
-   *  their files then (`set` replaces whatever stops counted before). */
-  firstSight(session: string): boolean {
-    if (this.seen.has(session)) return false
+
+  private loads = new Map<string, Promise<void>>()
+  /** The first time a session is asked about (this run, or since it was let go), its
+   *  sub-agents are counted from their files by `load`; every caller waits for that one count,
+   *  so no snapshot goes out without it. */
+  seed(session: string, load: () => Promise<Map<string, Kit>>): Promise<void> {
+    if (this.seen.has(session)) return this.loads.get(session) ?? Promise.resolve()
     if (this.seen.size >= MAX_KEYS * 4) this.seen.clear()
     this.seen.add(session)
-    return true
+    const p = load()
+      .then((found) => {
+        for (const [agent, kit] of found) this.put(session, agent, kit)
+      })
+      .catch(() => {})
+      .finally(() => this.loads.delete(session))
+    this.loads.set(session, p)
+    return p
   }
-  add(session: string, kit: Kit) {
-    if (!this.kits.has(session) && this.kits.size >= MAX_KEYS)
-      this.kits.delete(this.kits.keys().next().value!)
-    this.kits.set(session, addUses(this.kits.get(session) ?? emptyKit, kit))
+
+  /** One sub-agent's uses, from a read of its whole transcript. */
+  put(session: string, agent: string, kit: Kit) {
+    const m = this.agents.get(session) ?? new Map<string, Kit>()
+    const had = m.get(agent)
+    if (!had || weight(kit) >= weight(had)) {
+      if (!had && m.size >= MAX_KEYS) return
+      m.set(agent, kit)
+    }
+    this.touch(this.agents, session, m)
   }
-  of = (session: string): Kit | undefined => this.kits.get(session)
-  forget(session: string) {
-    this.kits.delete(session)
+
+  /** The session's sub-agents' uses, together. */
+  of(session: string): Kit | undefined {
+    const m = this.agents.get(session)
+    if (!m?.size) return undefined
+    let kit = emptyKit
+    for (const k of m.values()) kit = addUses(kit, k)
+    return kit
   }
 }

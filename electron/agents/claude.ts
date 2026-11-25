@@ -209,12 +209,14 @@ export function createClaudeAdapter(): AgentAdapter {
       for (const ev of batch) subs.root(ev.sessionId, ev.cwd)
       return tokenEventsForBatch(reads, batch, resolve, {
         tokens: (r) => r.tokens,
-        sub: (r, ev) => subs.add(ev.sessionId, r.kit), // (a sub-agent's uses are its session's)
+        // (a sub-agent's uses are its session's: its whole transcript, its own entry)
+        sub: (r, ev) => ev.agentId && subs.put(ev.sessionId, ev.agentId, r.kit),
         toolbox: async (r, ev) => {
           // (the first time this run sees a session, its finished sub-agents are counted from
           // their files: a resumed or reopened session keeps them)
-          if (subs.firstSight(ev.sessionId) && ev.transcriptPath && process.platform !== "win32")
-            subs.set(ev.sessionId, await claudeSubagentUses(ev.transcriptPath))
+          const tx = ev.transcriptPath
+          if (tx && process.platform !== "win32")
+            await subs.seed(ev.sessionId, () => claudeSubagentUses(tx))
           return toToolbox(
             addUses(r.kit, subs.of(ev.sessionId)),
             await mcpConfig?.servers(subs.root(ev.sessionId, ev.cwd)),

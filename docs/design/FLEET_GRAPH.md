@@ -208,17 +208,20 @@ of plumbing.
 Researched on real data (2026-11-25):
 
 - **Claude**, exact. Loaded: the transcript's `skill_listing` and `deferred_tools_delta`
-  entries (skills; MCP tools as `mcp__<server>__<tool>`; failed and pending servers). When
-  Claude loads all tools up front, MCP servers come from its config files instead
-  (`~/.claude.json` per project, `.mcp.json`, plugins), read in main and cached. Used: the
-  `PreToolUse` hook we already receive (`Skill` with its `skill`; `mcp__…` names).
+  entries (skills; MCP tools as `mcp__<server>__<tool>`; failed servers), plus the servers its
+  config gives the folder the session started in (`~/.claude.json` user-wide and per project,
+  under `CLAUDE_CONFIG_DIR` when set; the nearest `.mcp.json` up to the repo root when approved
+  there or in a settings file). `~/.claude.json` can be many MB and changes every turn: a worker
+  thread reads it and sends main only the MCP fields. Used: the transcript's `tool_use` entries
+  (`mcp__…` names; `Skill` with its `skill`), the session's and each sub-agent's.
 - **Codex**: MCP servers loaded from `~/.codex/config.toml` (`[mcp_servers.*]`; the rollout
   doesn't list them). Used: the rollout's `item_completed` events whose item is a
   `McpToolCall` (`server`, `tool`, `status`; a call refused for want of approval is `failed`).
   Skills: "not supported yet". Codex has no skill tool, and guessing from `SKILL.md` reads isn't
   worth showing.
-- **OpenCode**: MCP servers loaded from its config's `mcp` key: the global config,
-  `OPENCODE_CONFIG` and `OPENCODE_CONFIG_CONTENT` when main has them, and `opencode.json(c)` /
+- **OpenCode**: MCP servers loaded from its config's `mcp` key, its layers merged as OpenCode
+  merges them: the global config, `OPENCODE_CONFIG`, `OPENCODE_CONFIG_DIR` and
+  `OPENCODE_CONFIG_CONTENT` when main has them, and `opencode.json(c)` /
   `.opencode/` from the session's folder up to its repo root (an `enabled: false` server left
   out). Used, through our plugin's tool events: an MCP tool is
   `<server>_<tool>` (matched against the configured servers, since names hold `_`); a skill is
@@ -227,7 +230,8 @@ Researched on real data (2026-11-25):
   per session (kept across a switch away and back).
 - Verified 2026-11-25 (codex-cli 0.167.1, opencode 1.18.34) with a scratch stdio MCP server.
 - Counted in main per session from events it already handles, sent on the agent event channel.
-  A sub-agent's uses count for its session. A server's configured name is matched to its tool
+  A sub-agent's uses count for its session: one entry per sub-agent, replaced (never added to)
+  by each read of its whole transcript, so a continued or still-running sub-agent counts once. A server's configured name is matched to its tool
   names the way the agents write them (`[^A-Za-z0-9_-]` → `_`); servers the user turned off or
   never approved aren't listed. Config files are re-read at most every 30 s.
   Transcripts are read incrementally (one Codex rollout here is 16 GB).

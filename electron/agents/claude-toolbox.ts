@@ -8,7 +8,7 @@ import os from "node:os"
 import path from "node:path"
 import { Worker } from "node:worker_threads"
 import { TranscriptFold } from "../transcript-fold"
-import { addUses, bump, emptyKit, kitName, nameList, withTool, type Kit } from "./toolbox"
+import { bump, emptyKit, kitName, nameList, withTool, type Kit } from "./toolbox"
 
 /** `mcp__<server>__<tool>` → its server as the user knows it (`claude_ai_X` → `claude.ai X`). */
 export function mcpServerOf(tool: string): string | undefined {
@@ -102,27 +102,27 @@ const serversIn = (o: unknown): string[] => {
     : []
 }
 
-/** The uses a session's sub-agents made, from their transcripts
- *  (`<session>/subagents/agent-*.jsonl`): read once, in chunks, off the agent's loop. */
-export async function claudeSubagentUses(transcriptPath: string): Promise<Kit> {
+/** The uses each of a session's sub-agents made, by agent id, from their transcripts
+ *  (`<session>/subagents/agent-<id>.jsonl`): read in chunks, off the agent's loop. */
+export async function claudeSubagentUses(transcriptPath: string): Promise<Map<string, Kit>> {
+  const out = new Map<string, Kit>()
   const dir = transcriptPath.replace(/\.jsonl$/i, "")
-  if (dir === transcriptPath) return emptyKit
+  if (dir === transcriptPath) return out
   let files: string[]
   try {
-    files = (await fs.promises.readdir(path.join(dir, "subagents")))
-      .filter((f) => f.endsWith(".jsonl"))
-      .slice(0, 512)
+    files = (await fs.promises.readdir(path.join(dir, "subagents"))).slice(0, 512)
   } catch {
-    return emptyKit
+    return out
   }
   const fold = new TranscriptFold<Kit>(addClaudeKitLine, emptyKit)
-  let kit = emptyKit
   for (const f of files) {
+    const id = /^agent-(.+)\.jsonl$/.exec(f)?.[1]
+    if (!id) continue
     const p = path.join(dir, "subagents", f)
-    kit = addUses(kit, await fold.update(p))
+    out.set(id, await fold.update(p))
     fold.forget(p)
   }
-  return kit
+  return out
 }
 
 /** What minmux needs from `~/.claude.json`: the user's servers and, per project, its servers
@@ -175,31 +175,34 @@ parentPort.on("message", ({ id, file }) => {
 `
 
 class DigestWorker {
-  private worker: Worker | null = null
-  private waiting = new Map<number, (d: ClaudeDigest | null) => void>()
+  private current: { w: Worker; waiting: Map<number, (d: ClaudeDigest | null) => void> } | null =
+    null
   private ids = 0
   read(file: string): Promise<ClaudeDigest | null> {
     try {
-      if (!this.worker) {
+      if (!this.current) {
         const w = new Worker(WORKER_SRC, { eval: true })
         w.unref()
+        // (each worker answers only its own reads: a dead one's late exit can't touch the next)
+        const mine = { w, waiting: new Map<number, (d: ClaudeDigest | null) => void>() }
         w.on("message", (m: { id: number; out: ClaudeDigest | null }) => {
-          this.waiting.get(m.id)?.(m.out)
-          this.waiting.delete(m.id)
+          mine.waiting.get(m.id)?.(m.out)
+          mine.waiting.delete(m.id)
         })
         const fail = () => {
-          for (const done of this.waiting.values()) done(null)
-          this.waiting.clear()
-          this.worker = null
+          for (const done of mine.waiting.values()) done(null)
+          mine.waiting.clear()
+          if (this.current === mine) this.current = null
         }
         w.on("error", fail)
         w.on("exit", fail)
-        this.worker = w
+        this.current = mine
       }
+      const { w, waiting } = this.current
       const id = ++this.ids
       return new Promise((done) => {
-        this.waiting.set(id, done)
-        this.worker!.postMessage({ id, file })
+        waiting.set(id, done)
+        w.postMessage({ id, file })
       })
     } catch {
       return Promise.resolve(null)
@@ -240,6 +243,9 @@ export class ClaudeMcpConfig {
         return hit.d
       }
       const d = await this.worker.read(file)
+      // (a read that failed, most likely of a file Claude was rewriting, keeps the last good
+      // one; the next read tries again)
+      if (!d) return hit?.d ?? null
       this.digests.set(file, { mtime: st.mtimeMs, at: now, d })
       return d
     } catch {

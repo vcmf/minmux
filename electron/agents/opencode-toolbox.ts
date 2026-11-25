@@ -237,7 +237,8 @@ export class OpencodeToolbox {
           this.config.servers(s.cwd),
           this.config.skills(s.cwd),
         ])
-        const kit = { ...s.kit, skillsLoaded: nameList([...skills, ...Object.keys(s.kit.skills)]) }
+        // (a name the model asked for isn't proof the skill exists: loaded is the folders' list)
+        const kit = { ...s.kit, skillsLoaded: skills }
         out.push({ event: "Toolbox", sessionId: ev.sessionId, toolbox: toToolbox(kit, servers) })
       }
     }
