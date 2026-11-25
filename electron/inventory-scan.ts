@@ -226,7 +226,8 @@ export async function scanInventory(
         }
       }
       if (e.offset) cache.files[key] = e
-      take(e)
+      // (a file read again from the start that couldn't be: its ledger entry still counts)
+      take(e.offset || !had ? e : had)
       if (Date.now() - saved > SAVE_MS) await save()
     }
     // The rest of its ledger: files gone, or not listed this time, still count.

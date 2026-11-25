@@ -329,11 +329,8 @@ describe("the agents' sources", () => {
     const got = await src.store!({ t: 0, id: "" })
     // Read to the end; the running call is kept to check again.
     expect(got.until).toMatchObject({ t: t + 5, id: "g", pending: ["e"], floor: "a" })
-    // Kept raw (folder and tool), made into servers when the result is built.
-    expect(got.days[today]!.mcp).toEqual({
-      [`${proj}\0echo_ping`]: 2,
-      [`${proj}\0linear_issue`]: 1,
-    })
+    // Named when read, while their servers are configured.
+    expect(got.days[today]!.mcp).toEqual({ "=echo": 2, "=linear": 1 })
     expect(await src.resolve!(got.days)).toEqual({
       [today]: { mcp: { echo: 2, linear: 1 }, mcpFailed: { echo: 1 }, skills: { fleet: 1 } },
     })
@@ -361,9 +358,12 @@ describe("the agents' sources", () => {
     late.close()
     const after = await src.store!(more.until)
     expect(await src.resolve!(after.days)).toEqual({
-      // (z: no sane time, not counted; gone: no longer configured, named by its prefix)
-      [today]: { mcp: { echo: 1, gone: 1 }, skills: {} },
+      // (z: no sane time; gone_q: no config names it, so no MCP call)
+      [today]: { mcp: { echo: 1 }, skills: {} },
     })
+    // A server removed from the config after its calls were read keeps them.
+    fs.rmSync(path.join(proj, "opencode.json"))
+    expect((await src.resolve!(got.days))[today]!.mcp).toEqual({ echo: 2, linear: 1 })
     expect(await src.store!(after.until)).toMatchObject({ days: {} })
     // A call still running a day on (its agent died) is let go.
     const d3 = new DatabaseSync(file)

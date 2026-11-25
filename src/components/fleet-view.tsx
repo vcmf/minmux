@@ -755,7 +755,7 @@ export function FleetView() {
             </div>
           </div>
         )}
-        {pinCount > 0 && (
+        {pinCount > 0 && mode === "graph" && (
           <button
             className="btn fleet-unpin"
             onClick={() => {
@@ -766,7 +766,7 @@ export function FleetView() {
             <PushPinSlash size={13} /> Unpin
           </button>
         )}
-        {docked.length > 0 && (
+        {docked.length > 0 && mode === "graph" && (
           <div className="fleet-dock" aria-label="Other repos">
             {docked.map((r) => (
               <button
