@@ -1,8 +1,8 @@
 import { describe, it, expect } from "vitest"
 import {
   FLEET,
-  fit,
-  steady,
+  clampCamera,
+  toScreen,
   nodeId,
   openLayout,
   overviewLayout,
@@ -131,7 +131,7 @@ describe("openLayout", () => {
 })
 
 describe("relax", () => {
-  it("leaves no two cards overlapping in a busy repo, the repo where it was, all in bounds", () => {
+  it("leaves no two cards overlapping in a busy repo, the repo where it was", () => {
     const r = repo({
       prs: [
         pr(1, [agent("a", 2), agent("b"), agent("c")]),
@@ -146,11 +146,6 @@ describe("relax", () => {
       for (let j = i + 1; j < ns.length; j++)
         expect(overlaps(ns[i]!, ns[j]!), `${ns[i]!.id} / ${ns[j]!.id}`).toBe(false)
     expect(byId(ns).get(nodeId.root("o/r"))).toMatchObject({ x: FLEET.cx, y: FLEET.cy })
-    const area = fit(ns)
-    for (const n of area.nodes) {
-      expect(n.x - n.w / 2).toBeGreaterThanOrEqual(0)
-      expect(n.y + n.h / 2).toBeLessThanOrEqual(area.h)
-    }
   })
 
   it("a very busy repo (8 PRs × 4 agents × 3 sub-agents) still has no overlaps", () => {
@@ -163,17 +158,15 @@ describe("relax", () => {
         ),
       ),
     })
-    const area = fit(relax(openLayout(r)))
-    const ns = area.nodes
+    const ns = relax(openLayout(r))
     let bad = 0
     for (let i = 0; i < ns.length; i++)
       for (let j = i + 1; j < ns.length; j++) if (overlaps(ns[i]!, ns[j]!)) bad++
     expect(bad).toBe(0)
-    expect(area.w).toBeGreaterThan(FLEET.w) // the area grew (it scrolls)
   })
 })
 
-describe("steady", () => {
+describe("camera", () => {
   const node = (id: string, x: number, y: number): FleetNode => ({
     id,
     kind: "agent",
@@ -183,34 +176,16 @@ describe("steady", () => {
     h: 40,
   })
 
-  it("a node keeps its place in the area when the layout grows on the left", () => {
-    const first = fit([node("a", 500, 500)])
-    const grown = fit([node("a", 500, 500), node("b", -300, 500)]) // fit shifts everything right
-    const kept = steady(first, grown)
-    const a1 = first.nodes.find((n) => n.id === "a")!
-    const a2 = kept.nodes.find((n) => n.id === "a")!
-    expect(a2.x).toBe(a1.x + (kept.dx - first.dx)) // moved exactly by the origin's growth…
-    expect(kept.dx).toBe(grown.dx) // …which the view adds to its scroll: same place on screen
+  it("stays over the graph: its middle is clamped to the graph's extent", () => {
+    const ns = [node("a", 0, 0), node("b", 1000, 600)]
+    expect(clampCamera({ x: 500, y: 300 }, ns)).toEqual({ x: 500, y: 300 })
+    expect(clampCamera({ x: -5000, y: 9000 }, ns)).toEqual({ x: -50, y: 620 })
   })
 
-  it("never shrinks while the same view shows, so the scroll never has to jump back", () => {
-    const big = fit([node("a", 500, 500), node("b", -300, 500)])
-    const small = fit([node("a", 500, 500)])
-    const kept = steady(big, small)
-    expect(kept.dx).toBe(big.dx)
-    expect(kept.w).toBeGreaterThanOrEqual(big.w)
-    expect(kept.nodes.find((n) => n.id === "a")!.x).toBe(big.nodes.find((n) => n.id === "a")!.x)
-  })
-
-  it("a new view starts from its own fit", () => {
-    const f = fit([node("a", 500, 500)])
-    expect(steady(null, f)).toBe(f)
-  })
-
-  it("growing on the left while a far-right node goes: the old right edge moves with the origin", () => {
-    const prev = fit([node("a", 500, 500), node("far", 2900, 500)])
-    const f = fit([node("a", 500, 500), node("b", -300, 500)])
-    const kept = steady(prev, f)
-    expect(kept.w).toBeGreaterThanOrEqual(prev.w + (kept.dx - prev.dx))
+  it("puts the world point it holds in the middle of the view, whatever the view's size", () => {
+    const cam = { x: 700, y: 400 }
+    expect(toScreen(cam, cam, 1200, 800)).toEqual({ x: 600, y: 400 })
+    expect(toScreen(cam, cam, 900, 500)).toEqual({ x: 450, y: 250 }) // a resize keeps it centred
+    expect(toScreen({ x: 800, y: 400 }, cam, 1200, 800)).toEqual({ x: 700, y: 400 })
   })
 })

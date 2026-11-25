@@ -127,8 +127,12 @@ sit on a ring, in a stable order (first seen).
   agent. Rings are ellipses (wider than tall). A repo with very few nodes uses smaller rings.
 - Free-form forces were tried on the canvas and gave an unreadable tangle; nodes have computed
   places and only ease toward them, with a light overlap check.
-- **The graph may be bigger than the window.** It scrolls; opening a repo scrolls it to the
-  centre and a Center button brings it back. The header, the strip and the controls stay fixed.
+- **The graph may be bigger than the window.** No native scrolling: a camera (the world point in
+  the middle of the view) pans one layer of cards with a transform. The wheel or trackpad and a
+  drag on empty space move it, a focused card glides it into view, opening a repo glides to its
+  centre, and it stays over the graph. A resize keeps the middle in the middle; cards coming or
+  going never move the others under the user. (Native scrolling was tried and raced React's
+  renders on resize and on model updates.)
 - PR cards reuse the PR graph's looks (`lib/pr-graph` `cardLook`: red for conflicts, failing CI
   or changes requested, amber for CI running, dashed for a draft, an approved tick). A PR the
   lists don't hold shows its number and state only. Agent cards: kind dot, name, sub-agent
@@ -228,7 +232,7 @@ Researched on real data (2026-11-25):
 - **Cards are DOM** (text, focus, hover, accessibility, theme tokens), placed with transforms
   written directly by one animation loop. React renders when the model changes, never per
   frame.
-- **Edges and dots are one 2D canvas** the size of the viewport, drawn with the scroll offset,
+- **Edges and dots are one 2D canvas** the size of the viewport, drawn through the camera,
   under the cards. A 2D canvas isn't a WebGL context, and the CSP allows it and inline
   transforms.
 - The view is a tab, so nothing WebGL is on screen while it moves (the reason the PR graph,
@@ -262,7 +266,7 @@ One PR each into `epic/fleet-graph`:
    `prs:local`, agent placement by checkout, the PR lookup gate. Tests; a plain list stands in
    for the graph.
 3. **Graph** (#226). `lib/fleet-layout`, the overview, an open repo, the strip, the side panel,
-   scrolling; no motion.
+   the camera; no motion.
 4. **Motion** (#224). The loop and its stop rules, turning, dots, hover freeze, drag to pin,
    grow-out; the perf check.
 5. **MCP servers and skills** (#225). Verify the two unknown formats first, then the per

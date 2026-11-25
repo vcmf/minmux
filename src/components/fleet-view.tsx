@@ -1,20 +1,21 @@
 // The Fleet tab's view (docs/design/FLEET_GRAPH.md, "The graph"): the repos with a live agent
 // session on a ring; one opened as a radial tree (PRs, their agents, sub-agents) with the others
-// docked in a strip, and a side panel for the selection. Cards are DOM, placed from
-// lib/fleet-layout; the edges are one viewport-sized 2D canvas under them, redrawn on layout,
-// scroll and resize. Static here: the motion step turns it.
+// docked in a strip, and a side panel for the selection. Cards are DOM, placed in world
+// coordinates (lib/fleet-layout) on one layer; a camera (the world point in the middle) pans it
+// with a transform: no native scrolling. The edges are one viewport-sized 2D canvas under the
+// cards. Static here: the motion step turns it.
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
 import { ArrowSquareOut, GitBranch, Graph } from "@phosphor-icons/react"
 import { useStore, activeTheme } from "../store"
 import { useFleetModel } from "./use-fleet-data"
 import {
-  fit,
+  FLEET,
+  clampCamera,
   nodeId,
   openLayout,
   overviewLayout,
   relax,
-  steady,
-  type Fitted,
+  type Camera,
   type FleetNode,
 } from "../lib/fleet-layout"
 import { DETACHED, type FleetAgent, type FleetPr, type FleetRepo } from "../lib/fleet-model"
@@ -100,17 +101,16 @@ export function FleetView() {
       openRoots.current = []
       setOpenKey(null)
       setSel(null)
-      setView((v) => v + 1) // the overview again: its own origin, centred
     } else if (open && open.key !== openKey) {
       setOpenKey(open.key)
       setSel((s) => (s?.kind === "repo" && s.key === openKey ? { kind: "repo", key: open.key } : s))
     }
   }, [openKey, open])
 
-  // Each open or close is a new view: it starts its own steady origin and is centred once. A repo
-  // that vanished is a new view in this very render (no frame drawn on its old origin).
-  const [view, setView] = useState(0)
-  const viewId = `${view}:${open ? "open" : "all"}`
+  const nodes = useMemo(
+    () => (open ? relax(openLayout(open)) : overviewLayout(repos)),
+    [open, repos],
+  )
 
   const lookup = useMemo(() => {
     const m = new Map<string, NodeInfo>()
@@ -133,57 +133,69 @@ export function FleetView() {
     return m
   }, [repos])
 
-  // The layout on a steady origin (lib/fleet-layout `steady`): while the same view shows, the
-  // area only grows, so a node never moves in it because another one came or went.
-  const shown = useRef<{ viewId: string; placed: Fitted } | null>(null)
-  const placed = useMemo(() => {
-    const f = fit(open ? relax(openLayout(open)) : overviewLayout(repos))
-    const prev = shown.current?.viewId === viewId ? shown.current.placed : null
-    return steady(prev, f)
-  }, [open, repos, viewId])
-  const nodes = placed.nodes
-
-  // Scrolling. A viewport bigger than the graph gets padding, so the graph's centre can still be
-  // scrolled to the middle (no CSS centring: every offset is ours). The view keeps one point of
-  // the layout ("world": before the origin's shift) in its middle; after any change (the origin
-  // growing, a resize, a new layout) the scroll is set so that point is back there, so the cards
-  // stay put on screen.
-  const scroller = useRef<HTMLDivElement>(null)
-  const [vp, setVp] = useState({ w: 0, h: 0 })
-  const pad = {
-    x: Math.max(0, Math.round(vp.w / 2 - placed.cx)),
-    y: Math.max(0, Math.round(vp.h / 2 - placed.cy)),
-  }
-  const areaW = Math.max(placed.w + pad.x, pad.x + placed.cx + Math.ceil(vp.w / 2))
-  const areaH = Math.max(placed.h + pad.y, pad.y + placed.cy + Math.ceil(vp.h / 2))
-  const origin = useRef({ x: 0, y: 0, padX: 0, padY: 0 }) // world → area, for the listeners
-  const mid = useRef<{ x: number; y: number } | null>(null) // the world point in the middle
-  const centring = useRef(false) // the opening's smooth scroll runs: it owns the scroll
-  useLayoutEffect(() => {
-    const el = scroller.current
-    const was = shown.current
-    shown.current = { viewId, placed }
-    const o = { x: placed.dx + pad.x, y: placed.dy + pad.y }
-    origin.current = { ...o, padX: pad.x, padY: pad.y }
-    if (!el) return
-    const at = (m: { x: number; y: number }) => ({
-      left: m.x + o.x - el.clientWidth / 2,
-      top: m.y + o.y - el.clientHeight / 2,
+  // The camera: the world point in the middle of the view. It lives in a ref and is written to
+  // the cards' layer as a transform (and the canvas redrawn) on a frame: panning renders nothing.
+  const viewport = useRef<HTMLDivElement>(null)
+  const layer = useRef<HTMLDivElement>(null)
+  const canvas = useRef<HTMLCanvasElement>(null)
+  const cam = useRef<Camera>({ x: FLEET.cx, y: FLEET.cy })
+  const nodesRef = useRef(nodes)
+  nodesRef.current = nodes
+  const drawRef = useRef<() => void>(() => {})
+  const frame = useRef(0)
+  const apply = useCallback(() => {
+    cancelAnimationFrame(frame.current)
+    frame.current = requestAnimationFrame(() => {
+      const el = viewport.current
+      if (!el) return
+      const tx = Math.round(el.clientWidth / 2 - cam.current.x)
+      const ty = Math.round(el.clientHeight / 2 - cam.current.y)
+      if (layer.current) layer.current.style.transform = `translate3d(${tx}px, ${ty}px, 0)`
+      drawRef.current()
     })
-    if (!was || was.viewId !== viewId || centring.current) {
-      // A new view (or its opening scroll still going): the layout's centre in the middle.
-      const isNew = !was || was.viewId !== viewId
-      const smooth = isNew ? !!was && !!open : true
-      if (isNew) centring.current = smooth
-      mid.current = { x: placed.cx - placed.dx, y: placed.cy - placed.dy }
-      el.scrollTo?.({ ...at(mid.current), behavior: smooth ? "smooth" : "auto" })
-    } else if (mid.current) {
-      const t = at(mid.current)
-      if (Math.abs(el.scrollLeft - t.left) >= 1) el.scrollLeft = t.left
-      if (Math.abs(el.scrollTop - t.top) >= 1) el.scrollTop = t.top
+  }, [])
+  const glide = useRef(0)
+  const moveTo = useCallback(
+    (to: Camera, smooth: boolean) => {
+      cancelAnimationFrame(glide.current)
+      if (!smooth || window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) {
+        cam.current = to
+        apply()
+        return
+      }
+      const from = cam.current
+      const t0 = performance.now()
+      const step = (t: number) => {
+        const k = Math.min(1, (t - t0) / 320)
+        const e = 1 - (1 - k) ** 3 // ease out
+        cam.current = { x: from.x + (to.x - from.x) * e, y: from.y + (to.y - from.y) * e }
+        apply()
+        if (k < 1) glide.current = requestAnimationFrame(step)
+      }
+      glide.current = requestAnimationFrame(step)
+    },
+    [apply],
+  )
+
+  const moveToRef = useRef(moveTo)
+  moveToRef.current = moveTo
+
+  // Each open or close centres its view once; a layout change keeps the camera where it is (over
+  // the graph): nothing slides under the user.
+  const [view, setView] = useState(0)
+  const viewId = `${view}:${open ? "open" : "all"}`
+  const shownView = useRef<string | null>(null)
+  useLayoutEffect(() => {
+    if (shownView.current !== viewId) {
+      const first = shownView.current === null
+      shownView.current = viewId
+      moveTo({ x: FLEET.cx, y: FLEET.cy }, !first && !!open)
+    } else {
+      cam.current = clampCamera(cam.current, nodes)
+      apply()
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- `open` only picks the scroll's style
-  }, [placed, viewId, pad.x, pad.y, vp.w, vp.h])
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `open` only picks the glide
+  }, [viewId, nodes, moveTo, apply])
 
   const toggle = useCallback(
     (key: string) => {
@@ -202,15 +214,14 @@ export function FleetView() {
     setView((v) => v + 1)
   }, [])
 
-  // The edges: one canvas the size of the viewport, drawn with the scroll offset.
-  const canvas = useRef<HTMLCanvasElement>(null)
+  // The edges: one canvas the size of the viewport, drawn through the camera.
   const selectedAgent = shownSel?.kind === "agent" ? shownSel.id : null
   const scheme = useStore((s) => activeTheme(s).scheme)
   // The theme's colours, from the theme itself (its CSS variables may not be applied yet).
   const ui = useStore((s) => activeTheme(s).ui)
   const draw = useCallback(() => {
     const c = canvas.current
-    const el = scroller.current
+    const el = viewport.current
     const ctx = c?.getContext?.("2d")
     if (!c || !el || !ctx) return
     const dpr = window.devicePixelRatio || 1
@@ -222,12 +233,14 @@ export function FleetView() {
       c.style.width = `${w}px`
       c.style.height = `${h}px`
     }
-    // (the padding of a view bigger than the graph moves the edges with the cards)
-    const o = { x: pad.x, y: pad.y }
-    ctx.setTransform(dpr, 0, 0, dpr, (o.x - el.scrollLeft) * dpr, (o.y - el.scrollTop) * dpr)
-    ctx.clearRect(el.scrollLeft - o.x, el.scrollTop - o.y, w, h)
+    const tx = Math.round(w / 2 - cam.current.x)
+    const ty = Math.round(h / 2 - cam.current.y)
+    ctx.setTransform(1, 0, 0, 1, 0, 0)
+    ctx.clearRect(0, 0, c.width, c.height)
+    ctx.setTransform(dpr, 0, 0, dpr, tx * dpr, ty * dpr)
     const { border2: faint, red, accent } = ui
-    const byId = new Map(nodes.map((n) => [n.id, n]))
+    const ns = nodesRef.current
+    const byId = new Map(ns.map((n) => [n.id, n]))
     // The selected agent's way to its repo, drawn green.
     const path = new Set<string>()
     for (
@@ -236,7 +249,7 @@ export function FleetView() {
       id = byId.get(id)?.parent
     )
       path.add(id)
-    for (const n of nodes) {
+    for (const n of ns) {
       const p = n.parent && byId.get(n.parent)
       if (!p) continue
       const info = lookup.get(n.id)
@@ -258,84 +271,98 @@ export function FleetView() {
       ctx.stroke()
     }
     ctx.globalAlpha = 1
-  }, [nodes, lookup, selectedAgent, scheme, ui, pad.x, pad.y])
-  // Scroll and resize listeners, set up once: they draw through a ref (a new layout doesn't
-  // re-create them, so it can't interrupt a scroll).
-  const drawRef = useRef(draw)
+  }, [lookup, selectedAgent, scheme, ui])
   drawRef.current = draw
-  const frame = useRef(0)
-  const redraw = useCallback(() => {
-    cancelAnimationFrame(frame.current)
-    frame.current = requestAnimationFrame(() => drawRef.current())
-  }, [])
-  useEffect(() => redraw(), [draw, redraw])
-  useLayoutEffect(() => {
-    const el = scroller.current
+  useEffect(() => apply(), [draw, nodes, apply])
+
+  // Panning: the wheel / trackpad, or dragging empty space. A resize needs nothing: the camera is
+  // the middle, so the graph stays centred on it.
+  useEffect(() => {
+    const el = viewport.current
     if (!el) return
-    setVp({ w: el.clientWidth, h: el.clientHeight })
-    const onScroll = () => {
-      // Where the user scrolled is the point kept in the middle (not while the opening's scroll
-      // runs: it isn't the user's).
-      if (!centring.current) {
-        const o = origin.current
-        mid.current = {
-          x: el.scrollLeft + el.clientWidth / 2 - o.x,
-          y: el.scrollTop + el.clientHeight / 2 - o.y,
-        }
-      }
-      redraw()
+    const pan = (dx: number, dy: number) => {
+      cancelAnimationFrame(glide.current) // the user takes over from an opening's glide
+      cam.current = clampCamera({ x: cam.current.x + dx, y: cam.current.y + dy }, nodesRef.current)
+      apply()
     }
-    const done = () => {
-      centring.current = false
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault()
+      pan(e.deltaX, e.deltaY)
     }
-    const onResize = () => {
-      setVp((v) =>
-        v.w === el.clientWidth && v.h === el.clientHeight
-          ? v
-          : { w: el.clientWidth, h: el.clientHeight },
-      )
-      redraw()
+    let drag: { x: number; y: number; id: number } | null = null
+    const onDown = (e: PointerEvent) => {
+      if (e.button !== 0 || (e.target as HTMLElement).closest("button, .fleet-card")) return
+      drag = { x: e.clientX, y: e.clientY, id: e.pointerId }
+      el.setPointerCapture?.(e.pointerId)
+      el.classList.add("panning")
     }
-    el.addEventListener("scroll", onScroll, { passive: true })
-    el.addEventListener("scrollend", done) // the opening's scroll arrived
-    el.addEventListener("wheel", done, { passive: true }) // the user takes over
-    el.addEventListener("pointerdown", done)
-    const ro = typeof ResizeObserver !== "undefined" ? new ResizeObserver(onResize) : null
+    const onMove = (e: PointerEvent) => {
+      if (!drag || e.pointerId !== drag.id) return
+      pan(drag.x - e.clientX, drag.y - e.clientY)
+      drag = { ...drag, x: e.clientX, y: e.clientY }
+    }
+    const onUp = (e: PointerEvent) => {
+      if (!drag || e.pointerId !== drag.id) return
+      drag = null
+      el.classList.remove("panning")
+    }
+    // A card the keyboard (or anything else) focuses comes into view: the camera glides to it.
+    const onFocus = (e: FocusEvent) => {
+      const id = (e.target as HTMLElement).closest<HTMLElement>("[data-node]")?.dataset.node
+      const n = id ? nodesRef.current.find((x) => x.id === id) : undefined
+      if (!n) return
+      const sx = n.x - cam.current.x + el.clientWidth / 2
+      const sy = n.y - cam.current.y + el.clientHeight / 2
+      const margin = 24
+      const inside =
+        sx - n.w / 2 >= margin &&
+        sx + n.w / 2 <= el.clientWidth - margin &&
+        sy - n.h / 2 >= margin &&
+        sy + n.h / 2 <= el.clientHeight - margin
+      if (!inside) moveToRef.current({ x: n.x, y: n.y }, true)
+    }
+    el.addEventListener("focusin", onFocus)
+    el.addEventListener("wheel", onWheel, { passive: false })
+    el.addEventListener("pointerdown", onDown)
+    el.addEventListener("pointermove", onMove)
+    el.addEventListener("pointerup", onUp)
+    el.addEventListener("pointercancel", onUp)
+    const ro = typeof ResizeObserver !== "undefined" ? new ResizeObserver(() => apply()) : null
     ro?.observe(el)
     return () => {
       cancelAnimationFrame(frame.current)
-      el.removeEventListener("scroll", onScroll)
-      el.removeEventListener("scrollend", done)
-      el.removeEventListener("wheel", done)
-      el.removeEventListener("pointerdown", done)
+      cancelAnimationFrame(glide.current)
+      el.removeEventListener("focusin", onFocus)
+      el.removeEventListener("wheel", onWheel)
+      el.removeEventListener("pointerdown", onDown)
+      el.removeEventListener("pointermove", onMove)
+      el.removeEventListener("pointerup", onUp)
+      el.removeEventListener("pointercancel", onUp)
       ro?.disconnect()
     }
-  }, [redraw])
-  // A resize re-runs the layout effect above (vp → pad): the middle point is restored there.
+  }, [apply])
 
   const docked = open ? repos.filter((r) => r.key !== open.key) : []
   return (
     <div className="fleet-view" ref={ref} tabIndex={-1}>
       <div className="fleet-graph">
         <canvas className="fleet-edges" ref={canvas} aria-hidden="true" />
-        <div className="fleet-scroll" ref={scroller}>
-          <div className="fleet-area" style={{ width: areaW, height: areaH }}>
-            <div className="fleet-origin" style={{ left: pad.x, top: pad.y }}>
-              {nodes.map((n) => (
-                <FleetCard
-                  key={n.id}
-                  node={n}
-                  info={lookup.get(n.id)}
-                  open={!!open}
-                  selected={
-                    (shownSel?.kind === "agent" && n.id === nodeId.agent(shownSel.id)) ||
-                    (shownSel?.kind === "repo" && n.id === nodeId.root(shownSel.key))
-                  }
-                  onRoot={toggle}
-                  onAgent={(id) => setSel({ kind: "agent", id })}
-                />
-              ))}
-            </div>
+        <div className="fleet-viewport" ref={viewport}>
+          <div className="fleet-layer" ref={layer}>
+            {nodes.map((n) => (
+              <FleetCard
+                key={n.id}
+                node={n}
+                info={lookup.get(n.id)}
+                open={!!open}
+                selected={
+                  (shownSel?.kind === "agent" && n.id === nodeId.agent(shownSel.id)) ||
+                  (shownSel?.kind === "repo" && n.id === nodeId.root(shownSel.key))
+                }
+                onRoot={toggle}
+                onAgent={(id) => setSel({ kind: "agent", id })}
+              />
+            ))}
           </div>
         </div>
         {repos.length === 0 && (
@@ -408,6 +435,7 @@ function FleetCard(props: {
         <button
           className={`fleet-root${open ? " open" : ""}${selected ? " sel" : ""}`}
           style={style}
+          data-node={n.id}
           aria-label={`${open ? "Close" : "Open"} ${r.label}`}
           aria-expanded={open}
           onClick={() => props.onRoot(r.key)}
@@ -436,6 +464,7 @@ function FleetCard(props: {
       <div
         className={`fleet-card fleet-pr${st.cls === "ok" ? "" : ` ${st.cls}`}${p.state === "draft" ? " draft" : ""}`}
         style={style}
+        data-node={n.id}
       >
         <span className="one">
           <span className="faint">#{p.number}</span> <b>{p.row?.title ?? ""}</b>
@@ -482,6 +511,7 @@ function FleetCard(props: {
       <button
         className={`fleet-card fleet-agent ${a.status}${selected ? " sel" : ""}`}
         style={style}
+        data-node={n.id}
         aria-label={`${agentInfo(a.kind).label} agent ${agentName(a)}, ${st.word}`}
         onClick={() => props.onAgent(a.id)}
         onDoubleClick={() => goToPane(a.paneId)}

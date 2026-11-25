@@ -4255,19 +4255,21 @@ body.resizing-col {
   inset: 0;
   pointer-events: none;
 }
-.fleet-scroll {
+.fleet-viewport {
   position: absolute;
   inset: 0;
-  overflow: auto;
+  overflow: hidden; /* the camera pans the layer: no native scrolling (fleet-view) */
+  cursor: grab;
+  touch-action: none;
 }
-.fleet-origin {
-  position: absolute; /* the padding of a view bigger than the graph (fleet-view) */
+.fleet-viewport.panning {
+  cursor: grabbing;
 }
-.fleet-area {
-  position: relative;
-}
-.fleet-scroll::-webkit-scrollbar-corner {
-  background: transparent;
+.fleet-layer {
+  position: absolute;
+  left: 0;
+  top: 0;
+  will-change: transform;
 }
 .fleet-view .one {
   display: block;

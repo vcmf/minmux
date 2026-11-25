@@ -184,63 +184,40 @@ export function relax(nodes: FleetNode[], passes = 40): FleetNode[] {
   return ns
 }
 
-/** Where a layout sits in its area: the shift applied to it, the area's size, its centre. */
-export interface Fitted {
-  nodes: FleetNode[]
-  dx: number
-  dy: number
-  w: number
-  h: number
-  cx: number
-  cy: number
+/** The camera: the world point shown in the middle of the view. */
+export interface Camera {
+  x: number
+  y: number
 }
 
-/** The area the nodes need (at least the default one), and the nodes moved into it. */
-export function fit(nodes: FleetNode[]): Fitted {
-  const pad = 40
-  let minX = Infinity
-  let minY = Infinity
-  let maxX = -Infinity
-  let maxY = -Infinity
+/** The graph's extent: the box every card (and a root's label) fits in. */
+export function bounds(nodes: FleetNode[]): { x0: number; y0: number; x1: number; y1: number } {
+  if (!nodes.length) return { x0: FLEET.cx, y0: FLEET.cy, x1: FLEET.cx, y1: FLEET.cy }
+  let x0 = Infinity
+  let y0 = Infinity
+  let x1 = -Infinity
+  let y1 = -Infinity
   for (const n of nodes) {
-    // (a root's 240px label is wider than its circle)
-    const half = n.kind === "root" ? Math.max(n.w, 240) / 2 : n.w / 2
-    minX = Math.min(minX, n.x - half)
-    minY = Math.min(minY, n.y - n.h / 2)
-    maxX = Math.max(maxX, n.x + half)
-    maxY = Math.max(maxY, n.y + n.h / 2 + 60) // (a root's label hangs below it)
+    const half = n.kind === "root" ? Math.max(n.w, 240) / 2 : n.w / 2 // (a root's label)
+    x0 = Math.min(x0, n.x - half)
+    y0 = Math.min(y0, n.y - n.h / 2)
+    x1 = Math.max(x1, n.x + half)
+    y1 = Math.max(y1, n.y + n.h / 2 + (n.kind === "root" ? 60 : 0))
   }
-  if (!nodes.length)
-    return { nodes, dx: 0, dy: 0, w: FLEET.w, h: FLEET.h, cx: FLEET.cx, cy: FLEET.cy }
-  const dx = Math.max(0, pad - minX)
-  const dy = Math.max(0, pad - minY)
-  const moved = dx || dy ? nodes.map((n) => ({ ...n, x: n.x + dx, y: n.y + dy })) : nodes
+  return { x0, y0, x1, y1 }
+}
+
+/** A camera kept over the graph: its middle never leaves the graph's extent. */
+export function clampCamera(c: Camera, nodes: FleetNode[]): Camera {
+  const b = bounds(nodes)
   return {
-    nodes: moved,
-    dx,
-    dy,
-    w: Math.max(FLEET.w, maxX + dx + pad),
-    h: Math.max(FLEET.h, maxY + dy + pad),
-    cx: FLEET.cx + dx,
-    cy: FLEET.cy + dy,
+    x: Math.min(b.x1, Math.max(b.x0, c.x)),
+    y: Math.min(b.y1, Math.max(b.y0, c.y)),
   }
 }
 
-/** A fitted layout whose origin and size only grow within a view (`prev`: the last one shown). */
-export function steady(prev: Fitted | null, f: Fitted): Fitted {
-  if (!prev) return f
-  const dx = Math.max(prev.dx, f.dx)
-  const dy = Math.max(prev.dy, f.dy)
-  const ox = dx - f.dx
-  const oy = dy - f.dy
-  return {
-    nodes: ox || oy ? f.nodes.map((n) => ({ ...n, x: n.x + ox, y: n.y + oy })) : f.nodes,
-    dx,
-    dy,
-    // (the last area moved right / down with the origin: its far edges did too)
-    w: Math.max(prev.w + (dx - prev.dx), f.w + ox),
-    h: Math.max(prev.h + (dy - prev.dy), f.h + oy),
-    cx: f.cx + ox,
-    cy: f.cy + oy,
-  }
-}
+/** Where a world point lands on screen, for a camera and a view size. */
+export const toScreen = (p: Camera, c: Camera, w: number, h: number) => ({
+  x: p.x - c.x + w / 2,
+  y: p.y - c.y + h / 2,
+})
