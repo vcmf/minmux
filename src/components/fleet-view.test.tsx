@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest"
-import { act, render, screen, waitFor } from "@testing-library/react"
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { FleetView } from "./fleet-view"
 import { useStore } from "../store"
 import { ipc } from "../lib/ipc"
@@ -67,12 +67,18 @@ describe("FleetView", () => {
   })
   afterEach(() => vi.restoreAllMocks())
 
-  it("lists the repos with a live agent: name, default branch, PRs, agents", async () => {
+  it("shows a repo's circle; opening it shows its PRs and agents; an agent leads to its pane", async () => {
     seed()
     render(<FleetView />)
-    await waitFor(() =>
-      expect(screen.getByText(/o\/r ⑂ main · 2 PRs · 1 agent/)).toBeInTheDocument(),
-    )
+    const root = await screen.findByRole("button", { name: "Open o/r" })
+    await waitFor(() => expect(screen.getAllByText("2 PRs · 1 agent").length).toBeGreaterThan(0))
+    fireEvent.click(root)
+    expect((await screen.findAllByText("PR 7")).length).toBe(2) // its card and the panel
+    expect(screen.getAllByText("PR 8").length).toBe(2) // mine, nobody on it
+    const agent = screen.getByRole("button", { name: /^Claude agent .*working$/ })
+    fireEvent.click(agent)
+    fireEvent.click(screen.getByText("Go to pane"))
+    expect(useStore.getState().tabs.length).toBe(0) // (no tab holds p1 in this test: nothing breaks)
   })
 
   it("says so when no agent works in a repo", async () => {
