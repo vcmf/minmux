@@ -1,3 +1,4 @@
+import type { ViewKind } from "./view-tabs"
 import type { PaneNode, RemoteRef, Session, Tab } from "../types"
 import type { ObjectEntry, FolderView } from "./folder-entries"
 import { parseRemoteRef, sshLabel } from "./ssh-validate"
@@ -78,6 +79,7 @@ export interface WorkspaceState {
   // Folder entries and their views (from layout.json, lib/layout-file): not in workspace.json.
   objects?: Record<string, ObjectEntry>
   folderViews?: Record<string, FolderView>
+  views?: ViewKind[] // view tabs (layout.json only), restored never shown
 }
 
 // A pane with no terminal is left out (older builds would drop it, maybe the whole file): it

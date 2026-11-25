@@ -19,6 +19,7 @@ import {
   selectSurface,
 } from "./pane-tree"
 import { withFocus } from "./tab-focus"
+import { parseViews, type ViewKind } from "./view-tabs"
 
 // Still 1 with file entries (step 3a): an older build drops the kinds it doesn't know (file
 // tabs) and keeps the folders, and if it saves, the file tabs are gone (quick to reopen). A
@@ -30,6 +31,7 @@ export interface LayoutState {
   activeTabId: string | null
   objects: Record<string, ObjectEntry>
   folderViews: Record<string, FolderView>
+  views?: ViewKind[] // view tabs; an older build ignores the key (they have no panes)
 }
 
 interface LayoutFile extends LayoutState {
@@ -69,6 +71,7 @@ export function serializeLayout(state: LayoutState, workspaceJson: string): stri
     tabs: state.tabs,
     objects,
     folderViews,
+    ...(state.views?.length ? { views: state.views } : {}),
   }
   return `${JSON.stringify(file, null, 2)}\n`
 }
@@ -232,6 +235,8 @@ export function restoreLayout(
       ...(ws?.pruned ? { pruned: ws.pruned } : {}),
       objects: kept,
       folderViews,
+      // Both branches: view tabs don't depend on workspace.json (they sit after its tabs).
+      ...(parseViews(file.views).length ? { views: parseViews(file.views) } : {}),
     },
     blocked: false,
   }

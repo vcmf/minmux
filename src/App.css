@@ -4202,3 +4202,55 @@ body.resizing-col {
   padding: 4px 8px;
   color: var(--faint);
 }
+
+/* ── View tabs (docs/design/FLEET_GRAPH.md): after the terminal tabs, not in their drag list ── */
+.view-tabs {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 auto;
+}
+.view-tab-icon {
+  flex: none;
+  color: var(--dim);
+}
+.view-tab.active .view-tab-icon {
+  color: var(--text);
+}
+.fleet-btn {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 22px;
+  padding: 0 8px;
+  background: var(--elev);
+  color: var(--text);
+  border: 1px solid var(--border2);
+  border-radius: 6px;
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+.fleet-btn:hover {
+  background: var(--bg);
+}
+.fleet-btn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+.fleet-view {
+  height: 100%;
+  outline: none;
+}
+.fleet-empty p {
+  margin: 10px 0 0;
+  max-width: 340px;
+  text-align: center;
+  line-height: 1.5;
+}
+.fleet-empty > div {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}

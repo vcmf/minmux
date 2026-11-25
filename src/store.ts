@@ -1,4 +1,5 @@
-import { create } from "zustand"
+import { create, type StateCreator } from "zustand"
+import { leavingView, withView, withoutView, type ViewKind } from "./lib/view-tabs"
 import { moveTo } from "./lib/tab-order"
 import { moveTerminal as moveTerminalPure, type GroupDrop } from "./lib/group-move"
 import type { Session, ShellOption, SshHost, Tab } from "./types"
@@ -200,7 +201,9 @@ export type RightView = "agents" | null
 interface AppState {
   sessions: Record<string, Session>
   tabs: Tab[]
-  activeTabId: string | null
+  activeTabId: string | null // the terminal tab in context (shown unless a view covers it)
+  views: ViewKind[] // the bar's view tabs (lib/view-tabs), after the terminal tabs
+  activeView: ViewKind | null // a view covering the pane area
   shells: ShellOption[]
   sshHosts: SshHost[] // saved ssh hosts (main's list, refreshed when ~/.ssh/config changes)
   remotePhase: Record<string, RemotePhase> // ssh panes started here: where each connection is
@@ -317,6 +320,9 @@ interface AppState {
   moveTab: (tabId: string, insertAt: number) => void // reorder (drag & drop; lands before insertAt)
   moveActiveTab: (delta: -1 | 1) => void // ⌘K "Move session left/right"
   setActiveTab: (tabId: string) => void
+  openView: (kind: ViewKind) => void // open that view tab, or switch to it when open
+  closeView: (kind: ViewKind) => void
+  showTerminals: () => void // leave the view: the context tab is on screen again
   renameTab: (tabId: string, title: string) => void // trimmed; "" unpins (back to the live title)
   splitActive: (direction: "row" | "column", fallback?: ShellOption) => void
   // split active pane at cwd; shell from paneId (`host`: a host folder, never a WSL shell)
@@ -374,7 +380,7 @@ function terminalStates(state: AppState, ids: string[]): TerminalState[] {
  *  it's the active tab's focused pane. Per-pane, so the heuristic never nags (and
  *  we don't badge) the pane you're driving. */
 export function isVisibleIn(state: AppState, sessionId: string): boolean {
-  if (!state.windowFocused || !state.activeTabId) return false
+  if (!state.windowFocused || !state.activeTabId || state.activeView) return false
   const tab = state.tabs.find((t) => t.id === state.activeTabId)
   return tab?.activeEntryId === sessionId
 }
@@ -557,884 +563,970 @@ function writeRecent(ids: string[]) {
   }
 }
 
-export const useStore = create<AppState>((set, get) => ({
-  sessions: {},
-  tabs: [],
-  activeTabId: null,
-  shells: [],
-  sshHosts: [],
-  sshHostsLoaded: false,
-  remotePhase: {},
-  remoteDetail: {},
-  windowFocused: true,
-  // Seeded from the OS now (not after an effect) so "system" never starts on the wrong scheme.
-  systemDark:
-    typeof window !== "undefined" && typeof window.matchMedia === "function"
-      ? window.matchMedia("(prefers-color-scheme: dark)").matches
-      : true,
-  settings: defaultSettings,
-  settingsLoaded: false,
-  settingsOpen: false,
-  prDialogOpen: false,
-  prLink: null,
-  ghMissing: false,
-  paletteOpen: false,
-  hostPickerOpen: false,
-  integrationHint: null,
-  hintDismissed: [],
-  sshRecent: readRecent(),
-  searchOpen: false,
-  rightView: null,
-  rightPanelWidth: RIGHT_PANEL_DEFAULT,
-  sidebarCollapsed: false,
-  git: null,
-  agents: emptyGraph,
-  home: "",
-  platform: "",
-  profile: "",
-  editor: null,
-  preview: null,
-  objects: {},
-  folderViews: {},
-  folderGit: {},
-  folderRoots: {},
-  closeConfirm: null,
-  dragging: null,
-  agentMeta: {},
-  paneGit: {},
-  paneWork: {},
-  dirRoots: {},
-  resume: {},
-  agentHint: {},
+// Actions that put something in the context tab's panes (or focus one): run while a view is
+// shown, they bring the tab back first so the result is on screen.
+const SHOWS_TERMINALS = [
+  "splitWith",
+  "splitActive",
+  "openFolderInSplit",
+  "splitPaneAt",
+  "newSurface",
+  "openFolder",
+  "openFile",
+  "resumeInSplit",
+  "setActivePane",
+  "focusSession",
+] as const satisfies readonly (keyof AppState)[]
 
-  setHome: (home) => set({ home }),
-  setPlatform: (platform) => set({ platform }),
-  setProfile: (profile) => set({ profile }),
-  setEditor: (editor) => set({ editor }),
-  setPreview: (preview) => set({ preview }),
-  openFile: (path, given = {}) =>
-    set((state) => {
-      // A heading is only a markdown file's; another file takes GitHub's `#L12` as its line.
-      let opts = given
-      if (opts.anchor && !isMarkdownPath(path)) {
-        const n = /^L(\d+)/.exec(opts.anchor)
-        opts = { ...opts, anchor: undefined, ...(n ? { line: Number(n[1]) } : {}) }
-      }
-      const tab = state.tabs.find((t) => t.id === (opts.tabId ?? state.activeTabId))
-      if (!tab || !path) return {}
-      const pane = opts.paneId
-        ? findPaneById(tab.root, opts.paneId)
-        : findPane(tab.root, tab.activeEntryId)
-      if (!pane) return {}
-      const line = opts.line && opts.line > 0 ? { line: opts.line } : {}
-      // Already open in this pane: show it there (at the line asked for).
-      // The same file: same distro (or both host), same path (any case on Windows).
-      const key = (p: string) => (state.platform === "win32" && !opts.wsl ? p.toLowerCase() : p)
-      const open = pane.entryIds.find((id) => {
-        const o = state.objects[id]
-        return (
-          o?.kind === "file" &&
-          o.wsl?.distro === opts.wsl?.distro &&
-          !o.wsl === !opts.wsl &&
-          key(o.path) === key(path)
-        )
+/** Store middleware for view tabs: every `set` (and `setState`) goes through `leavingView`, and
+ *  the SHOWS_TERMINALS actions leave a shown view before they run. */
+const viewRule =
+  (config: StateCreator<AppState>): StateCreator<AppState> =>
+  (set, get, api) => {
+    const ruled = ((partial: unknown, replace?: boolean) =>
+      set(
+        (state) =>
+          leavingView(
+            state,
+            (typeof partial === "function"
+              ? (partial as (s: AppState) => Partial<AppState>)(state)
+              : partial) as Partial<AppState>,
+          ) as AppState,
+        replace as false,
+      )) as typeof set
+    api.setState = ruled
+    const store = config(ruled, get, api)
+    for (const name of SHOWS_TERMINALS) {
+      const run = store[name] as (...args: unknown[]) => unknown
+      Object.assign(store, {
+        [name]: (...args: unknown[]) => {
+          if (get().activeView) get().showTerminals()
+          return run(...args)
+        },
       })
-      if (open) {
-        const cur = state.objects[open] as FileEntry
-        // At its line again, even the same one (scrolled away since): a new `seq` says "go".
-        // The latest target only: a line drops the heading asked before, and the other way round.
-        let next: FileEntry = cur
-        if (opts.line) {
-          next = { ...cur, line: opts.line, seq: (cur.seq ?? 0) + 1 }
-          delete next.anchor
-        } else if (opts.anchor) {
-          next = { ...cur, anchor: opts.anchor, seq: (cur.seq ?? 0) + 1 }
-          delete next.line
-          delete next.view // a heading is the Preview's
+    }
+    return store
+  }
+
+export const useStore = create<AppState>()(
+  viewRule((set, get) => ({
+    sessions: {},
+    tabs: [],
+    activeTabId: null,
+    views: [],
+    activeView: null,
+    shells: [],
+    sshHosts: [],
+    sshHostsLoaded: false,
+    remotePhase: {},
+    remoteDetail: {},
+    windowFocused: true,
+    // Seeded from the OS now (not after an effect) so "system" never starts on the wrong scheme.
+    systemDark:
+      typeof window !== "undefined" && typeof window.matchMedia === "function"
+        ? window.matchMedia("(prefers-color-scheme: dark)").matches
+        : true,
+    settings: defaultSettings,
+    settingsLoaded: false,
+    settingsOpen: false,
+    prDialogOpen: false,
+    prLink: null,
+    ghMissing: false,
+    paletteOpen: false,
+    hostPickerOpen: false,
+    integrationHint: null,
+    hintDismissed: [],
+    sshRecent: readRecent(),
+    searchOpen: false,
+    rightView: null,
+    rightPanelWidth: RIGHT_PANEL_DEFAULT,
+    sidebarCollapsed: false,
+    git: null,
+    agents: emptyGraph,
+    home: "",
+    platform: "",
+    profile: "",
+    editor: null,
+    preview: null,
+    objects: {},
+    folderViews: {},
+    folderGit: {},
+    folderRoots: {},
+    closeConfirm: null,
+    dragging: null,
+    agentMeta: {},
+    paneGit: {},
+    paneWork: {},
+    dirRoots: {},
+    resume: {},
+    agentHint: {},
+
+    setHome: (home) => set({ home }),
+    setPlatform: (platform) => set({ platform }),
+    setProfile: (profile) => set({ profile }),
+    setEditor: (editor) => set({ editor }),
+    setPreview: (preview) => set({ preview }),
+    openFile: (path, given = {}) =>
+      set((state) => {
+        // A heading is only a markdown file's; another file takes GitHub's `#L12` as its line.
+        let opts = given
+        if (opts.anchor && !isMarkdownPath(path)) {
+          const n = /^L(\d+)/.exec(opts.anchor)
+          opts = { ...opts, anchor: undefined, ...(n ? { line: Number(n[1]) } : {}) }
         }
-        if (opts.diff && cur.view !== "diff") next = { ...next, view: "diff" }
-        else if (opts.line && !opts.diff && next.view === "diff") {
-          next = { ...next } // a line is the text's: off the diff to show it
-          delete next.view
+        const tab = state.tabs.find((t) => t.id === (opts.tabId ?? state.activeTabId))
+        if (!tab || !path) return {}
+        const pane = opts.paneId
+          ? findPaneById(tab.root, opts.paneId)
+          : findPane(tab.root, tab.activeEntryId)
+        if (!pane) return {}
+        const line = opts.line && opts.line > 0 ? { line: opts.line } : {}
+        // Already open in this pane: show it there (at the line asked for).
+        // The same file: same distro (or both host), same path (any case on Windows).
+        const key = (p: string) => (state.platform === "win32" && !opts.wsl ? p.toLowerCase() : p)
+        const open = pane.entryIds.find((id) => {
+          const o = state.objects[id]
+          return (
+            o?.kind === "file" &&
+            o.wsl?.distro === opts.wsl?.distro &&
+            !o.wsl === !opts.wsl &&
+            key(o.path) === key(path)
+          )
+        })
+        if (open) {
+          const cur = state.objects[open] as FileEntry
+          // At its line again, even the same one (scrolled away since): a new `seq` says "go".
+          // The latest target only: a line drops the heading asked before, and the other way round.
+          let next: FileEntry = cur
+          if (opts.line) {
+            next = { ...cur, line: opts.line, seq: (cur.seq ?? 0) + 1 }
+            delete next.anchor
+          } else if (opts.anchor) {
+            next = { ...cur, anchor: opts.anchor, seq: (cur.seq ?? 0) + 1 }
+            delete next.line
+            delete next.view // a heading is the Preview's
+          }
+          if (opts.diff && cur.view !== "diff") next = { ...next, view: "diff" }
+          else if (opts.line && !opts.diff && next.view === "diff") {
+            next = { ...next } // a line is the text's: off the diff to show it
+            delete next.view
+          }
+          const objects = next === cur ? state.objects : { ...state.objects, [open]: next }
+          return {
+            objects,
+            tabs: replaceTab(state.tabs, tab.id, (t) => withFocus(t, open)),
+            activeTabId: tab.id,
+          }
         }
-        const objects = next === cur ? state.objects : { ...state.objects, [open]: next }
+        const id = objectId(newId())
+        const file: FileEntry = {
+          kind: "file",
+          path,
+          ...(opts.wsl ? { wsl: opts.wsl } : {}),
+          ...line,
+          ...(opts.peek ? { peek: true as const } : {}),
+          ...(opts.diff ? { view: "diff" as const } : {}),
+          ...(opts.anchor ? { anchor: opts.anchor } : {}),
+        }
+        // A peek takes the place of the pane's previous one.
+        const old = opts.peek
+          ? pane.entryIds.find((e) => (state.objects[e] as FileEntry | undefined)?.peek)
+          : undefined
+        // Added right after it first, then it goes: the pane survives even when the peek was all
+        // it held, and the new peek takes its place.
+        const at = old ? pane.entryIds.indexOf(old) + 1 : undefined
+        let root = addSurface(tab.root, pane.id, id, at)
+        if (old) root = removeNode(root, old) ?? root
+        const objects = { ...state.objects, [id]: file }
+        if (old) {
+          delete objects[old]
+          files.forget(old) // the replaced peek's text and lines go now
+        }
         return {
           objects,
-          tabs: replaceTab(state.tabs, tab.id, (t) => withFocus(t, open)),
+          tabs: replaceTab(state.tabs, tab.id, (t) => withFocus(t, id, root)),
           activeTabId: tab.id,
         }
-      }
-      const id = objectId(newId())
-      const file: FileEntry = {
-        kind: "file",
-        path,
-        ...(opts.wsl ? { wsl: opts.wsl } : {}),
-        ...line,
-        ...(opts.peek ? { peek: true as const } : {}),
-        ...(opts.diff ? { view: "diff" as const } : {}),
-        ...(opts.anchor ? { anchor: opts.anchor } : {}),
-      }
-      // A peek takes the place of the pane's previous one.
-      const old = opts.peek
-        ? pane.entryIds.find((e) => (state.objects[e] as FileEntry | undefined)?.peek)
-        : undefined
-      // Added right after it first, then it goes: the pane survives even when the peek was all
-      // it held, and the new peek takes its place.
-      const at = old ? pane.entryIds.indexOf(old) + 1 : undefined
-      let root = addSurface(tab.root, pane.id, id, at)
-      if (old) root = removeNode(root, old) ?? root
-      const objects = { ...state.objects, [id]: file }
-      if (old) {
-        delete objects[old]
-        files.forget(old) // the replaced peek's text and lines go now
-      }
-      return {
-        objects,
-        tabs: replaceTab(state.tabs, tab.id, (t) => withFocus(t, id, root)),
-        activeTabId: tab.id,
-      }
-    }),
+      }),
 
-  setFileView: (id, view) =>
-    set((state) => {
-      const o = state.objects[id]
-      if (o?.kind !== "file" || viewOf(o) === view) return state
-      if (view === "preview" && !isMarkdownPath(o.path)) return state
-      const next: FileEntry = { ...o }
-      delete next.view // its default…
-      if (viewOf(next) !== view) next.view = view as "source" | "diff" // …or the one asked for
-      return { objects: { ...state.objects, [id]: next } }
-    }),
+    setFileView: (id, view) =>
+      set((state) => {
+        const o = state.objects[id]
+        if (o?.kind !== "file" || viewOf(o) === view) return state
+        if (view === "preview" && !isMarkdownPath(o.path)) return state
+        const next: FileEntry = { ...o }
+        delete next.view // its default…
+        if (viewOf(next) !== view) next.view = view as "source" | "diff" // …or the one asked for
+        return { objects: { ...state.objects, [id]: next } }
+      }),
 
-  keepEntry: (id) =>
-    set((state) => {
-      const o = state.objects[id]
-      if (o?.kind !== "file" || !o.peek) return state
-      const kept: FileEntry = { ...o }
-      delete kept.peek
-      return { objects: { ...state.objects, [id]: kept } }
-    }),
+    keepEntry: (id) =>
+      set((state) => {
+        const o = state.objects[id]
+        if (o?.kind !== "file" || !o.peek) return state
+        const kept: FileEntry = { ...o }
+        delete kept.peek
+        return { objects: { ...state.objects, [id]: kept } }
+      }),
 
-  openFolder: (path, opts = {}) =>
-    set((state) => {
-      const tab = state.tabs.find((t) => t.id === (opts.tabId ?? state.activeTabId))
-      if (!tab || !path) return {}
-      const pane = opts.paneId
-        ? findPaneById(tab.root, opts.paneId)
-        : findPane(tab.root, tab.activeEntryId)
-      if (!pane) return {}
-      // Already open in this pane: show that one.
-      const norm = normalizeRootPath(path)
-      const open = pane.entryIds.find((e) => {
-        const o = state.objects[e]
-        return (
-          o?.kind === "folder" &&
-          (state.platform === "win32" && !opts.wsl
-            ? o.path.toLowerCase() === norm.toLowerCase()
-            : o.path === norm) &&
-          !o.wsl === !opts.wsl &&
-          o.wsl?.distro === opts.wsl?.distro
-        )
-      })
-      if (open)
+    openFolder: (path, opts = {}) =>
+      set((state) => {
+        const tab = state.tabs.find((t) => t.id === (opts.tabId ?? state.activeTabId))
+        if (!tab || !path) return {}
+        const pane = opts.paneId
+          ? findPaneById(tab.root, opts.paneId)
+          : findPane(tab.root, tab.activeEntryId)
+        if (!pane) return {}
+        // Already open in this pane: show that one.
+        const norm = normalizeRootPath(path)
+        const open = pane.entryIds.find((e) => {
+          const o = state.objects[e]
+          return (
+            o?.kind === "folder" &&
+            (state.platform === "win32" && !opts.wsl
+              ? o.path.toLowerCase() === norm.toLowerCase()
+              : o.path === norm) &&
+            !o.wsl === !opts.wsl &&
+            o.wsl?.distro === opts.wsl?.distro
+          )
+        })
+        if (open)
+          return {
+            tabs: replaceTab(state.tabs, tab.id, (t) => withFocus(t, open)),
+            activeTabId: tab.id,
+          }
+        const id = objectId(newId())
+        const folder: FolderEntry = {
+          kind: "folder",
+          path: normalizeRootPath(path),
+          ...(opts.wsl ? { wsl: opts.wsl } : {}),
+        }
+        const root = addSurface(tab.root, pane.id, id)
         return {
-          tabs: replaceTab(state.tabs, tab.id, (t) => withFocus(t, open)),
+          objects: { ...state.objects, [id]: folder },
+          tabs: replaceTab(state.tabs, tab.id, (t) => withFocus(t, id, root)),
           activeTabId: tab.id,
         }
-      const id = objectId(newId())
-      const folder: FolderEntry = {
-        kind: "folder",
-        path: normalizeRootPath(path),
-        ...(opts.wsl ? { wsl: opts.wsl } : {}),
-      }
-      const root = addSurface(tab.root, pane.id, id)
-      return {
-        objects: { ...state.objects, [id]: folder },
-        tabs: replaceTab(state.tabs, tab.id, (t) => withFocus(t, id, root)),
-        activeTabId: tab.id,
-      }
-    }),
+      }),
 
-  setFolderView: (id, view) =>
-    set((state) =>
-      !state.objects[id] || state.folderViews[id] === view
-        ? state // same state: nothing notified, nothing saved
-        : { folderViews: { ...state.folderViews, [id]: view } },
-    ),
-
-  setFolderRoot: (id, path) =>
-    set((state) => {
-      const cur = state.objects[id]
-      const norm = normalizeRootPath(path)
-      if (cur?.kind !== "folder" || cur.path === norm) return state
-      return {
-        objects: { ...state.objects, [id]: { ...cur, path: norm } },
-        folderViews: { ...state.folderViews, [id]: EMPTY_VIEW },
-      }
-    }),
-
-  setSessionOscTitle: (sessionId, title) =>
-    set((state) => {
-      const s = state.sessions[sessionId]
-      const next = title.trim()
-      if (!s || !next || s.oscTitle === next) return {}
-      return { sessions: { ...state.sessions, [sessionId]: { ...s, oscTitle: next } } }
-    }),
-  setGit: (git) => set({ git }),
-  setFolderRoots: (roots) =>
-    set((state) => {
-      const cur = state.folderRoots
-      const keys = Object.keys(roots)
-      const same = keys.length === Object.keys(cur).length && keys.every((k) => cur[k] === roots[k])
-      return same ? state : { folderRoots: roots }
-    }),
-  setFolderGit: (key, git) =>
-    set((state) => {
-      const cur = state.folderGit[key]
-      if (git && cur && JSON.stringify(cur) === JSON.stringify(git)) return state // no re-render
-      if (!git && !cur) return state
-      const folderGit = { ...state.folderGit }
-      if (git) folderGit[key] = git
-      else delete folderGit[key]
-      return { folderGit }
-    }),
-
-  // Fold a coalesced batch of hook events into the agent tree (one re-render per batch).
-  applyAgentEvents: (events) =>
-    set((state) => {
-      let agents = state.agents
-      let paneWork = state.paneWork
-      const touched = new Set<string>()
-      for (const ev of events) {
-        agents = reduceAgentEvent(agents, ev)
-        const pane = ev.worked && workPane(agents, ev)
-        if (!pane || !state.sessions[pane]) continue
-        const w = addWork(paneWork[pane], ev, ++workSeq, Date.now())
-        if (w !== paneWork[pane]) paneWork = { ...paneWork, [pane]: w! }
-        touched.add(pane)
-      }
-      if (paneWork === state.paneWork) return { agents }
-      return {
-        agents,
-        paneWork: settleAllWork(paneWork, state.dirRoots, state.paneGit, touched),
-      }
-    }),
-  agentExited: (paneId) =>
-    set((state) => {
-      const agents = dropPaneSessions(state.agents, paneId)
-      return agents === state.agents ? state : { agents }
-    }),
-  setRightView: (rightView) => set({ rightView }),
-  setSessionCwd: (sessionId, cwd) =>
-    set((state) => {
-      const s = state.sessions[sessionId]
-      // A remote shell's OSC 7 path is on the host: local panels must never read it.
-      if (!s || s.remote || s.cwd === cwd) return {}
-      return { sessions: { ...state.sessions, [sessionId]: { ...s, cwd } } }
-    }),
-  // Display only: local panels read `cwd`, which a remote session never has.
-  setRemoteCwd: (sessionId, cwd, verified = false, host) =>
-    set((state) => {
-      const s = state.sessions[sessionId]
-      const ok = verified && cwd !== undefined && !!host
-      if (!s?.remote) return state
-      // Any report of where the shell is replaces the folder to reopen: the shell is elsewhere
-      // now (a plain connection's own OSC 7 too), or went somewhere we won't reopen.
-      const reported = cwd !== undefined || verified
-      const same =
-        s.remoteCwd === cwd &&
-        !!s.remoteCwdVerified === ok &&
-        s.remoteCwdHost === (ok ? host : undefined) &&
-        !(reported && s.reopenCwd)
-      if (same) return state
-      const next: Session = { ...s, remoteCwd: cwd, remoteCwdVerified: ok, remoteCwdHost: host }
-      if (cwd === undefined) delete next.remoteCwd
-      if (!ok) {
-        delete next.remoteCwdVerified
-        delete next.remoteCwdHost
-      }
-      if (reported) delete next.reopenCwd
-      return { sessions: { ...state.sessions, [sessionId]: next } }
-    }),
-  setReopenCwd: (sessionId, reopen) =>
-    set((state) => {
-      const s = state.sessions[sessionId]
-      if (!s?.remote || JSON.stringify(s.reopenCwd) === JSON.stringify(reopen)) return state
-      const next: Session = { ...s, reopenCwd: reopen }
-      if (!reopen) delete next.reopenCwd
-      return { sessions: { ...state.sessions, [sessionId]: next } }
-    }),
-  // One overlay at a time: opening either closes the other (⌘K over an open picker).
-  setPaletteOpen: (paletteOpen) =>
-    set(paletteOpen ? { paletteOpen, hostPickerOpen: false } : { paletteOpen }),
-  setHostPickerOpen: (hostPickerOpen) =>
-    set(hostPickerOpen ? { hostPickerOpen, paletteOpen: false } : { hostPickerOpen }),
-  openHost: (host, how) => {
-    if (host.hidden) return // listed only so it can be shown again
-    const shell = hostShellOption(host)
-    if (how === "tab") get().newTab(shell)
-    else get().splitWith(how, shell)
-    const sshRecent = pushRecent(get().sshRecent, host.hostId)
-    set({ sshRecent })
-    writeRecent(sshRecent)
-  },
-  toggleHostPinned: (hostId) => {
-    const st = get()
-    const ssh = st.settings.ssh
-    st.updateSettings({ ...st.settings, ssh: { ...ssh, pinned: togglePinned(ssh.pinned, hostId) } })
-  },
-  toggleHostIntegration: (alias) => {
-    const st = get()
-    const ssh = st.settings.ssh
-    const on = !integrationOn(alias, ssh.integration, ssh.integrationMode)
-    st.updateSettings({
-      ...st.settings,
-      ssh: {
-        ...ssh,
-        integration: setIntegration(ssh.integration, alias, on, ssh.integrationMode),
-      },
-    })
-  },
-  answerIntegrationHint: (choice) => {
-    const st = get()
-    const hint = st.integrationHint
-    if (!hint) return
-    const ssh = st.settings.ssh
-    // Decided meanwhile (the host menu, Settings): nothing left to ask; never write behind it.
-    const stale = hint.state === "ask" && !hintStillAsks(hint.alias, ssh)
-    if (choice === "dismiss" || stale) {
-      return set({
-        integrationHint: null,
-        hintDismissed: [...st.hintDismissed.filter((a) => a !== hint.alias), hint.alias],
-      })
-    }
-    const integration =
-      choice === "on"
-        ? setIntegration(ssh.integration, hint.alias, true, ssh.integrationMode)
-        : declineIntegration(ssh.integration, hint.alias)
-    st.updateSettings({ ...st.settings, ssh: { ...ssh, integration } })
-    set({ integrationHint: choice === "on" ? { ...hint, state: "on" } : null })
-  },
-  setHostHidden: (alias, hide) => {
-    const st = get()
-    const ssh = st.settings.ssh
-    const isDefault = DEFAULT_HIDDEN_HOSTS.some((a) => a.toLowerCase() === alias.toLowerCase())
-    st.updateSettings({
-      ...st.settings,
-      ssh: {
-        ...ssh,
-        hidden: toggleHidden(ssh.hidden, alias, hide),
-        // Showing a default-hidden git host is recorded as "shown"; hiding it again undoes that.
-        shown:
-          isDefault && !hide
-            ? toggleHidden(ssh.shown, alias, true)
-            : toggleHidden(ssh.shown, alias, false),
-      },
-    })
-  },
-  setSearchOpen: (searchOpen) => set({ searchOpen }),
-  setSidebarCollapsed: (sidebarCollapsed) => set({ sidebarCollapsed }),
-  setSettingsOpen: (settingsOpen) => set({ settingsOpen }),
-  setGhMissing: (ghMissing) => {
-    if (get().ghMissing !== ghMissing) set({ ghMissing })
-  },
-  setPrDialogOpen: (prDialogOpen) =>
-    set(prDialogOpen ? { prDialogOpen, paletteOpen: false } : { prDialogOpen, prLink: null }),
-  openPrLink: (pr, pane) =>
-    set({ prDialogOpen: true, paletteOpen: false, prLink: { ...pr, pane, at: Date.now() } }),
-  setSettings: (settings) => set({ settings, settingsLoaded: true }),
-  updateSettings: (next) => {
-    const validated = mergeSettings(next)
-    set({ settings: validated, settingsLoaded: true })
-    void saveSettings(validated)
-  },
-  setShells: (shells) => set({ shells }),
-  // Unchanged, or the session is gone (a late answer after a close) → the same state.
-  setRemotePhase: (sessionId, phase, detail) =>
-    set((state) => {
-      if (!state.sessions[sessionId]) return state
-      const samePhase = state.remotePhase[sessionId] === phase
-      const sameDetail = state.remoteDetail[sessionId] === detail
-      if (samePhase && sameDetail) return state
-      let remoteDetail = state.remoteDetail
-      if (!sameDetail) {
-        remoteDetail = { ...state.remoteDetail }
-        if (detail === undefined) delete remoteDetail[sessionId]
-        else remoteDetail[sessionId] = detail
-      }
-      return {
-        remotePhase: samePhase ? state.remotePhase : { ...state.remotePhase, [sessionId]: phase },
-        remoteDetail,
-      }
-    }),
-
-  // Unchanged → the same state object, so nothing is notified.
-  setSshHosts: (hosts) =>
-    set((state) =>
-      state.sshHostsLoaded && sameHosts(state.sshHosts, hosts)
-        ? state
-        : { sshHosts: hosts, sshHostsLoaded: true },
-    ),
-
-  restoreWorkspace: (ws, livePtys = []) =>
-    set({
-      // Marked so a restored ssh pane can follow `ssh.restore` (terminal-manager) — unless its
-      // ssh is still live in main (a renderer reload): that one isn't waiting for anything.
-      sessions: Object.fromEntries(
-        Object.entries(ws.sessions).map(([id, s]) => [
-          id,
-          s.remote && !livePtys.includes(id) ? { ...s, restored: true } : s,
-        ]),
+    setFolderView: (id, view) =>
+      set((state) =>
+        !state.objects[id] || state.folderViews[id] === view
+          ? state // same state: nothing notified, nothing saved
+          : { folderViews: { ...state.folderViews, [id]: view } },
       ),
-      remotePhase: {},
-      remoteDetail: {},
-      tabs: ws.tabs,
-      activeTabId: ws.activeTabId,
-      objects: ws.objects ?? {},
-      folderViews: ws.folderViews ?? {},
-      ...(ws.rightPanelWidth !== undefined ? { rightPanelWidth: ws.rightPanelWidth } : {}),
-    }),
-  setRightPanelWidth: (px, maxAvail) => set({ rightPanelWidth: clampPanelWidth(px, maxAvail) }),
 
-  newTab: (shell) =>
-    set((state) => {
-      const session = makeSession(shell, focusedCwd(state))
-      // Title unpinned: the display derives from the focused pane's live title.
-      const tab: Tab = makeTab(newId(), "", makeLeaf(newId(), session.id), session.id)
-      return {
-        sessions: { ...state.sessions, [session.id]: session },
-        tabs: [...state.tabs, tab],
-        activeTabId: tab.id,
+    setFolderRoot: (id, path) =>
+      set((state) => {
+        const cur = state.objects[id]
+        const norm = normalizeRootPath(path)
+        if (cur?.kind !== "folder" || cur.path === norm) return state
+        return {
+          objects: { ...state.objects, [id]: { ...cur, path: norm } },
+          folderViews: { ...state.folderViews, [id]: EMPTY_VIEW },
+        }
+      }),
+
+    setSessionOscTitle: (sessionId, title) =>
+      set((state) => {
+        const s = state.sessions[sessionId]
+        const next = title.trim()
+        if (!s || !next || s.oscTitle === next) return {}
+        return { sessions: { ...state.sessions, [sessionId]: { ...s, oscTitle: next } } }
+      }),
+    setGit: (git) => set({ git }),
+    setFolderRoots: (roots) =>
+      set((state) => {
+        const cur = state.folderRoots
+        const keys = Object.keys(roots)
+        const same =
+          keys.length === Object.keys(cur).length && keys.every((k) => cur[k] === roots[k])
+        return same ? state : { folderRoots: roots }
+      }),
+    setFolderGit: (key, git) =>
+      set((state) => {
+        const cur = state.folderGit[key]
+        if (git && cur && JSON.stringify(cur) === JSON.stringify(git)) return state // no re-render
+        if (!git && !cur) return state
+        const folderGit = { ...state.folderGit }
+        if (git) folderGit[key] = git
+        else delete folderGit[key]
+        return { folderGit }
+      }),
+
+    // Fold a coalesced batch of hook events into the agent tree (one re-render per batch).
+    applyAgentEvents: (events) =>
+      set((state) => {
+        let agents = state.agents
+        let paneWork = state.paneWork
+        const touched = new Set<string>()
+        for (const ev of events) {
+          agents = reduceAgentEvent(agents, ev)
+          const pane = ev.worked && workPane(agents, ev)
+          if (!pane || !state.sessions[pane]) continue
+          const w = addWork(paneWork[pane], ev, ++workSeq, Date.now())
+          if (w !== paneWork[pane]) paneWork = { ...paneWork, [pane]: w! }
+          touched.add(pane)
+        }
+        if (paneWork === state.paneWork) return { agents }
+        return {
+          agents,
+          paneWork: settleAllWork(paneWork, state.dirRoots, state.paneGit, touched),
+        }
+      }),
+    agentExited: (paneId) =>
+      set((state) => {
+        const agents = dropPaneSessions(state.agents, paneId)
+        return agents === state.agents ? state : { agents }
+      }),
+    setRightView: (rightView) => set({ rightView }),
+    setSessionCwd: (sessionId, cwd) =>
+      set((state) => {
+        const s = state.sessions[sessionId]
+        // A remote shell's OSC 7 path is on the host: local panels must never read it.
+        if (!s || s.remote || s.cwd === cwd) return {}
+        return { sessions: { ...state.sessions, [sessionId]: { ...s, cwd } } }
+      }),
+    // Display only: local panels read `cwd`, which a remote session never has.
+    setRemoteCwd: (sessionId, cwd, verified = false, host) =>
+      set((state) => {
+        const s = state.sessions[sessionId]
+        const ok = verified && cwd !== undefined && !!host
+        if (!s?.remote) return state
+        // Any report of where the shell is replaces the folder to reopen: the shell is elsewhere
+        // now (a plain connection's own OSC 7 too), or went somewhere we won't reopen.
+        const reported = cwd !== undefined || verified
+        const same =
+          s.remoteCwd === cwd &&
+          !!s.remoteCwdVerified === ok &&
+          s.remoteCwdHost === (ok ? host : undefined) &&
+          !(reported && s.reopenCwd)
+        if (same) return state
+        const next: Session = { ...s, remoteCwd: cwd, remoteCwdVerified: ok, remoteCwdHost: host }
+        if (cwd === undefined) delete next.remoteCwd
+        if (!ok) {
+          delete next.remoteCwdVerified
+          delete next.remoteCwdHost
+        }
+        if (reported) delete next.reopenCwd
+        return { sessions: { ...state.sessions, [sessionId]: next } }
+      }),
+    setReopenCwd: (sessionId, reopen) =>
+      set((state) => {
+        const s = state.sessions[sessionId]
+        if (!s?.remote || JSON.stringify(s.reopenCwd) === JSON.stringify(reopen)) return state
+        const next: Session = { ...s, reopenCwd: reopen }
+        if (!reopen) delete next.reopenCwd
+        return { sessions: { ...state.sessions, [sessionId]: next } }
+      }),
+    // One overlay at a time: opening either closes the other (⌘K over an open picker).
+    setPaletteOpen: (paletteOpen) =>
+      set(paletteOpen ? { paletteOpen, hostPickerOpen: false } : { paletteOpen }),
+    setHostPickerOpen: (hostPickerOpen) =>
+      set(hostPickerOpen ? { hostPickerOpen, paletteOpen: false } : { hostPickerOpen }),
+    openHost: (host, how) => {
+      if (host.hidden) return // listed only so it can be shown again
+      const shell = hostShellOption(host)
+      if (how === "tab") get().newTab(shell)
+      else get().splitWith(how, shell)
+      const sshRecent = pushRecent(get().sshRecent, host.hostId)
+      set({ sshRecent })
+      writeRecent(sshRecent)
+    },
+    toggleHostPinned: (hostId) => {
+      const st = get()
+      const ssh = st.settings.ssh
+      st.updateSettings({
+        ...st.settings,
+        ssh: { ...ssh, pinned: togglePinned(ssh.pinned, hostId) },
+      })
+    },
+    toggleHostIntegration: (alias) => {
+      const st = get()
+      const ssh = st.settings.ssh
+      const on = !integrationOn(alias, ssh.integration, ssh.integrationMode)
+      st.updateSettings({
+        ...st.settings,
+        ssh: {
+          ...ssh,
+          integration: setIntegration(ssh.integration, alias, on, ssh.integrationMode),
+        },
+      })
+    },
+    answerIntegrationHint: (choice) => {
+      const st = get()
+      const hint = st.integrationHint
+      if (!hint) return
+      const ssh = st.settings.ssh
+      // Decided meanwhile (the host menu, Settings): nothing left to ask; never write behind it.
+      const stale = hint.state === "ask" && !hintStillAsks(hint.alias, ssh)
+      if (choice === "dismiss" || stale) {
+        return set({
+          integrationHint: null,
+          hintDismissed: [...st.hintDismissed.filter((a) => a !== hint.alias), hint.alias],
+        })
       }
-    }),
+      const integration =
+        choice === "on"
+          ? setIntegration(ssh.integration, hint.alias, true, ssh.integrationMode)
+          : declineIntegration(ssh.integration, hint.alias)
+      st.updateSettings({ ...st.settings, ssh: { ...ssh, integration } })
+      set({ integrationHint: choice === "on" ? { ...hint, state: "on" } : null })
+    },
+    setHostHidden: (alias, hide) => {
+      const st = get()
+      const ssh = st.settings.ssh
+      const isDefault = DEFAULT_HIDDEN_HOSTS.some((a) => a.toLowerCase() === alias.toLowerCase())
+      st.updateSettings({
+        ...st.settings,
+        ssh: {
+          ...ssh,
+          hidden: toggleHidden(ssh.hidden, alias, hide),
+          // Showing a default-hidden git host is recorded as "shown"; hiding it again undoes that.
+          shown:
+            isDefault && !hide
+              ? toggleHidden(ssh.shown, alias, true)
+              : toggleHidden(ssh.shown, alias, false),
+        },
+      })
+    },
+    setSearchOpen: (searchOpen) => set({ searchOpen }),
+    setSidebarCollapsed: (sidebarCollapsed) => set({ sidebarCollapsed }),
+    setSettingsOpen: (settingsOpen) => set({ settingsOpen }),
+    setGhMissing: (ghMissing) => {
+      if (get().ghMissing !== ghMissing) set({ ghMissing })
+    },
+    setPrDialogOpen: (prDialogOpen) =>
+      set(prDialogOpen ? { prDialogOpen, paletteOpen: false } : { prDialogOpen, prLink: null }),
+    openPrLink: (pr, pane) =>
+      set({ prDialogOpen: true, paletteOpen: false, prLink: { ...pr, pane, at: Date.now() } }),
+    setSettings: (settings) => set({ settings, settingsLoaded: true }),
+    updateSettings: (next) => {
+      const validated = mergeSettings(next)
+      set({ settings: validated, settingsLoaded: true })
+      void saveSettings(validated)
+    },
+    setShells: (shells) => set({ shells }),
+    // Unchanged, or the session is gone (a late answer after a close) → the same state.
+    setRemotePhase: (sessionId, phase, detail) =>
+      set((state) => {
+        if (!state.sessions[sessionId]) return state
+        const samePhase = state.remotePhase[sessionId] === phase
+        const sameDetail = state.remoteDetail[sessionId] === detail
+        if (samePhase && sameDetail) return state
+        let remoteDetail = state.remoteDetail
+        if (!sameDetail) {
+          remoteDetail = { ...state.remoteDetail }
+          if (detail === undefined) delete remoteDetail[sessionId]
+          else remoteDetail[sessionId] = detail
+        }
+        return {
+          remotePhase: samePhase ? state.remotePhase : { ...state.remotePhase, [sessionId]: phase },
+          remoteDetail,
+        }
+      }),
 
-  closeTab: (tabId) =>
-    set(
-      closing((state) => {
+    // Unchanged → the same state object, so nothing is notified.
+    setSshHosts: (hosts) =>
+      set((state) =>
+        state.sshHostsLoaded && sameHosts(state.sshHosts, hosts)
+          ? state
+          : { sshHosts: hosts, sshHostsLoaded: true },
+      ),
+
+    restoreWorkspace: (ws, livePtys = []) =>
+      set({
+        // Marked so a restored ssh pane can follow `ssh.restore` (terminal-manager) — unless its
+        // ssh is still live in main (a renderer reload): that one isn't waiting for anything.
+        sessions: Object.fromEntries(
+          Object.entries(ws.sessions).map(([id, s]) => [
+            id,
+            s.remote && !livePtys.includes(id) ? { ...s, restored: true } : s,
+          ]),
+        ),
+        remotePhase: {},
+        remoteDetail: {},
+        tabs: ws.tabs,
+        activeTabId: ws.activeTabId,
+        // View tabs come back, never shown: the context tab must mount for its terminals to start.
+        views: ws.views ?? [],
+        activeView: null,
+        objects: ws.objects ?? {},
+        folderViews: ws.folderViews ?? {},
+        ...(ws.rightPanelWidth !== undefined ? { rightPanelWidth: ws.rightPanelWidth } : {}),
+      }),
+    setRightPanelWidth: (px, maxAvail) => set({ rightPanelWidth: clampPanelWidth(px, maxAvail) }),
+
+    newTab: (shell) =>
+      set((state) => {
+        const session = makeSession(shell, focusedCwd(state))
+        // Title unpinned: the display derives from the focused pane's live title.
+        const tab: Tab = makeTab(newId(), "", makeLeaf(newId(), session.id), session.id)
+        return {
+          sessions: { ...state.sessions, [session.id]: session },
+          tabs: [...state.tabs, tab],
+          activeTabId: tab.id,
+        }
+      }),
+
+    closeTab: (tabId) =>
+      set(
+        closing((state) => {
+          const tab = state.tabs.find((t) => t.id === tabId)
+          if (!tab) return {}
+          return {
+            ...dropSessions(state, allSessionIds(tab.root)),
+            ...dropObjects(state, allEntryIds(tab.root)),
+            ...withoutTab(state, tabId),
+          }
+        }),
+      ),
+
+    moveTab: (tabId, insertAt) =>
+      set((state) => {
+        const tabs = moveTo(state.tabs, tabId, insertAt)
+        return tabs === state.tabs ? {} : { tabs }
+      }),
+
+    moveActiveTab: (delta) => {
+      const { tabs, activeTabId } = get()
+      const i = tabs.findIndex((t) => t.id === activeTabId)
+      if (i < 0) return
+      // insertAt is "before the item now at": one step right = past the next item.
+      get().moveTab(tabs[i]!.id, delta < 0 ? i - 1 : i + 2)
+    },
+
+    setActiveTab: (tabId) => {
+      set({ activeTabId: tabId, activeView: null })
+      get().revealTab(tabId)
+    },
+
+    openView: (kind) =>
+      set((state) =>
+        state.activeView === kind && state.views.includes(kind)
+          ? state
+          : { views: withView(state.views, kind), activeView: kind },
+      ),
+
+    closeView: (kind) => {
+      const shown = get().activeView === kind
+      set((state) => {
+        const views = withoutView(state.views, kind)
+        if (views === state.views && !shown) return state
+        return shown ? { views, activeView: null } : { views }
+      })
+      // The context tab is on screen again: what it shows counts as seen (as setActiveTab).
+      const { activeTabId, revealTab } = get()
+      if (shown && activeTabId) revealTab(activeTabId)
+    },
+
+    showTerminals: () => {
+      if (!get().activeView) return
+      set({ activeView: null })
+      const { activeTabId, revealTab } = get()
+      if (activeTabId) revealTab(activeTabId)
+    },
+
+    renameTab: (tabId, title) =>
+      set((state) => {
+        const name = title.trim()
         const tab = state.tabs.find((t) => t.id === tabId)
+        if (!tab || tab.title === name) return state // same reference: no reconcile, no save
+        return { tabs: state.tabs.map((t) => (t === tab ? { ...t, title: name } : t)) }
+      }),
+
+    // Split the active pane with a given shell (e.g. an ssh host), not the source's own.
+    splitWith: (direction, shell) => {
+      if (!get().tabs.some((t) => t.id === get().activeTabId)) return get().newTab(shell)
+      set((state) => splitActivePane(state, { shell, direction }))
+    },
+
+    splitActive: (direction, fallback) =>
+      set((state) => {
+        const tab = state.tabs.find((t) => t.id === state.activeTabId)
         if (!tab) return {}
-        return {
-          ...dropSessions(state, allSessionIds(tab.root)),
-          ...dropObjects(state, allEntryIds(tab.root)),
-          ...withoutTab(state, tabId),
-        }
+        // Inherit the source pane's shell + cwd (WSL → WSL), not the list's first entry.
+        const src = state.sessions[tab.activeSessionId]
+        // A focused folder: a terminal in that folder (newTerminalSource).
+        const from = newTerminalSource(state, tab, fallback)
+        if (!from) return {}
+        const { shell, cwd } = from
+        // An ssh pane's split opens where it verifiably is (its host's shell integration).
+        const reopen = shell.remote ? reopenFor(src) : undefined
+        const next = splitActivePane(state, { shell, cwd, direction, reopen })
+        return { ...next, ...hintFor(state, shell, next) }
       }),
-    ),
 
-  moveTab: (tabId, insertAt) =>
-    set((state) => {
-      const tabs = moveTo(state.tabs, tabId, insertAt)
-      return tabs === state.tabs ? {} : { tabs }
-    }),
+    // Open a folder (an agent's cwd / worktree from the board) as a split beside the active
+    // pane. Resolves the shell from the AGENT's own pane (paneId) so a WSL agent's path opens
+    // in a WSL shell, not the active native pane's; a missing dir falls back to $HOME in main.
+    openFolderInSplit: (cwd, paneId, host) =>
+      set((state) => {
+        const tab = state.tabs.find((t) => t.id === state.activeTabId)
+        if (!tab) return {}
+        const agentSession = paneId ? state.sessions[paneId] : undefined
+        const src = state.sessions[tab.activeSessionId]
+        // (a host folder: a host shell or none, never WSL's, which would start in `~`)
+        const shell = host
+          ? hostOnlyShellFor(state, agentSession ?? src)
+          : localShellFor(state, agentSession ?? src)
+        if (!shell) return {}
+        return splitActivePane(state, { shell, cwd, direction: "row" })
+      }),
 
-  moveActiveTab: (delta) => {
-    const { tabs, activeTabId } = get()
-    const i = tabs.findIndex((t) => t.id === activeTabId)
-    if (i < 0) return
-    // insertAt is "before the item now at": one step right = past the next item.
-    get().moveTab(tabs[i]!.id, delta < 0 ? i - 1 : i + 2)
-  },
+    // A terminal at `cwd` beside pane `paneId` (any tab), with its shell — the new split takes
+    // focus. Unlike focusing the pane first, its attention/unread state stays (you never looked).
+    splitPaneAt: (paneId, cwd) => {
+      const before = get().activeTabId
+      set((state) => {
+        const tab = state.tabs.find((t) => allSessionIds(t.root).includes(paneId))
+        const shell = localShellFor(state, state.sessions[paneId])
+        if (!tab || !shell) return {}
+        // Split the pane holding it — as shown (no surface swap), not marked seen itself.
+        const tabs = state.tabs.map((t) =>
+          t.id === tab.id ? withFocus(t, paneId, t.root, false) : t,
+        )
+        const at = { ...state, activeTabId: tab.id, tabs }
+        return { activeTabId: tab.id, ...splitActivePane(at, { shell, cwd, direction: "row" }) }
+      })
+      // Switched tabs: what's now on screen counts as seen (as setActiveTab does).
+      const now = get().activeTabId
+      if (now && now !== before) get().revealTab(now)
+    },
 
-  setActiveTab: (tabId) => {
-    set({ activeTabId: tabId })
-    get().revealTab(tabId)
-  },
+    // New terminal as a tab (surface) of the focused pane, inheriting its shell + cwd.
+    newSurface: (fallback) =>
+      set((state) => {
+        const tab = state.tabs.find((t) => t.id === state.activeTabId)
+        if (!tab) return {}
+        const pane = findPane(tab.root, tab.activeEntryId) // the focused pane
+        if (!pane) return {}
+        const src = state.sessions[tab.activeSessionId]
+        const from = newTerminalSource(state, tab, fallback) // in the focused folder, if any
+        if (!from) return {}
+        const { shell, cwd } = from
+        const session = makeSession(shell, cwd, shell.remote ? reopenFor(src) : undefined)
+        const root = addSurface(tab.root, pane.id, session.id)
+        const next = {
+          sessions: { ...state.sessions, [session.id]: session },
+          tabs: replaceTab(state.tabs, tab.id, (t) => withFocus(t, session.id, root)),
+        }
+        return { ...next, ...hintFor(state, shell, next) }
+      }),
 
-  renameTab: (tabId, title) =>
-    set((state) => {
-      const name = title.trim()
-      const tab = state.tabs.find((t) => t.id === tabId)
-      if (!tab || tab.title === name) return state // same reference: no reconcile, no save
-      return { tabs: state.tabs.map((t) => (t === tab ? { ...t, title: name } : t)) }
-    }),
+    closeSurface: (tabId, sessionId) =>
+      set(
+        closing((state) => {
+          const tab = state.tabs.find((t) => t.id === tabId)
+          const pane = tab && findPane(tab.root, sessionId)
+          if (!tab || !pane) return {}
+          const dropped = {
+            ...dropSessions(state, [sessionId]),
+            ...dropObjects(state, [sessionId]),
+          }
+          const root = removeNode(tab.root, sessionId)
+          if (root === null) return { ...dropped, ...withoutTab(state, tabId) }
+          // Closing the focused terminal: focus moves to the surface its pane now shows,
+          // or (the pane is gone) to the leftmost pane.
+          const survivor = findPaneById(root, pane.id)
+          const focus =
+            tab.activeEntryId === sessionId
+              ? (survivor?.activeEntryId ?? firstEntryId(root))
+              : tab.activeEntryId
+          return {
+            ...dropped,
+            // The surface revealed in its place is now being looked at.
+            sessions: markSeen(dropped.sessions, focus),
+            tabs: replaceTab(state.tabs, tabId, (t) => withFocus(t, focus, root)),
+          }
+        }),
+      ),
 
-  // Split the active pane with a given shell (e.g. an ssh host), not the source's own.
-  splitWith: (direction, shell) => {
-    if (!get().tabs.some((t) => t.id === get().activeTabId)) return get().newTab(shell)
-    set((state) => splitActivePane(state, { shell, direction }))
-  },
-
-  splitActive: (direction, fallback) =>
-    set((state) => {
-      const tab = state.tabs.find((t) => t.id === state.activeTabId)
-      if (!tab) return {}
-      // Inherit the source pane's shell + cwd (WSL → WSL), not the list's first entry.
-      const src = state.sessions[tab.activeSessionId]
-      // A focused folder: a terminal in that folder (newTerminalSource).
-      const from = newTerminalSource(state, tab, fallback)
-      if (!from) return {}
-      const { shell, cwd } = from
-      // An ssh pane's split opens where it verifiably is (its host's shell integration).
-      const reopen = shell.remote ? reopenFor(src) : undefined
-      const next = splitActivePane(state, { shell, cwd, direction, reopen })
-      return { ...next, ...hintFor(state, shell, next) }
-    }),
-
-  // Open a folder (an agent's cwd / worktree from the board) as a split beside the active
-  // pane. Resolves the shell from the AGENT's own pane (paneId) so a WSL agent's path opens
-  // in a WSL shell, not the active native pane's; a missing dir falls back to $HOME in main.
-  openFolderInSplit: (cwd, paneId, host) =>
-    set((state) => {
-      const tab = state.tabs.find((t) => t.id === state.activeTabId)
-      if (!tab) return {}
-      const agentSession = paneId ? state.sessions[paneId] : undefined
-      const src = state.sessions[tab.activeSessionId]
-      // (a host folder: a host shell or none, never WSL's, which would start in `~`)
-      const shell = host
-        ? hostOnlyShellFor(state, agentSession ?? src)
-        : localShellFor(state, agentSession ?? src)
-      if (!shell) return {}
-      return splitActivePane(state, { shell, cwd, direction: "row" })
-    }),
-
-  // A terminal at `cwd` beside pane `paneId` (any tab), with its shell — the new split takes
-  // focus. Unlike focusing the pane first, its attention/unread state stays (you never looked).
-  splitPaneAt: (paneId, cwd) => {
-    const before = get().activeTabId
-    set((state) => {
-      const tab = state.tabs.find((t) => allSessionIds(t.root).includes(paneId))
-      const shell = localShellFor(state, state.sessions[paneId])
-      if (!tab || !shell) return {}
-      // Split the pane holding it — as shown (no surface swap), not marked seen itself.
-      const tabs = state.tabs.map((t) =>
-        t.id === tab.id ? withFocus(t, paneId, t.root, false) : t,
-      )
-      const at = { ...state, activeTabId: tab.id, tabs }
-      return { activeTabId: tab.id, ...splitActivePane(at, { shell, cwd, direction: "row" }) }
-    })
-    // Switched tabs: what's now on screen counts as seen (as setActiveTab does).
-    const now = get().activeTabId
-    if (now && now !== before) get().revealTab(now)
-  },
-
-  // New terminal as a tab (surface) of the focused pane, inheriting its shell + cwd.
-  newSurface: (fallback) =>
-    set((state) => {
-      const tab = state.tabs.find((t) => t.id === state.activeTabId)
-      if (!tab) return {}
-      const pane = findPane(tab.root, tab.activeEntryId) // the focused pane
-      if (!pane) return {}
-      const src = state.sessions[tab.activeSessionId]
-      const from = newTerminalSource(state, tab, fallback) // in the focused folder, if any
-      if (!from) return {}
-      const { shell, cwd } = from
-      const session = makeSession(shell, cwd, shell.remote ? reopenFor(src) : undefined)
-      const root = addSurface(tab.root, pane.id, session.id)
-      const next = {
-        sessions: { ...state.sessions, [session.id]: session },
-        tabs: replaceTab(state.tabs, tab.id, (t) => withFocus(t, session.id, root)),
-      }
-      return { ...next, ...hintFor(state, shell, next) }
-    }),
-
-  closeSurface: (tabId, sessionId) =>
-    set(
-      closing((state) => {
-        const tab = state.tabs.find((t) => t.id === tabId)
-        const pane = tab && findPane(tab.root, sessionId)
-        if (!tab || !pane) return {}
-        const dropped = { ...dropSessions(state, [sessionId]), ...dropObjects(state, [sessionId]) }
-        const root = removeNode(tab.root, sessionId)
-        if (root === null) return { ...dropped, ...withoutTab(state, tabId) }
-        // Closing the focused terminal: focus moves to the surface its pane now shows,
-        // or (the pane is gone) to the leftmost pane.
-        const survivor = findPaneById(root, pane.id)
-        const focus =
-          tab.activeEntryId === sessionId
-            ? (survivor?.activeEntryId ?? firstEntryId(root))
+    closePane: (tabId, paneId) =>
+      set(
+        closing((state) => {
+          const tab = state.tabs.find((t) => t.id === tabId)
+          const pane = tab && findPaneById(tab.root, paneId)
+          if (!tab || !pane) return {}
+          const dropped = {
+            ...dropSessions(state, paneSessionIds(pane)),
+            ...dropObjects(state, pane.entryIds),
+          }
+          const root = removePane(tab.root, paneId)
+          if (root === null) return { ...dropped, ...withoutTab(state, tabId) }
+          const focus = pane.entryIds.includes(tab.activeEntryId)
+            ? firstEntryId(root)
             : tab.activeEntryId
-        return {
-          ...dropped,
-          // The surface revealed in its place is now being looked at.
-          sessions: markSeen(dropped.sessions, focus),
-          tabs: replaceTab(state.tabs, tabId, (t) => withFocus(t, focus, root)),
-        }
-      }),
-    ),
+          return {
+            ...dropped,
+            sessions: markSeen(dropped.sessions, focus),
+            tabs: replaceTab(state.tabs, tabId, (t) => withFocus(t, focus, root)),
+          }
+        }),
+      ),
 
-  closePane: (tabId, paneId) =>
-    set(
-      closing((state) => {
-        const tab = state.tabs.find((t) => t.id === tabId)
-        const pane = tab && findPaneById(tab.root, paneId)
-        if (!tab || !pane) return {}
-        const dropped = {
-          ...dropSessions(state, paneSessionIds(pane)),
-          ...dropObjects(state, pane.entryIds),
-        }
-        const root = removePane(tab.root, paneId)
-        if (root === null) return { ...dropped, ...withoutTab(state, tabId) }
-        const focus = pane.entryIds.includes(tab.activeEntryId)
-          ? firstEntryId(root)
-          : tab.activeEntryId
-        return {
-          ...dropped,
-          sessions: markSeen(dropped.sessions, focus),
-          tabs: replaceTab(state.tabs, tabId, (t) => withFocus(t, focus, root)),
-        }
-      }),
-    ),
+    requestClosePane: (tabId, paneId) => {
+      const tab = get().tabs.find((t) => t.id === tabId)
+      const pane = tab && findPaneById(tab.root, paneId)
+      if (!pane) return
+      const ids = paneSessionIds(pane)
+      if (ids.length > 1) {
+        set({ closeConfirm: { kind: "pane", tabId, paneId, count: ids.length } })
+      } else if (ids[0] && pane.entryIds.length === 1) {
+        // One terminal: the terminal rule (asks while it runs a command or Claude).
+        get().requestCloseTerminal(tabId, ids[0])
+      } else if (ids[0]) {
+        // One terminal beside folders: its question, but the whole pane closes.
+        const s = get()
+        const [t] = terminalStates(s, ids)
+        const session = s.sessions[ids[0]]
+        const ask =
+          t && session ? terminalCloseConfirm(tabId, displaySessionTitle(session, s.home), t) : null
+        if (ask?.kind === "terminal") set({ closeConfirm: { ...ask, paneId } })
+        else s.closePane(tabId, paneId)
+      } else {
+        get().closePane(tabId, paneId) // no terminal: nothing to ask about
+      }
+    },
 
-  requestClosePane: (tabId, paneId) => {
-    const tab = get().tabs.find((t) => t.id === tabId)
-    const pane = tab && findPaneById(tab.root, paneId)
-    if (!pane) return
-    const ids = paneSessionIds(pane)
-    if (ids.length > 1) {
-      set({ closeConfirm: { kind: "pane", tabId, paneId, count: ids.length } })
-    } else if (ids[0] && pane.entryIds.length === 1) {
-      // One terminal: the terminal rule (asks while it runs a command or Claude).
-      get().requestCloseTerminal(tabId, ids[0])
-    } else if (ids[0]) {
-      // One terminal beside folders: its question, but the whole pane closes.
+    requestCloseTab: (tabId) => {
       const s = get()
-      const [t] = terminalStates(s, ids)
-      const session = s.sessions[ids[0]]
-      const ask =
-        t && session ? terminalCloseConfirm(tabId, displaySessionTitle(session, s.home), t) : null
-      if (ask?.kind === "terminal") set({ closeConfirm: { ...ask, paneId } })
-      else s.closePane(tabId, paneId)
-    } else {
-      get().closePane(tabId, paneId) // no terminal: nothing to ask about
-    }
-  },
+      const tab = s.tabs.find((t) => t.id === tabId)
+      if (!tab) return
+      const title = tabTitle(tab, s.sessions, s.home)
+      const ask = tabCloseConfirm(tabId, title, terminalStates(s, allSessionIds(tab.root)))
+      if (ask) set({ closeConfirm: ask })
+      else s.closeTab(tabId)
+    },
 
-  requestCloseTab: (tabId) => {
-    const s = get()
-    const tab = s.tabs.find((t) => t.id === tabId)
-    if (!tab) return
-    const title = tabTitle(tab, s.sessions, s.home)
-    const ask = tabCloseConfirm(tabId, title, terminalStates(s, allSessionIds(tab.root)))
-    if (ask) set({ closeConfirm: ask })
-    else s.closeTab(tabId)
-  },
+    requestCloseTerminal: (tabId, sessionId) => {
+      const s = get()
+      const session = s.sessions[sessionId]
+      const [t] = terminalStates(s, [sessionId])
+      if (!session || !t) return
+      const ask = terminalCloseConfirm(tabId, displaySessionTitle(session, s.home), t)
+      if (ask) set({ closeConfirm: ask })
+      else s.closeSurface(tabId, sessionId)
+    },
 
-  requestCloseTerminal: (tabId, sessionId) => {
-    const s = get()
-    const session = s.sessions[sessionId]
-    const [t] = terminalStates(s, [sessionId])
-    if (!session || !t) return
-    const ask = terminalCloseConfirm(tabId, displaySessionTitle(session, s.home), t)
-    if (ask) set({ closeConfirm: ask })
-    else s.closeSurface(tabId, sessionId)
-  },
+    confirmClose: () => {
+      const c = get().closeConfirm
+      set({ closeConfirm: null })
+      if (!c) return
+      if (c.kind === "pane") get().closePane(c.tabId, c.paneId)
+      else if (c.kind === "tab") get().closeTab(c.tabId)
+      else if (c.paneId) get().closePane(c.tabId, c.paneId)
+      else get().closeSurface(c.tabId, c.sessionId)
+    },
 
-  confirmClose: () => {
-    const c = get().closeConfirm
-    set({ closeConfirm: null })
-    if (!c) return
-    if (c.kind === "pane") get().closePane(c.tabId, c.paneId)
-    else if (c.kind === "tab") get().closeTab(c.tabId)
-    else if (c.paneId) get().closePane(c.tabId, c.paneId)
-    else get().closeSurface(c.tabId, c.sessionId)
-  },
+    requestCloseEntry: (tabId, entryId) => {
+      if (isTerminalEntry(entryId)) get().requestCloseTerminal(tabId, entryId)
+      else get().closeSurface(tabId, entryId) // a folder / file: nothing runs, nothing to ask
+    },
 
-  requestCloseEntry: (tabId, entryId) => {
-    if (isTerminalEntry(entryId)) get().requestCloseTerminal(tabId, entryId)
-    else get().closeSurface(tabId, entryId) // a folder / file: nothing runs, nothing to ask
-  },
+    cancelClose: () => set({ closeConfirm: null }),
 
-  cancelClose: () => set({ closeConfirm: null }),
+    setDragging: (dragging) => set({ dragging }),
 
-  setDragging: (dragging) => set({ dragging }),
+    // Branch/PR poll results. Panes that were polled but came back empty (left the repo) are
+    // cleared; unchanged results keep the same map (no re-render).
+    setPaneGit: (fresh, polled) =>
+      set((state) => {
+        // Drop results for terminals that closed while the poll was in flight (else they'd
+        // be re-added after dropSessions cleared them, and never removed).
+        const live: typeof fresh = {}
+        for (const [id, info] of Object.entries(fresh))
+          if (state.sessions[paneOfGitKey(id)]) live[id] = info
+        let next = mergePaneGit(state.paneGit, live)
+        for (const id of polled) {
+          if (id in live || !(id in next)) continue
+          if (next === state.paneGit) next = { ...next }
+          delete next[id]
+        }
+        if (next === state.paneGit) return {}
+        const paneWork = settleAllWork(state.paneWork, state.dirRoots, next)
+        return paneWork === state.paneWork ? { paneGit: next } : { paneGit: next, paneWork }
+      }),
+    setDirRoots: (answers, gone = [], searched = false) =>
+      set((state) => {
+        let dirRoots = withDirRoots(state.dirRoots, answers, Date.now(), searched)
+        for (const root of gone) dirRoots = forgetRoot(dirRoots, root, Date.now())
+        // Only open panes' folders (a pane closed while its lookup was in flight adds none back).
+        if (dirRoots !== state.dirRoots) dirRoots = keepDirRoots(dirRoots, state.paneWork)
+        if (dirRoots === state.dirRoots) return {}
+        const paneWork = settleAllWork(state.paneWork, dirRoots, state.paneGit)
+        return paneWork === state.paneWork ? { dirRoots } : { dirRoots, paneWork }
+      }),
 
-  // Branch/PR poll results. Panes that were polled but came back empty (left the repo) are
-  // cleared; unchanged results keep the same map (no re-render).
-  setPaneGit: (fresh, polled) =>
-    set((state) => {
-      // Drop results for terminals that closed while the poll was in flight (else they'd
-      // be re-added after dropSessions cleared them, and never removed).
-      const live: typeof fresh = {}
-      for (const [id, info] of Object.entries(fresh))
-        if (state.sessions[paneOfGitKey(id)]) live[id] = info
-      let next = mergePaneGit(state.paneGit, live)
-      for (const id of polled) {
-        if (id in live || !(id in next)) continue
-        if (next === state.paneGit) next = { ...next }
-        delete next[id]
+    setAgentHint: (sessionId, hint) =>
+      set((state) => {
+        // Unchanged → the same state object, so nothing is notified.
+        if (hint && !state.sessions[sessionId]) return state
+        if (!hint && !(sessionId in state.agentHint)) return state
+        const agentHint = { ...state.agentHint }
+        if (hint) agentHint[sessionId] = hint
+        else delete agentHint[sessionId]
+        return { agentHint }
+      }),
+
+    // A past session (Sessions tab): a split in its folder, and the relaunch resume flow types its
+    // command at the first prompt. An unverified folder (hung mount) isn't a spawn cwd: the typed
+    // `cd` reaches it instead.
+    resumeInSplit: (plan) => {
+      const state = get()
+      const before = state.tabs.find((t) => t.id === state.activeTabId)?.activeSessionId
+      if (plan.cwdUnverified) {
+        // Only a typed `cd` reaches it then, and only a POSIX shell gets one.
+        const shell = localShellFor(state, before ? state.sessions[before] : undefined)
+        if (!shell || !isPosixShell(shell.command)) return undefined
       }
-      if (next === state.paneGit) return {}
-      const paneWork = settleAllWork(state.paneWork, state.dirRoots, next)
-      return paneWork === state.paneWork ? { paneGit: next } : { paneGit: next, paneWork }
-    }),
-  setDirRoots: (answers, gone = [], searched = false) =>
-    set((state) => {
-      let dirRoots = withDirRoots(state.dirRoots, answers, Date.now(), searched)
-      for (const root of gone) dirRoots = forgetRoot(dirRoots, root, Date.now())
-      // Only open panes' folders (a pane closed while its lookup was in flight adds none back).
-      if (dirRoots !== state.dirRoots) dirRoots = keepDirRoots(dirRoots, state.paneWork)
-      if (dirRoots === state.dirRoots) return {}
-      const paneWork = settleAllWork(state.paneWork, dirRoots, state.paneGit)
-      return paneWork === state.paneWork ? { dirRoots } : { dirRoots, paneWork }
-    }),
+      get().openFolderInSplit(plan.cwdUnverified ? state.home : plan.cwd)
+      const id = get().tabs.find((t) => t.id === get().activeTabId)?.activeSessionId
+      if (!id || id === before) return undefined
+      get().setResume(id, { phase: "pending", plan })
+      return id
+    },
 
-  setAgentHint: (sessionId, hint) =>
-    set((state) => {
-      // Unchanged → the same state object, so nothing is notified.
-      if (hint && !state.sessions[sessionId]) return state
-      if (!hint && !(sessionId in state.agentHint)) return state
-      const agentHint = { ...state.agentHint }
-      if (hint) agentHint[sessionId] = hint
-      else delete agentHint[sessionId]
-      return { agentHint }
-    }),
+    setResume: (sessionId, st) =>
+      set((state) => {
+        if (st && !state.sessions[sessionId]) return {}
+        if (!st && !(sessionId in state.resume)) return {}
+        const resume = { ...state.resume }
+        if (st) resume[sessionId] = st
+        else delete resume[sessionId]
+        return { resume }
+      }),
 
-  // A past session (Sessions tab): a split in its folder, and the relaunch resume flow types its
-  // command at the first prompt. An unverified folder (hung mount) isn't a spawn cwd: the typed
-  // `cd` reaches it instead.
-  resumeInSplit: (plan) => {
-    const state = get()
-    const before = state.tabs.find((t) => t.id === state.activeTabId)?.activeSessionId
-    if (plan.cwdUnverified) {
-      // Only a typed `cd` reaches it then, and only a POSIX shell gets one.
-      const shell = localShellFor(state, before ? state.sessions[before] : undefined)
-      if (!shell || !isPosixShell(shell.command)) return undefined
-    }
-    get().openFolderInSplit(plan.cwdUnverified ? state.home : plan.cwd)
-    const id = get().tabs.find((t) => t.id === get().activeTabId)?.activeSessionId
-    if (!id || id === before) return undefined
-    get().setResume(id, { phase: "pending", plan })
-    return id
-  },
+    // A Claude pane's /color + /rename from main (null = claude left the pane → no accent).
+    setAgentMeta: (sessionId, meta) =>
+      set((state) => {
+        if (!state.sessions[sessionId]) return {} // the pane already closed
+        const agentMeta = { ...state.agentMeta }
+        if (meta) agentMeta[sessionId] = meta
+        else if (sessionId in agentMeta) delete agentMeta[sessionId]
+        else return {}
+        return { agentMeta }
+      }),
 
-  setResume: (sessionId, st) =>
-    set((state) => {
-      if (st && !state.sessions[sessionId]) return {}
-      if (!st && !(sessionId in state.resume)) return {}
-      const resume = { ...state.resume }
-      if (st) resume[sessionId] = st
-      else delete resume[sessionId]
-      return { resume }
-    }),
+    // Drop a dragged surface: the terminal keeps its session (re-attaches, no respawn),
+    // becomes visible where it lands and takes focus.
+    moveSurface: (tabId, sessionId, target) => {
+      // A terminal from another group (its group was spring-loaded open mid-drag).
+      const here = get().tabs.find((t) => t.id === tabId)
+      if (here && !findPane(here.root, sessionId))
+        return get().moveTerminal(sessionId, { kind: "pane", tabId, target })
+      let moved = false
+      set((state) => {
+        const tab = state.tabs.find((t) => t.id === tabId)
+        // Stale drop (the surface or target pane went away mid-drag): just end the drag.
+        if (!tab || !findPane(tab.root, sessionId) || !findPaneById(tab.root, target.paneId)) {
+          return { dragging: null }
+        }
+        const root = moveSurface(tab.root, sessionId, target, { splitId: newId(), paneId: newId() })
+        moved = root !== tab.root
+        return {
+          dragging: null,
+          tabs: replaceTab(state.tabs, tabId, (t) => withFocus(t, sessionId, root)),
+          sessions: markSeen(state.sessions, sessionId),
+        }
+      })
+      if (moved) get().keepEntry(sessionId) // a peek dragged somewhere: kept
+    },
 
-  // A Claude pane's /color + /rename from main (null = claude left the pane → no accent).
-  setAgentMeta: (sessionId, meta) =>
-    set((state) => {
-      if (!state.sessions[sessionId]) return {} // the pane already closed
-      const agentMeta = { ...state.agentMeta }
-      if (meta) agentMeta[sessionId] = meta
-      else if (sessionId in agentMeta) delete agentMeta[sessionId]
-      else return {}
-      return { agentMeta }
-    }),
+    moveTerminal: (sessionId, drop) => {
+      const state = get()
+      const ids = { splitId: newId(), paneId: newId(), tabId: newId() }
+      const r = moveTerminalPure(state.tabs, sessionId, drop, ids)
+      if (!r) return set({ dragging: null })
+      get().keepEntry(sessionId) // a peek moved to another group: kept
+      // closing(): a pending close confirm naming the emptied group / the moved terminal goes.
+      set(
+        closing(() => ({
+          dragging: null,
+          tabs: r.tabs,
+          activeTabId: r.activeTabId,
+          sessions: markSeen(state.sessions, sessionId),
+        })),
+      )
+      get().revealTab(r.activeTabId)
+    },
 
-  // Drop a dragged surface: the terminal keeps its session (re-attaches, no respawn),
-  // becomes visible where it lands and takes focus.
-  moveSurface: (tabId, sessionId, target) => {
-    // A terminal from another group (its group was spring-loaded open mid-drag).
-    const here = get().tabs.find((t) => t.id === tabId)
-    if (here && !findPane(here.root, sessionId))
-      return get().moveTerminal(sessionId, { kind: "pane", tabId, target })
-    let moved = false
-    set((state) => {
-      const tab = state.tabs.find((t) => t.id === tabId)
-      // Stale drop (the surface or target pane went away mid-drag): just end the drag.
-      if (!tab || !findPane(tab.root, sessionId) || !findPaneById(tab.root, target.paneId)) {
-        return { dragging: null }
-      }
-      const root = moveSurface(tab.root, sessionId, target, { splitId: newId(), paneId: newId() })
-      moved = root !== tab.root
-      return {
-        dragging: null,
-        tabs: replaceTab(state.tabs, tabId, (t) => withFocus(t, sessionId, root)),
-        sessions: markSeen(state.sessions, sessionId),
-      }
-    })
-    if (moved) get().keepEntry(sessionId) // a peek dragged somewhere: kept
-  },
-
-  moveTerminal: (sessionId, drop) => {
-    const state = get()
-    const ids = { splitId: newId(), paneId: newId(), tabId: newId() }
-    const r = moveTerminalPure(state.tabs, sessionId, drop, ids)
-    if (!r) return set({ dragging: null })
-    get().keepEntry(sessionId) // a peek moved to another group: kept
-    // closing(): a pending close confirm naming the emptied group / the moved terminal goes.
-    set(
-      closing(() => ({
-        dragging: null,
-        tabs: r.tabs,
-        activeTabId: r.activeTabId,
+    setActivePane: (tabId, sessionId) =>
+      set((state) => ({
+        tabs: replaceTab(state.tabs, tabId, (t) => withFocus(t, sessionId)),
+        // Focusing a pane = you've seen it: clear its attention/unread/reason.
         sessions: markSeen(state.sessions, sessionId),
       })),
-    )
-    get().revealTab(r.activeTabId)
-  },
 
-  setActivePane: (tabId, sessionId) =>
-    set((state) => ({
-      tabs: replaceTab(state.tabs, tabId, (t) => withFocus(t, sessionId)),
-      // Focusing a pane = you've seen it: clear its attention/unread/reason.
-      sessions: markSeen(state.sessions, sessionId),
-    })),
-
-  // The terminal itself gained focus (click/keyboard) — make its pane active. This is
-  // the authoritative focus signal: a click handler on the pane container misses clicks
-  // inside a terminal that has mouse-tracking on (agent TUIs), because xterm's selection
-  // service stopPropagation()s those mousedowns. Derives the tab from the session.
-  focusSession: (sessionId) =>
-    set((state) => {
-      const tab = state.tabs.find((t) => allSessionIds(t.root).includes(sessionId))
-      if (!tab) return {}
-      return {
-        activeTabId: tab.id,
-        tabs: replaceTab(state.tabs, tab.id, (t) => withFocus(t, sessionId)),
-        sessions: markSeen(state.sessions, sessionId),
-      }
-    }),
-
-  setWindowFocused: (focused) => {
-    set({ windowFocused: focused })
-    const { activeTabId, revealTab } = get()
-    if (focused && activeTabId) revealTab(activeTabId)
-  },
-
-  setSystemDark: (systemDark) => set({ systemDark }),
-
-  signalSession: (sessionId, ev) =>
-    set((state) => {
-      const session = state.sessions[sessionId]
-      if (!session) return {}
-      const next = reduceSignals(
-        { status: session.status, unread: session.unread, running: session.running },
-        ev,
-        isVisibleIn(state, sessionId),
-      )
-      // The attention reason (OSC-9 message / "needs input"); cleared otherwise.
-      const detail =
-        next.status === "attention"
-          ? ev.type === "attention"
-            ? ev.detail || "needs input"
-            : "needs input"
-          : undefined
-      if (
-        next.status === session.status &&
-        next.unread === session.unread &&
-        next.running === session.running &&
-        detail === session.detail
-      ) {
-        return {}
-      }
-      return { sessions: { ...state.sessions, [sessionId]: { ...session, ...next, detail } } }
-    }),
-
-  revealTab: (tabId) =>
-    set((state) => {
-      const tab = state.tabs.find((t) => t.id === tabId)
-      if (!tab) return {}
-      const sessions = { ...state.sessions }
-      let changed = false
-      // Only what's actually on screen — a surface hidden behind another in its pane
-      // hasn't been seen, so it keeps its attention.
-      for (const id of visibleSessionIds(tab.root)) {
-        const s = sessions[id]
-        if (!s) continue
-        const status = s.status === "attention" ? (s.running ? "working" : "idle") : s.status
-        if (s.unread || status !== s.status || s.detail) {
-          sessions[id] = { ...s, status, unread: false, detail: undefined }
-          changed = true
+    // The terminal itself gained focus (click/keyboard) — make its pane active. This is
+    // the authoritative focus signal: a click handler on the pane container misses clicks
+    // inside a terminal that has mouse-tracking on (agent TUIs), because xterm's selection
+    // service stopPropagation()s those mousedowns. Derives the tab from the session.
+    focusSession: (sessionId) =>
+      set((state) => {
+        const tab = state.tabs.find((t) => allSessionIds(t.root).includes(sessionId))
+        if (!tab) return {}
+        return {
+          activeTabId: tab.id,
+          tabs: replaceTab(state.tabs, tab.id, (t) => withFocus(t, sessionId)),
+          sessions: markSeen(state.sessions, sessionId),
         }
-      }
-      return changed ? { sessions } : {}
-    }),
-}))
+      }),
+
+    setWindowFocused: (focused) => {
+      set({ windowFocused: focused })
+      // Nothing is seen while a view covers the panes: their "needs you" must stay.
+      const { activeTabId, activeView, revealTab } = get()
+      if (focused && activeTabId && !activeView) revealTab(activeTabId)
+    },
+
+    setSystemDark: (systemDark) => set({ systemDark }),
+
+    signalSession: (sessionId, ev) =>
+      set((state) => {
+        const session = state.sessions[sessionId]
+        if (!session) return {}
+        const next = reduceSignals(
+          { status: session.status, unread: session.unread, running: session.running },
+          ev,
+          isVisibleIn(state, sessionId),
+        )
+        // The attention reason (OSC-9 message / "needs input"); cleared otherwise.
+        const detail =
+          next.status === "attention"
+            ? ev.type === "attention"
+              ? ev.detail || "needs input"
+              : "needs input"
+            : undefined
+        if (
+          next.status === session.status &&
+          next.unread === session.unread &&
+          next.running === session.running &&
+          detail === session.detail
+        ) {
+          return {}
+        }
+        return { sessions: { ...state.sessions, [sessionId]: { ...session, ...next, detail } } }
+      }),
+
+    revealTab: (tabId) =>
+      set((state) => {
+        const tab = state.tabs.find((t) => t.id === tabId)
+        if (!tab) return {}
+        const sessions = { ...state.sessions }
+        let changed = false
+        // Only what's actually on screen — a surface hidden behind another in its pane
+        // hasn't been seen, so it keeps its attention.
+        for (const id of visibleSessionIds(tab.root)) {
+          const s = sessions[id]
+          if (!s) continue
+          const status = s.status === "attention" ? (s.running ? "working" : "idle") : s.status
+          if (s.unread || status !== s.status || s.detail) {
+            sessions[id] = { ...s, status, unread: false, detail: undefined }
+            changed = true
+          }
+        }
+        return changed ? { sessions } : {}
+      }),
+  })),
+)

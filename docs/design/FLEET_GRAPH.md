@@ -46,10 +46,11 @@ kind of tab beside the terminal ones instead of living inside one.
 
 - A **view tab** has a kind (`fleet` now, `pulls` later) and no panes. There is at most one of
   each kind, which is what makes "click again, switch to it" fall out naturally.
-- Terminal tabs stay in `tabs` unchanged. View tabs live beside them, and the **bar order** is
-  its own list of ids. Drag and move code that indexes into `tabs` goes through helpers that map
-  a bar position to a `tabs` index. A terminal or pane can't be dropped onto or joined into a
-  view tab.
+- Terminal tabs stay in `tabs` unchanged. View tabs live beside them, after the terminal tabs,
+  in the order they were opened, in their own container: the tab drag list (shared with the
+  sidebar) and its gap indices only ever see terminal tabs, so nothing can be dropped onto or
+  joined into a view tab. Dragging view tabs among the others waits for a second kind (the
+  pulls epic), when a bar order would earn its keep.
 - `activeTabId` keeps its meaning: the terminal tab in context (the last one shown). A separate
   `activeView` says a view covers the pane area. **One store-level rule** clears `activeView`
   whenever `activeTabId` is set, whatever path sets it (tab click, drag spring, moving a
@@ -57,7 +58,7 @@ kind of tab beside the terminal ones instead of living inside one.
 - A selector, `shownTerminalTab(state)`, returns the active terminal tab only when no view is
   shown. Every reader that asks "what is on screen" uses it; readers that ask "which tab is in
   context" keep `activeTabId`.
-- A view tab opens at the end of the bar and closes with its ×. No new keyboard shortcuts:
+- A view tab closes with its ×. No new keyboard shortcuts:
   ⌘W stays the window's Close.
 - The tab's dot follows the fleet: amber when any agent needs you, green while any works.
 
@@ -88,7 +89,7 @@ sizing, the top bar's ssh prompt check, and the window title.
 
 ### Persistence
 
-- View tabs and the bar order go in `layout.json` only. `workspace.json` is unchanged, so older
+- View tabs go in `layout.json` only. `workspace.json` is unchanged, so older
   builds read it as before (an older build reading `layout.json` skips a tab with no `root`).
   The new state joins the workspace save subscription.
 - When `workspace.json` wins over `layout.json` (the stamp check fails), view tabs are appended
@@ -241,7 +242,7 @@ Researched on real data (2026-11-25):
 
 One PR each into `epic/fleet-graph`:
 
-1. **View tabs** (#222). The view tab kind, bar order, `activeView` and its one clearing rule,
+1. **View tabs** (#222). The view tab kind, `activeView` and its one clearing rule,
    `shownTerminalTab`, the audit, renderer and attention behaviour, persistence, the tab dot;
    the Fleet view button opening an empty Fleet tab. Verified in the real app.
 2. **Model and data** (#223). `lib/fleet-model`, the PR refresh service, repo and default
