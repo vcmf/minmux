@@ -102,7 +102,8 @@ sizing, the top bar's ssh prompt check, and the window title.
 
 ### Overview
 
-One circle per repo that has a live agent session or one of my open PRs. The circle's size
+One circle per repo that has a live agent session (a repo with only open PRs and no session
+isn't shown, for now). The circle's size
 grows with its live agents (capped); under it, `owner/name ⑂ default-branch` (the folder name
 for a repo with no GitHub remote), PR and agent counts, and "● n working ● n need you". Circles
 sit on a ring, in a stable order (first seen).
@@ -253,7 +254,3 @@ One PR each into `epic/fleet-graph`:
    session counts, Claude's config reads and the side panel lists.
 6. **Inventory** (#228). The history scan and its cache in the sessions worker, the inventory
    view, highlighting sessions from a row.
-
-## Open questions
-
-- Repos shown: live sessions plus my open PRs, or also PRs where my review is requested?
