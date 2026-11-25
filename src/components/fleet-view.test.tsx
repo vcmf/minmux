@@ -77,8 +77,9 @@ describe("FleetView", () => {
     expect(screen.getAllByText("PR 8").length).toBe(2) // mine, nobody on it
     const agent = screen.getByRole("button", { name: /^Claude agent .*working$/ })
     fireEvent.click(agent)
+    const focus = vi.spyOn(useStore.getState(), "focusSession")
     fireEvent.click(screen.getByText("Go to pane"))
-    expect(useStore.getState().tabs.length).toBe(0) // (no tab holds p1 in this test: nothing breaks)
+    expect(focus).toHaveBeenCalledWith("p1")
   })
 
   it("says so when no agent works in a repo", async () => {

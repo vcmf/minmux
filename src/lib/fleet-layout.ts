@@ -226,8 +226,7 @@ export function fit(nodes: FleetNode[]): Fitted {
   }
 }
 
-/** A fitted layout on a steady origin: while the same view shows, its shift and size only grow
- *  (`prev`: the last one shown), so a node never moves because another one came or went. */
+/** A fitted layout whose origin and size only grow within a view (`prev`: the last one shown). */
 export function steady(prev: Fitted | null, f: Fitted): Fitted {
   if (!prev) return f
   const dx = Math.max(prev.dx, f.dx)
@@ -238,8 +237,9 @@ export function steady(prev: Fitted | null, f: Fitted): Fitted {
     nodes: ox || oy ? f.nodes.map((n) => ({ ...n, x: n.x + ox, y: n.y + oy })) : f.nodes,
     dx,
     dy,
-    w: Math.max(prev.w, f.w + ox),
-    h: Math.max(prev.h, f.h + oy),
+    // (the last area moved right / down with the origin: its far edges did too)
+    w: Math.max(prev.w + (dx - prev.dx), f.w + ox),
+    h: Math.max(prev.h + (dy - prev.dy), f.h + oy),
     cx: f.cx + ox,
     cy: f.cy + oy,
   }

@@ -100,6 +100,7 @@ export function FleetView() {
       openRoots.current = []
       setOpenKey(null)
       setSel(null)
+      setView((v) => v + 1) // the overview again: its own origin, centred
     } else if (open && open.key !== openKey) {
       setOpenKey(open.key)
       setSel((s) => (s?.kind === "repo" && s.key === openKey ? { kind: "repo", key: open.key } : s))
@@ -133,7 +134,8 @@ export function FleetView() {
   // The layout on a steady origin (lib/fleet-layout `steady`): while the same view shows, the
   // area only grows, and a growth on the left or top moves the scroll with it, so nothing slides
   // under the viewport when an agent comes or goes.
-  const shown = useRef<{ view: number; placed: Fitted } | null>(null)
+  const shown = useRef<{ view: number; placed: Fitted; off: { x: number; y: number } } | null>(null)
+  const centring = useRef(0) // until when the opening's smooth scroll runs
   const placed = useMemo(() => {
     const f = fit(open ? relax(openLayout(open)) : overviewLayout(repos))
     const prev = shown.current?.view === view ? shown.current.placed : null
@@ -147,19 +149,30 @@ export function FleetView() {
   useLayoutEffect(() => {
     const el = scroller.current
     const was = shown.current
-    shown.current = { view, placed }
+    // (the area as laid out now: when it's smaller than the view, it sits centred in it)
+    const off = offset()
+    shown.current = { view, placed, off }
     if (!el) return
+    const centre = (smooth: boolean) =>
+      el.scrollTo?.({
+        left: off.x + placed.cx - el.clientWidth / 2,
+        top: off.y + placed.cy - el.clientHeight / 2,
+        behavior: smooth ? "smooth" : "auto",
+      })
     if (!was || was.view !== view) {
       // A new view: its centre in the middle (smooth when opening a repo).
-      const o = offset()
-      el.scrollTo?.({
-        left: o.x + placed.cx - el.clientWidth / 2,
-        top: o.y + placed.cy - el.clientHeight / 2,
-        behavior: was && openKey ? "smooth" : "auto",
-      })
-    } else if (placed.dx !== was.placed.dx || placed.dy !== was.placed.dy) {
-      el.scrollLeft += placed.dx - was.placed.dx
-      el.scrollTop += placed.dy - was.placed.dy
+      const smooth = !!was && !!openKey
+      centring.current = smooth ? Date.now() + 800 : 0
+      centre(smooth)
+    } else if (Date.now() < centring.current) {
+      centre(true) // the opening's scroll is still going: aim it at the centre as it is now
+    } else {
+      // Same view: whatever moved the content on screen (the origin, the area's centring), the
+      // scroll moves too, so the cards stay where they were.
+      const ddx = placed.dx - was.placed.dx + off.x - was.off.x
+      const ddy = placed.dy - was.placed.dy + off.y - was.off.y
+      if (ddx) el.scrollLeft += ddx
+      if (ddy) el.scrollTop += ddy
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- runs per layout; openKey only picks the scroll's style
   }, [placed, view])

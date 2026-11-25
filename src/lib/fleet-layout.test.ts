@@ -206,4 +206,11 @@ describe("steady", () => {
     const f = fit([node("a", 500, 500)])
     expect(steady(null, f)).toBe(f)
   })
+
+  it("growing on the left while a far-right node goes: the old right edge moves with the origin", () => {
+    const prev = fit([node("a", 500, 500), node("far", 2900, 500)])
+    const f = fit([node("a", 500, 500), node("b", -300, 500)])
+    const kept = steady(prev, f)
+    expect(kept.w).toBeGreaterThanOrEqual(prev.w + (kept.dx - prev.dx))
+  })
 })
