@@ -8,6 +8,9 @@ describe("fleet-facts", () => {
     expect(shortModel("claude", "claude-opus-4-5-20251101")).toBe("opus-4-5")
     expect(shortModel("opencode", "openai/gpt-6.1-sol")).toBe("gpt-6.1-sol")
     expect(shortModel("codex", "gpt-6.1")).toBe("gpt-6.1")
+    expect(shortModel("claude", "us.anthropic.claude-opus-4-5-20251101-v1:0")).toBe("opus-4-5")
+    expect(shortModel("claude", "claude-opus-4-5@20251101")).toBe("opus-4-5")
+    expect(shortModel("opencode", "anthropic/claude-sonnet-4-5")).toBe("sonnet-4-5")
     expect(shortModel("claude", undefined)).toBeUndefined()
   })
 

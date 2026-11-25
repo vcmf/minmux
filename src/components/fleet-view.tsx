@@ -211,9 +211,10 @@ export function FleetView() {
     [apply],
   )
   // A zoom button: the keys go on reaching the graph after (focus back on it).
-  const zoomButton = (nz: number) => {
+  // (a click: focus back on the graph; the keyboard on a button: it stays there)
+  const zoomButton = (nz: number, e: { detail: number }) => {
     zoomTo(nz)
-    viewport.current?.focus({ focusVisible: false } as FocusOptions)
+    if (e.detail > 0) viewport.current?.focus({ focusVisible: false } as FocusOptions)
   }
   const zoomToRef = useRef(zoomTo)
   zoomToRef.current = zoomTo
@@ -862,7 +863,7 @@ export function FleetView() {
               aria-label="Zoom out"
               title="Zoom out (−)"
               disabled={zoom.current <= ZOOM_MIN}
-              onClick={() => zoomButton(zoom.current / 1.2)}
+              onClick={(e) => zoomButton(zoom.current / 1.2, e)}
             >
               <Minus size={13} />
             </button>
@@ -870,7 +871,7 @@ export function FleetView() {
               className="fleet-zoom-btn fleet-zoom-level"
               aria-label="Zoom to 100%"
               title="Back to 100% (0)"
-              onClick={() => zoomButton(1)}
+              onClick={(e) => zoomButton(1, e)}
             >
               {Math.round(zoom.current * 100)}%
             </button>
@@ -879,7 +880,7 @@ export function FleetView() {
               aria-label="Zoom in"
               title="Zoom in (+)"
               disabled={zoom.current >= ZOOM_MAX}
-              onClick={() => zoomButton(zoom.current * 1.2)}
+              onClick={(e) => zoomButton(zoom.current * 1.2, e)}
             >
               <Plus size={13} />
             </button>

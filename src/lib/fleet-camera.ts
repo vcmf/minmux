@@ -72,8 +72,7 @@ export const ZOOM_MAX = 2
 export const clampZoom = (z: number) =>
   Math.round(Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, z)) * 1000) / 1000
 
-/** The camera after zooming from `z` to `nz` about a point of the view (`at`, from its top
- *  left; the middle when absent): the world point under it stays under it. */
+/** The camera after zooming `z` → `nz` about a view point (`at`; the middle when absent). */
 export function zoomAt(
   cam: { x: number; y: number },
   z: number,
@@ -93,7 +92,8 @@ export function wheelZoom(
 ): number | null {
   if (!e.ctrlKey && !e.metaKey) return null
   const px = e.deltaMode === 1 ? e.deltaY * 16 : e.deltaMode === 2 ? e.deltaY * 400 : e.deltaY
-  return clampZoom(z * Math.exp(-px * 0.0025))
+  // (unrounded: a slow pinch's tiny steps add up, none lost to rounding)
+  return Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, z * Math.exp(-px * 0.0025)))
 }
 
 /** A key's zoom step (+, -, 0 for 100%): the new zoom, or null for none. */

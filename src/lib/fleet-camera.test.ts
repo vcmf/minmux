@@ -112,6 +112,8 @@ describe("zoom", () => {
     const w = { deltaY: -100, deltaMode: 0, ctrlKey: true, metaKey: false }
     expect(wheelZoom(w, 1)!).toBeGreaterThan(1)
     expect(wheelZoom({ ...w, ctrlKey: false }, 1)).toBeNull()
+    // a slow pinch's tiny step still moves it (no rounding back)
+    expect(wheelZoom({ ...w, deltaY: -0.1 }, 1)!).toBeGreaterThan(1)
     expect(wheelZoom({ ...w, deltaY: 100000 }, 1)).toBe(ZOOM_MIN)
     const k = (key: string) => keyZoom({ key, metaKey: false, ctrlKey: false, altKey: false }, 1)
     expect([k("+"), k("-"), k("0"), k("a")]).toEqual([1.2, clampZoom(1 / 1.2), 1, null])

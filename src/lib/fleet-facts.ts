@@ -13,14 +13,16 @@ export function folderName(cwd: string | undefined): string | undefined {
 /** A model id made short: no vendor prefix or path, no date suffix. */
 export function shortModel(kind: AgentKind, model: string | undefined): string | undefined {
   if (!model) return undefined
-  const prefix = AGENT_KINDS[kind].modelPrefix
-  let m = model.replace(/^[a-z0-9-]+\//i, "")
-  if (prefix && m.startsWith(prefix)) m = m.slice(prefix.length)
-  return m.replace(/-\d{8}$/, "")
+  // (a provider's path or region prefix, `openai/`, `us.anthropic.`; a date, `-20251101` or
+  // `@20251101`; a Bedrock version, `-v1:0`)
+  let m = model.replace(/^[a-z0-9-]+\//i, "").replace(/^([a-z]{2}\.)?anthropic\./i, "")
+  m = m.replace(/-v\d+(:\d+)?$/, "").replace(/[-@]\d{8}$/, "")
+  const prefix = AGENT_KINDS[kind].modelPrefix ?? AGENT_KINDS.claude.modelPrefix
+  // (any agent's Claude model is shown alike)
+  return prefix && m.startsWith(prefix) ? m.slice(prefix.length) : m
 }
 
-/** A session's context window: the agent's own word, else its kind's usual one, marked a guess
- *  (none when its kind has none). */
+/** A session's context window: its agent's own word, else its kind's usual one (a guess). */
 export function contextWindow(
   kind: AgentKind,
   t: TokenUsage | undefined,

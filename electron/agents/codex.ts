@@ -198,8 +198,8 @@ export function addCodexTokenLine(acc: TokenUsage, line: string): TokenUsage {
   }
   // A turn's context names its model.
   if (rec?.type === "turn_context") {
-    const m = rec.payload?.model
-    return typeof m === "string" && m && m !== acc.model ? { ...acc, model: m.slice(0, 64) } : acc
+    const m = typeof rec.payload?.model === "string" ? rec.payload.model.slice(0, 64) : ""
+    return m && m !== acc.model ? { ...acc, model: m } : acc
   }
   if (rec?.type !== "event_msg" || rec.payload?.type !== "token_count") return acc
   const info = rec.payload.info as
