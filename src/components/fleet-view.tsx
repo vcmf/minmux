@@ -15,6 +15,9 @@ import {
   openLayout,
   overviewLayout,
   relax,
+  toScreen,
+  unionBox,
+  bounds,
   type Camera,
   type FleetNode,
 } from "../lib/fleet-layout"
@@ -79,7 +82,6 @@ const goToPane = (paneId: string) => {
 export function FleetView() {
   // The keyboard comes here when the view shows (the parked terminals are inert).
   const ref = useRef<HTMLDivElement>(null)
-  useEffect(() => ref.current?.focus(), [])
   const repos = useFleetModel()
   const [openKey, setOpenKey] = useState<string | null>(null)
   const [sel, setSel] = useState<Selection>(null)
@@ -136,6 +138,8 @@ export function FleetView() {
   // The camera: the world point in the middle of the view. It lives in a ref and is written to
   // the cards' layer as a transform (and the canvas redrawn) on a frame: panning renders nothing.
   const viewport = useRef<HTMLDivElement>(null)
+  // (the keyboard lands on the graph's viewport: arrows pan it at once)
+  useEffect(() => viewport.current?.focus(), [])
   const layer = useRef<HTMLDivElement>(null)
   const canvas = useRef<HTMLCanvasElement>(null)
   const cam = useRef<Camera>({ x: FLEET.cx, y: FLEET.cy })
@@ -148,8 +152,9 @@ export function FleetView() {
     frame.current = requestAnimationFrame(() => {
       const el = viewport.current
       if (!el) return
-      const tx = Math.round(el.clientWidth / 2 - cam.current.x)
-      const ty = Math.round(el.clientHeight / 2 - cam.current.y)
+      const o = toScreen({ x: 0, y: 0 }, cam.current, el.clientWidth, el.clientHeight)
+      const tx = Math.round(o.x)
+      const ty = Math.round(o.y)
       if (layer.current) layer.current.style.transform = `translate3d(${tx}px, ${ty}px, 0)`
       drawRef.current()
     })
@@ -164,9 +169,10 @@ export function FleetView() {
         return
       }
       const from = cam.current
-      const t0 = performance.now()
+      let t0 = -1
       const step = (t: number) => {
-        const k = Math.min(1, (t - t0) / 320)
+        if (t0 < 0) t0 = t // (the first frame's own time: never a step backwards)
+        const k = Math.min(1, Math.max(0, (t - t0) / 320))
         const e = 1 - (1 - k) ** 3 // ease out
         cam.current = { x: from.x + (to.x - from.x) * e, y: from.y + (to.y - from.y) * e }
         apply()
@@ -185,13 +191,17 @@ export function FleetView() {
   const [view, setView] = useState(0)
   const viewId = `${view}:${open ? "open" : "all"}`
   const shownView = useRef<string | null>(null)
+  // The camera's bounds: the view's extent, which only grows while it shows (a card that goes
+  // away never pulls the camera in, so nothing moves under the user).
+  const extent = useRef<ReturnType<typeof bounds> | null>(null)
   useLayoutEffect(() => {
     if (shownView.current !== viewId) {
       const first = shownView.current === null
       shownView.current = viewId
+      extent.current = bounds(nodes)
       moveTo({ x: FLEET.cx, y: FLEET.cy }, !first && !!open)
     } else {
-      cam.current = clampCamera(cam.current, nodes)
+      extent.current = unionBox(extent.current, bounds(nodes))
       apply()
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- `open` only picks the glide
@@ -233,8 +243,9 @@ export function FleetView() {
       c.style.width = `${w}px`
       c.style.height = `${h}px`
     }
-    const tx = Math.round(w / 2 - cam.current.x)
-    const ty = Math.round(h / 2 - cam.current.y)
+    const o = toScreen({ x: 0, y: 0 }, cam.current, w, h)
+    const tx = Math.round(o.x)
+    const ty = Math.round(o.y)
     ctx.setTransform(1, 0, 0, 1, 0, 0)
     ctx.clearRect(0, 0, c.width, c.height)
     ctx.setTransform(dpr, 0, 0, dpr, tx * dpr, ty * dpr)
@@ -282,37 +293,71 @@ export function FleetView() {
     if (!el) return
     const pan = (dx: number, dy: number) => {
       cancelAnimationFrame(glide.current) // the user takes over from an opening's glide
-      cam.current = clampCamera({ x: cam.current.x + dx, y: cam.current.y + dy }, nodesRef.current)
+      cam.current = clampCamera(
+        { x: cam.current.x + dx, y: cam.current.y + dy },
+        nodesRef.current,
+        extent.current ?? undefined,
+      )
       apply()
     }
     const onWheel = (e: WheelEvent) => {
       e.preventDefault()
-      pan(e.deltaX, e.deltaY)
+      if (e.ctrlKey) return // a pinch (or ctrl+wheel): no zoom yet, and never a pan
+      // (lines and pages in pixels; shift turns a mouse wheel sideways)
+      const unit = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? el.clientHeight : 1
+      const dx = e.deltaX || (e.shiftKey ? e.deltaY : 0)
+      const dy = e.shiftKey && !e.deltaX ? 0 : e.deltaY
+      pan(dx * unit, dy * unit)
+    }
+    // The keyboard pans too: arrows a step, Page Up/Down a screen (not from a text field).
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.target as HTMLElement).closest("input, textarea, select")) return
+      const step = 80
+      const page = el.clientHeight * 0.8
+      const d: Record<string, [number, number]> = {
+        ArrowLeft: [-step, 0],
+        ArrowRight: [step, 0],
+        ArrowUp: [0, -step],
+        ArrowDown: [0, step],
+        PageUp: [0, -page],
+        PageDown: [0, page],
+      }
+      const m = d[e.key]
+      if (!m) return
+      e.preventDefault()
+      pan(m[0], m[1])
     }
     let drag: { x: number; y: number; id: number } | null = null
     const onDown = (e: PointerEvent) => {
       if (e.button !== 0 || (e.target as HTMLElement).closest("button, .fleet-card")) return
+      e.preventDefault() // no text selection following the drag
       drag = { x: e.clientX, y: e.clientY, id: e.pointerId }
       el.setPointerCapture?.(e.pointerId)
       el.classList.add("panning")
     }
     const onMove = (e: PointerEvent) => {
       if (!drag || e.pointerId !== drag.id) return
+      if ((e.buttons & 1) === 0) return end() // the button came up where we didn't hear it
       pan(drag.x - e.clientX, drag.y - e.clientY)
       drag = { ...drag, x: e.clientX, y: e.clientY }
     }
-    const onUp = (e: PointerEvent) => {
-      if (!drag || e.pointerId !== drag.id) return
+    const end = () => {
       drag = null
       el.classList.remove("panning")
     }
+    const onUp = (e: PointerEvent) => {
+      if (drag && e.pointerId === drag.id) end()
+    }
     // A card the keyboard (or anything else) focuses comes into view: the camera glides to it.
     const onFocus = (e: FocusEvent) => {
-      const id = (e.target as HTMLElement).closest<HTMLElement>("[data-node]")?.dataset.node
+      // (keyboard focus only: a click focuses its card too, and gliding then would move the
+      // card from under a double-click)
+      const t = e.target as HTMLElement
+      if (!t.matches?.(":focus-visible")) return
+      const id = t.closest<HTMLElement>("[data-node]")?.dataset.node
       const n = id ? nodesRef.current.find((x) => x.id === id) : undefined
       if (!n) return
-      const sx = n.x - cam.current.x + el.clientWidth / 2
-      const sy = n.y - cam.current.y + el.clientHeight / 2
+      const { x: sx, y: sy } = toScreen(n, cam.current, el.clientWidth, el.clientHeight)
       const margin = 24
       const inside =
         sx - n.w / 2 >= margin &&
@@ -322,6 +367,8 @@ export function FleetView() {
       if (!inside) moveToRef.current({ x: n.x, y: n.y }, true)
     }
     el.addEventListener("focusin", onFocus)
+    el.addEventListener("keydown", onKey)
+    el.addEventListener("lostpointercapture", end)
     el.addEventListener("wheel", onWheel, { passive: false })
     el.addEventListener("pointerdown", onDown)
     el.addEventListener("pointermove", onMove)
@@ -333,6 +380,8 @@ export function FleetView() {
       cancelAnimationFrame(frame.current)
       cancelAnimationFrame(glide.current)
       el.removeEventListener("focusin", onFocus)
+      el.removeEventListener("keydown", onKey)
+      el.removeEventListener("lostpointercapture", end)
       el.removeEventListener("wheel", onWheel)
       el.removeEventListener("pointerdown", onDown)
       el.removeEventListener("pointermove", onMove)
@@ -347,7 +396,12 @@ export function FleetView() {
     <div className="fleet-view" ref={ref} tabIndex={-1}>
       <div className="fleet-graph">
         <canvas className="fleet-edges" ref={canvas} aria-hidden="true" />
-        <div className="fleet-viewport" ref={viewport}>
+        <div
+          className="fleet-viewport"
+          ref={viewport}
+          tabIndex={0}
+          aria-label="Fleet graph: arrows and Page Up/Down pan it"
+        >
           <div className="fleet-layer" ref={layer}>
             {nodes.map((n) => (
               <FleetCard

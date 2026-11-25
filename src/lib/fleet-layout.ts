@@ -48,7 +48,7 @@ export const rootSize = (repo: FleetRepo) => Math.min(104, 64 + repo.counts.agen
 
 /** Every repo on a ring, the first at the top, in the model's order. */
 export function overviewLayout(repos: FleetRepo[]): FleetNode[] {
-  // Room for each repo's 240px label around the ring: it grows (and the area with it, `fit`).
+  // Room for each repo's 240px label around the ring: it grows (the camera's bounds follow it).
   const rx = Math.max(FLEET.ringRx, (repos.length * 340) / (Math.PI * 2))
   const ry = Math.max(FLEET.ringRy, rx * 0.85)
   return repos.map((r, i) => {
@@ -207,9 +207,22 @@ export function bounds(nodes: FleetNode[]): { x0: number; y0: number; x1: number
   return { x0, y0, x1, y1 }
 }
 
-/** A camera kept over the graph: its middle never leaves the graph's extent. */
-export function clampCamera(c: Camera, nodes: FleetNode[]): Camera {
-  const b = bounds(nodes)
+type Box = { x0: number; y0: number; x1: number; y1: number }
+
+/** Two extents as one (a view's extent only grows while it shows: the camera never snaps in). */
+export const unionBox = (a: Box | null, b: Box): Box =>
+  a
+    ? {
+        x0: Math.min(a.x0, b.x0),
+        y0: Math.min(a.y0, b.y0),
+        x1: Math.max(a.x1, b.x1),
+        y1: Math.max(a.y1, b.y1),
+      }
+    : b
+
+/** A camera kept over the graph: its middle never leaves the extent (the nodes', or `box`). */
+export function clampCamera(c: Camera, nodes: FleetNode[], box?: Box): Camera {
+  const b = box ?? bounds(nodes)
   return {
     x: Math.min(b.x1, Math.max(b.x0, c.x)),
     y: Math.min(b.y1, Math.max(b.y0, c.y)),

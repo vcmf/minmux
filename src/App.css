@@ -4261,6 +4261,8 @@ body.resizing-col {
   overflow: hidden; /* the camera pans the layer: no native scrolling (fleet-view) */
   cursor: grab;
   touch-action: none;
+  user-select: none; /* a drag pans, it never selects the cards' text */
+  outline: none;
 }
 .fleet-viewport.panning {
   cursor: grabbing;

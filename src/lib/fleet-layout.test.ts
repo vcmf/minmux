@@ -1,7 +1,9 @@
 import { describe, it, expect } from "vitest"
 import {
   FLEET,
+  bounds,
   clampCamera,
+  unionBox,
   toScreen,
   nodeId,
   openLayout,
@@ -187,5 +189,13 @@ describe("camera", () => {
     expect(toScreen(cam, cam, 1200, 800)).toEqual({ x: 600, y: 400 })
     expect(toScreen(cam, cam, 900, 500)).toEqual({ x: 450, y: 250 }) // a resize keeps it centred
     expect(toScreen({ x: 800, y: 400 }, cam, 1200, 800)).toEqual({ x: 700, y: 400 })
+  })
+
+  it("within a view the camera's bounds only grow: a card going away never pulls it in", () => {
+    const big = [node("a", 0, 0), node("far", 3000, 0)]
+    const small = [node("a", 0, 0)]
+    const box = unionBox(bounds(big), bounds(small))
+    expect(clampCamera({ x: 2900, y: 0 }, small, box).x).toBe(2900) // still reachable
+    expect(clampCamera({ x: 2900, y: 0 }, small).x).toBe(50) // (without the kept extent)
   })
 })
