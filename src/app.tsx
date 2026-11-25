@@ -739,7 +739,8 @@ function App() {
           )}
           {searchOpen && <SearchBar />}
         </div>
-        {rightView && (
+        {/* (a view, the Fleet, takes the room: the panel is set aside, back with the panes) */}
+        {rightView && !activeView && (
           <div className="rightpanel">
             <RightPanelResizer />
             {rightView === "agents" && <AgentsPanel />}

@@ -172,7 +172,11 @@ export function normalizeOpencodeDrop(raw: unknown, paneId?: string): AgentEvent
       const output = count(d.output)
       if (context === undefined || output === undefined) return null
       // No pane: a count is no sign of activity there (like Claude's and Codex's).
-      return { ...at("TokenUsage", { tokens: { context, output } }), paneId: undefined }
+      const model = text(d.model, 64)
+      return {
+        ...at("TokenUsage", { tokens: { context, output, ...(model ? { model } : {}) } }),
+        paneId: undefined,
+      }
     }
     case "end":
       return child ? null : at("SessionEnd", { reason: "switch" }) // a root the user left

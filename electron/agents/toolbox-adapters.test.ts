@@ -127,3 +127,27 @@ describe("the line readers' edges", () => {
     expect(tb).toEqual({ mcp: {}, mcpFailed: { x: 2 }, mcpDown: ["y"], skills: {} })
   })
 })
+
+describe("the model, with the token totals", () => {
+  it("Claude's from an assistant line; Codex's from a turn's context", async () => {
+    const { addLine } = await import("../transcript-tokens")
+    const { addCodexTokenLine } = await import("./codex")
+    const c = addLine(
+      { context: 0, output: 0 },
+      j({ type: "assistant", message: { model: "claude-opus-5-5", usage: { input_tokens: 3 } } }),
+    )
+    expect(c.model).toBe("claude-opus-5-5")
+    let x = addCodexTokenLine(
+      { context: 0, output: 0 },
+      j({ type: "turn_context", payload: { model: "gpt-6.1" } }),
+    )
+    x = addCodexTokenLine(
+      x,
+      j({
+        type: "event_msg",
+        payload: { type: "token_count", info: { last_token_usage: { total_tokens: 9 } } },
+      }),
+    )
+    expect([x.model, x.context]).toEqual(["gpt-6.1", 9])
+  })
+})

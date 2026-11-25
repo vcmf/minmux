@@ -64,3 +64,46 @@ export function cardInView(
     y + n.h / 2 + below <= view.h - margin
   )
 }
+
+export const ZOOM_MIN = 0.4
+export const ZOOM_MAX = 2
+
+/** A zoom kept in its range, rounded (no 0.9999 from repeated steps). */
+export const clampZoom = (z: number) =>
+  Math.round(Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, z)) * 1000) / 1000
+
+/** The camera after zooming from `z` to `nz` about a point of the view (`at`, from its top
+ *  left; the middle when absent): the world point under it stays under it. */
+export function zoomAt(
+  cam: { x: number; y: number },
+  z: number,
+  nz: number,
+  view: { w: number; h: number },
+  at?: { x: number; y: number },
+): { x: number; y: number } {
+  const ox = (at?.x ?? view.w / 2) - view.w / 2
+  const oy = (at?.y ?? view.h / 2) - view.h / 2
+  return { x: cam.x + ox / z - ox / nz, y: cam.y + oy / z - oy / nz }
+}
+
+/** A wheel's zoom step (a pinch, or ctrl/cmd with the wheel): the new zoom, or null for none. */
+export function wheelZoom(
+  e: { deltaY: number; deltaMode: number; ctrlKey: boolean; metaKey: boolean },
+  z: number,
+): number | null {
+  if (!e.ctrlKey && !e.metaKey) return null
+  const px = e.deltaMode === 1 ? e.deltaY * 16 : e.deltaMode === 2 ? e.deltaY * 400 : e.deltaY
+  return clampZoom(z * Math.exp(-px * 0.0025))
+}
+
+/** A key's zoom step (+, -, 0 for 100%): the new zoom, or null for none. */
+export function keyZoom(
+  e: { key: string; metaKey: boolean; ctrlKey: boolean; altKey: boolean },
+  z: number,
+): number | null {
+  if (e.metaKey || e.ctrlKey || e.altKey) return null
+  if (e.key === "+" || e.key === "=") return clampZoom(z * 1.2)
+  if (e.key === "-" || e.key === "_") return clampZoom(z / 1.2)
+  if (e.key === "0") return 1
+  return null
+}

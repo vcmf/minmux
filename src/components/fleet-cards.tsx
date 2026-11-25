@@ -6,6 +6,7 @@ import { type FleetNode } from "../lib/fleet-layout"
 import { DETACHED, type FleetAgent, type FleetPr, type FleetRepo } from "../lib/fleet-model"
 import { cardLook } from "../lib/pr-graph"
 import { mcpList, skillList, type ToolList } from "../lib/fleet-toolbox"
+import { contextWindow, folderName, kTokens, shortModel } from "../lib/fleet-facts"
 import { AGENT_STATUS_UI } from "../lib/agent-status-ui"
 import { agentColor, agentInfo } from "../lib/agent-kinds"
 import type { AgentKind } from "../lib/agent-graph"
@@ -197,10 +198,23 @@ export function FleetCard(props: {
           <span className="faint">· {a.subs.length ? plural(a.subs.length, "sub") : st.word}</span>
         </span>
         <span className={`one ${statusTone(a.status)}`}>{agentDoing(a)}</span>
+        <AgentFacts a={a} />
       </button>
     )
   }
   return null
+}
+
+/** An agent card's third line: its folder, its context and its model. */
+function AgentFacts({ a }: { a: FleetAgent }) {
+  const facts = [
+    folderName(a.cwd),
+    a.tokens ? `${kTokens(a.tokens.context)} ctx` : undefined,
+    shortModel(a.tokens?.model),
+  ].filter(Boolean)
+  return facts.length ? (
+    <span className="one faint fleet-facts-line">{facts.join(" · ")}</span>
+  ) : null
 }
 
 export function FleetPanel(props: {
@@ -222,7 +236,8 @@ export function FleetPanel(props: {
   if (agent?.agent) {
     const a = agent.agent
     const pr = agent.repo.prs.find((p) => p.agents.some((x) => x.id === a.id))
-    const ctx = a.tokens?.window ? Math.round((a.tokens.context / a.tokens.window) * 100) : null
+    const window = contextWindow(a.kind, a.tokens)
+    const ctx = a.tokens && window ? Math.round((a.tokens.context / window) * 100) : null
     return (
       <aside className="fleet-panel" aria-label="Agent">
         <button className="fleet-back" onClick={() => props.onRepo(agent.repo.key)}>
@@ -250,24 +265,39 @@ export function FleetPanel(props: {
               <dd className="one">{a.cwd}</dd>
             </>
           )}
-          {a.tokens && (
+          {a.tokens?.model && (
             <>
-              <dt>context</dt>
-              <dd>
-                {Math.round(a.tokens.context / 1000)}k
-                {a.tokens.window ? ` / ${Math.round(a.tokens.window / 1000)}k` : ""}
-                {ctx !== null && (
-                  <span className="fleet-meter">
-                    <span
-                      style={{ width: `${Math.min(100, ctx)}%` }}
-                      className={ctx > 80 ? "warn" : ""}
-                    />
-                  </span>
-                )}
-              </dd>
+              <dt>model</dt>
+              <dd className="one">{a.tokens.model}</dd>
             </>
           )}
         </dl>
+        {a.tokens && (
+          <div className="fleet-context">
+            <div className="fleet-context-head">
+              <span className="faint">context</span>
+              <span>
+                {kTokens(a.tokens.context)}
+                {window ? ` / ${kTokens(window)}` : ""}
+              </span>
+            </div>
+            {ctx !== null && (
+              <div
+                className="fleet-meter"
+                role="meter"
+                aria-label="context used"
+                aria-valuenow={Math.min(100, ctx)}
+                aria-valuemin={0}
+                aria-valuemax={100}
+              >
+                <span
+                  style={{ width: `${Math.min(100, ctx)}%` }}
+                  className={ctx > 90 ? "bad" : ctx > 75 ? "warn" : ""}
+                />
+              </div>
+            )}
+          </div>
+        )}
         <h3>Sub-agents · {a.subs.length}</h3>
         {a.subs.length ? (
           a.subs.map((s) => (

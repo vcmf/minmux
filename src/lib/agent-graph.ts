@@ -24,6 +24,7 @@ export interface TokenUsage {
   context: number
   output: number
   window?: number // the model's context window, when the agent reports it (Codex)
+  model?: string // the model the last turn used, when the agent says (its own id)
 }
 
 /** A session's MCP servers and skills: what it had loaded and what it used (main reads them off

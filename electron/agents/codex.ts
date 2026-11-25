@@ -184,14 +184,23 @@ export function normalizeCodexEvent(raw: unknown, paneId?: string): AgentEvent |
 // subtracts a baseline first, so it reads a little lower). Other lines are skipped.
 /** Fold one rollout `token_count` line into context, output so far and window (pure). */
 export function addCodexTokenLine(acc: TokenUsage, line: string): TokenUsage {
-  if (!line.includes('"token_count"')) return acc // cheap pre-filter: most lines aren't
+  // (cheap pre-filter: most lines are neither)
+  if (!line.includes('"token_count"') && !line.includes('"turn_context"')) return acc
   let o: unknown
   try {
     o = JSON.parse(line)
   } catch {
     return acc
   }
-  const rec = o as { type?: unknown; payload?: { type?: unknown; info?: unknown } }
+  const rec = o as {
+    type?: unknown
+    payload?: { type?: unknown; info?: unknown; model?: unknown }
+  }
+  // A turn's context names its model.
+  if (rec?.type === "turn_context") {
+    const m = rec.payload?.model
+    return typeof m === "string" && m && m !== acc.model ? { ...acc, model: m.slice(0, 64) } : acc
+  }
   if (rec?.type !== "event_msg" || rec.payload?.type !== "token_count") return acc
   const info = rec.payload.info as
     | {
@@ -211,6 +220,7 @@ export function addCodexTokenLine(acc: TokenUsage, line: string): TokenUsage {
       acc.context,
     output: Math.max(acc.output, num(info.total_token_usage?.output_tokens)),
     ...(window ? { window } : {}),
+    ...(acc.model ? { model: acc.model } : {}),
   }
 }
 

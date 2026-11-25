@@ -1,5 +1,15 @@
 import { describe, it, expect } from "vitest"
-import { cardInView, keyPan, wheelPan } from "./fleet-camera"
+import {
+  ZOOM_MAX,
+  ZOOM_MIN,
+  cardInView,
+  clampZoom,
+  keyPan,
+  keyZoom,
+  wheelPan,
+  wheelZoom,
+  zoomAt,
+} from "./fleet-camera"
 import type { FleetNode } from "./fleet-layout"
 
 const wheel = (over: Partial<Parameters<typeof wheelPan>[0]> = {}) => ({
@@ -80,5 +90,32 @@ describe("cardInView", () => {
     const nearTop = { x: 0, y: 360 } // the card's top 10px below the view's top
     expect(cardInView(card, nearTop, { ...view, top: 0 }, 0)).toBe(true)
     expect(cardInView(card, nearTop, { ...view, top: 48 }, 0)).toBe(false)
+  })
+})
+
+describe("zoom", () => {
+  it("about a point: the world point under it stays put", () => {
+    const view = { w: 1000, h: 800 }
+    const cam = { x: 0, y: 0 }
+    const at = { x: 900, y: 100 }
+    const under = (c: { x: number; y: number }, z: number) => ({
+      x: c.x + (at.x - view.w / 2) / z,
+      y: c.y + (at.y - view.h / 2) / z,
+    })
+    const next = zoomAt(cam, 1, 2, view, at)
+    expect(under(next, 2).x).toBeCloseTo(under(cam, 1).x)
+    expect(under(next, 2).y).toBeCloseTo(under(cam, 1).y)
+    expect(zoomAt(cam, 1, 2, view)).toEqual({ x: 0, y: 0 }) // (the middle: no move)
+  })
+
+  it("the wheel zooms only with ctrl or cmd (a pinch); keys + - 0; kept in range", () => {
+    const w = { deltaY: -100, deltaMode: 0, ctrlKey: true, metaKey: false }
+    expect(wheelZoom(w, 1)!).toBeGreaterThan(1)
+    expect(wheelZoom({ ...w, ctrlKey: false }, 1)).toBeNull()
+    expect(wheelZoom({ ...w, deltaY: 100000 }, 1)).toBe(ZOOM_MIN)
+    const k = (key: string) => keyZoom({ key, metaKey: false, ctrlKey: false, altKey: false }, 1)
+    expect([k("+"), k("-"), k("0"), k("a")]).toEqual([1.2, clampZoom(1 / 1.2), 1, null])
+    expect(keyZoom({ key: "+", metaKey: true, ctrlKey: false, altKey: false }, 1)).toBeNull()
+    expect(clampZoom(5)).toBe(ZOOM_MAX)
   })
 })

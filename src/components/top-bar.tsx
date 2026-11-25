@@ -441,10 +441,19 @@ export function TopBar() {
         {/* The right-side panel: the agents list (click again → hide). Folders and their git
             changes are pane tabs now (docs/design/WORKDIR_OBJECTS.md). */}
         <button
-          className={`iconbtn${rightView === "agents" ? " on" : ""}`}
+          className={`iconbtn${rightView === "agents" && !activeView ? " on" : ""}`}
           data-tip="Agents"
           aria-label="Agents"
-          onClick={() => useStore.getState().setRightView(rightView === "agents" ? null : "agents")}
+          onClick={() => {
+            const s = useStore.getState()
+            // In a view the panel is set aside: the button goes back to the panes, panel open.
+            if (s.activeView) {
+              s.setRightView("agents")
+              if (s.activeTabId) s.setActiveTab(s.activeTabId)
+              return
+            }
+            s.setRightView(rightView === "agents" ? null : "agents")
+          }}
         >
           <AgentsIcon size={15} />
         </button>

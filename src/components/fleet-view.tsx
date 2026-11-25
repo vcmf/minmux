@@ -5,22 +5,24 @@
 // with a transform: no native scrolling. The edges are one viewport-sized 2D canvas under the
 // cards. The open repo turns slowly while the mouse is still (lib/fleet-motion).
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
-import { Graph, PushPinSlash } from "@phosphor-icons/react"
+import { Graph, Minus, Plus, PushPinSlash } from "@phosphor-icons/react"
 import { useStore, activeTheme } from "../store"
 import { useFleetModel } from "./use-fleet-data"
-import {
-  FLEET,
-  clampCamera,
-  nodeId,
-  toScreen,
-  unionBox,
-  bounds,
-  type Camera,
-} from "../lib/fleet-layout"
+import { FLEET, clampCamera, nodeId, unionBox, bounds, type Camera } from "../lib/fleet-layout"
 import { type FleetAgent } from "../lib/fleet-model"
 import { cardLook } from "../lib/pr-graph"
 import { agentColor } from "../lib/agent-kinds"
-import { cardInView, keyPan, wheelPan } from "../lib/fleet-camera"
+import {
+  ZOOM_MAX,
+  ZOOM_MIN,
+  cardInView,
+  clampZoom,
+  keyPan,
+  keyZoom,
+  wheelPan,
+  wheelZoom,
+  zoomAt,
+} from "../lib/fleet-camera"
 import {
   FRAME_MS,
   GROW_MS,
@@ -125,15 +127,26 @@ export function FleetView() {
   nodesRef.current = nodes
   const drawRef = useRef<() => void>(() => {})
   const frame = useRef(0)
+  // The zoom: the layer scaled about its top left, the edges drawn at the same scale.
+  const zoom = useRef(1)
+  const [zoomShown, setZoomShown] = useState(1)
+  /** Where the world's origin lands on screen, and the scale, for a view this size. */
+  const origin = (w: number, h: number) => {
+    const z = zoom.current
+    return {
+      tx: Math.round(w / 2 - cam.current.x * z),
+      ty: Math.round(h / 2 - cam.current.y * z),
+      z,
+    }
+  }
   const apply = useCallback(() => {
     cancelAnimationFrame(frame.current)
     frame.current = requestAnimationFrame(() => {
       const el = viewport.current
       if (!el) return
-      const o = toScreen({ x: 0, y: 0 }, cam.current, el.clientWidth, el.clientHeight)
-      const tx = Math.round(o.x)
-      const ty = Math.round(o.y)
-      if (layer.current) layer.current.style.transform = `translate3d(${tx}px, ${ty}px, 0)`
+      const { tx, ty, z } = origin(el.clientWidth, el.clientHeight)
+      if (layer.current)
+        layer.current.style.transform = `translate3d(${tx}px, ${ty}px, 0) scale(${z})`
       drawRef.current()
     })
   }, [])
@@ -163,6 +176,23 @@ export function FleetView() {
     [apply],
   )
 
+  /** Zoom to `nz` about a point of the view (its middle when absent). */
+  const zoomTo = useCallback(
+    (nz: number, at?: { x: number; y: number }) => {
+      const el = viewport.current
+      const z = zoom.current
+      nz = clampZoom(nz)
+      if (!el || nz === z) return
+      cancelAnimationFrame(glide.current)
+      cam.current = zoomAt(cam.current, z, nz, { w: el.clientWidth, h: el.clientHeight }, at)
+      zoom.current = nz
+      setZoomShown(nz)
+      apply()
+    },
+    [apply],
+  )
+  const zoomToRef = useRef(zoomTo)
+  zoomToRef.current = zoomTo
   const moveToRef = useRef(moveTo)
   moveToRef.current = moveTo
   const wakeRef = useRef<() => void>(() => {})
@@ -234,13 +264,13 @@ export function FleetView() {
       c.style.width = `${w}px`
       c.style.height = `${h}px`
     }
-    const o = toScreen({ x: 0, y: 0 }, cam.current, w, h)
-    const tx = Math.round(o.x)
-    const ty = Math.round(o.y)
+    const { tx, ty, z } = origin(w, h)
     ctx.setTransform(1, 0, 0, 1, 0, 0)
     ctx.clearRect(0, 0, c.width, c.height)
-    ctx.setTransform(dpr, 0, 0, dpr, tx * dpr, ty * dpr)
-    const { border2: faint, red, accent } = ui
+    ctx.setTransform(dpr * z, 0, 0, dpr * z, tx * dpr, ty * dpr)
+    const { red, accent } = ui
+    // (on a light background the hairline colour is too pale for an edge: darker there)
+    const faint = scheme === "light" ? "rgba(0, 0, 0, 0.3)" : ui.border2
     const ns = nodesRef.current
     const byId = new Map(ns.map((n) => [n.id, n]))
     // The open repo's orbits (PRs, agents, sub-agents): faint dashed rings under everything. They
@@ -482,10 +512,12 @@ export function FleetView() {
   useEffect(() => {
     const el = viewport.current
     if (!el) return
+    // (screen pixels: a zoomed-in view moves less of the world for the same push)
     const pan = (dx: number, dy: number) => {
       cancelAnimationFrame(glide.current) // the user takes over from an opening's glide
+      const z = zoom.current
       cam.current = clampCamera(
-        { x: cam.current.x + dx, y: cam.current.y + dy },
+        { x: cam.current.x + dx / z, y: cam.current.y + dy / z },
         nodesRef.current,
         extent.current ?? undefined,
       )
@@ -493,12 +525,24 @@ export function FleetView() {
     }
     const onWheel = (e: WheelEvent) => {
       e.preventDefault()
+      // A pinch (ctrl/cmd with the wheel) zooms about the pointer; else the wheel pans.
+      const nz = wheelZoom(e, zoom.current)
+      if (nz !== null) {
+        const r = el.getBoundingClientRect()
+        zoomToRef.current(nz, { x: e.clientX - r.left, y: e.clientY - r.top })
+        return
+      }
       const d = wheelPan(e, { w: el.clientWidth, h: el.clientHeight })
       if (d) pan(d.dx, d.dy)
     }
     // The keyboard pans too (not from a text field); Home goes back to the view's centre.
     const onKey = (e: KeyboardEvent) => {
       if ((e.target as HTMLElement).closest("input, textarea, select")) return
+      const nz = keyZoom(e, zoom.current)
+      if (nz !== null) {
+        e.preventDefault()
+        return zoomToRef.current(nz)
+      }
       const d = keyPan(e, el.clientHeight)
       if (!d) return
       e.preventDefault()
@@ -548,7 +592,8 @@ export function FleetView() {
         // (on a keyframe while it drags: one layout a move, not two to blend; under 3px away)
         theta.current = Math.round(theta.current / KEY_RAD) * KEY_RAD
       }
-      pins.current.set(pin.id, { x: pin.nx + dx, y: pin.ny + dy })
+      const z = zoom.current
+      pins.current.set(pin.id, { x: pin.nx + dx / z, y: pin.ny + dy / z })
       pinsRev.current++
       // (one layout a frame, however fast the pointer reports)
       dragFrame ||= requestAnimationFrame(() => {
@@ -593,7 +638,8 @@ export function FleetView() {
       // (the dock of other repos covers the view's top while a repo is open)
       const dock = el.parentElement?.querySelector<HTMLElement>(".fleet-dock")
       const top = dock ? dock.getBoundingClientRect().bottom - el.getBoundingClientRect().top : 0
-      const view = { w: el.clientWidth, h: el.clientHeight, top: Math.max(0, top) }
+      const z = zoom.current // (the view in world units)
+      const view = { w: el.clientWidth / z, h: el.clientHeight / z, top: Math.max(0, top) / z }
       if (!cardInView(n, cam.current, view)) moveToRef.current({ x: n.x, y: n.y }, true)
     }
     const unhover = () => {
@@ -783,6 +829,36 @@ export function FleetView() {
               <Graph size={28} weight="duotone" />
               <p>No agent is working in a repo right now.</p>
             </div>
+          </div>
+        )}
+        {mode === "graph" && (
+          <div className="fleet-zoom" role="group" aria-label="Zoom">
+            <button
+              className="fleet-zoom-btn"
+              aria-label="Zoom out"
+              title="Zoom out (−)"
+              disabled={zoomShown <= ZOOM_MIN}
+              onClick={() => zoomTo(zoom.current / 1.2)}
+            >
+              <Minus size={13} />
+            </button>
+            <button
+              className="fleet-zoom-btn fleet-zoom-level"
+              aria-label="Zoom to 100%"
+              title="Back to 100% (0)"
+              onClick={() => zoomTo(1)}
+            >
+              {Math.round(zoomShown * 100)}%
+            </button>
+            <button
+              className="fleet-zoom-btn"
+              aria-label="Zoom in"
+              title="Zoom in (+)"
+              disabled={zoomShown >= ZOOM_MAX}
+              onClick={() => zoomTo(zoom.current * 1.2)}
+            >
+              <Plus size={13} />
+            </button>
           </div>
         )}
         {pinCount > 0 && mode === "graph" && (

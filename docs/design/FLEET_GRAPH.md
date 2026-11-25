@@ -133,11 +133,17 @@ sit on a ring, in a stable order (first seen).
   centre, and it stays over the graph. A resize keeps the middle in the middle; cards coming or
   going never move the others under the user. (Native scrolling was tried and raced React's
   renders on resize and on model updates.)
+- **Zoom** (40% to 200%): the camera scales the card layer and draws the edges at the same
+  scale. A pinch or ctrl/cmd with the wheel zooms about the pointer; + / − / 0 and the corner
+  buttons (− level +) about the middle. Pans and drags are in screen pixels, divided by the zoom.
+- While a view (the Fleet) shows, the agents panel is set aside (its state kept): it's back with
+  the panes; the Agents button in a view goes back to them with it open.
 - PR cards reuse the PR graph's looks (`lib/pr-graph` `cardLook`: red for conflicts, failing CI
   or changes requested, amber for CI running, dashed for a draft, an approved tick). A PR the
   lists don't hold shows its number and state only. PR cards carry the pull-request icon. Agent cards: the agent's icon
   (Claude, Codex, OpenCode), name, sub-agent count; what it's doing as a word coloured by status
-  (no dots); amber border when it needs you; idle ones dimmed; a
+  (no dots); a third line with its folder, context and model; amber border when it needs you;
+  idle ones dimmed by colour (never see-through: the edges behind stay hidden); a
   thin context meter along the bottom edge, amber past 80% of the window.
 - Edges: agent to PR in the agent kind's colour, PR to repo neutral (red when blocked),
   sub-agent dashed. Selecting an agent tints its path to the repo green.
