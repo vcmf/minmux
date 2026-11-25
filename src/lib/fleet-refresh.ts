@@ -43,7 +43,9 @@ export class FleetRefresh {
   /** Subscribe (useSyncExternalStore): the first subscriber starts it, the last one stops it. */
   subscribe = (fn: () => void): (() => void) => {
     this.listeners.add(fn)
-    if (this.listeners.size === 1) this.schedule(true)
+    // The repos at once (checkouts may have changed while nobody watched; git is local and
+    // cheap); GitHub only when the cadence says so.
+    if (this.listeners.size === 1) this.request({ local: true, mine: this.due() <= 0 })
     return () => {
       this.listeners.delete(fn)
       if (this.listeners.size === 0) this.stop()
@@ -106,6 +108,9 @@ export class FleetRefresh {
     let changed = false
     if (loc?.ok) {
       this.data = { ...this.data, local: loc.repos }
+      changed = true
+    } else if (local && !roots.length && this.data.local.length) {
+      this.data = { ...this.data, local: [] } // no pane in a repo any more: nothing to keep
       changed = true
     }
     if (mine) {

@@ -5,7 +5,7 @@ import { useStore, type AppState } from "../store"
 import { ipc } from "../lib/ipc"
 import { fleetModel, type FleetRepo } from "../lib/fleet-model"
 import { FleetRefresh, type FleetData } from "../lib/fleet-refresh"
-import { rootsOf, splitRoots } from "../lib/pane-roots"
+import { forgetRoots, rootsOf, splitRoots } from "../lib/pane-roots"
 import type { PaneGitInfo } from "../lib/pane-git"
 import type { Session } from "../types"
 
@@ -50,54 +50,65 @@ export function useFleetData(): FleetData {
     return () => {
       unsub()
       document.removeEventListener("visibilitychange", onVisible)
-      rootsMemo = null // (it holds the store's maps)
+      rootsMemo = null // (both hold the store's maps)
+      forgetRoots()
     }
   }, [])
   return data
 }
 
-type Picked = "agents" | "paneGit" | "sessions" | "agentMeta"
+type Slices = Pick<AppState, "agents" | "paneGit" | "sessions" | "agentMeta">
+const slices = (s: AppState): Slices => ({
+  agents: s.agents,
+  paneGit: s.paneGit,
+  sessions: s.sessions,
+  agentMeta: s.agentMeta,
+})
+const sameSlices = (a: Slices, b: AppState) =>
+  a.agents === b.agents &&
+  a.paneGit === b.paneGit &&
+  a.sessions === b.sessions &&
+  a.agentMeta === b.agentMeta
 
-/** A slice of the store, followed at most once per `ms`: the component wakes no more often. */
-export function useThrottledStore<K extends Picked>(key: K, ms: number): AppState[K] {
-  const [value, setValue] = useState(() => useStore.getState()[key])
+/** The store slices the fleet reads, followed together at most once per `ms` (one wake-up). */
+export function useThrottledSlices(ms: number): Slices {
+  const [value, setValue] = useState(() => slices(useStore.getState()))
   useEffect(() => {
     let timer: ReturnType<typeof setTimeout> | undefined
     let last = 0
+    let shown = value
     const later = () => {
       if (timer) return
       timer = setTimeout(
         () => {
           timer = undefined
           last = Date.now()
-          setValue(useStore.getState()[key])
+          shown = slices(useStore.getState())
+          setValue(shown)
         },
         Math.max(0, last + ms - Date.now()),
       )
     }
-    const unsub = useStore.subscribe((state, prev) => {
-      if (state[key] !== prev[key]) later()
+    const unsub = useStore.subscribe((state) => {
+      if (!sameSlices(shown, state)) later()
     })
     // A change between the first render and this subscription isn't missed.
-    if (useStore.getState()[key] !== value) later()
+    if (!sameSlices(shown, useStore.getState())) later()
     return () => {
       unsub()
       clearTimeout(timer)
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- `value` only seeds the first check
-  }, [key, ms])
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `value` only seeds `shown`
+  }, [ms])
   return value
 }
 
 /** The fleet model, following the store at most once a second. */
 export function useFleetModel(): FleetRepo[] {
   const { local, mine } = useFleetData()
-  const graph = useThrottledStore("agents", 1000)
-  const paneGit = useThrottledStore("paneGit", 1000)
-  const sessions = useThrottledStore("sessions", 1000)
-  const meta = useThrottledStore("agentMeta", 1000)
+  const { agents, paneGit, sessions, agentMeta } = useThrottledSlices(1000)
   return useMemo(
-    () => fleetModel({ agents: graph, paneGit, sessions, meta, local, mine }),
-    [graph, paneGit, sessions, meta, local, mine],
+    () => fleetModel({ agents, paneGit, sessions, meta: agentMeta, local, mine }),
+    [agents, paneGit, sessions, agentMeta, local, mine],
   )
 }

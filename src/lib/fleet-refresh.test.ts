@@ -74,6 +74,18 @@ describe("FleetRefresh", () => {
       off()
     }
     expect(h.prLists).toHaveBeenCalledTimes(1)
+    expect(h.prLocal).toHaveBeenCalledTimes(6) // the repos each time (cheap, local)
+  })
+
+  it("no pane in a repo any more: the repos list empties", async () => {
+    const h = harness()
+    h.r.subscribe(() => {})
+    await h.flush()
+    expect(h.r.get().local).toHaveLength(1)
+    h.state.roots = []
+    h.r.rootsChanged()
+    await h.advance(600)
+    expect(h.r.get().local).toEqual([])
   })
 
   it("stops with the last subscriber", async () => {

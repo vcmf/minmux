@@ -67,6 +67,24 @@ describe("PrLocal", () => {
     expect(res.ok && res.repos[0]).toMatchObject({ repo: "o/r", defaultBranch: "develop" })
   })
 
+  it("origin's HEAD failing too: not remembered as no default branch", async () => {
+    const run = fakeGit({
+      "/w/r remote -v":
+        "origin\tgit@github.com:me/r.git (fetch)\nupstream\tgit@github.com:o/r.git (fetch)\n",
+      "/w/r for-each-ref --format=%(symref:short) refs/remotes/upstream/HEAD": "",
+    })
+    const local = new PrLocal(run)
+    await local.checkouts({ roots: ["/w/r"] })
+    await local.checkouts({ roots: ["/w/r"] })
+    expect(calls(run, "for-each-ref --format=%(symref:short) refs/remotes/upstream/HEAD")).toBe(2)
+  })
+
+  it("answers only the asked roots the repo still lists", async () => {
+    const run = fakeGit({ "/w/gone rev-parse --git-common-dir": "/w/r/.git\n" })
+    const res = await new PrLocal(run).checkouts({ roots: ["/w/r", "/w/gone"] })
+    expect(res.ok && res.repos[0]!.roots).toEqual(["/w/r"])
+  })
+
   it("git failing: no default branch, asked again next time", async () => {
     const run = fakeGit()
     const local = new PrLocal(run)

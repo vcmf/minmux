@@ -120,7 +120,12 @@ export class PrLocal {
         const here = await Promise.all(all.map((w) => this.exists(w.path)))
         const worktrees = all.filter((_, i) => here[i])
         const remote = await this.remoteOf(dir, root)
-        const repo: LocalRepo = { repo: remote?.repo ?? null, worktrees, roots: rs }
+        // (only roots the repo still lists: one removed or re-cloned as another repo isn't its)
+        const repo: LocalRepo = {
+          repo: remote?.repo ?? null,
+          worktrees,
+          roots: rs.filter((r) => named.has(path.resolve(r))),
+        }
         const mine = remote
           ? prs.filter((p) => p.repo.toLowerCase() === remote.repo.toLowerCase())
           : []
@@ -187,7 +192,8 @@ export class PrLocal {
         .run(() =>
           this.run(["for-each-ref", "--format=%(symref:short)", "refs/remotes/origin/HEAD"], root),
         )
-        .catch(() => "")
+        .catch(() => undefined)
+      if (o === undefined) return hit?.branch ?? null // a failing git: not kept, asked again
       branch = o.trim().replace("origin/", "") || null
     }
     if (out !== undefined) {
