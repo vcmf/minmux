@@ -3,6 +3,12 @@
 What changed in each minmux release, newest first. Generated from the pull request titles by
 [git-cliff](https://git-cliff.org): edit `cliff.toml`, not this file.
 
+## [0.1.68](https://github.com/vcmf/minmux/releases/tag/v0.1.68) - 2026-11-25
+
+### Added
+
+- Fleet graph epic ([#230](https://github.com/vcmf/minmux/pull/230))
+
 ## [0.1.67](https://github.com/vcmf/minmux/releases/tag/v0.1.67) - 2026-11-24
 
 ### Added
