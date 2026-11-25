@@ -2,7 +2,7 @@
 // name, worktrees and default branch (prs:local), and my open PRs (the lists' `mine`). Asked
 // only while the Fleet tab is mounted and the window is visible, at the PR dialog's cadence.
 import { useEffect, useMemo, useRef, useState } from "react"
-import { useStore } from "../store"
+import { useStore, type AppState } from "../store"
 import { ipc } from "../lib/ipc"
 import { fleetModel, type FleetRepo } from "../lib/fleet-model"
 import { nextRefreshMs, type PrLists, type PrRow } from "../lib/pr-dashboard"
@@ -20,6 +20,9 @@ let cache: FleetData = { local: [], mine: [] }
 let lastLists: PrLists | null = null
 let lastAsked = 0 // when the last refresh ran (0: never)
 let failures = 0
+let localAsked = 0 // prs:local requests started…
+let localWritten = 0 // …and the newest one whose answer was kept (an older one landing later isn't)
+let localStale = false // the roots changed while the window was hidden: ask once it shows
 
 /** The panes' host checkout roots (WSL and ssh panes left out, as the PR dialog does). */
 const hostRoots = () => {
@@ -29,8 +32,11 @@ const hostRoots = () => {
 
 async function askLocal(roots: string[]): Promise<boolean> {
   if (!roots.length) return false
+  const seq = ++localAsked
   const r = await ipc.prLocal({ roots }).catch(() => null)
-  if (!r?.ok) return false
+  if (!r?.ok || seq < localWritten) return false
+  localWritten = seq
+  localStale = false
   cache = { ...cache, local: r.repos }
   return true
 }
@@ -51,8 +57,13 @@ export function useFleetData(): FleetData {
   const [data, setData] = useState(cache)
   const rootsKey = useStore((s) => rootsOf(s.paneGit, s.sessions).split("\t")[0]!)
 
-  // Repos, as soon as the set of roots changes (main caches names; worktrees are re-read).
+  // Repos, as soon as the set of roots changes (main caches names; worktrees are re-read); while
+  // the window is hidden, once it shows.
   useEffect(() => {
+    if (document.visibilityState === "hidden") {
+      localStale = true
+      return
+    }
     let stale = false
     void askLocal(rootsKey ? rootsKey.split("\n") : []).then((ok) => {
       if (ok && !stale) setData(cache)
@@ -82,7 +93,12 @@ export function useFleetData(): FleetData {
       schedule()
     }
     const onVisible = () => {
-      if (document.visibilityState !== "hidden" && due() <= 0) void tick()
+      if (document.visibilityState === "hidden") return
+      if (due() <= 0) void tick()
+      else if (localStale)
+        void askLocal(hostRoots()).then((ok) => {
+          if (ok && !stop) setData(cache)
+        })
     }
     if (due() <= 0) void tick()
     else schedule()
@@ -97,45 +113,50 @@ export function useFleetData(): FleetData {
   return data
 }
 
-/** `value`, updated at most once per `ms` (the latest one at the end of each window). */
-export function useThrottled<T>(value: T, ms: number): T {
-  const [shown, setShown] = useState(value)
-  const last = useRef(0)
-  const latest = useRef(value)
-  latest.current = value
+type Picked = "agents" | "paneGit" | "sessions" | "agentMeta"
+
+/** A slice of the store, followed at most once per `ms`: the component wakes no more often. */
+export function useThrottledStore<K extends Picked>(key: K, ms: number): AppState[K] {
+  const [value, setValue] = useState(() => useStore.getState()[key])
   useEffect(() => {
-    if (value === shown) return
-    const wait = last.current + ms - Date.now()
-    const t = setTimeout(
-      () => {
-        last.current = Date.now()
-        setShown(latest.current)
-      },
-      Math.max(0, wait),
-    )
-    return () => clearTimeout(t)
-  }, [value, shown, ms])
-  return shown
+    let timer: ReturnType<typeof setTimeout> | undefined
+    let last = 0
+    const unsub = useStore.subscribe((state, prev) => {
+      if (state[key] === prev[key] || timer) return
+      timer = setTimeout(
+        () => {
+          timer = undefined
+          last = Date.now()
+          setValue(useStore.getState()[key])
+        },
+        Math.max(0, last + ms - Date.now()),
+      )
+    })
+    return () => {
+      unsub()
+      clearTimeout(timer)
+    }
+  }, [key, ms])
+  return value
 }
 
 /** The fleet model, following the store at most once a second (the agent graph moves per tool call). */
 export function useFleetModel(): FleetRepo[] {
   const { local, mine } = useFleetData()
-  const graph = useThrottled(
-    useStore((s) => s.agents),
-    1000,
-  )
-  const paneGit = useThrottled(
-    useStore((s) => s.paneGit),
-    1000,
-  )
-  const sessions = useThrottled(
-    useStore((s) => s.sessions),
-    1000,
-  )
-  const meta = useStore((s) => s.agentMeta)
-  return useMemo(
-    () => fleetModel({ agents: graph, paneGit, sessions, meta, local, mine }),
-    [graph, paneGit, sessions, meta, local, mine],
-  )
+  const graph = useThrottledStore("agents", 1000)
+  const paneGit = useThrottledStore("paneGit", 1000)
+  const sessions = useThrottledStore("sessions", 1000)
+  const meta = useThrottledStore("agentMeta", 1000)
+  return useMemo(() => {
+    const host = new Set(splitRoots(rootsOf(paneGit, sessions)).host)
+    return fleetModel({
+      agents: graph,
+      paneGit,
+      sessions,
+      meta,
+      local,
+      mine,
+      hostRoot: (root) => host.has(root),
+    })
+  }, [graph, paneGit, sessions, meta, local, mine])
 }

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest"
-import { fleetModel, type FleetInput } from "./fleet-model"
+import { DETACHED, fleetModel, type FleetInput } from "./fleet-model"
 import { reduceAgentEvents, type AgentEvent } from "./agent-graph"
 import type { PaneGitInfo } from "./pane-git"
 import type { PrRow } from "./pr-dashboard"
@@ -225,5 +225,45 @@ describe("fleetModel", () => {
     expect(m[0]!.defaultBranch).toBeUndefined()
     expect(m[0]!.agents).toHaveLength(1)
     expect(m[0]!.branches).toEqual([])
+  })
+
+  it("a detached checkout still finds its repo (by the roots asked about), on a detached node", () => {
+    const local: LocalRepo[] = [{ ...localR, roots: ["/w/r-detached"] }]
+    const m = fleetModel(
+      input(session("s1", "p1", "/w/r-detached"), { p1: { root: "/w/r-detached" } }, { local }),
+    )
+    expect(m).toHaveLength(1)
+    expect(m[0]!.key).toBe("o/r")
+    expect(m[0]!.branches.map((b) => b.name)).toEqual([DETACHED])
+    expect(m[0]!.agents).toEqual([])
+  })
+
+  it("GitHub's default branch wins over a stale local remote HEAD", () => {
+    const local: LocalRepo[] = [{ ...localR, defaultBranch: "master" }]
+    const m = fleetModel(
+      input(
+        session("s1", "p1", "/w/r"),
+        { p1: { root: "/w/r", branch: "main" } },
+        {
+          local,
+          mine: [row(3, { defaultBranch: "main" })],
+        },
+      ),
+    )
+    expect(m[0]!.defaultBranch).toBe("main")
+    expect(m[0]!.agents).toHaveLength(1)
+  })
+
+  it("leaves out checkouts main's git can't read (WSL, in v1)", () => {
+    const m = fleetModel(
+      input(
+        session("s1", "p1", "/home/u/r"),
+        { p1: { root: "/home/u/r", branch: "main" } },
+        {
+          hostRoot: () => false,
+        },
+      ),
+    )
+    expect(m).toEqual([])
   })
 })

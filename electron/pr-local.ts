@@ -58,7 +58,8 @@ export class PrLocal {
   // root → its repo's common git dir (a worktree's root never moves to another repo)
   private common = new Map<string, string | null>()
   private remotes = new Map<string, { remote: Remote; at: number }>() // common dir → its remote
-  private heads = new Map<string, { branch: string | null; at: number }>() // common dir → default
+  // `${common dir}\0${remote}` → its default branch
+  private heads = new Map<string, { branch: string | null; at: number }>()
   // (common dir, head tip, base tip, default tip) → merged units; -1: too long a range
   private units = new Map<string, number>()
   private unitsFailed = new Map<string, number>() // the same key → when git failed on it
@@ -119,14 +120,16 @@ export class PrLocal {
         const here = await Promise.all(all.map((w) => this.exists(w.path)))
         const worktrees = all.filter((_, i) => here[i])
         const remote = await this.remoteOf(dir, root)
-        const repo: LocalRepo = { repo: remote?.repo ?? null, worktrees }
-        const head = remote ? await this.defaultOf(dir, root, remote.name) : null
-        if (head) repo.defaultBranch = head
+        const repo: LocalRepo = { repo: remote?.repo ?? null, worktrees, roots: rs }
         const mine = remote
           ? prs.filter((p) => p.repo.toLowerCase() === remote.repo.toLowerCase())
           : []
-        if (remote && mine.length)
-          repo.merged = await this.mergedUnits(dir, root, remote.name, mine)
+        const [head, merged] = await Promise.all([
+          remote ? this.defaultOf(dir, root, remote.name) : null,
+          remote && mine.length ? this.mergedUnits(dir, root, remote.name, mine) : undefined,
+        ])
+        if (head) repo.defaultBranch = head
+        if (merged) repo.merged = merged
         return repo
       }),
     )
@@ -165,7 +168,8 @@ export class PrLocal {
 
   /** The remote's default branch, from its HEAD ref (cached like the remote). */
   private async defaultOf(dir: string, root: string, remote: string): Promise<string | null> {
-    const hit = this.heads.get(dir)
+    const key = `${dir}\0${remote}`
+    const hit = this.heads.get(key)
     if (hit && this.now() - hit.at < REPO_TTL) return hit.branch
     // for-each-ref answers "" (exit 0) when the remote has no HEAD ref: an answer, kept; only a
     // failing git keeps the last one and asks again next time.
@@ -177,9 +181,9 @@ export class PrLocal {
     const branch =
       out === undefined ? (hit?.branch ?? null) : out.trim().replace(`${remote}/`, "") || null
     if (out !== undefined) {
-      if (this.heads.size >= COMMON_MAX && !this.heads.has(dir))
+      if (this.heads.size >= COMMON_MAX && !this.heads.has(key))
         this.heads.delete(this.heads.keys().next().value!)
-      this.heads.set(dir, { branch, at: this.now() })
+      this.heads.set(key, { branch, at: this.now() })
     }
     return branch
   }

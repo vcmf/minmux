@@ -1,34 +1,29 @@
 import { describe, it, expect, vi, afterEach } from "vitest"
 import { act, renderHook } from "@testing-library/react"
-import { useThrottled } from "./use-fleet-data"
+import { useThrottledStore } from "./use-fleet-data"
+import { useStore } from "../store"
 import { ipc } from "../lib/ipc"
 
 afterEach(() => vi.useRealTimers())
 
-describe("useThrottled", () => {
-  it("follows a fast-changing value at most once per window, ending on the latest", () => {
+describe("useThrottledStore", () => {
+  it("wakes at most once per window however often the slice changes, ending on the latest", () => {
     vi.useFakeTimers()
     vi.setSystemTime(10_000)
-    const { result, rerender } = renderHook(({ v }) => useThrottled(v, 1000), {
-      initialProps: { v: 0 },
+    let renders = 0
+    const { result } = renderHook(() => {
+      renders++
+      return useThrottledStore("sessions", 1000)
     })
-    expect(result.current).toBe(0)
-    // Ten updates within one window (as tool calls move the agent graph): the first shows at
-    // once, the rest wait for the window to end.
-    for (let v = 1; v <= 10; v++) {
-      rerender({ v })
-      act(() => void vi.advanceTimersByTime(50))
+    const before = renders
+    // Twenty changes within a second (as hook events move the store).
+    for (let i = 0; i < 20; i++) {
+      act(() => useStore.setState({ sessions: { [`s${i}`]: {} as never } }))
+      act(() => void vi.advanceTimersByTime(40))
     }
-    expect(result.current).toBe(1)
     act(() => void vi.advanceTimersByTime(1000))
-    expect(result.current).toBe(10) // the latest, once the window ends
-    for (let v = 11; v <= 20; v++) {
-      rerender({ v })
-      act(() => void vi.advanceTimersByTime(10))
-    }
-    expect(result.current).toBe(10) // a new window: still waiting
-    act(() => void vi.advanceTimersByTime(1000))
-    expect(result.current).toBe(20)
+    expect(renders - before).toBeLessThanOrEqual(2)
+    expect(Object.keys(result.current)).toEqual(["s19"])
   })
 })
 

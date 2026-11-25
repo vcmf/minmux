@@ -198,7 +198,7 @@ function newTerminalSource(
 /** The right-side panel's view (null = hidden): the agents list, from its top-bar icon. */
 export type RightView = "agents" | null
 
-interface AppState {
+export interface AppState {
   sessions: Record<string, Session>
   tabs: Tab[]
   activeTabId: string | null // the terminal tab in context (shown unless a view covers it)

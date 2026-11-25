@@ -76,8 +76,9 @@ describe("PrLocal", () => {
             { path: "/w/r", branch: "main" },
             { path: "/w/r-wt", branch: "b1" },
           ],
+          roots: ["/w/r", "/w/r-wt"],
         },
-        { repo: null, worktrees: [{ path: "/w/l", branch: "x" }] },
+        { repo: null, worktrees: [{ path: "/w/l", branch: "x" }], roots: ["/w/l"] },
       ],
     })
     expect(calls(run, "worktree list")).toBe(2)

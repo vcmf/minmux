@@ -30,6 +30,7 @@ export interface LocalRepo {
   repo: string | null
   worktrees: LocalWorktree[]
   defaultBranch?: string // the remote's HEAD (none: not fetched, or no remote)
+  roots?: string[] // the asked roots that are in this repo (a detached checkout too)
   merged?: Record<string, number> // unitsKey(head, base) → PRs merged into it (its commits)
 }
 

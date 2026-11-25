@@ -65,9 +65,12 @@ export interface FleetInput {
   meta: Record<string, SessionMeta>
   local: LocalRepo[] // prs:local: each repo's GitHub name, worktrees, default branch
   mine: PrRow[] // my open PRs (the lists' `mine`)
+  hostRoot?: (root: string) => boolean // roots main's git can read (WSL ones aren't, in v1)
 }
 
 const isLive = (s: PrState) => s === "open" || s === "draft"
+/** The branch node for agents on no branch (detached HEAD). */
+export const DETACHED = "(detached)"
 // The default branch when it's known; else the usual names (a branch node named `main` would be
 // wrong far more often than right).
 const isDefault = (branch: string, known?: string) =>
@@ -92,9 +95,12 @@ export function agentGit(
     : paneGit[paneId]
 }
 
-/** The local repo a checkout root belongs to (one of its worktrees). */
+/** The local repo a checkout root belongs to (asked about under it, or one of its worktrees). */
 function repoOfRoot(local: LocalRepo[], root: string): LocalRepo | undefined {
-  return local.find((r) => r.worktrees.some((w) => samePath(w.path, root)))
+  return local.find(
+    (r) =>
+      r.roots?.some((p) => samePath(p, root)) || r.worktrees.some((w) => samePath(w.path, root)),
+  )
 }
 
 function toAgent(
@@ -143,14 +149,17 @@ export function fleetModel(input: FleetInput): FleetRepo[] {
     const git = agentGit(graph, paneGit, paneId, sessions[paneId]?.cwd)
     const root = git?.root
     if (!root) continue // not in a repo (or not looked up yet)
+    if (input.hostRoot && !input.hostRoot(root)) continue // a WSL checkout: not shown in v1
     const loc = repoOfRoot(local, root)
     const gh = loc?.repo ?? undefined
     // No GitHub remote: its main worktree stands for the repo (all its worktrees, one node).
     const key = gh ? gh.toLowerCase() : (loc?.worktrees[0]?.path ?? root)
     let repo = repos.get(key)
     if (!repo) {
+      // GitHub's (on a listed PR) first: the local remote HEAD is set at clone and goes stale
+      // when the default is renamed.
       const defaultBranch =
-        loc?.defaultBranch ?? mine.find((r) => gh && r.repo.toLowerCase() === key)?.defaultBranch
+        mine.find((r) => gh && r.repo.toLowerCase() === key)?.defaultBranch ?? loc?.defaultBranch
       repo = {
         key,
         label: gh ?? folderName(key),
@@ -183,9 +192,11 @@ export function fleetModel(input: FleetInput): FleetRepo[] {
         repo.prs.push(node)
       }
       node.agents.push(agent)
-    } else if (git?.branch && !isDefault(git.branch, repo.defaultBranch)) {
-      let b = repo.branches.find((x) => x.name === git.branch)
-      if (!b) repo.branches.push((b = { name: git.branch, agents: [] }))
+    } else if (!git?.branch || !isDefault(git.branch, repo.defaultBranch)) {
+      // (no branch: a detached HEAD, mid-rebase or a checked-out tag; not the default branch)
+      const name = git?.branch ?? DETACHED
+      let b = repo.branches.find((x) => x.name === name)
+      if (!b) repo.branches.push((b = { name, agents: [] }))
       b.agents.push(agent)
     } else repo.agents.push(agent)
   }
