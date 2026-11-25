@@ -167,7 +167,7 @@ sit on a ring, in a stable order (first seen).
   MCP servers and skills (step 5).
 - **Inventory** (step 6), from a Graph | Inventory switch in the header: one column per agent
   kind, each MCP server and skill with its use count, then the loaded but unused ones; window
-  Live, 7 days, 30 days or All. Codex skill counts are marked "likely". Clicking a row switches
+  Live, 7 days, 30 days or All. Codex skills say "not supported yet". Clicking a row switches
   to the graph with the sessions that used it highlighted.
 
 ## Data
@@ -212,11 +212,16 @@ Researched on real data (2026-11-25):
   Claude loads all tools up front, MCP servers come from its config files instead
   (`~/.claude.json` per project, `.mcp.json`, plugins), read in main and cached. Used: the
   `PreToolUse` hook we already receive (`Skill` with its `skill`; `mcp__…` names).
-- **Codex**: MCP calls should show in the rollout, but no machine here has a server configured,
-  so the format is unverified. It has no skill tool: a skill counts as used when Codex reads
-  that skill's `SKILL.md`, shown as "likely".
-- **OpenCode**: MCP and skill calls come through our plugin's tool events; both formats are
-  unverified locally.
+- **Codex**: MCP servers loaded from `~/.codex/config.toml` (`[mcp_servers.*]`; the rollout
+  doesn't list them). Used: the rollout's `item_completed` events whose item is a
+  `McpToolCall` (`server`, `tool`, `status`; a call refused for want of approval is `failed`).
+  Skills: "not supported yet". Codex has no skill tool, and guessing from `SKILL.md` reads isn't
+  worth showing.
+- **OpenCode**: MCP servers loaded from its config's `mcp` key (the user's `opencode.json(c)`
+  and `OPENCODE_CONFIG_CONTENT`). Used, through our plugin's tool events: an MCP tool is
+  `<server>_<tool>` (matched against the configured servers, since names hold `_`); a skill is
+  the `skill` tool with its `name`. Skills loaded: the `skill/*/SKILL.md` folders it reads.
+- Verified 2026-11-25 (codex-cli 0.167.1, opencode 1.18.34) with a scratch stdio MCP server.
 - Counted in main per session from events it already handles, sent on the agent event channel.
   Transcripts are read incrementally (one Codex rollout here is 16 GB).
 - **Inventory windows** (step 6): Live adds up the per-session counts. 7 days, 30 days and All
