@@ -135,8 +135,9 @@ sit on a ring, in a stable order (first seen).
   renders on resize and on model updates.)
 - PR cards reuse the PR graph's looks (`lib/pr-graph` `cardLook`: red for conflicts, failing CI
   or changes requested, amber for CI running, dashed for a draft, an approved tick). A PR the
-  lists don't hold shows its number and state only. Agent cards: kind dot, name, sub-agent
-  count; status dot and what it's doing; amber border when it needs you; idle ones dimmed; a
+  lists don't hold shows its number and state only. PR cards carry the pull-request icon. Agent cards: the agent's icon
+  (Claude, Codex, OpenCode), name, sub-agent count; what it's doing as a word coloured by status
+  (no dots); amber border when it needs you; idle ones dimmed; a
   thin context meter along the bottom edge, amber past 80% of the window.
 - Edges: agent to PR in the agent kind's colour, PR to repo neutral (red when blocked),
   sub-agent dashed. Selecting an agent tints its path to the repo green.
