@@ -3,12 +3,14 @@ import {
   GROW_MS,
   IDLE_MS,
   IDLE_STOP_MS,
+  KEY_RAD,
   TURN_RAD_PER_MS,
+  between,
   dotAt,
   grown,
   moving,
-  turned,
   turning,
+  withPins,
   type MotionState,
 } from "./fleet-motion"
 import { FLEET, nodeId, openLayout, relax, type FleetNode } from "./fleet-layout"
@@ -43,25 +45,7 @@ const busy: FleetRepo = {
 const overlaps = (a: FleetNode, b: FleetNode) =>
   Math.abs(a.x - b.x) < (a.w + b.w) / 2 && Math.abs(a.y - b.y) < (a.h + b.h) / 2
 
-describe("turned", () => {
-  it("turns every node but the repo, keeping their distance in the rings' space", () => {
-    const ns = relax(openLayout(busy))
-    const t = turned(ns, 1)
-    const r = (n: FleetNode) => Math.hypot((n.x - FLEET.cx) / FLEET.ex, n.y - FLEET.cy)
-    for (let i = 0; i < ns.length; i++) {
-      if (ns[i]!.kind === "root") expect(t[i]).toBe(ns[i])
-      else expect(r(t[i]!)).toBeCloseTo(r(ns[i]!), 6)
-    }
-  })
-
-  it("a full turn comes back to where it started", () => {
-    const ns = relax(openLayout(busy))
-    turned(ns, Math.PI * 2).forEach((n, i) => {
-      expect(n.x).toBeCloseTo(ns[i]!.x, 6)
-      expect(n.y).toBeCloseTo(ns[i]!.y, 6)
-    })
-  })
-
+describe("the turn", () => {
   it("laid out at any angle of the turn, no two cards overlap (a busy repo)", () => {
     for (let a = 0; a < 24; a++) {
       const t = relax(openLayout(busy, (Math.PI * 2 * a) / 24))
@@ -89,6 +73,52 @@ describe("turned", () => {
   })
 })
 
+describe("keyframes", () => {
+  it("one a second; a blend between two neighbours never overlaps and moves a little a frame", () => {
+    expect(KEY_RAD).toBeCloseTo(TURN_RAD_PER_MS * 1000)
+    for (let a = 0; a < 24; a++) {
+      const x = relax(openLayout(busy, a * KEY_RAD * 50))
+      const y = relax(openLayout(busy, (a * 50 + 1) * KEY_RAD))
+      let prev = x
+      for (let f = 1; f <= 15; f++) {
+        const t = between(x, y, f / 15)
+        for (let i = 0; i < t.length; i++) {
+          expect(Math.hypot(t[i]!.x - prev[i]!.x, t[i]!.y - prev[i]!.y)).toBeLessThan(2)
+          for (let j = i + 1; j < t.length; j++)
+            expect(overlaps(t[i]!, t[j]!), `${a} ${f}: ${t[i]!.id} / ${t[j]!.id}`).toBe(false)
+        }
+        prev = t
+      }
+    }
+  })
+
+  it("its ends are the keyframes themselves; another node set is the newer one", () => {
+    const x = relax(openLayout(busy))
+    const y = relax(openLayout(busy, KEY_RAD))
+    expect(between(x, y, 0)).toBe(x)
+    expect(between(x, y, 1)).toBe(y)
+    expect(between(x, y.slice(1), 0.5)).toEqual(y.slice(1))
+  })
+})
+
+describe("withPins", () => {
+  it("a pinned PR takes its agents and their sub-agents along", () => {
+    const ns = openLayout(busy)
+    const pr = ns.find((n) => n.id === nodeId.pr("u/1"))!
+    const out = withPins(ns, new Map([[pr.id, { x: pr.x + 400, y: pr.y - 50 }]]))
+    const moved = (id: string) => {
+      const a = ns.find((n) => n.id === id)!
+      const b = out.find((n) => n.id === id)!
+      return [Math.round(b.x - a.x), Math.round(b.y - a.y)]
+    }
+    expect(moved(pr.id)).toEqual([400, -50])
+    expect(moved(nodeId.agent("a1"))).toEqual([400, -50])
+    expect(moved(nodeId.sub("a1-s0"))).toEqual([400, -50])
+    expect(moved(nodeId.agent("a2"))).toEqual([0, 0]) // another PR's
+    expect(withPins(ns, new Map())).toBe(ns)
+  })
+})
+
 describe("grown", () => {
   it("starts at the repo and ends placed", () => {
     const ns = relax(openLayout(busy))
@@ -96,6 +126,10 @@ describe("grown", () => {
     const pr = at0.find((n) => n.id === nodeId.pr("u/1"))!
     expect([pr.x, pr.y]).toEqual([FLEET.cx, FLEET.cy])
     expect(grown(ns, 1)).toBe(ns)
+    // (a card pinned mid-way stays under the pointer)
+    expect(grown(ns, 0, new Set([pr.id])).find((n) => n.id === pr.id)).toBe(
+      ns.find((n) => n.id === pr.id),
+    )
     expect(GROW_MS).toBeGreaterThan(0)
   })
 })

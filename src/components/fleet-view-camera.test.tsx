@@ -175,4 +175,32 @@ describe("FleetView: camera, edges, panel", () => {
     fireEvent.click(screen.getByRole("button", { name: "← all repos" }))
     await waitFor(() => expect(screen.getByText("Repos · 2")).toBeInTheDocument())
   })
+
+  it("dragging a card pins it there (its click doesn't fire); Unpin lets it go", async () => {
+    stubCanvas()
+    seed()
+    render(<FleetView />)
+    fireEvent.click(await screen.findByRole("button", { name: "Open o/r" }))
+    await screen.findAllByText("PR 7")
+    await act(async () => void (await new Promise((r) => setTimeout(r, 600)))) // grown out
+    const card = document.querySelector<HTMLElement>(".fleet-agent")!
+    const at = () => [card.style.left, card.style.top].join()
+    const before = at()
+    // A small wobble is still a click: no pin.
+    fireEvent.pointerDown(card, { button: 0, clientX: 100, clientY: 100, pointerId: 2 })
+    fireEvent.pointerMove(viewport(), { clientX: 102, clientY: 101, pointerId: 2, buttons: 1 })
+    fireEvent.pointerUp(viewport(), { clientX: 102, clientY: 101, pointerId: 2 })
+    expect(screen.queryByText("Unpin")).toBeNull()
+    // A drag moves it, and stays.
+    fireEvent.pointerDown(card, { button: 0, clientX: 100, clientY: 100, pointerId: 3 })
+    fireEvent.pointerMove(viewport(), { clientX: 160, clientY: 130, pointerId: 3, buttons: 1 })
+    fireEvent.pointerUp(viewport(), { clientX: 160, clientY: 130, pointerId: 3 })
+    fireEvent.click(card) // (the click that ends a drag)
+    await frame()
+    expect(at()).not.toBe(before)
+    fireEvent.click(await screen.findByText("Unpin"))
+    await frame()
+    expect(screen.queryByText("Unpin")).toBeNull()
+    expect(at()).toBe(before)
+  })
 })

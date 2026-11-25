@@ -3,7 +3,7 @@
 // docked in a strip, and a side panel for the selection. Cards are DOM, placed in world
 // coordinates (lib/fleet-layout) on one layer; a camera (the world point in the middle) pans it
 // with a transform: no native scrolling. The edges are one viewport-sized 2D canvas under the
-// cards. Static here: the motion step turns it.
+// cards. The open repo turns slowly while the mouse is still (lib/fleet-motion).
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
 import {
   ArrowSquareOut,
@@ -37,6 +37,9 @@ import { cardInView, keyPan, wheelPan } from "../lib/fleet-camera"
 import {
   FRAME_MS,
   GROW_MS,
+  KEY_RAD,
+  between,
+  withPins,
   IDLE_MS,
   TURN_RAD_PER_MS,
   dotAt,
@@ -116,6 +119,13 @@ export function FleetView() {
     : null
   const shownSel: Selection =
     sel?.kind === "repo" && open && sel.key === openKey ? { kind: "repo", key: open.key } : sel
+  // The cards pinned by a drag, where they were left.
+  const pins = useRef(new Map<string, { x: number; y: number }>())
+  const pinsRev = useRef(0) // (any pin change: the cached keyframes go)
+  const clearPins = useCallback(() => {
+    if (pins.current.size) pinsRev.current++
+    pins.current.clear()
+  }, [])
   useEffect(() => {
     if (open) openRoots.current = open.roots
     if (openKey && !open) {
@@ -123,48 +133,72 @@ export function FleetView() {
       openRoots.current = []
       setOpenKey(null)
       setSel(null)
-      pins.current.clear()
+      clearPins()
       setPinCount(0)
     } else if (open && open.key !== openKey) {
       setOpenKey(open.key)
       setSel((s) => (s?.kind === "repo" && s.key === openKey ? { kind: "repo", key: open.key } : s))
     }
-  }, [openKey, open])
+  }, [openKey, open, clearPins])
 
   // Motion (lib/fleet-motion): the open repo's angle, the nodes pinned by a drag, when it opened
   // (its cards grow out). React lays the graph out at the current angle with the pins on, so a
   // model update mid-turn never makes a card jump; the motion loop below moves them in between.
   const theta = useRef(0)
-  const pins = useRef(new Map<string, { x: number; y: number }>())
   const [pinCount, setPinCount] = useState(0)
   const openedAt = useRef(0)
+  const grewOut = useRef(true) // (the grow-out's last frame painted: a cut-short one is finished)
   const [, setPinVersion] = useState(0) // a pin moved: render with it
   const reduced = useRef(
     typeof window !== "undefined" &&
       !!window.matchMedia?.("(prefers-reduced-motion: reduce)").matches,
   )
-  // The one place positions come from, for React and the motion loop alike: the open repo at
-  // its angle, growing out while it opens, pinned cards where they were left (fixed in the overlap
-  // pass, their sub-agents moved with them).
+  // The one place positions come from, for React and the motion loop alike. The open repo turns
+  // through keyframes, one a second (lib/fleet-motion KEY_MS), each laid out at its angle with the
+  // pinned cards where they were left (fixed in the overlap pass, what hangs off them moved
+  // along); a frame blends the two around it and scales them while they grow out. So the overlap
+  // pass (O(n²)) runs about once a second while turning and never per frame, and a render that
+  // changes nothing gets the same array back (the effects keyed on it stay quiet).
+  const cache = useRef<{
+    repo: FleetRepo | null
+    all: FleetRepo[] | null
+    rev: number
+    keys: Map<number, FleetNode[]>
+    over: { all: FleetRepo[]; ns: FleetNode[] } | null
+    mix: { a: FleetNode[]; b: FleetNode[]; k: number; ns: FleetNode[] } | null
+  }>({ repo: null, all: null, rev: 0, keys: new Map(), over: null, mix: null })
   const layoutNow = useCallback((repo: FleetRepo | null, all: FleetRepo[], now: number) => {
-    if (!repo) return overviewLayout(all)
-    let ns = openLayout(repo, theta.current)
-    const pinned = pins.current
-    if (pinned.size) {
-      const shift = new Map<string, { dx: number; dy: number }>()
-      ns = ns.map((n) => {
-        const p = pinned.get(n.id)
-        if (!p) return n
-        shift.set(n.id, { dx: p.x - n.x, dy: p.y - n.y })
-        return { ...n, x: p.x, y: p.y }
-      })
-      ns = ns.map((n) => {
-        const d = !pinned.has(n.id) && n.parent ? shift.get(n.parent) : undefined
-        return d ? { ...n, x: n.x + d.dx, y: n.y + d.dy } : n
-      })
+    const c = cache.current
+    if (!repo) {
+      if (c.over?.all !== all) c.over = { all, ns: overviewLayout(all) }
+      return c.over.ns
     }
-    ns = relax(ns, 40, pinned.size ? new Set(pinned.keys()) : undefined)
-    return reduced.current ? ns : grown(ns, (now - openedAt.current) / GROW_MS)
+    if (c.repo !== repo || c.all !== all || c.rev !== pinsRev.current) {
+      Object.assign(c, { repo, all, rev: pinsRev.current, keys: new Map(), mix: null })
+    }
+    const pinned = pins.current
+    const fixed = pinned.size ? new Set(pinned.keys()) : undefined
+    const key = (i: number) => {
+      let ns = c.keys.get(i)
+      if (!ns) {
+        ns = relax(withPins(openLayout(repo, i * KEY_RAD), pinned), 40, fixed)
+        if (c.keys.size >= 4) c.keys.delete(c.keys.keys().next().value!)
+        c.keys.set(i, ns)
+      }
+      return ns
+    }
+    const step = theta.current / KEY_RAD
+    const i = Math.floor(step)
+    const k = step - i
+    const a = key(i)
+    let ns = a
+    if (k > 1e-9) {
+      const b = key(i + 1)
+      if (c.mix?.a !== a || c.mix.b !== b || c.mix.k !== k)
+        c.mix = { a, b, k, ns: between(a, b, k) }
+      ns = c.mix.ns
+    }
+    return reduced.current ? ns : grown(ns, (now - openedAt.current) / GROW_MS, fixed)
   }, [])
   const nodes = layoutNow(open, repos, performance.now())
 
@@ -271,23 +305,26 @@ export function FleetView() {
     (key: string) => {
       const closing = openKey === key
       openRoots.current = closing ? [] : (repos.find((r) => r.key === key)?.roots ?? [])
-      if (!closing) openedAt.current = reduced.current ? 0 : performance.now()
+      if (!closing) {
+        openedAt.current = reduced.current ? 0 : performance.now()
+        grewOut.current = false
+      }
       setOpenKey(closing ? null : key)
       setSel(closing ? null : { kind: "repo", key })
       setView((v) => v + 1)
-      pins.current.clear() // (pins belong to the view they were made in)
+      clearPins() // (pins belong to the view they were made in)
       setPinCount(0)
     },
-    [openKey, repos],
+    [openKey, repos, clearPins],
   )
   const closeAll = useCallback(() => {
     openRoots.current = []
     setOpenKey(null)
     setSel(null)
     setView((v) => v + 1)
-    pins.current.clear()
+    clearPins()
     setPinCount(0)
-  }, [])
+  }, [clearPins])
 
   // The edges: one canvas the size of the viewport, drawn through the camera.
   const selectedAgent = shownSel?.kind === "agent" ? shownSel.id : null
@@ -363,7 +400,9 @@ export function FleetView() {
         ctx.fillStyle = path.has(n.id)
           ? accent
           : (info?.agent && agentColor(info.agent.kind, scheme)) || accent
-        const seed = (n.id.length * 0.137) % 1 // (lines out of step with each other)
+        let seed = 0 // (lines out of step with each other: a hash of the id)
+        for (let i = 0; i < n.id.length; i++) seed = (seed * 31 + n.id.charCodeAt(i)) % 997
+        seed /= 997
         for (const phase of [seed, seed + 0.5]) {
           const d = dotAt(n, p, now, phase)
           ctx.beginPath()
@@ -431,8 +470,20 @@ export function FleetView() {
     },
     [layoutNow],
   )
+  // A grow-out the loop didn't see through (the window lost focus mid-way, a late frame): its last
+  // frame, all placed.
+  const finishGrow = useCallback(
+    (now: number) => {
+      if (grewOut.current || !openRef.current || now - openedAt.current < GROW_MS) return false
+      grewOut.current = true
+      paint(now)
+      return true
+    },
+    [paint],
+  )
   const wake = useCallback(() => {
     const m = motion.current
+    if (!m.on) finishGrow(performance.now())
     if (m.on || !moving(state(performance.now()))) return
     m.on = true
     m.last = performance.now()
@@ -449,7 +500,8 @@ export function FleetView() {
       if (st.growing) {
         m.last = now
         paint(now, true)
-      } else if (turns && now - m.last >= FRAME_MS) {
+      } else if (finishGrow(now)) m.last = now
+      else if (turns && now - m.last >= FRAME_MS) {
         theta.current += Math.min(now - m.last, 250) * TURN_RAD_PER_MS
         m.last = now
         paint(now, true)
@@ -458,7 +510,7 @@ export function FleetView() {
       m.raf = requestAnimationFrame(tick)
     }
     m.raf = requestAnimationFrame(tick)
-  }, [state, paint])
+  }, [state, paint, finishGrow])
   // A repo opening grows its cards out of its circle (and starts a turn from where it is).
   useLayoutEffect(() => {
     if (!open) return
@@ -473,6 +525,7 @@ export function FleetView() {
     let gone = false
     for (const id of pins.current.keys())
       if (!nodes.some((n) => n.id === id)) gone = pins.current.delete(id) || gone
+    if (gone) pinsRev.current++
     if (gone) setPinCount(pins.current.size)
   }, [nodes])
   useEffect(() => wake(), [working, nodes, wake])
@@ -544,8 +597,8 @@ export function FleetView() {
       const card = (e.target as HTMLElement).closest<HTMLElement>("[data-node]")
       const n = card && nodesRef.current.find((x) => x.id === card.dataset.node)
       if (e.button !== 0 || !n || n.kind === "root") return
+      // (no capture yet: a plain click or double-click must reach the card)
       pin = { id: n.id, x: e.clientX, y: e.clientY, nx: n.x, ny: n.y, moved: false }
-      el.setPointerCapture?.(e.pointerId) // (a release anywhere ends it)
     }
     const onCardUp = (released: boolean) => {
       if (pin?.moved) {
@@ -565,9 +618,13 @@ export function FleetView() {
       if ((e.buttons & 1) === 0) return onCardUp(false) // released where we didn't hear it
       const dx = e.clientX - pin.x
       const dy = e.clientY - pin.y
-      if (!pin.moved && Math.hypot(dx, dy) < 5) return
-      pin.moved = true
+      if (!pin.moved) {
+        if (Math.hypot(dx, dy) < 5) return
+        pin.moved = true
+        el.setPointerCapture?.(e.pointerId) // (a drag now: a release anywhere ends it)
+      }
       pins.current.set(pin.id, { x: pin.nx + dx, y: pin.ny + dy })
+      pinsRev.current++
       paintRef.current(performance.now())
     }
 
@@ -684,7 +741,7 @@ export function FleetView() {
           <button
             className="btn fleet-unpin"
             onClick={() => {
-              pins.current.clear()
+              clearPins()
               setPinCount(0)
             }}
           >
