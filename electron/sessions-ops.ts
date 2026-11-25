@@ -8,6 +8,8 @@ import type { AgentHistory } from "./agents/history-index"
 import { matcher, searchFiles, snippetOf, type SearchFile } from "./session-search"
 import { PORTS_MS, type AgentProc, type AgentProcsResult } from "../src/lib/agent-processes"
 import { attributeAll, type Marker, type PaneRoots, type Snapshot } from "./proc-snapshot"
+import type { Inventory } from "../src/lib/fleet-inventory"
+import { scanInventory, type InventorySource } from "./inventory-scan"
 
 export type SessionsRequest =
   | { id: number; op: "list"; agent: AgentKind }
@@ -20,6 +22,7 @@ export type SessionsRequest =
       under?: string // only sessions in this folder or below
     }
   | { id: number; op: "cancel" }
+  | { id: number; op: "inventory"; cacheFile: string }
   | { id: number; op: "touched"; agent: AgentKind; sessionId: string }
   | {
       id: number
@@ -41,7 +44,7 @@ export type SessionsReply =
   | {
       id: number
       ok: true
-      value: ListedSession[] | SearchDone | number | null | AgentProcsResult
+      value: ListedSession[] | SearchDone | number | null | AgentProcsResult | Inventory
     }
   | { id: number; ok: false; code: string }
   | { id: number; hit: SessionHit }
@@ -61,7 +64,29 @@ export class SessionsOps {
     private readonly scan: () => Promise<Scan> = () => Promise.reject(new Error("no process scan")),
     private readonly ports: (pids: number[]) => Promise<Map<number, number[]>> = async () =>
       new Map(),
+    private readonly inventorySources: () => InventorySource[] = () => [],
   ) {}
+
+  // One history scan at a time (a call while one runs shares it); a result this recent is
+  // reused: switching windows or reopening the view doesn't scan again.
+  private scanned: { at: number; file: string; value: Promise<Inventory> } | null = null
+  private inventory(cacheFile: string): Promise<Inventory> {
+    const s = this.scanned
+    if (s && s.file === cacheFile && (s.at === 0 || Date.now() - s.at < 30_000)) return s.value
+    const entry = { at: 0, file: cacheFile, value: Promise.resolve({} as Inventory) }
+    entry.value = scanInventory(this.inventorySources(), cacheFile).then(
+      (v) => {
+        entry.at = Date.now()
+        return v
+      },
+      (e: unknown) => {
+        this.scanned = null
+        throw e
+      },
+    )
+    this.scanned = entry
+    return entry.value
+  }
 
   handle(req: SessionsRequest): void {
     if (req.op === "cancel") return this.searches.get(req.id)?.abort()
@@ -75,6 +100,8 @@ export class SessionsOps {
           return this.procs(req)
         case "search":
           return this.search(req)
+        case "inventory":
+          return this.inventory(req.cacheFile)
       }
     })()
     void run.then(

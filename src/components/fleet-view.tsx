@@ -34,12 +34,19 @@ import {
 } from "../lib/fleet-motion"
 
 import { type Selection, type NodeInfo, RepoCounts, FleetCard, FleetPanel } from "./fleet-cards"
+import { FleetInventory } from "./fleet-inventory"
 import { useFleetLayout } from "./use-fleet-layout"
 
 export function FleetView() {
   const repos = useFleetModel()
   const [openKey, setOpenKey] = useState<string | null>(null)
   const [sel, setSel] = useState<Selection>(null)
+  // The graph, or the inventory over it (the graph stays mounted: its camera, open repo and pins
+  // keep; its motion pauses). A row picked there marks the open sessions that used it.
+  const [mode, setMode] = useState<"graph" | "inventory">("graph")
+  const modeRef = useRef(mode)
+  modeRef.current = mode
+  const [marked, setMarked] = useState<{ ids: Set<string>; label: string } | null>(null)
   // What's open is also held by its checkout roots: a folder's key becomes owner/name once the
   // repo lookup answers, and the open repo follows it. Worked out here, in render, so the old key
   // never reaches the panel or the highlight.
@@ -338,7 +345,8 @@ export function FleetView() {
   const state = useCallback(
     (now: number): MotionState => ({
       open: !!openRef.current,
-      shown: document.visibilityState !== "hidden" && document.hasFocus(),
+      shown:
+        document.visibilityState !== "hidden" && document.hasFocus() && modeRef.current === "graph",
       reduced: reduced.current,
       hovered: hovered.current,
       sinceInput: now - lastInput.current,
@@ -623,9 +631,74 @@ export function FleetView() {
   }, [apply, pins, pinsRev, setPinCount, setPinVersion, theta])
 
   const docked = open ? repos.filter((r) => r.key !== open.key) : []
+  const fleetAgents = useMemo(
+    () =>
+      repos.flatMap((r) => [
+        ...r.prs.flatMap((p) => p.agents),
+        ...r.branches.flatMap((b) => b.agents),
+        ...r.agents,
+      ]),
+    [repos],
+  )
+  // Back on the graph: its motion may go on.
+  useEffect(() => {
+    if (mode === "graph") wakeRef.current()
+  }, [mode])
+  // The first marked session comes into view once its card is placed (its repo may be opening).
+  const toFind = useRef<string | null>(null)
+  useEffect(() => {
+    const id = toFind.current
+    if (!id) return
+    const n = nodes.find((x) => x.id === nodeId.agent(id))
+    if (!n) return
+    toFind.current = null
+    // (where it ends up, not the grow-out's first frame)
+    const at = layoutNow(open, repos, Infinity).find((x) => x.id === n.id) ?? n
+    moveToRef.current({ x: at.x, y: at.y }, true)
+  }, [nodes, open, repos, layoutNow, marked])
+  /** An inventory row picked: back to the graph, its sessions marked, their repo open. */
+  const pick = (ids: string[], label: string) => {
+    setMode("graph")
+    setMarked({ ids: new Set(ids), label })
+    toFind.current = ids[0] ?? null
+    const repo = repos.find((r) =>
+      [...r.prs.flatMap((p) => p.agents), ...r.branches.flatMap((b) => b.agents), ...r.agents].some(
+        (a) => ids.includes(a.id),
+      ),
+    )
+    if (repo && openKey !== repo.key) toggle(repo.key)
+  }
+
   return (
     <div className="fleet-view">
       <div className="fleet-graph">
+        <div className="fleet-modes" role="group" aria-label="Show">
+          <button
+            className={`fleet-window${mode === "graph" ? " on" : ""}`}
+            aria-pressed={mode === "graph"}
+            onClick={() => setMode("graph")}
+          >
+            Graph
+          </button>
+          <button
+            className={`fleet-window${mode === "inventory" ? " on" : ""}`}
+            aria-pressed={mode === "inventory"}
+            onClick={() => setMode("inventory")}
+          >
+            Inventory
+          </button>
+        </div>
+        {marked && mode === "graph" && (
+          <div className="fleet-marked">
+            <span className="one">
+              {marked.ids.size} {marked.ids.size === 1 ? "session" : "sessions"} used {marked.label}
+            </span>
+            <button className="btn" onClick={() => setMarked(null)}>
+              Clear
+            </button>
+          </div>
+        )}
+        {mode === "inventory" && <FleetInventory agents={fleetAgents} onPick={pick} />}
         <canvas className="fleet-edges" ref={canvas} aria-hidden="true" />
         <div
           className="fleet-viewport"
@@ -640,6 +713,11 @@ export function FleetView() {
                 node={n}
                 info={lookup.get(n.id)}
                 open={!!open}
+                marked={
+                  !!marked &&
+                  n.kind === "agent" &&
+                  marked.ids.has(lookup.get(n.id)?.agent?.id ?? "")
+                }
                 selected={
                   (shownSel?.kind === "agent" && n.id === nodeId.agent(shownSel.id)) ||
                   (shownSel?.kind === "repo" && n.id === nodeId.root(shownSel.key))

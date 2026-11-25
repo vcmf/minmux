@@ -4640,3 +4640,131 @@ body.resizing-col {
   border-style: dashed;
   color: var(--dim);
 }
+/* The Fleet view's Graph | Inventory switch, the inventory over the graph, a picked row's mark. */
+.fleet-modes {
+  position: absolute;
+  top: 10px;
+  right: 12px;
+  z-index: 6;
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--border2);
+  border-radius: 8px;
+  background: var(--bg);
+}
+.fleet-window {
+  border: none;
+  background: none;
+  color: var(--dim);
+  font: inherit;
+  font-size: 12px;
+  padding: 3px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.fleet-window.on {
+  background: var(--border2);
+  color: var(--text);
+}
+.fleet-inventory {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  overflow: auto;
+  background: var(--bg);
+  padding: 14px 20px 24px;
+}
+.fleet-windows {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-bottom: 14px;
+  padding-right: 170px; /* (clear of the switch) */
+}
+.fleet-windows .faint {
+  margin-left: 10px;
+  font-size: 12px;
+}
+.fleet-columns {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 24px;
+}
+.fleet-column h2 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  margin: 0 0 6px;
+}
+.fleet-column h3 {
+  margin: 14px 0 6px;
+}
+.fleet-rows {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.fleet-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  min-width: 0;
+  padding: 4px 6px;
+  border: none;
+  border-radius: 5px;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+}
+.fleet-row .one {
+  min-width: 0;
+}
+.fleet-row .faint {
+  flex: none;
+  white-space: nowrap;
+}
+button.fleet-row:not(:disabled) {
+  cursor: pointer;
+}
+button.fleet-row:not(:disabled):hover {
+  background: var(--border2);
+}
+.fleet-row.bad {
+  color: var(--red);
+}
+.fleet-row.unused {
+  color: var(--dim);
+}
+.fleet-more {
+  border: none;
+  background: none;
+  color: var(--dim);
+  font: inherit;
+  font-size: 12px;
+  padding: 4px 6px;
+  cursor: pointer;
+}
+.fleet-marked {
+  position: absolute;
+  left: 50%;
+  bottom: 14px;
+  z-index: 6;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: calc(100% - 40px);
+  padding: 6px 8px 6px 14px;
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  background: var(--bg);
+  font-size: 12px;
+}
+.fleet-card.marked {
+  box-shadow: 0 0 0 2px var(--accent);
+}

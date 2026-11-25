@@ -237,11 +237,20 @@ Researched on real data (2026-11-25):
   names the way the agents write them (`[^A-Za-z0-9_-]` → `_`); servers the user turned off or
   never approved aren't listed. Config files are re-read at most every 30 s.
   Transcripts are read incrementally (one Codex rollout here is 16 GB).
-- **Inventory windows** (step 6): Live adds up the per-session counts. 7 days, 30 days and All
-  come from a history scan in the sessions worker, which already reads past sessions for the
-  agents list: each transcript, rollout or OpenCode session is read once and its counts cached
-  by path, size and mtime, so later scans only read what changed. It runs when the inventory is
-  shown, never on a timer.
+- **Inventory windows** (step 6): Live adds up the open sessions' toolboxes. 7 days, 30 days and
+  All come from a history scan in the sessions worker (a utility process, so no scan touches
+  main): Claude's transcripts and their sub-agents', Codex's rollouts (archived ones too), and
+  OpenCode's tool calls in its database. Each use goes to its own day (the line's timestamp, else
+  the file's), with step 5's line readers. Each file is read on from where the last scan
+  stopped, and those places and per-day counts are kept in `inventory-cache.json` in minmux's
+  config folder (written whole through a temporary file; a file gone from disk leaves it).
+  OpenCode's database is read on from the last row's time. A scan runs when a history window is
+  shown, one at a time, a result reused for 30 s; never on a timer. Measured here: the first
+  scan of all history 90 s (in the worker), the next 0.1 s; the cache file 3.7 MB.
+- **The view**: a Graph | Inventory switch at the graph's top right. The inventory covers the
+  graph, which stays mounted (camera, open repo, pins keep; its motion pauses). A used row
+  marks the open sessions that used it: back to the graph, their repo open, the camera on the
+  first one, a bar saying what's marked (Clear).
 
 ## Rendering
 
