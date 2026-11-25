@@ -177,16 +177,19 @@ of plumbing.
 | Which checkout an agent works in                    | the sidebar's rule (`lib/agent-dirs`): Claude's `in` folder and the pane's work checkouts first, the pane's cwd otherwise                                                                    |
 | Branch and PR (number, state, url) of that checkout | `PaneGitInfo`, as the sidebar shows                                                                                                                                                          |
 | `owner/name`                                        | the repo lookup the PR dialog caches per root (`repoFromRemotes`)                                                                                                                            |
-| Default branch                                      | `defaultBranchRef` on listed PRs; else the remote's HEAD, read once per repo root and cached                                                                                                 |
+| Default branch                                      | the remote's HEAD (`prs:local`, cached per repo); else `defaultBranchRef` on a listed PR                                                                                                     |
 | PR titles, CI, review; my open PRs                  | the PR lists' `mine` list, refreshed while the Fleet tab is shown                                                                                                                            |
 | Context use                                         | the session's `tokens.context`; the window from Codex's report, from the model in Claude's transcript (200k, or 1M for a 1M-context model), none for OpenCode (tokens shown without a meter) |
 
 - An agent on its repo's default branch hangs off the repo. A branch with no PR shows as a
   branch node. A PR not in `mine` (someone else's, or past the list's 30) keeps the pane's
   number and state, without title or CI, in v1.
-- **PR refresh service.** Today the lists' refresh loop lives inside the PR dialog component. It
-  moves to a shared service that runs while the dialog **or** the Fleet tab is shown, at the
-  dialog's cadence, with its cache. No per-repo queries are added in v1.
+- **PR refresh.** The Fleet tab asks for the `mine` list itself while it's shown (and the
+  window visible), at the dialog's cadence (`nextRefreshMs`: a minute, slower after failures or
+  on a low GraphQL budget). That's one query a refresh while both the tab and the dialog are
+  open; one loop shared with the dialog waits for the pulls epic, which reworks the dialog
+  into a tab anyway. The repos' names, worktrees and default branch come from `prs:local`
+  (the PR graph's request), asked again when the panes' checkout roots change.
 - **PR lookups.** Pane PR lookups (`noPr`) run only while something on screen shows a PR (the
   sidebar or the agents panel). A shown Fleet tab counts, so the existing per-pane lookups run
   while it's shown; nothing new while it isn't.
@@ -253,8 +256,9 @@ One PR each into `epic/fleet-graph`:
 1. **View tabs** (#222). The view tab kind, `activeView` and its one clearing rule,
    `shownTerminalTab`, the audit, renderer and attention behaviour, persistence, the tab dot;
    the Fleet view button opening an empty Fleet tab. Verified in the real app.
-2. **Model and data** (#223). `lib/fleet-model`, the PR refresh service, repo and default
-   branch per root, agent placement by checkout, the PR lookup gate. Tests; nothing drawn.
+2. **Model and data** (#223). `lib/fleet-model`, the `mine` refresh, the default branch in
+   `prs:local`, agent placement by checkout, the PR lookup gate. Tests; a plain list stands in
+   for the graph.
 3. **Graph** (#226). `lib/fleet-layout`, the overview, an open repo, the strip, the side panel,
    scrolling; no motion.
 4. **Motion** (#224). The loop and its stop rules, turning, dots, hover freeze, drag to pin,

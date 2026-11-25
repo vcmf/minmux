@@ -32,6 +32,24 @@ const calls = (run: ReturnType<typeof fakeGit>, what: string) =>
   run.mock.calls.filter(([args]) => args.join(" ").startsWith(what)).length
 
 describe("PrLocal", () => {
+  it("names each repo's default branch from its remote's HEAD, read once", async () => {
+    const run = fakeGit({ "/w/r symbolic-ref --short refs/remotes/origin/HEAD": "origin/main\n" })
+    const local = new PrLocal(run)
+    const res = await local.checkouts({ roots: ["/w/r", "/w/l"] })
+    expect(res.ok && res.repos.map((r) => r.defaultBranch)).toEqual(["main", undefined])
+    await local.checkouts({ roots: ["/w/r"] })
+    expect(calls(run, "symbolic-ref")).toBe(1) // cached with the remote; none asked for /w/l
+  })
+
+  it("no HEAD ref (or git failing): no default branch, asked again later", async () => {
+    const run = fakeGit()
+    const local = new PrLocal(run)
+    const res = await local.checkouts({ roots: ["/w/r"] })
+    expect(res.ok && res.repos[0]!.defaultBranch).toBeUndefined()
+    await local.checkouts({ roots: ["/w/r"] })
+    expect(calls(run, "symbolic-ref")).toBe(2)
+  })
+
   it("one worktree list per repo, however many of its worktrees panes are in", async () => {
     const run = fakeGit()
     const res = await new PrLocal(run).checkouts({ roots: ["/w/r", "/w/r-wt", "/w/l"] })

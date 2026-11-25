@@ -58,6 +58,7 @@ export class PrLocal {
   // root → its repo's common git dir (a worktree's root never moves to another repo)
   private common = new Map<string, string | null>()
   private remotes = new Map<string, { remote: Remote; at: number }>() // common dir → its remote
+  private heads = new Map<string, { branch: string | null; at: number }>() // common dir → default
   // (common dir, head tip, base tip, default tip) → merged units; -1: too long a range
   private units = new Map<string, number>()
   private unitsFailed = new Map<string, number>() // the same key → when git failed on it
@@ -119,6 +120,8 @@ export class PrLocal {
         const worktrees = all.filter((_, i) => here[i])
         const remote = await this.remoteOf(dir, root)
         const repo: LocalRepo = { repo: remote?.repo ?? null, worktrees }
+        const head = remote ? await this.defaultOf(dir, root, remote.name) : null
+        if (head) repo.defaultBranch = head
         const mine = remote
           ? prs.filter((p) => p.repo.toLowerCase() === remote.repo.toLowerCase())
           : []
@@ -158,6 +161,24 @@ export class PrLocal {
       this.remotes.delete(this.remotes.keys().next().value!)
     this.remotes.set(dir, { remote, at: this.now() })
     return remote
+  }
+
+  /** The remote's default branch, from its HEAD ref (cached like the remote). */
+  private async defaultOf(dir: string, root: string, remote: string): Promise<string | null> {
+    const hit = this.heads.get(dir)
+    if (hit && this.now() - hit.at < REPO_TTL) return hit.branch
+    const out = await this.git
+      .run(() => this.run(["symbolic-ref", "--short", `refs/remotes/${remote}/HEAD`], root))
+      .catch(() => undefined)
+    // no HEAD ref (never fetched with it) is an answer too; a failing git keeps the last one
+    const branch =
+      out === undefined ? (hit?.branch ?? null) : out.trim().replace(`${remote}/`, "") || null
+    if (out !== undefined) {
+      if (this.heads.size >= COMMON_MAX && !this.heads.has(dir))
+        this.heads.delete(this.heads.keys().next().value!)
+      this.heads.set(dir, { branch, at: this.now() })
+    }
+    return branch
   }
 
   // From the remote's refs (no checkout needed; a local branch not pulled doesn't lag): the

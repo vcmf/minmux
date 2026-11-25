@@ -29,6 +29,7 @@ export interface LocalWorktree {
 export interface LocalRepo {
   repo: string | null
   worktrees: LocalWorktree[]
+  defaultBranch?: string // the remote's HEAD (none: not fetched, or no remote)
   merged?: Record<string, number> // unitsKey(head, base) → PRs merged into it (its commits)
 }
 
