@@ -8,7 +8,7 @@ import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import type { AgentEvent } from "../../src/lib/agent-graph"
-import { bump, emptyKit, kitName, nameList, toToolbox, type Kit } from "./toolbox"
+import { bump, emptyKit, kitName, nameList, toToolbox, wireName, type Kit } from "./toolbox"
 
 /** JSON with comments and trailing commas (OpenCode's .jsonc) → JSON text. */
 export function stripJsonc(src: string): string {
@@ -31,22 +31,50 @@ export function stripJsonc(src: string): string {
   return out.replace(/,(\s*[}\]])/g, "$1")
 }
 
-const CONFIG_NAMES = ["opencode.json", "opencode.jsonc", "config.json"]
+const PROJECT_CONFIG = ["opencode.json", "opencode.jsonc"]
+const GLOBAL_CONFIG = [...PROJECT_CONFIG, "config.json"]
 const SKILL_DIRS = ["skill", "skills"]
 
-/** OpenCode's config files and skill folders for a session's folder: global
- *  (`~/.config/opencode`) and the project's (`<cwd>`, `<cwd>/.opencode`). Files are parsed once
- *  per change (by mtime). */
+/** The servers a parsed OpenCode config gives (an `enabled: false` one left out). */
+export function opencodeServersIn(o: unknown): string[] {
+  const mcp = (o as { mcp?: unknown } | null)?.mcp
+  if (!mcp || typeof mcp !== "object") return []
+  return Object.entries(mcp as Record<string, unknown>)
+    .filter(([, v]) => (v as { enabled?: unknown } | null)?.enabled !== false)
+    .map(([k]) => kitName(k))
+    .filter((n): n is string => !!n)
+}
+
+/** OpenCode's config files and skill folders for a session's folder: the global ones
+ *  (`~/.config/opencode`, `OPENCODE_CONFIG`, `OPENCODE_CONFIG_CONTENT` when main has them) and
+ *  the project's, from the folder up to its repo root (`opencode.json(c)`, `.opencode/`); skills
+ *  also from Claude's folders, which OpenCode reads too. Files are parsed once per change. */
 export class OpencodeConfig {
   private cache = new Map<string, { mtime: number; servers: string[] }>()
-  constructor(private readonly home: string = os.homedir()) {}
+  constructor(
+    private readonly home: string = os.homedir(),
+    private readonly env: NodeJS.ProcessEnv = process.env,
+  ) {}
 
-  private dirs(cwd: string | undefined) {
-    const global = path.join(
-      process.env.XDG_CONFIG_HOME || path.join(this.home, ".config"),
-      "opencode",
-    )
-    return [global, ...(cwd ? [cwd, path.join(cwd, ".opencode")] : [])]
+  private global() {
+    return path.join(this.env.XDG_CONFIG_HOME || path.join(this.home, ".config"), "opencode")
+  }
+
+  /** The folders from `cwd` up to its repo root (the one with .git), nearest first. */
+  private async project(cwd: string | undefined): Promise<string[]> {
+    if (!cwd) return []
+    const out: string[] = []
+    for (let d = path.resolve(cwd), i = 0; i < 32; i++) {
+      out.push(d)
+      const git = await fs.promises.access(path.join(d, ".git")).then(
+        () => true,
+        () => false,
+      )
+      const up = path.dirname(d)
+      if (git || up === d || d === this.home) break
+      d = up
+    }
+    return out
   }
 
   private async serversIn(file: string): Promise<string[] | undefined> {
@@ -55,15 +83,9 @@ export class OpencodeConfig {
       const hit = this.cache.get(file)
       if (hit && hit.mtime === st.mtimeMs) return hit.servers
       if (st.size > 4 * 1024 * 1024) return undefined
-      const o = JSON.parse(stripJsonc(await fs.promises.readFile(file, "utf8"))) as {
-        mcp?: unknown
-      }
-      const servers =
-        o?.mcp && typeof o.mcp === "object"
-          ? Object.keys(o.mcp)
-              .map(kitName)
-              .filter((n): n is string => !!n)
-          : []
+      const servers = opencodeServersIn(
+        JSON.parse(stripJsonc(await fs.promises.readFile(file, "utf8"))),
+      )
       this.cache.set(file, { mtime: st.mtimeMs, servers })
       return servers
     } catch {
@@ -84,7 +106,7 @@ export class OpencodeConfig {
     return r
   }
 
-  /** The configured servers (undefined: no config file read). */
+  /** The configured servers (undefined: no config read). */
   async servers(cwd: string | undefined): Promise<string[] | undefined> {
     const r = this.fresh(cwd)
     if ("servers" in r) return r.servers
@@ -101,60 +123,83 @@ export class OpencodeConfig {
   private async readServers(cwd: string | undefined): Promise<string[] | undefined> {
     let read = false
     const out: string[] = []
-    for (const d of this.dirs(cwd))
-      for (const n of CONFIG_NAMES) {
-        const s = await this.serversIn(path.join(d, n))
-        if (s) {
-          read = true
-          out.push(...s)
-        }
+    const add = (s: string[] | undefined) => {
+      if (!s) return
+      read = true
+      out.push(...s)
+    }
+    for (const n of GLOBAL_CONFIG) add(await this.serversIn(path.join(this.global(), n)))
+    if (this.env.OPENCODE_CONFIG) add(await this.serversIn(this.env.OPENCODE_CONFIG))
+    for (const d of await this.project(cwd))
+      for (const dir of [d, path.join(d, ".opencode")])
+        for (const n of PROJECT_CONFIG) add(await this.serversIn(path.join(dir, n)))
+    const inline = this.env.OPENCODE_CONFIG_CONTENT
+    if (inline)
+      try {
+        add(opencodeServersIn(JSON.parse(stripJsonc(inline))))
+      } catch {
+        // not JSON: nothing from it
       }
     return read ? nameList(out) : undefined
   }
 
   private async readSkills(cwd: string | undefined): Promise<string[]> {
+    const roots = [
+      ...SKILL_DIRS.map((s) => path.join(this.global(), s)),
+      path.join(this.home, ".claude", "skills"),
+    ]
+    for (const d of await this.project(cwd))
+      roots.push(
+        ...SKILL_DIRS.map((s) => path.join(d, ".opencode", s)),
+        path.join(d, ".claude", "skills"),
+      )
     const out: string[] = []
-    for (const d of this.dirs(cwd))
-      for (const s of SKILL_DIRS) {
-        try {
-          for (const e of await fs.promises.readdir(path.join(d, s), { withFileTypes: true }))
-            if (e.isDirectory()) {
-              const n = kitName(e.name)
-              const has = await fs.promises.access(path.join(d, s, e.name, "SKILL.md")).then(
-                () => true,
-                () => false,
-              )
-              if (n && has) out.push(n)
-            }
-        } catch {
-          // no such folder
-        }
+    for (const root of roots) {
+      try {
+        for (const e of await fs.promises.readdir(root, { withFileTypes: true }))
+          if (e.isDirectory()) {
+            const n = kitName(e.name)
+            const has = await fs.promises.access(path.join(root, e.name, "SKILL.md")).then(
+              () => true,
+              () => false,
+            )
+            if (n && has) out.push(n)
+          }
+      } catch {
+        // no such folder
       }
+    }
     return nameList(out)
   }
 }
 
-/** The configured server an MCP tool name belongs to (the longest that prefixes it). */
+/** The configured server an MCP tool name belongs to: the longest whose wire name (OpenCode
+ *  writes `[^A-Za-z0-9_-]` as `_`) prefixes it. */
 export function opencodeServerOf(tool: string, servers: string[]): string | undefined {
   let best: string | undefined
   for (const s of servers)
-    if (tool.startsWith(`${s}_`) && (!best || s.length > best.length)) best = s
+    if (tool.startsWith(`${wireName(s)}_`) && (!best || s.length > best.length)) best = s
   return best
 }
 
-/** Per session: its counts, folder and the config it was started with. */
+/** Per session: its counts and folder. Kept across a switch away and back (OpenCode keeps no
+ *  file to count them again from); the oldest go past 256 sessions. */
 export class OpencodeToolbox {
   private sessions = new Map<string, { kit: Kit; cwd?: string }>()
+  private chain: Promise<unknown> = Promise.resolve()
   constructor(private readonly config = new OpencodeConfig()) {}
 
-  /** A batch of OpenCode's events → the Toolbox events they call for. */
-  async events(batch: AgentEvent[]): Promise<AgentEvent[]> {
+  /** A batch of OpenCode's events → the Toolbox events they call for. Batches run one at a
+   *  time, so a snapshot never goes out after a newer one. */
+  events(batch: AgentEvent[]): Promise<AgentEvent[]> {
+    const run = this.chain.then(() => this.run(batch))
+    this.chain = run.catch(() => {})
+    return run
+  }
+
+  private async run(batch: AgentEvent[]): Promise<AgentEvent[]> {
     const out: AgentEvent[] = []
     for (const ev of batch) {
-      if (ev.event === "SessionEnd" && !ev.agentId) {
-        this.sessions.delete(ev.sessionId)
-        continue
-      }
       let s = this.sessions.get(ev.sessionId)
       if (!s) {
         if (ev.event !== "SessionStart" && ev.event !== "PreToolUse" && ev.event !== "Stop")

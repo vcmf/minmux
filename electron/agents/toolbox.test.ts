@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest"
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
-import { bump, emptyKit, toToolbox } from "./toolbox"
+import { SubUses, Tickets, addUses, bump, emptyKit, toToolbox, withTool } from "./toolbox"
 import { ClaudeMcpConfig, addClaudeKitLine, mcpServerOf } from "./claude-toolbox"
 import { addCodexKitLine, codexHomeOf, codexServersIn, CodexMcpConfig } from "./codex-toolbox"
 import { OpencodeToolbox, OpencodeConfig, opencodeServerOf, stripJsonc } from "./opencode-toolbox"
@@ -21,7 +21,7 @@ describe("toolbox", () => {
   })
 
   it("a Toolbox: listed and configured servers together; skills off when not supported", () => {
-    const kit = { ...emptyKit, mcp: { a: 2 }, mcpTools: { a: 3, gone: 0 }, skills: { s: 1 } }
+    const kit = { ...emptyKit, mcp: { a: 2 }, mcpTools: { a: ["x"], gone: [] }, skills: { s: 1 } }
     expect(toToolbox(kit, ["b"])).toEqual({
       mcp: { a: 2 },
       mcpLoaded: ["a", "b"],
@@ -30,6 +30,40 @@ describe("toolbox", () => {
     expect(toToolbox(emptyKit)).toEqual({ mcp: {}, skills: {} }) // nothing known
     expect(toToolbox(emptyKit, [])).toEqual({ mcp: {}, mcpLoaded: [], skills: {} }) // known: none
     expect(toToolbox(kit, undefined, false).skills).toBeNull()
+  })
+
+  it("a server seen by its wire name is shown by its configured one", () => {
+    const kit = { ...emptyKit, mcp: { my_server: 3 }, mcpTools: { my_server: ["q"] } }
+    expect(toToolbox(kit, ["my.server"])).toEqual({
+      mcp: { "my.server": 3 },
+      mcpLoaded: ["my.server"],
+      skills: {},
+    })
+  })
+
+  it("tools by name: one announced twice and removed once is gone", () => {
+    let m = withTool({}, "s", "t", true)
+    expect(withTool(m, "s", "t", true)).toBe(m)
+    m = withTool(m, "s", "t", false)
+    expect(m).toEqual({ s: [] })
+  })
+
+  it("sub-agents' uses add to the session's", () => {
+    const subs = new SubUses()
+    subs.add("s", { ...emptyKit, mcp: { gh: 2 }, skills: { r: 1 } })
+    subs.add("s", { ...emptyKit, mcp: { gh: 1 } })
+    const k = addUses({ ...emptyKit, mcp: { gh: 1, x: 1 } }, subs.of("s"))
+    expect([k.mcp, k.skills]).toEqual([{ gh: 4, x: 1 }, { r: 1 }])
+    subs.forget("s")
+    expect(subs.of("s")).toBeUndefined()
+  })
+
+  it("tickets: an older snapshot doesn't go out after a newer one", () => {
+    const t = new Tickets()
+    const a = t.take("s")
+    const b = t.take("s")
+    expect(t.send("s", b)).toBe(true)
+    expect(t.send("s", a)).toBe(false)
   })
 })
 
@@ -79,7 +113,7 @@ describe("Claude's transcript", () => {
     ]
     const kit = lines.reduce(addClaudeKitLine, emptyKit)
     expect(kit.skillsLoaded).toEqual(["review", "run", "deploy"])
-    expect(kit.mcpTools).toEqual({ github: 1 }) // (a sign-in tool isn't a server's)
+    expect(kit.mcpTools).toEqual({ github: ["mcp__github__b"] }) // (a sign-in tool isn't a server's)
     expect(kit.mcpDown).toEqual(["hexgate"])
     expect(kit.mcp).toEqual({ github: 1 })
     expect(kit.skills).toEqual({ review: 1 })
@@ -95,10 +129,17 @@ describe("Claude's transcript", () => {
       path.join(home, ".claude.json"),
       j({
         mcpServers: { a: {} },
-        projects: { [cwd]: { mcpServers: { b: {} } }, other: { mcpServers: { x: {} } } },
+        projects: {
+          [cwd]: {
+            mcpServers: { b: {}, off: {} },
+            disabledMcpServers: ["off"],
+            enabledMcpjsonServers: ["c"],
+          },
+          other: { mcpServers: { x: {} } },
+        },
       }),
     )
-    fs.writeFileSync(path.join(cwd, ".mcp.json"), j({ mcpServers: { c: {} } }))
+    fs.writeFileSync(path.join(cwd, ".mcp.json"), j({ mcpServers: { c: {}, unapproved: {} } }))
     expect(await new ClaudeMcpConfig(home).servers(cwd)).toEqual(["a", "b", "c"])
   })
 
@@ -120,12 +161,41 @@ describe("Claude's transcript", () => {
       reads,
       [{ event: "Stop", sessionId: "s", transcriptPath: tx }],
       undefined,
-      (r) => ({ tokens: { context: r.n, output: 0 }, toolbox: toToolbox(r.kit) }),
+      { tokens: (r) => ({ context: r.n, output: 0 }), toolbox: async (r) => toToolbox(r.kit) },
     )
     expect(out).toEqual([
       { event: "TokenUsage", sessionId: "s", tokens: { context: 1, output: 0 } },
       { event: "Toolbox", sessionId: "s", toolbox: { mcp: { gh: 1 }, skills: {} } },
     ])
+  })
+})
+
+describe("snapshots in order", () => {
+  it("two Stops of one session: the slower first read's snapshot is dropped", async () => {
+    const dir = tmp()
+    const tx = path.join(dir, "s.jsonl")
+    fs.writeFileSync(tx, "{}\n")
+    const reads = new TranscriptFold((n: number) => n + 1, 0)
+    const tickets = new Tickets()
+    let first = true
+    const view = {
+      tokens: (n: number) => ({ context: n, output: 0 }),
+      // the first read's config read is slow
+      toolbox: async () => {
+        const slow = first
+        first = false
+        await new Promise((r) => setTimeout(r, slow ? 40 : 0))
+        return { mcp: {}, skills: {} }
+      },
+      tickets,
+    }
+    const stop = [{ event: "Stop", sessionId: "s", transcriptPath: tx }]
+    const [a, b] = await Promise.all([
+      tokenEventsForBatch(reads, stop, undefined, view),
+      tokenEventsForBatch(reads, stop, undefined, view),
+    ])
+    expect(a).toEqual([]) // (b's went first)
+    expect(b.length).toBe(2)
   })
 })
 
@@ -156,6 +226,11 @@ describe("Codex's rollout", () => {
         'model = "x"\n[mcp_servers.echo]\ncommand = "node"\n[mcp_servers.echo.env]\nA = "1"\n[mcp_servers."my server"]\n[profiles.x]\n',
       ),
     ).toEqual(["echo", "my server"])
+    expect(
+      codexServersIn(
+        'mcp_servers.root.command = "x"\nmcp_servers.gone.enabled = false\n[mcp_servers]\nin = { command = "node" }\noff = { command = "n", enabled = false }\n[mcp_servers.t]\nenabled = false\n',
+      ),
+    ).toEqual(["root", "in"])
     expect(codexHomeOf("/h/.codex/sessions/2026/11/25/rollout-x.jsonl")).toBe("/h/.codex")
     expect(codexHomeOf("/elsewhere/x.jsonl")).toBeNull()
     const home = tmp()
@@ -178,46 +253,46 @@ describe("OpenCode", () => {
     expect(opencodeServerOf("bash", ["my"])).toBeUndefined()
   })
 
-  it("counts a session's MCP calls and skills; its config and skill folders give what it has", async () => {
+  it("counts a session's MCP calls and skills; config up to the repo root says what it has", async () => {
     const home = tmp()
-    const cwd = path.join(home, "proj")
-    fs.mkdirSync(path.join(cwd, ".opencode/skill/fleet"), { recursive: true })
-    fs.writeFileSync(path.join(cwd, ".opencode/skill/fleet/SKILL.md"), "---\nname: fleet\n---\n")
-    fs.writeFileSync(path.join(cwd, "opencode.jsonc"), '{ "mcp": { "echo": {}, }, // x\n }')
-    const prev = process.env.XDG_CONFIG_HOME
-    process.env.XDG_CONFIG_HOME = path.join(home, "nothing")
-    try {
-      const tb = new OpencodeToolbox(new OpencodeConfig(home))
-      const start = await tb.events([{ event: "SessionStart", sessionId: "s", cwd }])
-      expect(start[0]!.toolbox).toEqual({
-        mcp: {},
-        mcpLoaded: ["echo"],
-        skills: {},
-        skillsLoaded: ["fleet"],
-      })
-      const stop = await tb.events([
-        { event: "PreToolUse", sessionId: "s", toolName: "echo_ping" },
-        { event: "PreToolUse", sessionId: "s", toolName: "skill", skill: "fleet" },
-        { event: "PreToolUse", sessionId: "s", toolName: "bash" },
-        { event: "Stop", sessionId: "s" },
-      ])
-      expect(stop).toEqual([
-        {
-          event: "Toolbox",
-          sessionId: "s",
-          toolbox: {
-            mcp: { echo: 1 },
-            mcpLoaded: ["echo"],
-            skills: { fleet: 1 },
-            skillsLoaded: ["fleet"],
-          },
-        },
-      ])
-      await tb.events([{ event: "SessionEnd", sessionId: "s" }])
-      expect(await tb.events([{ event: "UserPromptSubmit", sessionId: "s" }])).toEqual([])
-    } finally {
-      if (prev === undefined) delete process.env.XDG_CONFIG_HOME
-      else process.env.XDG_CONFIG_HOME = prev
+    const repo = path.join(home, "repo")
+    const cwd = path.join(repo, "packages", "app")
+    fs.mkdirSync(cwd, { recursive: true })
+    fs.mkdirSync(path.join(repo, ".git"))
+    fs.mkdirSync(path.join(repo, ".opencode/skill/fleet"), { recursive: true })
+    fs.writeFileSync(path.join(repo, ".opencode/skill/fleet/SKILL.md"), "---\nname: fleet\n---\n")
+    fs.mkdirSync(path.join(cwd, "skills/not-a-skill-dir"), { recursive: true }) // (not OpenCode's)
+    fs.writeFileSync(
+      path.join(repo, "opencode.jsonc"),
+      '{ "mcp": { "echo": {}, "my.db": {}, "off": { "enabled": false }, }, // x\n }',
+    )
+    const env = {
+      XDG_CONFIG_HOME: path.join(home, "nothing"),
+      OPENCODE_CONFIG_CONTENT: '{"mcp":{"inline":{}}}',
     }
+    const tb = new OpencodeToolbox(new OpencodeConfig(home, env))
+    const start = await tb.events([{ event: "SessionStart", sessionId: "s", cwd }])
+    expect(start[0]!.toolbox).toEqual({
+      mcp: {},
+      mcpLoaded: ["echo", "my.db", "inline"],
+      skills: {},
+      skillsLoaded: ["fleet"],
+    })
+    await tb.events([
+      { event: "PreToolUse", sessionId: "s", toolName: "echo_ping" },
+      { event: "PreToolUse", sessionId: "s", toolName: "my_db_query" },
+      { event: "PreToolUse", sessionId: "s", toolName: "skill", skill: "fleet" },
+      { event: "PreToolUse", sessionId: "s", toolName: "bash" },
+    ])
+    // A switch away and back keeps its counts.
+    await tb.events([{ event: "SessionEnd", sessionId: "s", reason: "switch" }])
+    const back = await tb.events([{ event: "Stop", sessionId: "s" }])
+    expect(back[0]!.toolbox).toEqual({
+      mcp: { echo: 1, "my.db": 1 },
+      mcpLoaded: ["echo", "my.db", "inline"],
+      skills: { fleet: 1 },
+      skillsLoaded: ["fleet"],
+    })
+    expect(await tb.events([{ event: "UserPromptSubmit", sessionId: "t" }])).toEqual([])
   })
 })

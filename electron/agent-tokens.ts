@@ -5,6 +5,7 @@
 
 import type { AgentEvent, TokenUsage, Toolbox } from "../src/lib/agent-graph"
 import type { TranscriptFold } from "./transcript-fold"
+import type { Tickets } from "./agents/toolbox"
 
 /** Host-fs candidate paths for a transcript path the agent reported. Identity on same-OS
  *  runs; on WSL the agent's Linux path resolves to the pane's distro's UNC shares (see main —
@@ -41,33 +42,37 @@ export function subagentTranscriptPath(
  *     UserPromptSubmit prunes a finished sub-agent before its (slow) read lands, the reducer's
  *     no-resurrection guard drops it and no badge appears. Narrow — sub-agent transcripts are
  *     small so the read is fast; the session root is never pruned, only evicted on SessionEnd. */
+/** What a read of a transcript gives: its tokens and, for a session's Stop, its MCP servers and
+ *  skills (one read gives both). `sub` sees a sub-agent's read before it's forgotten; `tickets`
+ *  keeps a session's snapshots in order. */
+export interface ReadView<T> {
+  tokens: (v: T) => TokenUsage
+  toolbox?: (v: T, ev: AgentEvent) => Promise<Toolbox | undefined>
+  sub?: (v: T, ev: AgentEvent) => void
+  tickets?: Tickets
+}
+
 export async function tokenEventsForBatch<T = TokenUsage>(
   tracker: TranscriptFold<T>, // the agent's transcript reader (Claude's, Codex's…)
   batch: AgentEvent[],
   resolve: ResolvePath = identity,
-  // What a read holds: its tokens and, for a session, its MCP servers and skills (one read of
-  // the transcript gives both; `ev` is the Stop it's for)
-  view: (
-    v: T,
-    ev: AgentEvent,
-  ) =>
-    | Promise<{ tokens: TokenUsage; toolbox?: Toolbox }>
-    | {
-        tokens: TokenUsage
-        toolbox?: Toolbox
-      } = (v) => ({ tokens: v as TokenUsage }),
+  view: ReadView<T> = { tokens: (v) => v as TokenUsage },
 ): Promise<AgentEvent[]> {
   const out: AgentEvent[] = []
   for (const ev of batch) {
-    if (ev.event === "SessionEnd" && ev.transcriptPath) {
-      tracker.forget(ev.transcriptPath)
+    if (ev.event === "SessionEnd") {
+      view.tickets?.forget(ev.sessionId)
+      if (ev.transcriptPath) tracker.forget(ev.transcriptPath)
       continue
     }
     // Session turn finished → price the session transcript against the root.
     if (ev.event === "Stop" && ev.transcriptPath) {
+      const ticket = view.tickets?.take(ev.sessionId) ?? 0
       const read = await tracker.update(ev.transcriptPath, resolve(ev.transcriptPath, ev.paneId))
-      const { tokens, toolbox } = await view(read, ev)
-      out.push({ event: "TokenUsage", sessionId: ev.sessionId, tokens })
+      const toolbox = await view.toolbox?.(read, ev)
+      // (a later Stop's snapshot already went out: this older one would undo it)
+      if (view.tickets && !view.tickets.send(ev.sessionId, ticket)) continue
+      out.push({ event: "TokenUsage", sessionId: ev.sessionId, tokens: view.tokens(read) })
       if (toolbox) out.push({ event: "Toolbox", sessionId: ev.sessionId, toolbox })
     }
     // Sub-agent finished → price its own transcript against that sub-agent, then free the
@@ -76,8 +81,9 @@ export async function tokenEventsForBatch<T = TokenUsage>(
       const txPath = ev.agentTranscriptPath ?? subagentTranscriptPath(ev.transcriptPath, ev.agentId)
       if (txPath) {
         const read = await tracker.update(txPath, resolve(txPath, ev.paneId))
-        const { tokens } = await view(read, ev)
+        const tokens = view.tokens(read)
         out.push({ event: "TokenUsage", sessionId: ev.sessionId, agentId: ev.agentId, tokens })
+        view.sub?.(read, ev)
         tracker.forget(txPath)
       }
     }

@@ -27,15 +27,46 @@ export function addCodexKitLine(acc: Kit, line: string): Kit {
     : { ...acc, mcp: bump(acc.mcp, server) }
 }
 
-/** The servers a config.toml names: `[mcp_servers.<name>]` tables (and their sub-tables). */
+const KEY = String.raw`(?:"([^"]+)"|'([^']+)'|([A-Za-z0-9_-]+))`
+const pick = (m: RegExpExecArray, at = 1) => kitName(m[at] ?? m[at + 1] ?? m[at + 2])
+
+/** The servers a config.toml gives Codex: `[mcp_servers.<name>]` tables, `<name> = {…}` under
+ *  a bare `[mcp_servers]`, or root `mcp_servers.<name>.… =` keys; one with `enabled = false`
+ *  is left out. A line reader, not a TOML parser: enough for these shapes. */
 export function codexServersIn(toml: string): string[] {
-  const out: string[] = []
-  const re = /^\s*\[\s*mcp_servers\.(?:"([^"]+)"|'([^']+)'|([A-Za-z0-9_-]+))/gm
-  for (let m = re.exec(toml); m; m = re.exec(toml)) {
-    const n = kitName(m[1] ?? m[2] ?? m[3])
-    if (n) out.push(n)
+  const found: string[] = []
+  const off = new Set<string>()
+  const table = new RegExp(String.raw`^\[\s*mcp_servers\.${KEY}`)
+  const bare = /^\[\s*mcp_servers\s*\]/
+  const header = /^\[/
+  const inline = new RegExp(String.raw`^${KEY}\s*=\s*\{(.*)`)
+  const dotted = new RegExp(String.raw`^mcp_servers\.${KEY}\s*\.\s*([A-Za-z_]+)\s*=\s*(.*)`)
+  let where: { server?: string; bare?: boolean; root: boolean } = { root: true }
+  for (const raw of toml.split(/\r?\n/)) {
+    const line = raw.trim()
+    if (!line || line.startsWith("#")) continue
+    let m: RegExpExecArray | null
+    if ((m = table.exec(line))) {
+      const n = pick(m)
+      if (n) found.push(n)
+      where = { server: n, root: false }
+    } else if (bare.test(line)) where = { bare: true, root: false }
+    else if (header.test(line)) where = { root: false }
+    else if (where.bare && (m = inline.exec(line))) {
+      const n = pick(m)
+      if (n) {
+        found.push(n)
+        if (/\benabled\s*=\s*false\b/.test(m[4] ?? "")) off.add(n)
+      }
+    } else if (where.root && (m = dotted.exec(line))) {
+      const n = pick(m)
+      if (n) {
+        found.push(n)
+        if (m[4] === "enabled" && /^false\b/.test(m[5] ?? "")) off.add(n)
+      }
+    } else if (where.server && /^enabled\s*=\s*false\b/.test(line)) off.add(where.server)
   }
-  return nameList(out)
+  return nameList(found.filter((n) => !off.has(n)))
 }
 
 /** Codex's home for a rollout (`<home>/sessions/YYYY/MM/DD/rollout-….jsonl`); null if not one. */

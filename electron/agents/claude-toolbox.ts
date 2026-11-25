@@ -6,7 +6,7 @@
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
-import { bump, kitName, nameList, type Kit } from "./toolbox"
+import { bump, kitName, nameList, withTool, type Kit } from "./toolbox"
 
 /** `mcp__<server>__<tool>` → its server as the user knows it (`claude_ai_X` → `claude.ai X`). */
 export function mcpServerOf(tool: string): string | undefined {
@@ -48,17 +48,19 @@ export function addClaudeKitLine(acc: Kit, line: string): Kit {
     }
     if (a.type === "deferred_tools_delta") {
       let tools = acc.mcpTools
-      const count = (list: unknown, by: number) => {
+      // (by name: a tool announced again after a compaction isn't one more)
+      const note = (list: unknown, add: boolean) => {
         if (!Array.isArray(list)) return
         for (const t of list)
           if (typeof t === "string" && !SIGN_IN.test(t)) {
             const s = mcpServerOf(t)
-            if (s) tools = bump(tools, s, by)
+            const tool = kitName(t)
+            if (s && tool) tools = withTool(tools, s, tool, add)
           }
       }
-      count(a.addedNames, 1)
-      count(a.readdedNames, 1)
-      count(a.removedNames, -1)
+      note(a.addedNames, true)
+      note(a.readdedNames, true)
+      note(a.removedNames, false)
       const failed = Array.isArray(a.failedMcpServers)
         ? a.failedMcpServers
             .map((f) => kitName(typeof f === "string" ? f : (f as { name?: unknown })?.name))
@@ -134,7 +136,17 @@ export class ClaudeMcpConfig {
     const project = cwd ? await this.read(path.join(cwd, ".mcp.json")) : undefined
     if (user === undefined && project === undefined) return undefined
     const projects = (user as { projects?: Record<string, unknown> } | undefined)?.projects
-    const here = cwd && projects && typeof projects === "object" ? projects[cwd] : undefined
-    return nameList([...serversIn(user), ...serversIn(here), ...serversIn(project)])
+    const here = (cwd && projects && typeof projects === "object" ? projects[cwd] : undefined) as
+      Record<string, unknown> | undefined
+    // (servers the user turned off or declined aren't loaded: a project's .mcp.json ones need
+    // approval, and any can be disabled per project)
+    const list = (k: string) => (Array.isArray(here?.[k]) ? (here[k] as unknown[]) : [])
+    const off = new Set([...list("disabledMcpServers"), ...list("disabledMcpjsonServers")])
+    const approved = new Set(list("enabledMcpjsonServers"))
+    const allJson = here?.enableAllProjectMcpServers === true
+    const fromJson = serversIn(project).filter((s) => allJson || approved.has(s))
+    return nameList([...serversIn(user), ...serversIn(here), ...fromJson]).filter(
+      (s) => !off.has(s),
+    )
   }
 }

@@ -217,12 +217,19 @@ Researched on real data (2026-11-25):
   `McpToolCall` (`server`, `tool`, `status`; a call refused for want of approval is `failed`).
   Skills: "not supported yet". Codex has no skill tool, and guessing from `SKILL.md` reads isn't
   worth showing.
-- **OpenCode**: MCP servers loaded from its config's `mcp` key (the user's `opencode.json(c)`
-  and `OPENCODE_CONFIG_CONTENT`). Used, through our plugin's tool events: an MCP tool is
+- **OpenCode**: MCP servers loaded from its config's `mcp` key: the global config,
+  `OPENCODE_CONFIG` and `OPENCODE_CONFIG_CONTENT` when main has them, and `opencode.json(c)` /
+  `.opencode/` from the session's folder up to its repo root (an `enabled: false` server left
+  out). Used, through our plugin's tool events: an MCP tool is
   `<server>_<tool>` (matched against the configured servers, since names hold `_`); a skill is
-  the `skill` tool with its `name`. Skills loaded: the `skill/*/SKILL.md` folders it reads.
+  the `skill` tool with its `name`. Skills loaded: its skill folders (global and `.opencode/`)
+  and Claude's (`~/.claude/skills`, `.claude/skills`), which it reads too. Counts live in main
+  per session (kept across a switch away and back).
 - Verified 2026-11-25 (codex-cli 0.167.1, opencode 1.18.34) with a scratch stdio MCP server.
 - Counted in main per session from events it already handles, sent on the agent event channel.
+  A sub-agent's uses count for its session. A server's configured name is matched to its tool
+  names the way the agents write them (`[^A-Za-z0-9_-]` → `_`); servers the user turned off or
+  never approved aren't listed. Config files are re-read at most every 30 s.
   Transcripts are read incrementally (one Codex rollout here is 16 GB).
 - **Inventory windows** (step 6): Live adds up the per-session counts. 7 days, 30 days and All
   come from a history scan in the sessions worker, which already reads past sessions for the

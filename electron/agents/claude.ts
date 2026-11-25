@@ -15,7 +15,7 @@ import { TranscriptMeta } from "../transcript-meta"
 import { TranscriptFold } from "../transcript-fold"
 import { addLine as addTokenLine, emptyUsage } from "../transcript-tokens"
 import { ClaudeMcpConfig, addClaudeKitLine } from "./claude-toolbox"
-import { emptyKit, toToolbox, type Kit } from "./toolbox"
+import { SubUses, Tickets, addUses, emptyKit, toToolbox, type Kit } from "./toolbox"
 import type { AgentAdapter, AgentShell, AgentSpec, SessionRules } from "./types"
 import { cdPrefix, workedFolders } from "./worked"
 
@@ -190,6 +190,8 @@ export function createClaudeAdapter(): AgentAdapter {
   const reads = new TranscriptFold<Read>(foldRead, { tokens: emptyUsage, kit: emptyKit })
   // (Windows runs Claude in WSL, whose config isn't the host's: the transcript alone there)
   const mcpConfig = process.platform === "win32" ? null : new ClaudeMcpConfig()
+  const subs = new SubUses()
+  const tickets = new Tickets()
   return {
     kind: "claude",
     install(cfgDir) {
@@ -203,11 +205,16 @@ export function createClaudeAdapter(): AgentAdapter {
     env: (): Record<string, string> =>
       settingsPath ? { MINMUX_CLAUDE_SETTINGS: settingsPath } : {},
     normalize: normalizeClaudeEvent,
-    usage: (batch, resolve) =>
-      tokenEventsForBatch(reads, batch, resolve, async (r, ev) => ({
-        tokens: r.tokens,
-        toolbox: toToolbox(r.kit, await mcpConfig?.servers(ev.cwd)),
-      })),
+    usage: (batch, resolve) => {
+      for (const ev of batch) if (ev.event === "SessionEnd") subs.forget(ev.sessionId)
+      return tokenEventsForBatch(reads, batch, resolve, {
+        tokens: (r) => r.tokens,
+        sub: (r, ev) => subs.add(ev.sessionId, r.kit), // (a sub-agent's uses are its session's)
+        toolbox: async (r, ev) =>
+          toToolbox(addUses(r.kit, subs.of(ev.sessionId)), await mcpConfig?.servers(ev.cwd)),
+        tickets,
+      })
+    },
     meta: { file: (ev) => ev.transcriptPath ?? null, reader: () => new TranscriptMeta() },
   }
 }

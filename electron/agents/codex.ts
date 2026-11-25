@@ -21,7 +21,7 @@ import type { AgentAdapter, AgentShell, AgentSpec, SessionRules } from "./types"
 import { cdPrefix, workedFolders } from "./worked"
 import { codexHome } from "./codex-history"
 import { CodexMcpConfig, addCodexKitLine, codexHomeOf } from "./codex-toolbox"
-import { emptyKit, toToolbox, type Kit } from "./toolbox"
+import { SubUses, Tickets, addUses, emptyKit, toToolbox, type Kit } from "./toolbox"
 
 // The events we consume; tool events take a matcher (S1-d).
 const EVENTS = [
@@ -368,6 +368,8 @@ export function createCodexAdapter(): AgentAdapter {
   const reads = new TranscriptFold<Read>(foldRead, { tokens: emptyUsage, kit: emptyKit })
   // (Windows runs Codex in WSL, whose config isn't reachable by this path: the rollout alone)
   const mcpConfig = process.platform === "win32" ? null : new CodexMcpConfig()
+  const subs = new SubUses()
+  const tickets = new Tickets()
   return {
     kind: "codex",
     install(cfgDir) {
@@ -384,11 +386,20 @@ export function createCodexAdapter(): AgentAdapter {
     env: (): Record<string, string> => (argsPath ? { MINMUX_CODEX_ARGS: argsPath } : {}),
     normalize: normalizeCodexEvent,
     // Stop → the session's rollout; SubagentStop → the sub-agent's (its hook names it).
-    usage: (batch, resolve) =>
-      tokenEventsForBatch(reads, batch, resolve, async (r, ev) => ({
-        tokens: r.tokens,
-        toolbox: toToolbox(r.kit, await mcpConfig?.servers(codexHomeOf(ev.transcriptPath)), false),
-      })),
+    usage: (batch, resolve) => {
+      for (const ev of batch) if (ev.event === "SessionEnd") subs.forget(ev.sessionId)
+      return tokenEventsForBatch(reads, batch, resolve, {
+        tokens: (r) => r.tokens,
+        sub: (r, ev) => subs.add(ev.sessionId, r.kit), // (a sub-agent's uses are its session's)
+        toolbox: async (r, ev) =>
+          toToolbox(
+            addUses(r.kit, subs.of(ev.sessionId)),
+            await mcpConfig?.servers(codexHomeOf(ev.transcriptPath)),
+            false,
+          ),
+        tickets,
+      })
+    },
     meta: { file: (ev) => codexIndexFor(ev.transcriptPath), reader: threadNameReader },
     // Codex records each trusted hook in its config.toml; read it (async, read-only) and compare.
     approved: async () => {
