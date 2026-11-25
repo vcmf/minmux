@@ -1,0 +1,98 @@
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest"
+import { act, render, screen, waitFor } from "@testing-library/react"
+import { FleetView } from "./fleet-view"
+import { useStore } from "../store"
+import { ipc } from "../lib/ipc"
+import { reduceAgentEvents } from "../lib/agent-graph"
+import { resetStore, testShell } from "../test/helpers"
+import type { PrRow } from "../lib/pr-dashboard"
+
+const row = (n: number): PrRow =>
+  ({
+    number: n,
+    title: `PR ${n}`,
+    url: `https://github.com/o/r/pull/${n}`,
+    repo: "o/r",
+    defaultBranch: "main",
+    state: "open",
+  }) as PrRow
+
+// One pane `p1` in /w/r with a Claude session working there.
+function seed() {
+  useStore.setState({
+    sessions: {
+      p1: {
+        id: "p1",
+        title: "zsh",
+        command: testShell.command,
+        args: [],
+        cwd: "/w/r",
+        status: "idle",
+        unread: false,
+      },
+    },
+    agents: reduceAgentEvents([
+      { event: "SessionStart", sessionId: "s1", cwd: "/w/r", paneId: "p1" },
+      { event: "UserPromptSubmit", sessionId: "s1" },
+    ]),
+    paneGit: {
+      p1: {
+        root: "/w/r",
+        branch: "feat",
+        pr: { number: 7, state: "open", url: "https://github.com/o/r/pull/7" },
+      },
+    },
+  })
+}
+
+describe("FleetView", () => {
+  let local: ReturnType<typeof vi.spyOn>
+  beforeEach(() => {
+    resetStore()
+    local = vi.spyOn(ipc, "prLocal").mockResolvedValue({
+      ok: true,
+      repos: [
+        {
+          repo: "o/r",
+          defaultBranch: "main",
+          worktrees: [{ path: "/w/r", branch: "feat" }],
+          roots: ["/w/r"],
+        },
+      ],
+    })
+    vi.spyOn(ipc, "prLists").mockResolvedValue({
+      ok: true,
+      lists: { mine: [row(7), row(8)], review: [] },
+    })
+  })
+  afterEach(() => vi.restoreAllMocks())
+
+  it("lists the repos with a live agent: name, default branch, PRs, agents", async () => {
+    seed()
+    render(<FleetView />)
+    await waitFor(() =>
+      expect(screen.getByText(/o\/r ⑂ main · 2 PRs · 1 agent/)).toBeInTheDocument(),
+    )
+  })
+
+  it("says so when no agent works in a repo", async () => {
+    render(<FleetView />)
+    expect(await screen.findByText("No agent is working in a repo right now.")).toBeInTheDocument()
+  })
+
+  it("re-reads the repos when a pane moves to another checkout, and when the window shows", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    seed()
+    const view = render(<FleetView />)
+    await waitFor(() => expect(local).toHaveBeenCalled())
+    const before = local.mock.calls.length
+    act(() => useStore.setState({ paneGit: { p1: { root: "/w/r2", branch: "main" } } }))
+    await act(async () => void (await vi.advanceTimersByTimeAsync(700)))
+    expect(local.mock.calls.length).toBeGreaterThan(before)
+    expect(local.mock.calls.at(-1)![0].roots).toEqual(["/w/r2"])
+    // The window shows again: whatever came due runs (nothing breaks when nothing did).
+    act(() => void document.dispatchEvent(new Event("visibilitychange")))
+    view.unmount()
+    vi.useRealTimers()
+  })
+})
