@@ -4295,6 +4295,9 @@ body.resizing-col {
 .fleet-view .ok {
   color: var(--accent);
 }
+.fleet-view .done {
+  color: var(--blue);
+}
 .fleet-root {
   position: absolute;
   border: none;
@@ -4406,6 +4409,24 @@ body.resizing-col {
 }
 .fleet-kind {
   vertical-align: -2px;
+  display: inline-flex;
+  flex: none;
+}
+.fleet-pr-icon {
+  display: inline-flex;
+  vertical-align: -2px;
+  color: var(--accent); /* an open PR, as GitHub colours it */
+}
+.fleet-pr-icon.draft {
+  color: var(--faint);
+}
+.fleet-unpin {
+  position: absolute;
+  right: 16px;
+  bottom: 16px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
 }
 .fleet-dock {
   position: absolute;

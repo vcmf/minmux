@@ -148,8 +148,11 @@ export function openLayout(repo: FleetRepo, theta = 0): FleetNode[] {
   return out
 }
 
-/** Cards that overlap pushed apart along their shorter overlap (roots stay put), until still. */
-export function relax(nodes: FleetNode[], passes = 40): FleetNode[] {
+// Each overlapping pair is pushed apart along the line between their centres, by the least that
+// clears them on either axis. That's continuous in the cards' positions (no axis choice that
+// flips), so a layout turned a little moves its cards a little: it can run on every frame.
+/** Cards that overlap pushed apart (roots stay put), until still. */
+export function relax(nodes: FleetNode[], passes = 40, fixed?: Set<string>): FleetNode[] {
   const ns = nodes.map((n) => ({ ...n }))
   for (let pass = 0; pass < passes; pass++) {
     let moved = false
@@ -157,26 +160,28 @@ export function relax(nodes: FleetNode[], passes = 40): FleetNode[] {
       for (let j = i + 1; j < ns.length; j++) {
         const n = ns[i]!
         const m = ns[j]!
-        const nf = n.kind === "root"
-        const mf = m.kind === "root"
+        const nf = n.kind === "root" || !!fixed?.has(n.id)
+        const mf = m.kind === "root" || !!fixed?.has(m.id)
         if (nf && mf) continue
         const dx = m.x - n.x
         const dy = m.y - n.y
-        const ox = (n.w + m.w) / 2 + 24 - Math.abs(dx)
-        const oy = (n.h + m.h) / 2 + 20 - Math.abs(dy)
-        if (ox <= 0 || oy <= 0) continue
+        const gx = (n.w + m.w) / 2 + 24 // the gaps that keep them apart, per axis
+        const gy = (n.h + m.h) / 2 + 20
+        if (Math.abs(dx) >= gx || Math.abs(dy) >= gy) continue
         moved = true
+        const d = Math.hypot(dx, dy)
+        const ux = d > 1e-6 ? dx / d : 0
+        const uy = d > 1e-6 ? dy / d : 1
+        // how far along (ux, uy) until one axis clears
+        const tx = Math.abs(ux) > 1e-6 ? (gx - Math.abs(dx)) / Math.abs(ux) : Infinity
+        const ty = Math.abs(uy) > 1e-6 ? (gy - Math.abs(dy)) / Math.abs(uy) : Infinity
+        const t = Math.min(tx, ty)
         const wn = nf ? 0 : mf ? 1 : 0.5
         const wm = mf ? 0 : nf ? 1 : 0.5
-        if (ox < oy) {
-          const s = dx < 0 ? -1 : 1
-          n.x -= s * ox * wn
-          m.x += s * ox * wm
-        } else {
-          const s = dy < 0 ? -1 : 1
-          n.y -= s * oy * wn
-          m.y += s * oy * wm
-        }
+        n.x -= ux * t * wn
+        n.y -= uy * t * wn
+        m.x += ux * t * wm
+        m.y += uy * t * wm
       }
     }
     if (!moved) break

@@ -3,9 +3,15 @@
 // docked in a strip, and a side panel for the selection. Cards are DOM, placed in world
 // coordinates (lib/fleet-layout) on one layer; a camera (the world point in the middle) pans it
 // with a transform: no native scrolling. The edges are one viewport-sized 2D canvas under the
-// cards. Static here: the motion step turns it.
+// cards. The open repo turns slowly while the mouse is still (lib/fleet-motion).
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
-import { ArrowSquareOut, GitBranch, Graph } from "@phosphor-icons/react"
+import {
+  ArrowSquareOut,
+  GitBranch,
+  GitPullRequest,
+  Graph,
+  PushPinSlash,
+} from "@phosphor-icons/react"
 import { useStore, activeTheme } from "../store"
 import { useFleetModel } from "./use-fleet-data"
 import {
@@ -28,6 +34,20 @@ import { agentColor, agentInfo } from "../lib/agent-kinds"
 import { agentIcon } from "./agent-icon"
 import { ipc } from "../lib/ipc"
 import { cardInView, keyPan, wheelPan } from "../lib/fleet-camera"
+import {
+  FRAME_MS,
+  GROW_MS,
+  KEY_RAD,
+  between,
+  withPins,
+  IDLE_MS,
+  TURN_RAD_PER_MS,
+  dotAt,
+  grown,
+  moving,
+  turning,
+  type MotionState,
+} from "../lib/fleet-motion"
 import { TerminalManager } from "../terminal/terminal-manager"
 
 type Selection = { kind: "repo"; key: string } | { kind: "agent"; id: string } | null
@@ -75,6 +95,10 @@ const agentDoing = (a: FleetAgent) =>
         : "working"
       : AGENT_STATUS_UI[a.status].word
 
+/** The class a status's word takes (no dot: the agent's icon says which agent it is). */
+const statusTone = (status: FleetAgent["status"]) =>
+  status === "working" ? "ok" : status === "waiting" ? "warn" : status === "done" ? "done" : "dim"
+
 const goToPane = (paneId: string) => {
   useStore.getState().focusSession(paneId)
   requestAnimationFrame(() => TerminalManager.focus(paneId))
@@ -95,6 +119,13 @@ export function FleetView() {
     : null
   const shownSel: Selection =
     sel?.kind === "repo" && open && sel.key === openKey ? { kind: "repo", key: open.key } : sel
+  // The cards pinned by a drag, where they were left.
+  const pins = useRef(new Map<string, { x: number; y: number }>())
+  const pinsRev = useRef(0) // (any pin change: the cached keyframes go)
+  const clearPins = useCallback(() => {
+    if (pins.current.size) pinsRev.current++
+    pins.current.clear()
+  }, [])
   useEffect(() => {
     if (open) openRoots.current = open.roots
     if (openKey && !open) {
@@ -102,16 +133,77 @@ export function FleetView() {
       openRoots.current = []
       setOpenKey(null)
       setSel(null)
+      clearPins()
+      setPinCount(0)
     } else if (open && open.key !== openKey) {
       setOpenKey(open.key)
       setSel((s) => (s?.kind === "repo" && s.key === openKey ? { kind: "repo", key: open.key } : s))
     }
-  }, [openKey, open])
+  }, [openKey, open, clearPins])
 
-  const nodes = useMemo(
-    () => (open ? relax(openLayout(open)) : overviewLayout(repos)),
-    [open, repos],
+  // Motion (lib/fleet-motion): the open repo's angle, the nodes pinned by a drag, when it opened
+  // (its cards grow out). React lays the graph out at the current angle with the pins on, so a
+  // model update mid-turn never makes a card jump; the motion loop below moves them in between.
+  const theta = useRef(0)
+  const [pinCount, setPinCount] = useState(0)
+  const openedAt = useRef(0)
+  const grewOut = useRef(true) // (the grow-out's last frame painted: a cut-short one is finished)
+  const [, setPinVersion] = useState(0) // a pin moved: render with it
+  const reduced = useRef(
+    typeof window !== "undefined" &&
+      !!window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches,
   )
+  // The one place positions come from, for React and the motion loop alike. The open repo turns
+  // through keyframes, one a second (lib/fleet-motion KEY_MS), each laid out at its angle with the
+  // pinned cards where they were left (fixed in the overlap pass, what hangs off them moved
+  // along); a frame blends the two around it and scales them while they grow out. So the overlap
+  // pass (O(n²)) runs about once a second while turning and never per frame, and a render that
+  // changes nothing gets the same array back (the effects keyed on it stay quiet).
+  const cache = useRef<{
+    repo: FleetRepo | null
+    all: FleetRepo[] | null
+    rev: number
+    keys: Map<number, FleetNode[]>
+    over: { all: FleetRepo[]; ns: FleetNode[] } | null
+    mix: { a: FleetNode[]; b: FleetNode[]; k: number; ns: FleetNode[] } | null
+  }>({ repo: null, all: null, rev: 0, keys: new Map(), over: null, mix: null })
+  const layoutNow = useCallback((repo: FleetRepo | null, all: FleetRepo[], now: number) => {
+    const c = cache.current
+    if (!repo) {
+      if (c.over?.all !== all) c.over = { all, ns: overviewLayout(all) }
+      return c.over.ns
+    }
+    if (c.repo !== repo || c.all !== all || c.rev !== pinsRev.current) {
+      Object.assign(c, { repo, all, rev: pinsRev.current, keys: new Map(), mix: null })
+    }
+    const pinned = pins.current
+    const fixed = pinned.size ? new Set(pinned.keys()) : undefined
+    const key = (i: number) => {
+      let ns = c.keys.get(i)
+      if (!ns) {
+        // (pins are where a card was left in the settled layout: what hangs off a pinned card
+        // moves by its offset from there, then the pass runs again around the pins)
+        ns = relax(openLayout(repo, i * KEY_RAD))
+        if (fixed) ns = relax(withPins(ns, pinned), 40, fixed)
+        if (c.keys.size >= 4) c.keys.delete(c.keys.keys().next().value!)
+        c.keys.set(i, ns)
+      }
+      return ns
+    }
+    const step = theta.current / KEY_RAD
+    const i = Math.floor(step)
+    const k = step - i
+    const a = key(i)
+    let ns = a
+    if (k > 1e-9) {
+      const b = key(i + 1)
+      if (c.mix?.a !== a || c.mix.b !== b || c.mix.k !== k)
+        c.mix = { a, b, k, ns: between(a, b, k) }
+      ns = c.mix.ns
+    }
+    return reduced.current ? ns : grown(ns, (now - openedAt.current) / GROW_MS, fixed)
+  }, [])
+  const nodes = layoutNow(open, repos, performance.now())
 
   const lookup = useMemo(() => {
     const m = new Map<string, NodeInfo>()
@@ -163,7 +255,7 @@ export function FleetView() {
   const moveTo = useCallback(
     (to: Camera, smooth: boolean, done?: () => void) => {
       cancelAnimationFrame(glide.current)
-      if (!smooth || window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) {
+      if (!smooth || window.matchMedia?.("(prefers-reduced-motion: reduce)")?.matches) {
         cam.current = to
         apply()
         done?.()
@@ -187,6 +279,8 @@ export function FleetView() {
 
   const moveToRef = useRef(moveTo)
   moveToRef.current = moveTo
+  const wakeRef = useRef<() => void>(() => {})
+  const paintRef = useRef<(now: number) => void>(() => {})
 
   // Each open or close centres its view once; a layout change keeps the camera where it is (over
   // the graph): nothing slides under the user.
@@ -200,10 +294,11 @@ export function FleetView() {
     if (shownView.current !== viewId) {
       const first = shownView.current === null
       shownView.current = viewId
-      extent.current = bounds(nodes)
+      // (the layout grown out, not its first frame at the circle: the camera can reach it all)
+      extent.current = bounds(layoutNow(open, repos, Infinity))
       moveTo({ x: FLEET.cx, y: FLEET.cy }, !first && !!open)
     } else {
-      extent.current = unionBox(extent.current, bounds(nodes))
+      extent.current = unionBox(extent.current, bounds(layoutNow(open, repos, Infinity)))
       apply()
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- `open` only picks the glide
@@ -213,18 +308,26 @@ export function FleetView() {
     (key: string) => {
       const closing = openKey === key
       openRoots.current = closing ? [] : (repos.find((r) => r.key === key)?.roots ?? [])
+      if (!closing) {
+        openedAt.current = reduced.current ? 0 : performance.now()
+        grewOut.current = false
+      }
       setOpenKey(closing ? null : key)
       setSel(closing ? null : { kind: "repo", key })
       setView((v) => v + 1)
+      clearPins() // (pins belong to the view they were made in)
+      setPinCount(0)
     },
-    [openKey, repos],
+    [openKey, repos, clearPins],
   )
   const closeAll = useCallback(() => {
     openRoots.current = []
     setOpenKey(null)
     setSel(null)
     setView((v) => v + 1)
-  }, [])
+    clearPins()
+    setPinCount(0)
+  }, [clearPins])
 
   // The edges: one canvas the size of the viewport, drawn through the camera.
   const selectedAgent = shownSel?.kind === "agent" ? shownSel.id : null
@@ -284,9 +387,193 @@ export function FleetView() {
       ctx.stroke()
     }
     ctx.globalAlpha = 1
+    // The dots running along the lines of working agents and sub-agents.
+    if (!reduced.current) {
+      const now = performance.now()
+      for (const n of ns) {
+        const info = lookup.get(n.id)
+        const status =
+          n.kind === "sub"
+            ? info?.sub?.status
+            : n.kind === "agent"
+              ? info?.agent?.status
+              : undefined
+        const p = n.parent && byId.get(n.parent)
+        if (status !== "working" || !p) continue
+        ctx.fillStyle = path.has(n.id)
+          ? accent
+          : (info?.agent && agentColor(info.agent.kind, scheme)) || accent
+        let seed = 0 // (lines out of step with each other: a hash of the id)
+        for (let i = 0; i < n.id.length; i++) seed = (seed * 31 + n.id.charCodeAt(i)) % 997
+        seed /= 997
+        for (const phase of [seed, seed + 0.5]) {
+          const d = dotAt(n, p, now, phase)
+          ctx.beginPath()
+          ctx.arc(d.x, d.y, 2.5, 0, Math.PI * 2)
+          ctx.fill()
+        }
+      }
+    }
   }, [lookup, selectedAgent, scheme, ui])
   drawRef.current = draw
   useEffect(() => apply(), [draw, nodes, apply])
+
+  // The motion loop: one throttled rAF (about 15 frames a second) that runs only while something
+  // moves (lib/fleet-motion `moving`): the open repo turning while the mouse is still, its cards
+  // growing out, dots on working agents. Each frame lays the open repo out at its angle, writes the
+  // cards' places straight to the DOM and redraws the canvas; it never renders React.
+  const lastInput = useRef(performance.now())
+  const hovered = useRef(false)
+  const pointer = useRef<{ x: number; y: number } | null>(null) // (where it was last seen)
+  const openRef = useRef(open)
+  openRef.current = open
+  const reposRef = useRef(repos)
+  reposRef.current = repos
+  const working = useMemo(
+    () =>
+      nodes.some((n) => {
+        const info = lookup.get(n.id)
+        return (
+          (n.kind === "agent" && info?.agent?.status === "working") ||
+          (n.kind === "sub" && info?.sub?.status === "working")
+        )
+      }),
+    [nodes, lookup],
+  )
+  const workingRef = useRef(working)
+  workingRef.current = working
+  const motion = useRef({ on: false, last: 0, raf: 0 })
+  const state = useCallback(
+    (now: number): MotionState => ({
+      open: !!openRef.current,
+      shown: document.visibilityState !== "hidden" && document.hasFocus(),
+      reduced: reduced.current,
+      hovered: hovered.current,
+      sinceInput: now - lastInput.current,
+      working: workingRef.current,
+      growing: !!openRef.current && now - openedAt.current < GROW_MS,
+    }),
+    [],
+  )
+  const paint = useCallback(
+    (now: number, relayout = true) => {
+      if (!relayout) return drawRef.current() // (dots only: the cards haven't moved)
+      const ns = layoutNow(openRef.current, reposRef.current, now)
+      nodesRef.current = ns
+      // (the turn carries cards past where they started: the camera can follow them)
+      extent.current = unionBox(extent.current, bounds(ns))
+      const els = layer.current?.querySelectorAll<HTMLElement>("[data-node]") ?? []
+      const at = new Map(ns.map((n) => [n.id, n]))
+      for (const el of els) {
+        const n = at.get(el.dataset.node!)
+        if (!n || n.kind === "root") continue
+        el.style.left = `${n.x - n.w / 2}px`
+        el.style.top = `${n.y - n.h / 2}px`
+      }
+      drawRef.current()
+    },
+    [layoutNow],
+  )
+  // A grow-out the loop didn't see through (the window lost focus mid-way, a late frame): its last
+  // frame, all placed.
+  const finishGrow = useCallback(
+    (now: number) => {
+      if (grewOut.current || !openRef.current || now - openedAt.current < GROW_MS) return false
+      grewOut.current = true
+      paint(now)
+      return true
+    },
+    [paint],
+  )
+  const wake = useCallback(() => {
+    const m = motion.current
+    if (!m.on) finishGrow(performance.now())
+    if (m.on || !moving(state(performance.now()))) return
+    m.on = true
+    m.last = performance.now()
+    // Two paces: the slow turn relays the cards out about 15 times a second (it moves ~2 px a
+    // second); the dots and the brief grow-out run every frame, where 15 would stutter. A frame
+    // with only dots redraws just the canvas.
+    const tick = (now: number) => {
+      const st = state(now)
+      if (!moving(st)) {
+        m.on = false
+        return
+      }
+      const turns = turning(st)
+      if (st.growing) {
+        m.last = now
+        paint(now, true)
+      } else if (finishGrow(now)) m.last = now
+      else if (turns && now - m.last >= FRAME_MS) {
+        theta.current += Math.min(now - m.last, 250) * TURN_RAD_PER_MS
+        m.last = now
+        paint(now, true)
+      } else if (st.working && !st.reduced) paint(now, false)
+      else if (!turns) m.last = now // (a turn starting later counts from now, not from long ago)
+      m.raf = requestAnimationFrame(tick)
+    }
+    m.raf = requestAnimationFrame(tick)
+  }, [state, paint, finishGrow])
+  // A repo opening grows its cards out of its circle (and starts a turn from where it is).
+  useLayoutEffect(() => {
+    if (!open) return
+    paint(performance.now()) // (the first frame grown from the circle, before anything shows)
+    wake()
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- once per open view
+  }, [viewId])
+  wakeRef.current = wake
+  paintRef.current = paint
+  // Pins whose card left (its agent ended) go too.
+  useEffect(() => {
+    let gone = false
+    for (const id of pins.current.keys())
+      if (!nodes.some((n) => n.id === id)) gone = pins.current.delete(id) || gone
+    if (gone) pinsRev.current++
+    if (gone) setPinCount(pins.current.size)
+  }, [nodes])
+  useEffect(() => wake(), [working, nodes, wake])
+  useEffect(() => {
+    let idle: ReturnType<typeof setTimeout> | undefined
+    // Still again: is a card under the pointer now? (the one it was on may have moved away, as a
+    // repo circle does when it opens, with no pointer event to say so)
+    const settle = () => {
+      const p = pointer.current
+      if (p) hovered.current = !!document.elementFromPoint?.(p.x, p.y)?.closest?.("[data-node]")
+      wake()
+    }
+    // Any input: the turn stops (where it is); once still again, it starts.
+    const input = (e: Event) => {
+      if (e instanceof MouseEvent) pointer.current = { x: e.clientX, y: e.clientY }
+      lastInput.current = performance.now()
+      clearTimeout(idle)
+      idle = setTimeout(settle, IDLE_MS + 20)
+      wake()
+    }
+    const events = ["pointermove", "wheel", "keydown", "pointerdown"] as const
+    for (const e of events) window.addEventListener(e, input, { passive: true, capture: true })
+    window.addEventListener("focus", wake)
+    document.addEventListener("visibilitychange", wake)
+    idle = setTimeout(settle, IDLE_MS + 20)
+    // Reduce Motion switched on (or off) while the tab is open.
+    const mq = window.matchMedia?.("(prefers-reduced-motion: reduce)")
+    const onReduced = (e: MediaQueryListEvent) => {
+      reduced.current = e.matches
+      paintRef.current(performance.now())
+      wake()
+    }
+    mq?.addEventListener?.("change", onReduced)
+    const m = motion.current
+    return () => {
+      for (const e of events) window.removeEventListener(e, input, { capture: true })
+      window.removeEventListener("focus", wake)
+      document.removeEventListener("visibilitychange", wake)
+      mq?.removeEventListener?.("change", onReduced)
+      clearTimeout(idle)
+      cancelAnimationFrame(m.raf)
+      m.on = false
+    }
+  }, [wake])
 
   // Panning: the wheel / trackpad, or dragging empty space. A resize needs nothing: the camera is
   // the middle, so the graph stays centred on it.
@@ -320,14 +607,65 @@ export function FleetView() {
         })
       } else pan(d.dx, d.dy)
     }
+    // Hovering a card freezes the turn (it can be clicked); dragging one pins it where it's left.
+    const onOver = (e: PointerEvent) => {
+      hovered.current = !!(e.target as HTMLElement).closest("[data-node]")
+      wakeRef.current()
+    }
+    let pin: { id: string; x: number; y: number; nx: number; ny: number; moved: boolean } | null =
+      null
+    const onCardDown = (e: PointerEvent) => {
+      const card = (e.target as HTMLElement).closest<HTMLElement>("[data-node]")
+      const n = card && nodesRef.current.find((x) => x.id === card.dataset.node)
+      if (e.button !== 0 || !n || n.kind === "root") return
+      // (no capture yet: a plain click or double-click must reach the card)
+      pin = { id: n.id, x: e.clientX, y: e.clientY, nx: n.x, ny: n.y, moved: false }
+    }
+    const onCardUp = (released: boolean) => {
+      if (pin?.moved) {
+        if (released) {
+          // (the click that ends a drag isn't one; none comes: the guard goes on the next task)
+          const eat = (e: MouseEvent) => e.stopPropagation()
+          el.addEventListener("click", eat, { capture: true, once: true })
+          setTimeout(() => el.removeEventListener("click", eat, { capture: true }), 0)
+        }
+        setPinCount(pins.current.size)
+        setPinVersion((v) => v + 1)
+      }
+      pin = null
+    }
+    const onCardMove = (e: PointerEvent) => {
+      if (!pin) return
+      if ((e.buttons & 1) === 0) return onCardUp(false) // released where we didn't hear it
+      const dx = e.clientX - pin.x
+      const dy = e.clientY - pin.y
+      if (!pin.moved) {
+        if (Math.hypot(dx, dy) < 5) return
+        pin.moved = true
+        el.setPointerCapture?.(e.pointerId) // (a drag now: a release anywhere ends it)
+        // (on a keyframe while it drags: one layout a move, not two to blend; under 3px away)
+        theta.current = Math.round(theta.current / KEY_RAD) * KEY_RAD
+      }
+      pins.current.set(pin.id, { x: pin.nx + dx, y: pin.ny + dy })
+      pinsRev.current++
+      // (one layout a frame, however fast the pointer reports)
+      dragFrame ||= requestAnimationFrame(() => {
+        dragFrame = 0
+        paintRef.current(performance.now())
+      })
+    }
+    let dragFrame = 0
+
     let drag: { x: number; y: number; id: number } | null = null
     const onDown = (e: PointerEvent) => {
+      onCardDown(e)
       if (e.button !== 0 || (e.target as HTMLElement).closest("button, .fleet-card")) return
       drag = { x: e.clientX, y: e.clientY, id: e.pointerId }
       el.setPointerCapture?.(e.pointerId)
       el.classList.add("panning")
     }
     const onMove = (e: PointerEvent) => {
+      onCardMove(e)
       if (!drag || e.pointerId !== drag.id) return
       if ((e.buttons & 1) === 0) return end() // the button came up where we didn't hear it
       pan(drag.x - e.clientX, drag.y - e.clientY)
@@ -338,6 +676,7 @@ export function FleetView() {
       el.classList.remove("panning")
     }
     const onUp = (e: PointerEvent) => {
+      onCardUp(e.type === "pointerup")
       if (drag && e.pointerId === drag.id) end()
     }
     // A card the keyboard (or anything else) focuses comes into view: the camera glides to it.
@@ -355,6 +694,13 @@ export function FleetView() {
       const view = { w: el.clientWidth, h: el.clientHeight, top: Math.max(0, top) }
       if (!cardInView(n, cam.current, view)) moveToRef.current({ x: n.x, y: n.y }, true)
     }
+    const unhover = () => {
+      hovered.current = false
+      wakeRef.current()
+    }
+    el.addEventListener("pointerover", onOver)
+    el.addEventListener("pointerleave", unhover)
+    window.addEventListener("blur", unhover)
     el.addEventListener("focusin", onFocus)
     el.addEventListener("keydown", onKey)
     el.addEventListener("lostpointercapture", end)
@@ -368,6 +714,9 @@ export function FleetView() {
     return () => {
       cancelAnimationFrame(frame.current)
       cancelAnimationFrame(glide.current)
+      el.removeEventListener("pointerover", onOver)
+      el.removeEventListener("pointerleave", unhover)
+      window.removeEventListener("blur", unhover)
       el.removeEventListener("focusin", onFocus)
       el.removeEventListener("keydown", onKey)
       el.removeEventListener("lostpointercapture", end)
@@ -376,6 +725,7 @@ export function FleetView() {
       el.removeEventListener("pointermove", onMove)
       el.removeEventListener("pointerup", onUp)
       el.removeEventListener("pointercancel", onUp)
+      cancelAnimationFrame(dragFrame)
       ro?.disconnect()
     }
   }, [apply])
@@ -415,6 +765,17 @@ export function FleetView() {
               <p>No agent is working in a repo right now.</p>
             </div>
           </div>
+        )}
+        {pinCount > 0 && (
+          <button
+            className="btn fleet-unpin"
+            onClick={() => {
+              clearPins()
+              setPinCount(0)
+            }}
+          >
+            <PushPinSlash size={13} /> Unpin
+          </button>
         )}
         {docked.length > 0 && (
           <div className="fleet-dock" aria-label="Other repos">
@@ -510,6 +871,9 @@ function FleetCard(props: {
         data-node={n.id}
       >
         <span className="one">
+          <span className={`fleet-pr-icon${p.state === "draft" ? " draft" : ""}`}>
+            <GitPullRequest size={13} weight="bold" />
+          </span>{" "}
           <span className="faint">#{p.number}</span> <b>{p.row?.title ?? ""}</b>
         </span>
         <span className={`one fleet-st ${st.cls}`}>{st.word}</span>
@@ -526,7 +890,7 @@ function FleetCard(props: {
   }
   if (n.kind === "branch") {
     return (
-      <div className="fleet-card fleet-branch" style={style}>
+      <div className="fleet-card fleet-branch" style={style} data-node={n.id}>
         <GitBranch size={12} />
         <span className="one">
           {info.branch === DETACHED ? "detached HEAD" : info.branch}{" "}
@@ -537,11 +901,14 @@ function FleetCard(props: {
   }
   if (n.kind === "sub" && info.sub) {
     const st = AGENT_STATUS_UI[info.sub.status]
+    const Icon = agentIcon(info.agent?.kind ?? "claude")
     return (
-      <div className="fleet-card fleet-sub" style={style}>
-        <span className={`dot sm ${st.cls}`} />
+      <div className="fleet-card fleet-sub" style={style} data-node={n.id}>
+        <span className="fleet-kind">
+          <Icon size={12} />
+        </span>
         <span className="one">
-          {info.sub.type} <span className="faint">· {st.word}</span>
+          {info.sub.type} <span className={statusTone(info.sub.status)}>· {st.word}</span>
         </span>
       </div>
     )
@@ -566,10 +933,7 @@ function FleetCard(props: {
           <b>{agentName(a)}</b>{" "}
           <span className="faint">· {a.subs.length ? plural(a.subs.length, "sub") : st.word}</span>
         </span>
-        <span className="one">
-          <span className={`dot sm ${st.cls}`} />{" "}
-          <span className={a.status === "waiting" ? "warn" : "dim"}>{agentDoing(a)}</span>
-        </span>
+        <span className={`one ${statusTone(a.status)}`}>{agentDoing(a)}</span>
       </button>
     )
   }
@@ -595,7 +959,6 @@ function FleetPanel(props: {
   if (agent?.agent) {
     const a = agent.agent
     const pr = agent.repo.prs.find((p) => p.agents.some((x) => x.id === a.id))
-    const st = AGENT_STATUS_UI[a.status]
     const ctx = a.tokens?.window ? Math.round((a.tokens.context / a.tokens.window) * 100) : null
     return (
       <aside className="fleet-panel" aria-label="Agent">
@@ -605,7 +968,13 @@ function FleetPanel(props: {
         </button>
         <h2 className="one">{agentName(a)}</h2>
         <div className="fleet-panel-row">
-          <span className={`dot ${st.cls}`} /> {agentInfo(a.kind).label} · {agentDoing(a)}
+          <span className="fleet-kind">
+            {(() => {
+              const I = agentIcon(a.kind)
+              return <I size={13} />
+            })()}
+          </span>
+          {agentInfo(a.kind).label} · <span className={statusTone(a.status)}>{agentDoing(a)}</span>
         </div>
         <button className="btn primary" onClick={() => goToPane(a.paneId)}>
           Go to pane
@@ -643,8 +1012,8 @@ function FleetPanel(props: {
         {a.subs.length ? (
           a.subs.map((s) => (
             <div key={s.id} className="fleet-panel-row">
-              <span className={`dot sm ${AGENT_STATUS_UI[s.status].cls}`} /> {s.type}{" "}
-              <span className="faint">· {AGENT_STATUS_UI[s.status].word}</span>
+              {s.type}{" "}
+              <span className={statusTone(s.status)}>· {AGENT_STATUS_UI[s.status].word}</span>
             </div>
           ))
         ) : (
