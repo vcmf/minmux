@@ -149,11 +149,11 @@ sit on a ring, in a stable order (first seen).
 - When the mouse has been still for a moment, the open graph turns around its repo, every node
   the same way, about one turn in 20 minutes: a few pixels a second at the edge. Repo circles
   never turn. Cards stay upright.
-- Moving the mouse lets the turn ease out where it is (nothing snaps back). Hovering a card
+- Moving the mouse stops the turn where it is (nothing snaps back). Hovering a card
   freezes the graph so it can be clicked. Dragging a node pins it; Unpin releases all.
 - Dots run along the lines of working agents and sub-agents.
-- Opening a repo grows its nodes out of the circle (half a second, overlap checks off while
-  they fly out).
+- Opening a repo grows its nodes out of the circle (half a second; the settled layout scaled,
+  no overlap checks while they fly out).
 - Turning stops when the window loses focus and after ten minutes without input.
 - Reduced motion: no turning, no dots, no grow-out.
 
@@ -242,15 +242,16 @@ Researched on real data (2026-11-25):
 ## Performance budget
 
 - Tab not shown, window hidden: no loop, no requests, nothing.
-- Shown: the loop runs at about 15 frames a second, and only while something moves (turning,
-  easing, dots). Settled with the mouse active, hovered, reduced motion with nothing left to
-  animate, window blurred, or ten minutes without input: stopped. A frame computes at most a
-  few hundred positions and redraws the canvas, budget under 1 ms.
+- Shown: the loop runs only while something moves. The turn moves the cards about 15 times a
+  second; the grow-out and the dots run every frame (at 15 they stutter), and a dots-only frame
+  redraws just the canvas. Stopped with the mouse active and nothing working, hovered (dots
+  aside), reduced motion, window blurred, or ten minutes without input. A frame computes at
+  most a few hundred positions and redraws the canvas, budget under 1 ms.
 - The agent graph changes on every tool call. The model follows it at most once a second, and
   the layout is redone only when the structure changes (a node added, moved or removed);
   status and text changes only re-render the cards.
-- Overlap checks run when the layout changes and a few times a second while turning, never per
-  frame.
+- Overlap checks run when the layout changes and once a second while turning (a keyframe;
+  frames blend between two), never per frame. A drag runs them at most once a frame.
 - GitHub: the lists' existing refresh and the pane PR lookups, run while the tab is shown, as
   they run today while the dialog or the sidebar is.
 - Checked with the `MINMUX_PERF=1` harness: tab shown and turning vs another tab, keystroke
