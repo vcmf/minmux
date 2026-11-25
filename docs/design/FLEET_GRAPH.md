@@ -143,8 +143,9 @@ sit on a ring, in a stable order (first seen).
   lists don't hold shows its number and state only. PR cards carry the pull-request icon. Agent cards: the agent's icon
   (Claude, Codex, OpenCode), name, sub-agent count; what it's doing as a word coloured by status
   (no dots); a third line with its folder, context and model; amber border when it needs you;
-  idle ones dimmed by colour (never see-through: the edges behind stay hidden); a
-  thin context meter along the bottom edge, amber past 80% of the window.
+  idle ones dimmed by colour (never see-through: the edges behind stay hidden). The agent's
+  panel has its context bar: amber past 75% of the window, red past 90%; a window the agent
+  doesn't report is its kind's usual one, shown as a guess (`~200k`) and never coloured.
 - Edges: agent to PR in the agent kind's colour, PR to repo neutral (red when blocked),
   sub-agent dashed. Selecting an agent tints its path to the repo green.
 - Sub-agents are the live ones: the agent graph drops a turn's finished sub-agents at the next
@@ -181,16 +182,16 @@ sit on a ring, in a stable order (first seen).
 The fleet adds a pure model (`lib/fleet-model`) over what minmux already tracks, plus two pieces
 of plumbing.
 
-| What                                                | Source                                                                                                                                                                                       |
-| --------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Sessions, status, sub-agents, current tool, tokens  | the agent graph (`lib/agent-graph`, hook-fed)                                                                                                                                                |
-| Session name and colour                             | `agent-meta` (per pane)                                                                                                                                                                      |
-| Which checkout an agent works in                    | the sidebar's rule (`lib/agent-dirs`): Claude's `in` folder and the pane's work checkouts first, the pane's cwd otherwise                                                                    |
-| Branch and PR (number, state, url) of that checkout | `PaneGitInfo`, as the sidebar shows                                                                                                                                                          |
-| `owner/name`                                        | the repo lookup the PR dialog caches per root (`repoFromRemotes`)                                                                                                                            |
-| Default branch                                      | GitHub's `defaultBranchRef` on a listed PR; else the remote's HEAD (`prs:local`, cached; `origin`'s when the chosen remote has none); else `main`/`master`                                   |
-| PR titles, CI, review; my open PRs                  | the PR lists' `mine` list, refreshed while the Fleet tab is shown                                                                                                                            |
-| Context use                                         | the session's `tokens.context`; the window from Codex's report, from the model in Claude's transcript (200k, or 1M for a 1M-context model), none for OpenCode (tokens shown without a meter) |
+| What                                                | Source                                                                                                                                                                     |
+| --------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Sessions, status, sub-agents, current tool, tokens  | the agent graph (`lib/agent-graph`, hook-fed)                                                                                                                              |
+| Session name and colour                             | `agent-meta` (per pane)                                                                                                                                                    |
+| Which checkout an agent works in                    | the sidebar's rule (`lib/agent-dirs`): Claude's `in` folder and the pane's work checkouts first, the pane's cwd otherwise                                                  |
+| Branch and PR (number, state, url) of that checkout | `PaneGitInfo`, as the sidebar shows                                                                                                                                        |
+| `owner/name`                                        | the repo lookup the PR dialog caches per root (`repoFromRemotes`)                                                                                                          |
+| Default branch                                      | GitHub's `defaultBranchRef` on a listed PR; else the remote's HEAD (`prs:local`, cached; `origin`'s when the chosen remote has none); else `main`/`master`                 |
+| PR titles, CI, review; my open PRs                  | the PR lists' `mine` list, refreshed while the Fleet tab is shown                                                                                                          |
+| Context use                                         | the session's `tokens.context`; the window from Codex's report; Claude's is a guess (200k, 1M past it, from `agent-kinds`); none for OpenCode (tokens shown without a bar) |
 
 - An agent on its repo's default branch hangs off the repo. A branch with no PR shows as a
   branch node. A PR not in `mine` (someone else's, or past the list's 30) keeps the pane's

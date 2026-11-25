@@ -4275,7 +4275,7 @@ body.resizing-col {
   left: 0;
   top: 0;
   transform-origin: 0 0; /* (the zoom scales about the world's origin) */
-  will-change: transform;
+  /* (no will-change: with it, a zoomed layer is a stretched bitmap of its 100%, blurry) */
 }
 /* Zoom out | level | in, at the graph's bottom left. */
 .fleet-zoom {

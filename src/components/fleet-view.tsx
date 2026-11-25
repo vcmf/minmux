@@ -129,8 +129,19 @@ export function FleetView() {
   const frame = useRef(0)
   // The zoom: the layer scaled about its top left, the edges drawn at the same scale.
   const zoom = useRef(1)
-  const [zoomShown, setZoomShown] = useState(1)
   const zoomFrame = useRef(0)
+  // The zoom controls are written to directly (their level, which ends are off): a pinch's
+  // many steps render nothing.
+  const zoomBar = useRef<HTMLDivElement>(null)
+  const showZoom = () => {
+    const bar = zoomBar.current
+    if (!bar) return
+    const z = zoom.current
+    const [out, level, inn] = bar.querySelectorAll("button")
+    if (level) level.textContent = `${Math.round(z * 100)}%`
+    if (out) (out as HTMLButtonElement).disabled = z <= ZOOM_MIN
+    if (inn) (inn as HTMLButtonElement).disabled = z >= ZOOM_MAX
+  }
   /** Where the world's origin lands on screen, and the scale, for a view this size. */
   const origin = (w: number, h: number) => {
     const z = zoom.current
@@ -194,7 +205,7 @@ export function FleetView() {
       zoom.current = nz
       // (the level shown once a frame: a pinch's many events don't render the graph each)
       cancelAnimationFrame(zoomFrame.current)
-      zoomFrame.current = requestAnimationFrame(() => setZoomShown(zoom.current))
+      zoomFrame.current = requestAnimationFrame(showZoom)
       apply()
     },
     [apply],
@@ -651,9 +662,9 @@ export function FleetView() {
       // (the dock of other repos covers the view's top while a repo is open)
       const dock = el.parentElement?.querySelector<HTMLElement>(".fleet-dock")
       const top = dock ? dock.getBoundingClientRect().bottom - el.getBoundingClientRect().top : 0
-      const z = zoom.current // (the view in world units)
+      const z = zoom.current // (the view, and its margin, in world units)
       const view = { w: el.clientWidth / z, h: el.clientHeight / z, top: Math.max(0, top) / z }
-      if (!cardInView(n, cam.current, view)) moveToRef.current({ x: n.x, y: n.y }, true)
+      if (!cardInView(n, cam.current, view, 24 / z)) moveToRef.current({ x: n.x, y: n.y }, true)
     }
     const unhover = () => {
       hovered.current = false
@@ -812,7 +823,7 @@ export function FleetView() {
           tabIndex={0}
           // (under the inventory: no focus or keys reach the graph the user can't see)
           inert={mode === "inventory"}
-          aria-label="Fleet graph: arrows and Page Up/Down pan it, Home centres it"
+          aria-label="Fleet graph: arrows and Page Up/Down pan it, Home centres it, + and − zoom, 0 back to 100%"
         >
           <div className="fleet-layer" ref={layer}>
             {nodes.map((n) => (
@@ -845,12 +856,12 @@ export function FleetView() {
           </div>
         )}
         {mode === "graph" && (
-          <div className="fleet-zoom" role="group" aria-label="Zoom">
+          <div className="fleet-zoom" role="group" aria-label="Zoom" ref={zoomBar}>
             <button
               className="fleet-zoom-btn"
               aria-label="Zoom out"
               title="Zoom out (−)"
-              disabled={zoomShown <= ZOOM_MIN}
+              disabled={zoom.current <= ZOOM_MIN}
               onClick={() => zoomButton(zoom.current / 1.2)}
             >
               <Minus size={13} />
@@ -861,13 +872,13 @@ export function FleetView() {
               title="Back to 100% (0)"
               onClick={() => zoomButton(1)}
             >
-              {Math.round(zoomShown * 100)}%
+              {Math.round(zoom.current * 100)}%
             </button>
             <button
               className="fleet-zoom-btn"
               aria-label="Zoom in"
               title="Zoom in (+)"
-              disabled={zoomShown >= ZOOM_MAX}
+              disabled={zoom.current >= ZOOM_MAX}
               onClick={() => zoomButton(zoom.current * 1.2)}
             >
               <Plus size={13} />

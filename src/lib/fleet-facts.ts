@@ -31,11 +31,3 @@ export function contextWindow(
   if (!w) return undefined
   return { size: t.context > w.usual ? w.large : w.usual, guess: true }
 }
-
-/** Tokens short: `82k`, `1.2M`, or the count itself under a thousand. */
-export function kTokens(n: number): string {
-  if (n < 1000) return String(Math.round(n))
-  const k = Math.round(n / 1000)
-  if (k < 1000) return `${k}k`
-  return `${(n / 1_000_000).toFixed(1).replace(/\.0$/, "")}M`
-}

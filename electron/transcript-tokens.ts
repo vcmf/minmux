@@ -41,7 +41,9 @@ export function addLine(acc: TokenUsage, line: string): TokenUsage {
   if (typeof u !== "object" || u === null) return acc
   const g = u as Record<string, unknown>
   const m = (rec.message as { model?: unknown }).model
-  const model = typeof m === "string" && m && m !== "<synthetic>" ? m.slice(0, 64) : acc.model
+  // (a turn cut short or failed: Claude's stand-in reply, all-zero usage; no word on the context)
+  if (m === "<synthetic>") return acc
+  const model = typeof m === "string" && m ? m.slice(0, 64) : acc.model
   return {
     context:
       num(g.input_tokens) + num(g.cache_read_input_tokens) + num(g.cache_creation_input_tokens),

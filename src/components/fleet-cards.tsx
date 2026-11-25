@@ -6,7 +6,8 @@ import { type FleetNode } from "../lib/fleet-layout"
 import { DETACHED, type FleetAgent, type FleetPr, type FleetRepo } from "../lib/fleet-model"
 import { cardLook } from "../lib/pr-graph"
 import { mcpList, skillList, type ToolList } from "../lib/fleet-toolbox"
-import { contextWindow, folderName, kTokens, shortModel } from "../lib/fleet-facts"
+import { contextWindow, folderName, shortModel } from "../lib/fleet-facts"
+import { formatTokens } from "../lib/tokens"
 import { AGENT_STATUS_UI } from "../lib/agent-status-ui"
 import { agentColor, agentInfo } from "../lib/agent-kinds"
 import type { AgentKind } from "../lib/agent-graph"
@@ -146,7 +147,7 @@ export function FleetCard(props: {
         <span className={`one fleet-st ${st.cls}`}>{st.word}</span>
         <button
           className="fleet-link"
-          title="Open in the pull requests dialog"
+          title={`Open #${p.number}`}
           aria-label={`Open #${p.number}`}
           // (as a PR link clicked in a pane: the dialog, looked up with that pane's gh)
           onClick={() => openLink(p.url, p.agents[0]?.paneId)}
@@ -211,7 +212,7 @@ export function FleetCard(props: {
 function AgentFacts({ a }: { a: FleetAgent }) {
   const facts = [
     folderName(a.cwd),
-    a.tokens ? `${kTokens(a.tokens.context)} ctx` : undefined,
+    a.tokens?.context ? `${formatTokens(a.tokens.context)} ctx` : undefined,
     shortModel(a.kind, a.tokens?.model),
   ].filter(Boolean)
   return facts.length ? (
@@ -274,13 +275,13 @@ export function FleetPanel(props: {
             </>
           )}
         </dl>
-        {a.tokens && (
+        {!!a.tokens?.context && (
           <div className="fleet-context">
             <div className="fleet-context-head">
               <span className="faint">context</span>
               <span>
-                {kTokens(a.tokens.context)}
-                {window ? ` / ${window.guess ? "~" : ""}${kTokens(window.size)}` : ""}
+                {formatTokens(a.tokens.context)}
+                {window ? ` / ${window.guess ? "~" : ""}${formatTokens(window.size)}` : ""}
               </span>
             </div>
             {ctx !== null && (
