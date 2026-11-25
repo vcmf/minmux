@@ -18,20 +18,30 @@ const key = (k: string, over: Partial<Parameters<typeof keyPan>[0]> = {}) => ({
   ...over,
 })
 
+const page = { w: 1600, h: 800 }
+
 describe("wheelPan", () => {
   it("pans by pixels, lines and pages", () => {
-    expect(wheelPan(wheel({ deltaX: 5, deltaY: 10 }), 800)).toEqual({ dx: 5, dy: 10 })
-    expect(wheelPan(wheel({ deltaY: 3, deltaMode: 1 }), 800)).toEqual({ dx: 0, dy: 48 })
-    expect(wheelPan(wheel({ deltaY: 1, deltaMode: 2 }), 800)).toEqual({ dx: 0, dy: 800 })
+    expect(wheelPan(wheel({ deltaX: 5, deltaY: 10 }), page)).toEqual({ dx: 5, dy: 10 })
+    expect(wheelPan(wheel({ deltaY: 3, deltaMode: 1 }), page)).toEqual({ dx: 0, dy: 48 })
+    expect(wheelPan(wheel({ deltaY: 1, deltaMode: 2 }), page)).toEqual({ dx: 0, dy: 800 })
+    // (a page sideways is the view's width)
+    expect(wheelPan(wheel({ deltaY: 1, deltaMode: 2, shiftKey: true }), page)).toEqual({
+      dx: 1600,
+      dy: 0,
+    })
   })
 
   it("shift turns a mouse wheel sideways; a trackpad's own sideways stays", () => {
-    expect(wheelPan(wheel({ deltaY: 40, shiftKey: true }), 800)).toEqual({ dx: 40, dy: 0 })
-    expect(wheelPan(wheel({ deltaX: 7, deltaY: 3, shiftKey: true }), 800)).toEqual({ dx: 7, dy: 3 })
+    expect(wheelPan(wheel({ deltaY: 40, shiftKey: true }), page)).toEqual({ dx: 40, dy: 0 })
+    expect(wheelPan(wheel({ deltaX: 7, deltaY: 3, shiftKey: true }), page)).toEqual({
+      dx: 7,
+      dy: 3,
+    })
   })
 
   it("a pinch (ctrl wheel) is no pan", () => {
-    expect(wheelPan(wheel({ deltaY: 10, ctrlKey: true }), 800)).toBeNull()
+    expect(wheelPan(wheel({ deltaY: 10, ctrlKey: true }), page)).toBeNull()
   })
 })
 
@@ -57,6 +67,13 @@ describe("cardInView", () => {
   it("a card in the middle is in view; one past an edge isn't", () => {
     expect(cardInView(card, { x: 0, y: 0 }, view)).toBe(true)
     expect(cardInView(card, { x: 450, y: 0 }, view)).toBe(false) // its left edge past the left side
+  })
+
+  it("a repo circle counts with its label below it", () => {
+    const root: FleetNode = { id: "r", kind: "root", x: 0, y: 0, w: 80, h: 80 }
+    // the circle's bottom 40px above the view's bottom margin, its label not
+    expect(cardInView(root, { x: 0, y: -280 }, view)).toBe(false)
+    expect(cardInView(root, { x: 0, y: -200 }, view)).toBe(true)
   })
 
   it("a card under the dock of other repos isn't in view", () => {

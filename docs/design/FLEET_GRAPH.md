@@ -66,7 +66,7 @@ kind of tab beside the terminal ones instead of living inside one.
   shown. Readers that ask "what is on screen" (renderer, attention, highlights, the palette's
   tab list, find, the status bar's driving pane) check the view; readers that ask "which tab is
   in context" (new-tab cwd, `focusedTerminal`, `useGhMissing`) keep `activeTabId`.
-- A view tab closes with its ×. No new keyboard shortcuts:
+- A view tab closes with its ×. No new app-wide shortcuts (the graph's own keys pan it, see below):
   ⌘W stays the window's Close.
 - The tab's dot follows the fleet: amber when any agent needs you, green while any works.
 
@@ -128,8 +128,8 @@ sit on a ring, in a stable order (first seen).
 - Free-form forces were tried on the canvas and gave an unreadable tangle; nodes have computed
   places and only ease toward them, with a light overlap check.
 - **The graph may be bigger than the window.** No native scrolling: a camera (the world point in
-  the middle of the view) pans one layer of cards with a transform. The wheel or trackpad and a
-  drag on empty space move it, a focused card glides it into view, opening a repo glides to its
+  the middle of the view) pans one layer of cards with a transform. The wheel or trackpad, a drag
+  on empty space and the arrow / Page keys move it, Home centres it again, a focused card glides it into view, opening a repo glides to its
   centre, and it stays over the graph. A resize keeps the middle in the middle; cards coming or
   going never move the others under the user. (Native scrolling was tried and raced React's
   renders on resize and on model updates.)

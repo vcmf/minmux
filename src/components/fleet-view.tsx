@@ -139,7 +139,7 @@ export function FleetView() {
   const viewport = useRef<HTMLDivElement>(null)
   // The keyboard lands on the graph's viewport when the view shows (the parked terminals are
   // inert): arrows pan it at once.
-  useEffect(() => viewport.current?.focus(), [])
+  useEffect(() => viewport.current?.focus({ focusVisible: false } as FocusOptions), [])
   const layer = useRef<HTMLDivElement>(null)
   const canvas = useRef<HTMLCanvasElement>(null)
   const cam = useRef<Camera>({ x: FLEET.cx, y: FLEET.cy })
@@ -161,11 +161,12 @@ export function FleetView() {
   }, [])
   const glide = useRef(0)
   const moveTo = useCallback(
-    (to: Camera, smooth: boolean) => {
+    (to: Camera, smooth: boolean, done?: () => void) => {
       cancelAnimationFrame(glide.current)
       if (!smooth || window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) {
         cam.current = to
         apply()
+        done?.()
         return
       }
       const from = cam.current
@@ -177,6 +178,7 @@ export function FleetView() {
         cam.current = { x: from.x + (to.x - from.x) * e, y: from.y + (to.y - from.y) * e }
         apply()
         if (k < 1) glide.current = requestAnimationFrame(step)
+        else done?.()
       }
       glide.current = requestAnimationFrame(step)
     },
@@ -302,7 +304,7 @@ export function FleetView() {
     }
     const onWheel = (e: WheelEvent) => {
       e.preventDefault()
-      const d = wheelPan(e, el.clientHeight)
+      const d = wheelPan(e, { w: el.clientWidth, h: el.clientHeight })
       if (d) pan(d.dx, d.dy)
     }
     // The keyboard pans too (not from a text field); Home goes back to the view's centre.
@@ -312,8 +314,10 @@ export function FleetView() {
       if (!d) return
       e.preventDefault()
       if (d === "home") {
-        extent.current = bounds(nodesRef.current)
-        moveToRef.current({ x: FLEET.cx, y: FLEET.cy }, true)
+        // (the bounds shrink to the graph once there: a pan mid-glide keeps them as they were)
+        moveToRef.current({ x: FLEET.cx, y: FLEET.cy }, true, () => {
+          extent.current = bounds(nodesRef.current)
+        })
       } else pan(d.dx, d.dy)
     }
     let drag: { x: number; y: number; id: number } | null = null
@@ -351,11 +355,6 @@ export function FleetView() {
       const view = { w: el.clientWidth, h: el.clientHeight, top: Math.max(0, top) }
       if (!cardInView(n, cam.current, view)) moveToRef.current({ x: n.x, y: n.y }, true)
     }
-    // (overflow: clip forbids scrolling; this catches an engine that scrolls anyway)
-    const noScroll = () => {
-      if (el.scrollLeft || el.scrollTop) el.scrollLeft = el.scrollTop = 0
-    }
-    el.addEventListener("scroll", noScroll)
     el.addEventListener("focusin", onFocus)
     el.addEventListener("keydown", onKey)
     el.addEventListener("lostpointercapture", end)
@@ -369,7 +368,6 @@ export function FleetView() {
     return () => {
       cancelAnimationFrame(frame.current)
       cancelAnimationFrame(glide.current)
-      el.removeEventListener("scroll", noScroll)
       el.removeEventListener("focusin", onFocus)
       el.removeEventListener("keydown", onKey)
       el.removeEventListener("lostpointercapture", end)

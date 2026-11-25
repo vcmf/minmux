@@ -2,20 +2,22 @@
 // focused card moves the camera. Pure; the view wires them to its events.
 import { toScreen, type Camera, type FleetNode } from "./fleet-layout"
 
-/** A wheel event's pan in px: lines and pages scaled, shift turning a mouse wheel sideways; a
- *  ctrl / pinch wheel is no pan (null). */
+// Lines and pages in px (a page: the view's width sideways, its height down); shift turns a mouse
+// wheel sideways; a ctrl / pinch wheel is no pan.
+/** A wheel event's pan in px, or null. */
 export function wheelPan(
   e: { deltaX: number; deltaY: number; deltaMode: number; shiftKey: boolean; ctrlKey: boolean },
-  pageH: number,
+  page: { w: number; h: number },
 ): { dx: number; dy: number } | null {
   if (e.ctrlKey) return null
-  const unit = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? pageH : 1
   const sideways = e.shiftKey && !e.deltaX
-  return { dx: (sideways ? e.deltaY : e.deltaX) * unit, dy: (sideways ? 0 : e.deltaY) * unit }
+  const ux = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? page.w : 1
+  const uy = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? page.h : 1
+  return sideways ? { dx: e.deltaY * ux, dy: 0 } : { dx: e.deltaX * ux, dy: e.deltaY * uy }
 }
 
-/** What a key does to the camera: a pan (arrows a step, Page Up/Down most of a screen), `home`
- *  (back to the view's centre), or nothing (another key, or one with a modifier held). */
+// Arrows a step, Page Up/Down most of a screen, Home back to the centre; nothing with a modifier.
+/** What a key does to the camera: a pan, `home`, or nothing. */
 export function keyPan(
   e: { key: string; metaKey: boolean; ctrlKey: boolean; altKey: boolean },
   pageH: number,
@@ -43,8 +45,9 @@ export function keyPan(
   }
 }
 
-/** Whether a card shows whole in the view: `top` is where the visible part starts (below the
- *  dock of other repos when it's shown). */
+// `top`: where the visible part starts (below the dock of other repos when it's shown); a root
+// counts with its label (240px wide, about 60px below the circle), as `bounds` does.
+/** Whether a card shows whole in the view. */
 export function cardInView(
   n: FleetNode,
   cam: Camera,
@@ -52,10 +55,12 @@ export function cardInView(
   margin = 24,
 ): boolean {
   const { x, y } = toScreen(n, cam, view.w, view.h)
+  const half = n.kind === "root" ? Math.max(n.w, 240) / 2 : n.w / 2
+  const below = n.kind === "root" ? 60 : 0
   return (
-    x - n.w / 2 >= margin &&
-    x + n.w / 2 <= view.w - margin &&
+    x - half >= margin &&
+    x + half <= view.w - margin &&
     y - n.h / 2 >= view.top + margin &&
-    y + n.h / 2 <= view.h - margin
+    y + n.h / 2 + below <= view.h - margin
   )
 }
