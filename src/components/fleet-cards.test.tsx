@@ -156,6 +156,27 @@ describe("FleetPanel", () => {
     expect(screen.getAllByText("none").length).toBeGreaterThan(0)
   })
 
+  it("an agent's MCP servers and skills: unsupported, none, none seen, failed only", () => {
+    const show = (toolbox: FleetAgent["toolbox"]) => {
+      const a = agent({ kind: "codex", toolbox })
+      return panel({ sel: { kind: "agent", id: "a" }, agentOf: () => ({ repo: repo(), agent: a }) })
+    }
+    let r = show({ mcp: {}, mcpFailed: { echo: 2 }, mcpLoaded: ["echo"], skills: null })
+    expect(screen.getByText("not supported yet")).toBeInTheDocument()
+    expect(screen.getByText("· failed")).toBeInTheDocument()
+    r.unmount()
+    r = show({ mcp: {}, mcpLoaded: [], skills: {}, skillsLoaded: [] })
+    expect(screen.getAllByText("none").length).toBeGreaterThan(1)
+    r.unmount()
+    show({ mcp: {}, skills: {} })
+    expect(screen.getAllByText("none seen").length).toBe(2)
+  })
+
+  it("an agent before its first turn ends", () => {
+    panel({ sel: { kind: "agent", id: "a" }, agentOf: () => ({ repo: repo(), agent: agent() }) })
+    expect(screen.getAllByText("after its first turn").length).toBe(2)
+  })
+
   it("a repo with no open PR; its GitHub link", () => {
     const open = vi.spyOn(ipc, "openExternal").mockResolvedValue(undefined as never)
     const r = repo({ repo: "o/r", agents: [agent()] })

@@ -174,6 +174,17 @@ describe("agent-graph — token usage", () => {
     expect(g.nodes[A]!.tokens!.output).toBe(7)
   })
 
+  it("a Toolbox lands on the session's root, never makes one", () => {
+    const toolbox = { mcp: { gh: 2 }, skills: { review: 1 } }
+    const g = reduceAgentEvents([
+      { event: "SessionStart", sessionId: S },
+      { event: "Toolbox", sessionId: S, toolbox },
+    ])
+    expect(g.nodes["root:sess-1"]!.toolbox).toEqual(toolbox)
+    const none = reduceAgentEvents([{ event: "Toolbox", sessionId: "nope", toolbox }])
+    expect(none.nodes["root:nope"]).toBeUndefined()
+  })
+
   it("ignores a late token total for an already-dropped sub-agent (no resurrection)", () => {
     // Finish + prune the sub-agent, THEN a straggler TokenUsage arrives for it.
     const g1 = reduceAgentEvents([

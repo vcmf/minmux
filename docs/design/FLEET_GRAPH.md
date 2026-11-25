@@ -167,7 +167,7 @@ sit on a ring, in a stable order (first seen).
   MCP servers and skills (step 5).
 - **Inventory** (step 6), from a Graph | Inventory switch in the header: one column per agent
   kind, each MCP server and skill with its use count, then the loaded but unused ones; window
-  Live, 7 days, 30 days or All. Codex skill counts are marked "likely". Clicking a row switches
+  Live, 7 days, 30 days or All. Codex skills say "not supported yet". Clicking a row switches
   to the graph with the sessions that used it highlighted.
 
 ## Data
@@ -208,16 +208,34 @@ of plumbing.
 Researched on real data (2026-11-25):
 
 - **Claude**, exact. Loaded: the transcript's `skill_listing` and `deferred_tools_delta`
-  entries (skills; MCP tools as `mcp__<server>__<tool>`; failed and pending servers). When
-  Claude loads all tools up front, MCP servers come from its config files instead
-  (`~/.claude.json` per project, `.mcp.json`, plugins), read in main and cached. Used: the
-  `PreToolUse` hook we already receive (`Skill` with its `skill`; `mcp__…` names).
-- **Codex**: MCP calls should show in the rollout, but no machine here has a server configured,
-  so the format is unverified. It has no skill tool: a skill counts as used when Codex reads
-  that skill's `SKILL.md`, shown as "likely".
-- **OpenCode**: MCP and skill calls come through our plugin's tool events; both formats are
-  unverified locally.
+  entries (skills; MCP tools as `mcp__<server>__<tool>`; failed servers), plus the servers its
+  config gives the folder the session started in (`~/.claude.json` user-wide and per project,
+  under `CLAUDE_CONFIG_DIR` when set; the nearest `.mcp.json` up to the repo root when approved
+  there or in a settings file). `~/.claude.json` can be many MB and changes every turn: a worker
+  thread reads it and sends main only the MCP fields. Used: the transcript's `tool_use` entries
+  (`mcp__…` names; `Skill` with its `skill`), the session's and each sub-agent's.
+- **Codex**: MCP servers loaded from `~/.codex/config.toml` (`[mcp_servers.*]`; the rollout
+  doesn't list them). Used: the rollout's `item_completed` events whose item is a
+  `McpToolCall` (`server`, `tool`, `status`; a call refused for want of approval is `failed`).
+  Skills: "not supported yet". Codex has no skill tool, and guessing from `SKILL.md` reads isn't
+  worth showing.
+- **OpenCode**: MCP servers loaded from its config's `mcp` key, its layers merged as OpenCode
+  merges them: the global config, `OPENCODE_CONFIG`, `OPENCODE_CONFIG_DIR` and
+  `OPENCODE_CONFIG_CONTENT` when main has them, and `opencode.json(c)` /
+  `.opencode/` from the session's folder up to its repo root (an `enabled: false` server left
+  out). Used, through our plugin's tool events: an MCP tool is
+  `<server>_<tool>` (matched against the configured servers, since names hold `_`); a skill is
+  the `skill` tool with its `name`. Skills loaded: its skill folders (global and `.opencode/`)
+  and Claude's (`~/.claude/skills`, `.claude/skills`), which it reads too. Counts live in main
+  per session (kept across a switch away and back).
+- Verified 2026-11-25 (codex-cli 0.167.1, opencode 1.18.34) with a scratch stdio MCP server.
 - Counted in main per session from events it already handles, sent on the agent event channel.
+  A sub-agent's uses count for its session: one entry per sub-agent, replaced (never added to)
+  by each read of its whole transcript, so a continued or still-running sub-agent counts once.
+  Sub-agents are read when they stop: after a relaunch, one that finished before it counts again
+  only if it runs again (a session's sub-agent folder can hold gigabytes; it's never re-read). A server's configured name is matched to its tool
+  names the way the agents write them (`[^A-Za-z0-9_-]` → `_`); servers the user turned off or
+  never approved aren't listed. Config files are re-read at most every 30 s.
   Transcripts are read incrementally (one Codex rollout here is 16 GB).
 - **Inventory windows** (step 6): Live adds up the per-session counts. 7 days, 30 days and All
   come from a history scan in the sessions worker, which already reads past sessions for the
