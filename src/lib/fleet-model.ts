@@ -56,6 +56,7 @@ export interface FleetRepo {
   branches: FleetBranch[]
   agents: FleetAgent[] // on the default branch (no PR, no branch node)
   counts: { agents: number; working: number; waiting: number; prs: number }
+  roots: string[] // its agents' checkout roots (stable while `key` moves from a folder to owner/name)
 }
 
 export interface FleetInput {
@@ -167,9 +168,11 @@ export function fleetModel(input: FleetInput): FleetRepo[] {
         branches: [],
         agents: [],
         counts: { agents: 0, working: 0, waiting: 0, prs: 0 },
+        roots: [],
       }
       repos.set(key, repo)
     }
+    if (!repo.roots.includes(root)) repo.roots.push(root)
     const agent = toAgent(graph, n, paneId, input, git)
     repo.counts.agents++
     if (agent.status === "working") repo.counts.working++

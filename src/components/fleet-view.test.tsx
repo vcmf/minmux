@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest"
-import { act, render, screen, waitFor } from "@testing-library/react"
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { FleetView } from "./fleet-view"
 import { useStore } from "../store"
 import { ipc } from "../lib/ipc"
@@ -67,12 +67,19 @@ describe("FleetView", () => {
   })
   afterEach(() => vi.restoreAllMocks())
 
-  it("lists the repos with a live agent: name, default branch, PRs, agents", async () => {
+  it("shows a repo's circle; opening it shows its PRs and agents; an agent leads to its pane", async () => {
     seed()
     render(<FleetView />)
-    await waitFor(() =>
-      expect(screen.getByText(/o\/r ⑂ main · 2 PRs · 1 agent/)).toBeInTheDocument(),
-    )
+    const root = await screen.findByRole("button", { name: "Open o/r" })
+    await waitFor(() => expect(screen.getAllByText("2 PRs · 1 agent").length).toBeGreaterThan(0))
+    fireEvent.click(root)
+    expect((await screen.findAllByText("PR 7")).length).toBe(2) // its card and the panel
+    expect(screen.getAllByText("PR 8").length).toBe(2) // mine, nobody on it
+    const agent = screen.getByRole("button", { name: /^Claude agent .*working$/ })
+    fireEvent.click(agent)
+    const focus = vi.spyOn(useStore.getState(), "focusSession")
+    fireEvent.click(screen.getByText("Go to pane"))
+    expect(focus).toHaveBeenCalledWith("p1")
   })
 
   it("says so when no agent works in a repo", async () => {
@@ -94,5 +101,33 @@ describe("FleetView", () => {
     act(() => void document.dispatchEvent(new Event("visibilitychange")))
     view.unmount()
     vi.useRealTimers()
+  })
+
+  it("a repo that leaves the model while open closes, and doesn't reopen by itself", async () => {
+    seed()
+    render(<FleetView />)
+    fireEvent.click(await screen.findByRole("button", { name: "Open o/r" }))
+    await screen.findAllByText("PR 7")
+    const agents = useStore.getState().agents
+    act(() => useStore.setState({ agents: reduceAgentEvents([]) })) // its session ended
+    await waitFor(() => expect(screen.queryByText("PR 7")).toBeNull(), { timeout: 3000 })
+    act(() => useStore.setState({ agents })) // an agent there again
+    expect(
+      await screen.findByRole("button", { name: "Open o/r" }, { timeout: 3000 }),
+    ).toBeInTheDocument()
+    expect(screen.queryByText("PR 7")).toBeNull() // still the overview
+  })
+
+  it("an open repo stays open when its key moves from its folder to owner/name", async () => {
+    local.mockResolvedValueOnce({ ok: true, repos: [] }) // first: no GitHub name yet
+    seed()
+    render(<FleetView />)
+    fireEvent.click(await screen.findByRole("button", { name: "Open r" }))
+    await screen.findByRole("button", { name: /^Claude agent/ }) // opened, under its folder's key
+    act(() => useStore.setState({ paneGit: { ...useStore.getState().paneGit } })) // roots refresh
+    await waitFor(() => expect(screen.getAllByText("PR 7").length).toBeGreaterThan(0), {
+      timeout: 3000,
+    })
+    expect(screen.queryByRole("button", { name: "Open o/r" })).toBeNull() // not the overview
   })
 })
