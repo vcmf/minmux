@@ -7,14 +7,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { ArrowSquareOut, GitBranch, Graph } from "@phosphor-icons/react"
 import { useStore, activeTheme } from "../store"
 import { useFleetModel } from "./use-fleet-data"
-import {
-  FLEET,
-  nodeId,
-  openLayout,
-  overviewLayout,
-  relax,
-  type FleetNode,
-} from "../lib/fleet-layout"
+import { fit, nodeId, openLayout, overviewLayout, relax, type FleetNode } from "../lib/fleet-layout"
 import { DETACHED, type FleetAgent, type FleetPr, type FleetRepo } from "../lib/fleet-model"
 import { cardLook } from "../lib/pr-graph"
 import { AGENT_STATUS_UI } from "../lib/agent-status-ui"
@@ -80,19 +73,34 @@ export function FleetView() {
   const repos = useFleetModel()
   const [openKey, setOpenKey] = useState<string | null>(null)
   const [sel, setSel] = useState<Selection>(null)
-  const open = repos.find((r) => r.key === openKey) ?? null
-  // A repo that left the model (its last agent ended) closes; it doesn't reopen by itself later.
+  // The open repo, by key, or by its checkout roots when its key moved (a folder's key becomes
+  // owner/name once the repo lookup answers).
+  const openRoots = useRef<string[]>([])
+  const open =
+    repos.find((r) => r.key === openKey) ??
+    (openKey ? repos.find((r) => r.roots.some((x) => openRoots.current.includes(x))) : undefined) ??
+    null
   useEffect(() => {
-    if (openKey && !open) {
+    if (!openKey) return
+    if (!open) {
+      // It left the model (its last agent ended): closed; it doesn't reopen by itself later.
       setOpenKey(null)
       setSel(null)
+      return
+    }
+    openRoots.current = open.roots
+    if (open.key !== openKey) {
+      setOpenKey(open.key)
+      setSel((s) => (s?.kind === "repo" ? { kind: "repo", key: open.key } : s))
     }
   }, [openKey, open])
 
-  const nodes = useMemo(
-    () => (open ? relax(openLayout(open)) : overviewLayout(repos)),
+  // The layout, moved into an area as big as it needs (a busy repo makes it scroll).
+  const placed = useMemo(
+    () => fit(open ? relax(openLayout(open)) : overviewLayout(repos)),
     [open, repos],
   )
+  const nodes = placed.nodes
 
   const lookup = useMemo(() => {
     const m = new Map<string, NodeInfo>()
@@ -115,6 +123,11 @@ export function FleetView() {
     return m
   }, [repos])
 
+  const area = useRef<HTMLDivElement>(null)
+  const centre = useRef({ cx: placed.cx, cy: placed.cy })
+  centre.current = { cx: placed.cx, cy: placed.cy }
+  const offset = () => ({ x: area.current?.offsetLeft ?? 0, y: area.current?.offsetTop ?? 0 })
+
   const toggle = useCallback(
     (key: string) => {
       const closing = openKey === key
@@ -128,9 +141,10 @@ export function FleetView() {
   const scroller = useRef<HTMLDivElement>(null)
   useLayoutEffect(() => {
     const el = scroller.current
+    const o = offset()
     el?.scrollTo?.({
-      left: FLEET.cx - el.clientWidth / 2,
-      top: FLEET.cy - el.clientHeight / 2,
+      left: o.x + centre.current.cx - el.clientWidth / 2,
+      top: o.y + centre.current.cy - el.clientHeight / 2,
       behavior: openKey ? "smooth" : "auto",
     })
   }, [openKey])
@@ -139,20 +153,8 @@ export function FleetView() {
   const canvas = useRef<HTMLCanvasElement>(null)
   const selectedAgent = sel?.kind === "agent" ? sel.id : null
   const scheme = useStore((s) => activeTheme(s).scheme)
-  const themeName = useStore((s) => activeTheme(s).name)
-  // The theme's colours, read once per theme (never per frame).
-  const colors = useRef({ faint: "#3a3a42", red: "#f0625f", accent: "#4ec97a" })
-  useLayoutEffect(() => {
-    const c = canvas.current
-    if (!c) return
-    const css = getComputedStyle(c)
-    const v = (name: string, or: string) => css.getPropertyValue(name).trim() || or
-    colors.current = {
-      faint: v("--border2", "#3a3a42"),
-      red: v("--red", "#f0625f"),
-      accent: v("--accent", "#4ec97a"),
-    }
-  }, [themeName])
+  // The theme's colours, from the theme itself (its CSS variables may not be applied yet).
+  const ui = useStore((s) => activeTheme(s).ui)
   const draw = useCallback(() => {
     const c = canvas.current
     const el = scroller.current
@@ -167,9 +169,11 @@ export function FleetView() {
       c.style.width = `${w}px`
       c.style.height = `${h}px`
     }
-    ctx.setTransform(dpr, 0, 0, dpr, -el.scrollLeft * dpr, -el.scrollTop * dpr)
-    ctx.clearRect(el.scrollLeft, el.scrollTop, w, h)
-    const { faint, red, accent } = colors.current
+    // (the area is centred in a view bigger than it: its offset moves the edges with it)
+    const o = offset()
+    ctx.setTransform(dpr, 0, 0, dpr, (o.x - el.scrollLeft) * dpr, (o.y - el.scrollTop) * dpr)
+    ctx.clearRect(el.scrollLeft - o.x, el.scrollTop - o.y, w, h)
+    const { border2: faint, red, accent } = ui
     const byId = new Map(nodes.map((n) => [n.id, n]))
     // The selected agent's way to its repo, drawn green.
     const path = new Set<string>()
@@ -201,8 +205,7 @@ export function FleetView() {
       ctx.stroke()
     }
     ctx.globalAlpha = 1
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- a new theme redraws with its colours
-  }, [nodes, lookup, selectedAgent, scheme, themeName])
+  }, [nodes, lookup, selectedAgent, scheme, ui])
   // Scroll and resize listeners, set up once: they draw through a ref (a new layout doesn't
   // re-create them, so it can't interrupt a scroll).
   const drawRef = useRef(draw)
@@ -248,7 +251,7 @@ export function FleetView() {
       <div className="fleet-graph">
         <canvas className="fleet-edges" ref={canvas} aria-hidden="true" />
         <div className="fleet-scroll" ref={scroller}>
-          <div className="fleet-area" style={{ width: FLEET.w, height: FLEET.h }}>
+          <div className="fleet-area" ref={area} style={{ width: placed.w, height: placed.h }}>
             {nodes.map((n) => (
               <FleetCard
                 key={n.id}
@@ -364,7 +367,7 @@ function FleetCard(props: {
     const st = prStatus(p)
     return (
       <div
-        className={`fleet-card fleet-pr ${st.cls}${p.state === "draft" ? " draft" : ""}`}
+        className={`fleet-card fleet-pr${st.cls === "ok" ? "" : ` ${st.cls}`}${p.state === "draft" ? " draft" : ""}`}
         style={style}
       >
         <span className="one">

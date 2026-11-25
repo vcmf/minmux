@@ -48,6 +48,9 @@ export const rootSize = (repo: FleetRepo) => Math.min(104, 64 + repo.counts.agen
 
 /** Every repo on a ring, the first at the top, in the model's order. */
 export function overviewLayout(repos: FleetRepo[]): FleetNode[] {
+  // Room for each repo's 240px label around the ring: it grows (and the area with it, `fit`).
+  const rx = Math.max(FLEET.ringRx, (repos.length * 340) / (Math.PI * 2))
+  const ry = Math.max(FLEET.ringRy, rx * 0.85)
   return repos.map((r, i) => {
     const a = -Math.PI / 2 + (Math.PI * 2 * i) / Math.max(repos.length, 1)
     const s = rootSize(r)
@@ -55,8 +58,8 @@ export function overviewLayout(repos: FleetRepo[]): FleetNode[] {
     return {
       id: nodeId.root(r.key),
       kind: "root" as const,
-      x: FLEET.cx + (one ? 0 : Math.cos(a) * FLEET.ringRx),
-      y: FLEET.cy + (one ? 0 : Math.sin(a) * FLEET.ringRy),
+      x: FLEET.cx + (one ? 0 : Math.cos(a) * rx),
+      y: FLEET.cy + (one ? 0 : Math.sin(a) * ry),
       w: s,
       h: s,
     }
@@ -90,7 +93,9 @@ export function openLayout(repo: FleetRepo, theta = 0): FleetNode[] {
       c.agents.reduce((n, a) => n + agentWeight(a.subs.length), 0),
     )
   const total = children.reduce((n, c) => n + weight(c), 0)
-  const k = total <= 3 ? 0.8 : 1 // a small repo: smaller rings
+  // A small repo: smaller rings; a busy one: bigger, so its agents keep a card's room each (the
+  // area grows with it, `fit`).
+  const k = total <= 3 ? 0.8 : Math.max(1, total * 0.095)
   const r1 = FLEET.r1 * k
   const r2 = FLEET.r2 * k
   const unit = (Math.PI * 2) / total
@@ -144,7 +149,7 @@ export function openLayout(repo: FleetRepo, theta = 0): FleetNode[] {
 }
 
 /** Cards that overlap pushed apart along their shorter overlap (roots stay put), a few passes. */
-export function relax(nodes: FleetNode[], passes = 12): FleetNode[] {
+export function relax(nodes: FleetNode[], passes = 40): FleetNode[] {
   const ns = nodes.map((n) => ({ ...n }))
   for (let pass = 0; pass < passes; pass++) {
     let moved = false
@@ -176,9 +181,38 @@ export function relax(nodes: FleetNode[], passes = 12): FleetNode[] {
     }
     if (!moved) break
   }
-  for (const n of ns) {
-    n.x = Math.max(n.w / 2 + 16, Math.min(FLEET.w - n.w / 2 - 16, n.x))
-    n.y = Math.max(n.h / 2 + 16, Math.min(FLEET.h - n.h / 2 - 16, n.y))
-  }
   return ns
+}
+
+/** The area the nodes need (at least the default one), and the nodes moved into it; `cx`/`cy`:
+ *  where the layout's centre landed (the view scrolls it to the middle). */
+export function fit(nodes: FleetNode[]): {
+  nodes: FleetNode[]
+  w: number
+  h: number
+  cx: number
+  cy: number
+} {
+  const pad = 40
+  let minX = Infinity
+  let minY = Infinity
+  let maxX = -Infinity
+  let maxY = -Infinity
+  for (const n of nodes) {
+    minX = Math.min(minX, n.x - n.w / 2)
+    minY = Math.min(minY, n.y - n.h / 2)
+    maxX = Math.max(maxX, n.x + n.w / 2)
+    maxY = Math.max(maxY, n.y + n.h / 2 + 60) // (a root's label hangs below it)
+  }
+  if (!nodes.length) return { nodes, w: FLEET.w, h: FLEET.h, cx: FLEET.cx, cy: FLEET.cy }
+  const dx = Math.max(0, pad - minX)
+  const dy = Math.max(0, pad - minY)
+  const moved = dx || dy ? nodes.map((n) => ({ ...n, x: n.x + dx, y: n.y + dy })) : nodes
+  return {
+    nodes: moved,
+    w: Math.max(FLEET.w, maxX + dx + pad),
+    h: Math.max(FLEET.h, maxY + dy + pad),
+    cx: FLEET.cx + dx,
+    cy: FLEET.cy + dy,
+  }
 }

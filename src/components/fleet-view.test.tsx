@@ -116,4 +116,17 @@ describe("FleetView", () => {
     ).toBeInTheDocument()
     expect(screen.queryByText("PR 7")).toBeNull() // still the overview
   })
+
+  it("an open repo stays open when its key moves from its folder to owner/name", async () => {
+    local.mockResolvedValueOnce({ ok: true, repos: [] }) // first: no GitHub name yet
+    seed()
+    render(<FleetView />)
+    fireEvent.click(await screen.findByRole("button", { name: "Open r" }))
+    await screen.findByRole("button", { name: /^Claude agent/ }) // opened, under its folder's key
+    act(() => useStore.setState({ paneGit: { ...useStore.getState().paneGit } })) // roots refresh
+    await waitFor(() => expect(screen.getAllByText("PR 7").length).toBeGreaterThan(0), {
+      timeout: 3000,
+    })
+    expect(screen.queryByRole("button", { name: "Open o/r" })).toBeNull() // not the overview
+  })
 })

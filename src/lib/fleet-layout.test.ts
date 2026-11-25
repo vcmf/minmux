@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest"
 import {
   FLEET,
+  fit,
   nodeId,
   openLayout,
   overviewLayout,
@@ -29,6 +30,7 @@ const repo = (over: Partial<FleetRepo> = {}): FleetRepo => ({
   branches: [],
   agents: [],
   counts: { agents: 0, working: 0, waiting: 0, prs: 0 },
+  roots: [],
   ...over,
 })
 const pr = (n: number, agents: FleetAgent[]) => ({
@@ -50,6 +52,15 @@ describe("overviewLayout", () => {
     expect(ns[0]!.y).toBeLessThan(FLEET.cy)
     const one = overviewLayout([repo()])
     expect([one[0]!.x, one[0]!.y]).toEqual([FLEET.cx, FLEET.cy])
+  })
+
+  it("the ring grows with the repos, so their labels don't overlap", () => {
+    const ns = overviewLayout(Array.from({ length: 10 }, (_, i) => repo({ key: `r${i}` })))
+    for (let i = 0; i < ns.length; i++) {
+      const a = ns[i]!
+      const b = ns[(i + 1) % ns.length]!
+      expect(Math.hypot(a.x - b.x, a.y - b.y)).toBeGreaterThan(240) // a label's width
+    }
   })
 
   it("a repo's circle grows with its agents, up to a cap", () => {
@@ -134,9 +145,29 @@ describe("relax", () => {
       for (let j = i + 1; j < ns.length; j++)
         expect(overlaps(ns[i]!, ns[j]!), `${ns[i]!.id} / ${ns[j]!.id}`).toBe(false)
     expect(byId(ns).get(nodeId.root("o/r"))).toMatchObject({ x: FLEET.cx, y: FLEET.cy })
-    for (const n of ns) {
+    const area = fit(ns)
+    for (const n of area.nodes) {
       expect(n.x - n.w / 2).toBeGreaterThanOrEqual(0)
-      expect(n.y + n.h / 2).toBeLessThanOrEqual(FLEET.h)
+      expect(n.y + n.h / 2).toBeLessThanOrEqual(area.h)
     }
+  })
+
+  it("a very busy repo (8 PRs × 4 agents × 3 sub-agents) still has no overlaps", () => {
+    let n = 0
+    const r = repo({
+      prs: Array.from({ length: 8 }, (_, i) =>
+        pr(
+          i,
+          Array.from({ length: 4 }, () => agent(`a${n++}`, 3)),
+        ),
+      ),
+    })
+    const area = fit(relax(openLayout(r)))
+    const ns = area.nodes
+    let bad = 0
+    for (let i = 0; i < ns.length; i++)
+      for (let j = i + 1; j < ns.length; j++) if (overlaps(ns[i]!, ns[j]!)) bad++
+    expect(bad).toBe(0)
+    expect(area.w).toBeGreaterThan(FLEET.w) // the area grew (it scrolls)
   })
 })

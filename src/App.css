@@ -4259,6 +4259,8 @@ body.resizing-col {
   position: absolute;
   inset: 0;
   overflow: auto;
+  display: grid;
+  place-items: safe center; /* a view bigger than the area: the area in its middle */
 }
 .fleet-area {
   position: relative;
@@ -4405,7 +4407,8 @@ body.resizing-col {
   display: flex;
   gap: 24px;
   padding: 12px 20px 20px;
-  overflow-x: auto;
+  flex-wrap: wrap;
+  row-gap: 10px;
   background: linear-gradient(var(--bg) 70%, transparent);
   pointer-events: none; /* only its repos take clicks: cards scrolled under it stay clickable */
 }
