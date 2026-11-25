@@ -186,8 +186,8 @@ of plumbing.
   number and state, without title or CI, in v1.
 - **Refresh.** One serialized refresher (`lib/fleet-refresh`) runs while the Fleet tab is
   mounted and the window visible: my `mine` list at the dialog's cadence (`nextRefreshMs`), the
-  repos' names, worktrees and default branch (`prs:local`) with it and, debounced, when the
-  panes' checkout roots change. One run at a time; anything asked meanwhile runs next. That's
+  repos' names, worktrees and default branch (`prs:local`) with it, at once each time the tab
+  opens, and, debounced, when the panes' checkout roots change. One run at a time; anything asked meanwhile runs next. That's
   one GitHub query a refresh while both the tab and the dialog are open; sharing the dialog's
   loop waits for the pulls epic, which reworks the dialog into a tab.
 - WSL agents are shown, keyed by their folder, without GitHub data (main's git can't read their

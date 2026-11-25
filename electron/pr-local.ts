@@ -34,13 +34,19 @@ const dirExists: DirExists = (p) =>
     () => false,
   )
 
+/** A folder as compared against git's list: resolved, and case-blind on Windows (`c:` vs `C:`). */
+const pathId = (p: string) => {
+  const r = path.resolve(p)
+  return process.platform === "win32" ? r.toLowerCase() : r
+}
+
 /** The folders `git worktree list --porcelain` names, whatever their state. */
 const listed = (out: string) =>
   new Set(
     out
       .split(/\r?\n/)
       .filter((l) => l.startsWith("worktree "))
-      .map((l) => path.resolve(l.slice(9))),
+      .map((l) => pathId(l.slice(9))),
   )
 
 const defaultGit: GitRunner = async (args, cwd) =>
@@ -114,7 +120,7 @@ export class PrLocal {
         if (list === null) return null
         // a root the repo no longer lists (removed, re-cloned as another repo): looked up again
         const named = listed(list)
-        for (const r of rs) if (!named.has(path.resolve(r))) this.common.delete(r)
+        for (const r of rs) if (!named.has(pathId(r))) this.common.delete(r)
         // (a locked worktree on a drive that's gone is never marked prunable)
         const all = parseWorktrees(list)
         const here = await Promise.all(all.map((w) => this.exists(w.path)))
@@ -124,7 +130,7 @@ export class PrLocal {
         const repo: LocalRepo = {
           repo: remote?.repo ?? null,
           worktrees,
-          roots: rs.filter((r) => named.has(path.resolve(r))),
+          roots: rs.filter((r) => named.has(pathId(r))),
         }
         const mine = remote
           ? prs.filter((p) => p.repo.toLowerCase() === remote.repo.toLowerCase())

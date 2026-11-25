@@ -157,4 +157,39 @@ describe("FleetRefresh", () => {
     expect(h.prLists).toHaveBeenCalledTimes(3)
     off()
   })
+
+  it("a low GraphQL budget waits for its reset, however often the tab comes back", async () => {
+    const h = harness()
+    const reset = new Date(1_000_000 + 600_000).toISOString()
+    h.prLists.mockResolvedValue({
+      ok: true,
+      lists: { mine: [], review: [], remaining: 100, resetAt: reset },
+    } as PrListsResult)
+    h.r.subscribe(() => {})()
+    await h.flush()
+    for (let i = 0; i < 5; i++) {
+      await h.advance(100_000) // back halfway and later: still before the reset
+      const off = h.r.subscribe(() => {})
+      await h.flush()
+      off()
+    }
+    expect(h.prLists).toHaveBeenCalledTimes(1)
+    await h.advance(101_000)
+    const off = h.r.subscribe(() => {})
+    await h.flush()
+    expect(h.prLists).toHaveBeenCalledTimes(2) // past the reset
+    off()
+  })
+
+  it("the same repos answer again tells nobody", async () => {
+    const h = harness()
+    const heard = vi.fn()
+    h.r.subscribe(heard)
+    await h.flush()
+    const calls = heard.mock.calls.length
+    h.r.rootsChanged()
+    await h.advance(600)
+    expect(h.prLocal).toHaveBeenCalledTimes(2)
+    expect(heard.mock.calls.length).toBe(calls)
+  })
 })

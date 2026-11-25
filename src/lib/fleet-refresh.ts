@@ -28,7 +28,7 @@ const ROOTS_DEBOUNCE_MS = 500
 export class FleetRefresh {
   private data: FleetData = { local: [], mine: [] }
   private lists: PrLists | null = null
-  private asked = 0 // when GitHub was last asked (0: never)
+  private dueAt = 0 // when GitHub is next due (absolute, fixed after each ask; 0: at once)
   private failures = 0
   private running = false
   private want = { local: false, mine: false } // asked for while a run is going, or hidden
@@ -65,7 +65,7 @@ export class FleetRefresh {
   }
 
   private due(): number {
-    return this.asked + nextRefreshMs(this.lists, this.failures) - this.deps.now()
+    return this.dueAt - this.deps.now()
   }
 
   // The cadence: both lists when it comes due (and at once on start when it already is).
@@ -99,14 +99,14 @@ export class FleetRefresh {
     this.running = true
     const { local, mine } = this.want
     this.want = { local: false, mine: false }
-    if (mine) this.asked = this.deps.now()
     const roots = local ? this.deps.roots() : []
     const [loc, lists] = await Promise.all([
       roots.length ? this.deps.prLocal({ roots }).catch(() => null) : null,
       mine ? this.deps.prLists({ closed: false, part: "mine" }).catch(() => null) : null,
     ])
     let changed = false
-    if (loc?.ok) {
+    // (the same answer as before: nothing to tell; the model and the view stay as they are)
+    if (loc?.ok && JSON.stringify(loc.repos) !== JSON.stringify(this.data.local)) {
       this.data = { ...this.data, local: loc.repos }
       changed = true
     } else if (local && !roots.length && this.data.local.length) {
@@ -120,6 +120,9 @@ export class FleetRefresh {
         this.data = { ...this.data, mine: lists.lists.mine }
         changed = true
       } else this.failures++
+      // From this ask, once: a later look (a remount, the window shown) doesn't move it.
+      const now = this.deps.now()
+      this.dueAt = now + nextRefreshMs(this.lists, this.failures, now)
     }
     this.running = false
     if (changed) for (const fn of this.listeners) fn()
