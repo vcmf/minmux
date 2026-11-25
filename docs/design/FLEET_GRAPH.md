@@ -240,13 +240,19 @@ Researched on real data (2026-11-25):
 - **Inventory windows** (step 6): Live adds up the open sessions' toolboxes. 7 days, 30 days and
   All come from a history scan in the sessions worker (a utility process, so no scan touches
   main): Claude's transcripts and their sub-agents', Codex's rollouts (archived ones too), and
-  OpenCode's tool calls in its database. Each use goes to its own day (the line's timestamp, else
-  the file's), with step 5's line readers. Each file is read on from where the last scan
-  stopped, and those places and per-day counts are kept in `inventory-cache.json` in minmux's
-  config folder (written whole through a temporary file; a file gone from disk leaves it).
-  OpenCode's database is read on from the last row's time. A scan runs when a history window is
-  shown, one at a time, a result reused for 30 s; never on a timer. Measured here: the first
-  scan of all history 90 s (in the worker), the next 0.1 s; the cache file 3.7 MB.
+  OpenCode's tool calls in its database. Each use goes to its own day (the record's timestamp,
+  else the file's), with step 5's line readers; what a session had loaded counts on its file's
+  last day, and a window's "loaded" is its sessions' plus what the config gives now.
+- **The cache is a ledger**: `inventory-cache.json` in minmux's config folder holds, per session
+  file (keyed by its name, unique per session), how far it was read and its per-day counts. A
+  file moved (Codex archiving it) keeps its entry; one deleted (Claude's 30-day cleanup) keeps
+  its counts, so All means everything since minmux first scanned. It's saved every 20 s during a
+  scan and written whole through a temporary file; a newer build's file is never written over.
+  OpenCode is read by part id (its primary key, in time order), a page at a time; calls still
+  running are kept by id and counted once they finish (let go after a day). Its tool calls are
+  kept raw (folder and tool) and resolved to servers when a result is built.
+- A scan runs when a history window is shown, one at a time, a result reused for 30 s; never on
+  a timer. Measured here: the first scan of all history 90 s (in the worker), the next 0.1 s.
 - **The view**: a Graph | Inventory switch at the graph's top right. The inventory covers the
   graph, which stays mounted (camera, open repo, pins keep; its motion pauses). A used row
   marks the open sessions that used it: back to the graph, their repo open, the camera on the

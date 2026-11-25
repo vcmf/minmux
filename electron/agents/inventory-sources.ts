@@ -18,8 +18,7 @@ import { emptyKit, kitName, type Kit } from "./toolbox"
 // (the agents write ISO timestamps without spaces: the day is a timestamp's first 10 characters)
 const DAY = /"timestamp":"(\d{4}-\d{2}-\d{2})/g
 
-/** A line's own day: its record's `timestamp`, which Claude writes last (a tool's input before
- *  it may hold one too) and Codex first. */
+/** A line's own day: its record's `timestamp` (Claude writes it last, Codex first). */
 export function lineDay(line: string, which: "first" | "last"): string | undefined {
   let day: string | undefined
   DAY.lastIndex = 0
@@ -99,14 +98,14 @@ export function codexInventory(home = codexHome, config = new CodexMcpConfig()):
       return [...live, ...archived]
     },
     line: dayFold(addCodexKitLine, "first"),
+    noSkills: true,
     async loaded() {
       return { mcp: (await config.servers(home())) ?? [], skills: null }
     },
   }
 }
 
-/** OpenCode: its tool calls in its database (`part` rows), from `after` (ms) on. MCP tools
- *  are `<server>_<tool>` of a configured server; a skill is the `skill` tool's `name`. */
+/** OpenCode: its tool calls (`part` rows), from a mark on; MCP tools are `<server>_<tool>`. */
 export function opencodeInventory(db = opencodeDb, config = new OpencodeConfig()): InventorySource {
   return {
     kind: "opencode",
@@ -124,55 +123,61 @@ export function opencodeInventory(db = opencodeDb, config = new OpencodeConfig()
       const file = db()
       if (!fs.existsSync(file)) return { until: after, days: {} }
       const days: Record<string, Uses> = {}
-      let until = after
-      const stale = Date.now() - 60 * 60_000
-      for (;;) {
+      const count = (r: Row) => {
+        const tool = kitName(r.tool)
+        if (!tool) return
+        const u = (days[new Date(r.t).toISOString().slice(0, 10)] ??= { mcp: {}, skills: {} })
+        const ok = r.status === "completed"
+        if (tool === "skill") {
+          const n = kitName(r.name)
+          if (n && ok) u.skills[n] = (u.skills[n] ?? 0) + 1
+          return
+        }
+        if (!tool.includes("_")) return // (a built-in: an MCP tool is `<server>_<tool>`)
+        const key = `${r.dir ?? ""}\0${tool}`
+        const into = ok ? u.mcp : (u.mcpFailed ??= {})
+        into[key] = (into[key] ?? 0) + 1
+      }
+      const final = (r: Row) => r.status === "completed" || r.status === "error"
+      // (by part id: the primary key, and in time order; each page a short read)
+      const SELECT = `select p.time_created t, p.id id, s.directory dir,
+          json_extract(p.data, '$.type') type, json_extract(p.data, '$.tool') tool,
+          json_extract(p.data, '$.state.status') status,
+          json_extract(p.data, '$.state.input.name') name
+        from part p left join session s on s.id = p.session_id`
+      const read = (sql: string, ...args: (string | number)[]) => {
         const d = new DatabaseSync(file, { readOnly: true, timeout: 1000 })
-        let rows: Row[]
         try {
-          rows = d
-            .prepare(
-              `select p.time_created t, p.id id, s.directory dir,
-                 json_extract(p.data, '$.tool') tool,
-                 json_extract(p.data, '$.state.status') status,
-                 json_extract(p.data, '$.state.input.name') name
-               from part p left join session s on s.id = p.session_id
-               where (p.time_created > ? or (p.time_created = ? and p.id > ?))
-                 and json_extract(p.data, '$.type') = 'tool'
-               order by p.time_created, p.id limit ${PAGE}`,
-            )
-            .all(until.t, until.t, until.id) as unknown as Row[]
+          return d.prepare(sql).all(...args) as unknown as Row[]
         } finally {
           d.close()
         }
-        let stop = false
+      }
+      // Calls running at the last read: counted once they've finished, kept a day at most.
+      const pending: string[] = []
+      const was = (after.pending ?? []).slice(0, 1000)
+      if (was.length) {
+        const rows = read(`${SELECT} where p.id in (${was.map(() => "?").join(",")})`, ...was)
+        const day = Date.now() - 24 * 60 * 60_000
+        for (const r of rows)
+          if (final(r)) count(r)
+          else if (r.t > day) pending.push(r.id)
+      }
+      let id = after.id
+      let t = after.t
+      for (;;) {
+        const rows = read(`${SELECT} where p.id > ? order by p.id limit ${PAGE}`, id)
         for (const r of rows) {
-          const final = r.status === "completed" || r.status === "error"
-          // A call still running stops the read here (read again next time); one left running
-          // over an hour (its agent died) is passed, uncounted.
-          if (!final && r.t > stale) {
-            stop = true
-            break
-          }
-          until = { t: r.t, id: r.id }
-          const tool = kitName(r.tool)
-          if (!final || !tool) continue
-          const day = new Date(r.t).toISOString().slice(0, 10)
-          const ok = r.status === "completed"
-          const u = (days[day] ??= { mcp: {}, skills: {} })
-          if (tool === "skill") {
-            const n = kitName(r.name)
-            if (n && ok) u.skills[n] = (u.skills[n] ?? 0) + 1
-            continue
-          }
-          const key = `${r.dir ?? ""}\0${tool}`
-          const into = ok ? u.mcp : (u.mcpFailed ??= {})
-          into[key] = (into[key] ?? 0) + 1
+          id = r.id
+          t = r.t
+          if (r.type !== "tool") continue
+          if (final(r)) count(r)
+          else pending.push(r.id)
         }
-        if (stop || rows.length < PAGE) break
+        if (rows.length < PAGE) break
         await new Promise((r) => setImmediate(r)) // (a page at a time: the worker answers others)
       }
-      return { until, days }
+      return { until: { t, id, pending }, days }
     },
     // Raw tool calls → MCP servers, as configured where each session ran.
     async resolve(raw) {
@@ -204,6 +209,7 @@ interface Row {
   t: number
   id: string
   dir: string | null
+  type?: unknown
   tool: unknown
   status: unknown
   name: unknown

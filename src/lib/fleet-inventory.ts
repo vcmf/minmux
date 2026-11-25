@@ -11,8 +11,7 @@ export interface Uses {
   skills: Record<string, number>
 }
 
-/** One agent kind's history: its uses per day (`YYYY-MM-DD`), what its sessions had loaded per
- *  day, and what its config gives it now. */
+/** One agent kind's history: uses and what its sessions had loaded per day; its config now. */
 export interface InventoryAgent {
   days: Record<string, Uses>
   loaded: Record<string, { mcp: string[]; skills: string[] }>

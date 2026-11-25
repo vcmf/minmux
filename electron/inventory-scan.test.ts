@@ -98,7 +98,7 @@ describe("dayFold", () => {
 })
 
 describe("scanInventory", () => {
-  it("reads only what's new, keeps it in the cache file, and forgets files gone", async () => {
+  it("reads only what's new; a ledger: a file moved or deleted keeps its counts", async () => {
     const dir = tmp()
     const cache = path.join(dir, "cfg", "inventory-cache.json")
     const f = path.join(dir, "s.jsonl")
@@ -123,14 +123,29 @@ describe("scanInventory", () => {
     const b = await scanInventory([src], cache)
     expect(lines).toBe(2) // (the first line wasn't read again)
     expect(b.claude!.days["2026-11-21"]!.mcp).toEqual({ gh: 1 })
-    expect(Object.keys((await readCache(cache)).files)).toEqual([f])
-    // A file that shrank is read again from the start; one gone leaves the cache.
-    fs.writeFileSync(f, use("mcp__db__q", "2026-11-22"))
+    expect(Object.keys((await readCache(cache)).files)).toEqual(["claude:s.jsonl"])
+    // Moved (archived): the same entry, not read again, counted once.
+    const moved = path.join(dir, "archived", "s.jsonl")
+    fs.mkdirSync(path.dirname(moved))
+    fs.renameSync(f, moved)
+    const g = f
+    ;(src as { files: InventorySource["files"] }).files = async () =>
+      fs.existsSync(moved)
+        ? [{ file: moved, size: fs.statSync(moved).size, mtimeMs: fs.statSync(moved).mtimeMs }]
+        : []
+    const m = await scanInventory([src], cache)
+    expect(lines).toBe(2)
+    expect(m.claude!.days["2026-11-20"]!.mcp).toEqual({ gh: 1 })
+    expect((await readCache(cache)).files["claude:s.jsonl"]!.path).toBe(moved)
+    // Deleted (an agent's cleanup): its counts stay.
+    fs.rmSync(moved)
+    const d = await scanInventory([src], cache)
+    expect(d.claude!.days["2026-11-21"]!.mcp).toEqual({ gh: 1 })
+    // One that shrank is read again from the start.
+    fs.writeFileSync(moved, use("mcp__db__q", "2026-11-22"))
     const c = await scanInventory([src], cache)
     expect(Object.keys(c.claude!.days)).toEqual(["2026-11-22"])
-    fs.rmSync(f)
-    await scanInventory([src], cache)
-    expect((await readCache(cache)).files).toEqual({})
+    expect(g).toBe(f)
     fs.writeFileSync(cache, "not json")
     expect((await readCache(cache)).files).toEqual({})
   })
@@ -187,10 +202,10 @@ describe("scanInventory", () => {
     broken = false
     list = false // (its folder unreadable for a moment: the file stays in the cache)
     await scanInventory([src], cache)
-    expect(Object.keys((await readCache(cache)).files)).toEqual([f])
-    fs.writeFileSync(cache, JSON.stringify({ v: 2, files: {}, stores: {} }))
+    expect(Object.keys((await readCache(cache)).files)).toEqual(["claude:s.jsonl"])
+    fs.writeFileSync(cache, JSON.stringify({ v: 3, files: {}, stores: {} }))
     await scanInventory([src], cache)
-    expect(JSON.parse(fs.readFileSync(cache, "utf8")).v).toBe(2) // never written over
+    expect(JSON.parse(fs.readFileSync(cache, "utf8")).v).toBe(3) // never written over
   })
 
   it("a server seen by its wire name is counted under its configured one", async () => {
@@ -267,40 +282,35 @@ describe("the agents' sources", () => {
     fs.writeFileSync(path.join(cfg, "opencode", "opencode.json"), j({ mcp: { echo: {} } }))
     const src = opencodeInventory(() => file, new OpencodeConfig(dir, { XDG_CONFIG_HOME: cfg }))
     const got = await src.store!({ t: 0, id: "" })
-    expect(got.until).toEqual({ t: t + 2, id: "d" }) // (stopped before the running one)
+    // Read to the end; the running call is kept to check again.
+    expect(got.until).toEqual({ t: t + 5, id: "g", pending: ["e"] })
     // Kept raw (folder and tool), made into servers when the result is built.
     expect(got.days[today]!.mcp).toEqual({
-      [`${proj}\0echo_ping`]: 1,
+      [`${proj}\0echo_ping`]: 2,
       [`${proj}\0linear_issue`]: 1,
     })
     expect(await src.resolve!(got.days)).toEqual({
-      [today]: { mcp: { echo: 1, linear: 1 }, mcpFailed: { echo: 1 }, skills: { fleet: 1 } },
+      [today]: { mcp: { echo: 2, linear: 1 }, mcpFailed: { echo: 1 }, skills: { fleet: 1 } },
     })
-    // Once it finishes, the read goes on from the mark.
+    // Once it finishes, it's counted (and nothing else again).
     const d2 = new DatabaseSync(file)
     d2.prepare("update part set data = ? where id = 'e'").run(
       tool("skill", "completed", { name: "x" }),
     )
     d2.close()
     const more = await src.store!(got.until)
-    expect(await src.resolve!(more.days)).toEqual({
-      [today]: { mcp: { echo: 1 }, skills: { x: 1 } },
-    })
-    // One left running over an hour (its agent died) is passed, uncounted.
-    const oldFile = path.join(dir, "old.db")
-    const d3 = new DatabaseSync(oldFile)
-    d3.exec("create table part (id text, session_id text, time_created integer, data text)")
-    d3.exec("create table session (id text, directory text)")
-    const old = Date.now() - 3 * 60 * 60_000
-    const add = d3.prepare("insert into part values (?, ?, ?, ?)")
-    add.run("h", "s1", old, tool("echo_ping", "running"))
-    add.run("i", "s1", old + 1, tool("echo_ping", "completed"))
-    d3.close()
-    const stale = opencodeInventory(
-      () => oldFile,
-      new OpencodeConfig(dir, { XDG_CONFIG_HOME: cfg }),
+    expect(more.until).toEqual({ t: t + 5, id: "g", pending: [] })
+    expect(await src.resolve!(more.days)).toEqual({ [today]: { mcp: {}, skills: { x: 1 } } })
+    // A call still running a day on (its agent died) is let go.
+    const d3 = new DatabaseSync(file)
+    d3.prepare("insert into part values (?, ?, ?, ?)").run(
+      "a0",
+      "s1",
+      Date.now() - 2 * 24 * 60 * 60_000,
+      tool("echo_ping", "running"),
     )
-    expect((await stale.store!({ t: 0, id: "" })).until).toEqual({ t: old + 1, id: "i" })
+    d3.close()
+    expect((await src.store!({ ...more.until, pending: ["a0"] })).until.pending).toEqual([])
     expect(
       await opencodeInventory(() => path.join(dir, "none.db")).store!({ t: 5, id: "" }),
     ).toEqual({

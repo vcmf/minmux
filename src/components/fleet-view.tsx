@@ -701,7 +701,13 @@ export function FleetView() {
               {marked.ids.size} {marked.ids.size === 1 ? "session" : "sessions"} used {marked.label}
               {marked.repos > 1 ? `, in ${marked.repos} repos (the others in the strip above)` : ""}
             </span>
-            <button className="btn" onClick={() => setMarked(null)}>
+            <button
+              className="btn"
+              onClick={() => {
+                toFind.current = null // (nor glide to it later)
+                setMarked(null)
+              }}
+            >
               Clear
             </button>
           </div>

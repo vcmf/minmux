@@ -2,7 +2,7 @@
 // servers and skills with their use counts over a window, then the loaded but unused ones.
 // Live adds up the open sessions; the other windows ask main's history scan (in the sessions
 // worker, cached on disk). A used row picks the open sessions that used it, for the graph.
-import { useEffect, useMemo, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import type { AgentKind } from "../lib/agent-graph"
 import { AVAILABLE_AGENTS, agentColor, agentInfo } from "../lib/agent-kinds"
 import {
@@ -25,8 +25,11 @@ const WINDOWS: { id: InventoryWindow; label: string }[] = [
   { id: "all", label: "All" },
 ]
 
-/** The history, asked for once per view (main reuses a scan this recent). */
-function useHistory(want: boolean): {
+/** The history: asked for when a window is shown, again when one is chosen a while later. */
+function useHistory(
+  want: boolean,
+  win: InventoryWindow,
+): {
   inv: Inventory | null
   state: "idle" | "loading" | "failed"
   retry: () => void
@@ -34,14 +37,17 @@ function useHistory(want: boolean): {
   const [inv, setInv] = useState<Inventory | null>(null)
   const [state, setState] = useState<"idle" | "loading" | "failed">("idle")
   const [attempt, setAttempt] = useState(0)
+  const fetched = useRef(0)
   useEffect(() => {
-    if (!want || inv) return
+    // (main reuses a scan for 30 s: sooner than that, the answer would be the same)
+    if (!want || (inv && Date.now() - fetched.current < 30_000)) return
     let live = true
-    setState("loading")
+    setState("loading") // (the numbers shown stay until the new ones come)
     ipc.fleetInventory().then(
       (v) => {
         if (!live) return
-        setInv(v)
+        fetched.current = Date.now()
+        if (v) setInv(v)
         setState(v ? "idle" : "failed")
       },
       () => live && setState("failed"),
@@ -49,7 +55,8 @@ function useHistory(want: boolean): {
     return () => {
       live = false
     }
-  }, [want, inv, attempt])
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- `inv` read, not watched
+  }, [want, win, attempt])
   return { inv, state, retry: () => setAttempt((n) => n + 1) }
 }
 
@@ -58,8 +65,8 @@ export function FleetInventory(props: {
   onPick: (ids: string[], label: string) => void
 }) {
   const [win, setWin] = useState<InventoryWindow>("live")
-  const { inv, state, retry } = useHistory(win !== "live")
-  const today = useMemo(() => new Date(), [])
+  const { inv, state, retry } = useHistory(win !== "live", win)
+  const today = new Date() // (each render: a view left open over midnight moves on)
   return (
     <div className="fleet-inventory">
       <div className="fleet-windows" role="group" aria-label="Window">
@@ -97,7 +104,7 @@ export function FleetInventory(props: {
               kind={kind}
               mcp={tb && mcpList(tb)}
               skills={tb ? skillList(tb) : undefined}
-              pending={win !== "live" && state === "loading"}
+              pending={win !== "live" && !inv && state === "loading"}
               live={win === "live"}
               onPick={(what, name) =>
                 props.onPick(

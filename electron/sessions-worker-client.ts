@@ -103,8 +103,7 @@ export class SessionsWorkerClient {
     return { done, cancel: () => this.proc?.postMessage({ id, op: "cancel" }) }
   }
 
-  /** The Fleet inventory's history, scanned from where `cacheFile` says the last scan stopped
-   *  (a first scan reads every transcript: long, and only this call fails when it's late). */
+  /** The Fleet inventory's history (a first scan is long: only this call fails when late). */
   inventory(cacheFile: string): Promise<Inventory> {
     return this.call(
       { op: "inventory", cacheFile },
