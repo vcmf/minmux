@@ -185,17 +185,38 @@ describe("fleetModel", () => {
     expect(prs[2]!.on!.url).toBe(prs[1]!.url)
   })
 
-  it("a stacking cycle (two PRs on each other) leaves both unstacked", () => {
+  it("a stacking cycle is broken at its first PR; a PR on it keeps its link", () => {
     const m = fleetModel(
       input(
         session("s1", "p1", "/w/r"),
         { p1: { root: "/w/r", branch: "main" } },
-        { mine: [row(3, { head: "a", base: "b" }), row(4, { head: "b", base: "a" })] },
+        {
+          mine: [
+            row(3, { head: "a", base: "b" }),
+            row(4, { head: "b", base: "a" }),
+            row(8, { head: "c", base: "a" }),
+          ],
+        },
       ),
     )
-    expect(m[0]!.prs.map((p) => [p.number, p.on])).toEqual([
+    expect(m[0]!.prs.map((p) => [p.number, p.on?.number])).toEqual([
       [3, undefined],
-      [4, undefined],
+      [4, 3],
+      [8, 3],
+    ])
+  })
+
+  it("a PR shown for its agent alone (no list row) can be the base of mine", () => {
+    const m = fleetModel(
+      input(
+        session("s1", "p1", "/w/r-wt"),
+        { p1: { root: "/w/r-wt", branch: "feat", pr: pr(7) } },
+        { mine: [row(9, { head: "top", base: "feat" })] },
+      ),
+    )
+    expect(m[0]!.prs.map((p) => [p.number, p.on?.number])).toEqual([
+      [7, undefined],
+      [9, 7],
     ])
   })
 

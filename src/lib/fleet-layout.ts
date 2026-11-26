@@ -226,10 +226,11 @@ export function edgeEnd(
   a: Pt,
   c: [Pt, Pt] | undefined,
   b: { x: number; y: number; w: number; h: number },
-): { x: number; y: number; angle: number } {
+): { x: number; y: number; angle: number } | null {
   const on = (t: number) =>
     c ? cubicAt(a, c, b, t) : { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t }
   const inside = (q: Pt) => Math.abs(q.x - b.x) <= b.w / 2 && Math.abs(q.y - b.y) <= b.h / 2
+  if (inside(a)) return null // (it starts on the card: dragged over it, no border to point at)
   let lo = 0
   let hi = 1
   for (let i = 0; i < 20; i++) {

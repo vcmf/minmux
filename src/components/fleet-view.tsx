@@ -370,8 +370,8 @@ export function FleetView() {
             : faint
       ctx.globalAlpha = on ? 1 : n.kind === "agent" && info?.agent?.status === "idle" ? 0.35 : 0.7
       ctx.stroke()
-      if (e.arrow) {
-        const end = edgeEnd(n, c, p)
+      const end = e.arrow ? edgeEnd(n, c, p) : null
+      if (end) {
         const size = on ? 13 : 11
         ctx.setLineDash([])
         ctx.fillStyle = ctx.strokeStyle

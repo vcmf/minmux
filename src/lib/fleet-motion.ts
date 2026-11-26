@@ -57,7 +57,9 @@ export function withPins(
     if (shift.has(n.id)) return shift.get(n.id)!
     shift.set(n.id, null) // (a cycle can't loop)
     const p = pins.get(n.id)
-    const parent = n.parent ? byId.get(n.parent) : undefined
+    // (a stacked PR hangs off its base PR, yet is a card of its own on the ring: it stays)
+    const up = n.parent ? byId.get(n.parent) : undefined
+    const parent = n.kind === "pr" && up?.kind === "pr" ? undefined : up
     const d = p ? { dx: p.x - n.x, dy: p.y - n.y } : parent ? shiftOf(parent) : null
     shift.set(n.id, d)
     return d

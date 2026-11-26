@@ -21,7 +21,6 @@ import { SLOTS, nextPlaces, type Place, type PlaceLedger } from "./fleet-places"
 import type { PaneGitInfo, PrState } from "./pane-git"
 import type { PrRow } from "./pr-dashboard"
 import type { LocalRepo } from "./pr-local"
-import { baseOf } from "./pr-stacks"
 import type { SessionMeta } from "./session-color"
 import type { Session } from "../types"
 
@@ -59,6 +58,7 @@ export interface FleetPr {
   linked: FleetAgent[] // placed elsewhere in the repo, touching it too
   dirs: string[] // the checkouts it's in
   on?: { url: string; number: number } // the PR it's stacked on, when that one is shown too
+  head?: string // its branch, from a checkout (a PR with no list row: it can still be a base)
 }
 
 export interface FleetBranch {
@@ -198,6 +198,7 @@ function targetOf(
         number: pr.number,
         state: pr.state,
         ...(row ? { row } : {}),
+        ...(place.branch ? { head: place.branch } : {}),
         agents: [],
         linked: [],
         dirs: [],
@@ -324,27 +325,33 @@ export function fleetModel(input: FleetInput): FleetRepo[] {
   return [...repos.values()]
 }
 
-// As the pull requests dialog (lib/pr-stacks): B is stacked on A when B's base is A's head.
+// As the pull requests dialog (lib/pr-stacks): B is stacked on A when B's base is A's head. A
+// PR with no list row (an agent's, not mine) has its checkout's branch as its head: it can be a
+// base, never stacked (its base is unknown). A cycle (A on B, B on A) is broken at its first PR.
 /** A repo's PRs with their base PR, each stack's PRs together: a PR right after its base. */
 export function stacked(prs: FleetPr[]): FleetPr[] {
-  const rows = prs.flatMap((p) => (p.row ? [p.row] : []))
-  const on = new Map<string, FleetPr>()
+  const heads = new Map<string, FleetPr>()
   for (const p of prs) {
-    const b = p.row && baseOf(p.row, rows)
-    const node = b && prs.find((q) => q.url === b.url)
-    if (node) on.set(p.url, node)
+    const head = p.row ? (p.row.fork ? undefined : p.row.head) : p.head
+    if (head && !heads.has(head)) heads.set(head, p)
+  }
+  const kids = new Map<string, FleetPr[]>()
+  const based = new Set<string>()
+  for (const p of prs) {
+    const b = p.row ? heads.get(p.row.base) : undefined
+    if (!b || b === p) continue
+    based.add(p.url)
+    kids.set(b.url, [...(kids.get(b.url) ?? []), p])
   }
   const out: FleetPr[] = []
   const seen = new Set<string>()
-  const walk = (p: FleetPr) => {
+  const walk = (p: FleetPr, on?: FleetPr) => {
     if (seen.has(p.url)) return
     seen.add(p.url)
-    const b = on.get(p.url)
-    out.push(b ? { ...p, on: { url: b.url, number: b.number } } : p)
-    for (const k of prs) if (on.get(k.url) === p) walk(k)
+    out.push(on ? { ...p, on: { url: on.url, number: on.number } } : p)
+    for (const k of kids.get(p.url) ?? []) walk(k, p)
   }
-  for (const p of prs) if (!on.has(p.url)) walk(p)
-  // (a cycle, A on B and B on A, has no bottom: its PRs as they came, unstacked)
-  for (const p of prs) if (!seen.has(p.url)) out.push(p)
+  for (const p of prs) if (!based.has(p.url)) walk(p)
+  for (const p of prs) walk(p) // (a cycle: no bottom; its first PR stands as one)
   return out
 }

@@ -227,18 +227,19 @@ describe("camera", () => {
 describe("edgeEnd", () => {
   it("stops at the card's border, heading into it", () => {
     const b = { x: 300, y: 100, w: 100, h: 40 }
-    const line = edgeEnd({ x: 0, y: 100 }, undefined, b)
+    const line = edgeEnd({ x: 0, y: 100 }, undefined, b)!
     expect(line.x).toBeCloseTo(250, 1)
     expect(line.y).toBeCloseTo(100)
     expect(line.angle).toBeCloseTo(0)
     // a curve: on the border too, heading inwards
     const a = { x: FLEET.cx - 400, y: FLEET.cy - 200 }
     const to = { x: FLEET.cx + 300, y: FLEET.cy - 230, w: 196, h: 56 }
-    const end = edgeEnd(a, linkCurve(a, to), to)
+    const end = edgeEnd(a, linkCurve(a, to), to)!
     const onEdge =
       Math.abs(Math.abs(end.x - to.x) - to.w / 2) < 0.5 ||
       Math.abs(Math.abs(end.y - to.y) - to.h / 2) < 0.5
     expect(onEdge).toBe(true)
+    expect(edgeEnd({ x: 310, y: 105 }, undefined, b)).toBeNull() // (starting on the card)
     expect(
       Math.cos(end.angle) * (to.x - end.x) + Math.sin(end.angle) * (to.y - end.y),
     ).toBeGreaterThan(0)

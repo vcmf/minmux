@@ -155,7 +155,8 @@ sit on a ring, in a stable order (first seen).
   head, same repo): B hangs off A instead of the repo, right after it on the ring, its edge
   curved along the ring with an arrow into A (where it merges). The card says `on #A`. So a
   selected agent's green path runs up its whole stack: agent → B → A → repo. Only when A is
-  shown too (a live agent on it, or my open PR); a cycle leaves both unstacked.
+  shown too (a live agent on it, or my open PR). B needs its list row (my open PR) to know its
+  base; A only its branch. A cycle is broken at its first PR. Dragging A leaves B in place.
 - Sub-agents are the live ones: the agent graph drops a turn's finished sub-agents at the next
   prompt, so counts reset each turn.
 
