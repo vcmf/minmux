@@ -313,7 +313,7 @@ export function FleetPanel(props: {
           )}
           {!!a.more?.length && (
             <>
-              <dt>edited</dt>
+              <dt>also in</dt>
               <dd className="one" title={a.more.join("\n")}>
                 {a.more.map((d) => folderName(d)).join(" · ")}
               </dd>

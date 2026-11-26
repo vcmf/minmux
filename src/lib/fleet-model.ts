@@ -172,7 +172,10 @@ export function touched(
   // (as the sidebar's `edits` line: only with a branch or a PR; else it's one of the `+N`)
   const answered = !!shown && !!edit?.forCwd && samePath(edit.forCwd, shown)
   const editPlaced = answered && !!(edit!.branch || edit!.pr)
-  if (editPlaced) add(fromGit(edit))
+  // (it moved on to another checkout, its answer on the way: the last one stands meanwhile, or
+  // an agent with no other place would leave the graph between two polls)
+  const stale = !!shown && !answered && !!edit?.forCwd && !!(edit.branch || edit.pr)
+  if (editPlaced || stale) add(fromGit(edit))
   const dir = agentWorkDirs(graph)[paneId]
   const shellCwd = sessions[paneId]?.cwd
   const inGit = paneGit[gitKey(paneId, "in")]

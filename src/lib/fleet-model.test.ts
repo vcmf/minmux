@@ -441,12 +441,28 @@ describe("fleetModel", () => {
           session("s1", "p1", "/w/r"),
           {
             p1: { root: "/w/r", branch: "main" },
-            "p1@edit": { root: "/w/old", branch: "x", forCwd: "/w/old" },
+            "p1@edit": { root: "/w/r-fix", branch: "fix", forCwd: "/w/r-fix" },
           },
           { paneWork: { p1: work("s1", "/w/r-wt") }, local },
         ),
       )
-      expect(m[0]!.agents[0]!.more).toBeUndefined()
+      // (the last answer still places it meanwhile)
+      expect(m[0]!.branches[0]!.agents[0]!.more).toBeUndefined()
+      expect(m[0]!.branches.map((b) => [b.name, b.agents.length])).toEqual([["fix", 1]])
+    })
+
+    it("an agent placed only by its edits stays while the next checkout's answer is on the way", () => {
+      const m = fleetModel(
+        input(
+          session("s1", "p1", "/home/u/notes"),
+          {
+            p1: { noRepo: true },
+            "p1@edit": { root: "/w/r-wt", branch: "feat", pr: pr(7), forCwd: "/w/r-wt" },
+          },
+          { paneWork: { p1: work("s1", "/w/r-fix") }, local },
+        ),
+      )
+      expect(m[0]!.prs[0]!.agents.map((a) => a.sessionId)).toEqual(["s1"])
     })
 
     it("a WSL pane's checkouts main can't place: only its placing one stands for the repo", () => {
