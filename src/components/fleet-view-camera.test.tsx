@@ -176,6 +176,7 @@ describe("FleetView: camera, edges, panel", () => {
     await frame()
     expect(calls.filter((c) => c.startsWith("lineTo")).length).toBeGreaterThan(1)
     expect(calls).toContain("setTransform(6)")
+    expect(calls).not.toContain("closePath(0)") // (no stack: no arrow)
   })
 
   it("the panel: all repos, one repo with its PRs, one agent with its context; the dock switches", async () => {
