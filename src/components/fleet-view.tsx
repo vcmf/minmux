@@ -8,8 +8,18 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { Graph, Minus, Plus, PushPinSlash } from "@phosphor-icons/react"
 import { useStore, activeTheme } from "../store"
 import { useFleetModel } from "./use-fleet-data"
-import { FLEET, clampCamera, nodeId, unionBox, bounds, type Camera } from "../lib/fleet-layout"
-import { type FleetAgent } from "../lib/fleet-model"
+import {
+  FLEET,
+  clampCamera,
+  nodeId,
+  unionBox,
+  bounds,
+  cubicAt,
+  linkCurve,
+  type Camera,
+  type FleetNode,
+} from "../lib/fleet-layout"
+import { agentsIn, fleetAgentsOf, type FleetAgent } from "../lib/fleet-model"
 import { cardLook } from "../lib/pr-graph"
 import { agentColor } from "../lib/agent-kinds"
 import {
@@ -95,7 +105,8 @@ export function FleetView() {
 
   const lookup = useMemo(() => {
     const m = new Map<string, NodeInfo>()
-    for (const r of repos) {
+    // (an agent in two repos: the open one's card is the one shown, so it's looked up last)
+    for (const r of open ? [...repos.filter((x) => x !== open), open] : repos) {
       m.set(nodeId.root(r.key), { repo: r })
       const agentIn = (a: FleetAgent) => {
         m.set(nodeId.agent(a.id), { repo: r, agent: a })
@@ -106,13 +117,13 @@ export function FleetView() {
         p.agents.forEach(agentIn)
       }
       for (const b of r.branches) {
-        m.set(nodeId.branch(r.key, b.name), { repo: r, branch: b.name })
+        m.set(nodeId.branch(r.key, b.name), { repo: r, branch: b.name, branchNode: b })
         b.agents.forEach(agentIn)
       }
       r.agents.forEach(agentIn)
     }
     return m
-  }, [repos])
+  }, [repos, open])
 
   // The camera: the world point in the middle of the view. It lives in a ref and is written to
   // the cards' layer as a transform (and the canvas redrawn) on a frame: panning renders nothing.
@@ -313,25 +324,29 @@ export function FleetView() {
       }
       ctx.restore()
     }
-    // The selected agent's way to its repo, drawn green.
+    // Every edge: each card to its parent, and an agent to its other PRs and branches.
+    const edges: { n: FleetNode; p: FleetNode; c?: [Camera, Camera] }[] = []
+    for (const n of ns)
+      for (const to of n.parent ? [n.parent, ...(n.links ?? [])] : []) {
+        const p = byId.get(to)
+        // (a link curves round the centre: across the graph, a line would cut through the root)
+        if (p) edges.push({ n, p, ...(to !== n.parent ? { c: linkCurve(n, p) } : {}) })
+      }
+    // The selected agent's ways to its repo, drawn green.
     const path = new Set<string>()
-    for (
-      let id = selectedAgent ? nodeId.agent(selectedAgent) : undefined;
-      id;
-      id = byId.get(id)?.parent
-    )
-      path.add(id)
-    for (const n of ns) {
-      const p = n.parent && byId.get(n.parent)
-      if (!p) continue
+    const sel = selectedAgent ? byId.get(nodeId.agent(selectedAgent)) : undefined
+    for (const start of sel ? [sel.id, ...(sel.links ?? [])] : [])
+      for (let id: string | undefined = start; id; id = byId.get(id)?.parent) path.add(id)
+    for (const { n, p, c } of edges) {
       const info = lookup.get(n.id)
       const on = path.has(n.id) && path.has(p.id)
       const blocked = info?.pr?.row && cardLook(info.pr.row).tone === "red"
       ctx.beginPath()
-      ctx.moveTo(p.x, p.y)
-      ctx.lineTo(n.x, n.y)
+      ctx.moveTo(n.x, n.y)
+      if (c) ctx.bezierCurveTo(c[0].x, c[0].y, c[1].x, c[1].y, p.x, p.y)
+      else ctx.lineTo(p.x, p.y)
       ctx.setLineDash(n.kind === "sub" || n.kind === "branch" ? [4, 5] : [])
-      ctx.lineWidth = on ? 2.5 : 1.5
+      ctx.lineWidth = on ? 3.5 : 2.25
       ctx.strokeStyle = on
         ? accent
         : n.kind === "agent" && info?.agent
@@ -346,7 +361,7 @@ export function FleetView() {
     // The dots running along the lines of working agents and sub-agents.
     if (!reduced.current) {
       const now = performance.now()
-      for (const n of ns) {
+      for (const { n, p, c } of edges) {
         const info = lookup.get(n.id)
         const status =
           n.kind === "sub"
@@ -354,16 +369,18 @@ export function FleetView() {
             : n.kind === "agent"
               ? info?.agent?.status
               : undefined
-        const p = n.parent && byId.get(n.parent)
-        if (status !== "working" || !p) continue
+        if (status !== "working") continue
         ctx.fillStyle = path.has(n.id)
           ? accent
           : (info?.agent && agentColor(info.agent.kind, scheme)) || accent
-        let seed = 0 // (lines out of step with each other: a hash of the id)
-        for (let i = 0; i < n.id.length; i++) seed = (seed * 31 + n.id.charCodeAt(i)) % 997
+        let seed = 0 // (lines out of step with each other: a hash of the ids)
+        const key = n.id + p.id
+        for (let i = 0; i < key.length; i++) seed = (seed * 31 + key.charCodeAt(i)) % 997
         seed /= 997
         for (const phase of [seed, seed + 0.5]) {
-          const d = dotAt(n, p, now, phase)
+          const d = c
+            ? cubicAt(n, c, p, dotAt({ x: 0, y: 0 }, { x: 1, y: 0 }, now, phase).x)
+            : dotAt(n, p, now, phase)
           ctx.beginPath()
           ctx.arc(d.x, d.y, 2.5, 0, Math.PI * 2)
           ctx.fill()
@@ -704,15 +721,7 @@ export function FleetView() {
   }, [apply, pins, pinsRev, setPinCount, setPinVersion, theta])
 
   const docked = open ? repos.filter((r) => r.key !== open.key) : []
-  const fleetAgents = useMemo(
-    () =>
-      repos.flatMap((r) => [
-        ...r.prs.flatMap((p) => p.agents),
-        ...r.branches.flatMap((b) => b.agents),
-        ...r.agents,
-      ]),
-    [repos],
-  )
+  const fleetAgents = useMemo(() => fleetAgentsOf(repos), [repos])
   // Back on the graph: its motion may go on. Leaving it, or a new mark, drops a glide not done.
   const firstMode = useRef(true)
   useEffect(() => {
@@ -745,32 +754,20 @@ export function FleetView() {
     if (!marked) return null
     const ids = fleetAgents.filter((a) => marked.ids.has(a.id)).map((a) => a.id)
     if (!ids.length) return null
-    const repoCount = repos.filter((r) =>
-      [...r.prs.flatMap((p) => p.agents), ...r.branches.flatMap((b) => b.agents), ...r.agents].some(
-        (a) => ids.includes(a.id),
-      ),
-    ).length
+    const repoCount = repos.filter((r) => agentsIn(r).some((a) => ids.includes(a.id))).length
     return { ids, label: marked.label, repos: repoCount }
   }, [marked, fleetAgents, repos])
   /** An inventory row picked: back to the graph, its sessions marked, their repo open. */
   const pick = (ids: string[], label: string) => {
     setMode("graph")
-    const repoCount = repos.filter((r) =>
-      [...r.prs.flatMap((p) => p.agents), ...r.branches.flatMap((b) => b.agents), ...r.agents].some(
-        (a) => ids.includes(a.id),
-      ),
-    ).length
+    const repoCount = repos.filter((r) => agentsIn(r).some((a) => ids.includes(a.id))).length
     setMarked({ ids: new Set(ids), label, repos: repoCount })
     // (a glide that can't happen soon, its card not placed, isn't done later out of nowhere;
     // a newer pick's own timer replaces this one)
     window.clearTimeout(pickTimer.current)
     pickTimer.current = window.setTimeout(() => (toFind.current = null), 3000)
     toFind.current = ids[0] ?? null
-    const repo = repos.find((r) =>
-      [...r.prs.flatMap((p) => p.agents), ...r.branches.flatMap((b) => b.agents), ...r.agents].some(
-        (a) => ids.includes(a.id),
-      ),
-    )
+    const repo = repos.find((r) => agentsIn(r).some((a) => ids.includes(a.id)))
     if (repo && openKey !== repo.key) toggle(repo.key)
   }
 

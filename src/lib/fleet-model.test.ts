@@ -4,6 +4,7 @@ import { reduceAgentEvents, type AgentEvent } from "./agent-graph"
 import type { PaneGitInfo } from "./pane-git"
 import type { PrRow } from "./pr-dashboard"
 import type { LocalRepo } from "./pr-local"
+import type { PaneWork } from "./agent-work"
 
 // A session in pane `pane`, started in `cwd`, working (a prompt was sent).
 const session = (sessionId: string, pane: string, cwd: string): AgentEvent[] => [
@@ -45,6 +46,7 @@ function input(
     agents: reduceAgentEvents(events),
     paneGit,
     sessions: Object.fromEntries([...panes].map((p) => [p, { cwd: paneGit[p]?.root ?? "/" }])),
+    paneWork: {},
     meta: {},
     local: [localR],
     mine: [],
@@ -91,7 +93,12 @@ describe("fleetModel", () => {
       }),
     )
     expect(m[0]!.branches).toEqual([
-      { name: "feat", agents: [expect.objectContaining({ sessionId: "s1" })] },
+      {
+        name: "feat",
+        agents: [expect.objectContaining({ sessionId: "s1" })],
+        linked: [],
+        dirs: ["/w/r-wt"],
+      },
     ])
     expect(m[0]!.agents.map((a) => a.sessionId)).toEqual(["s2"])
     expect(m[0]!.prs).toEqual([])
@@ -261,5 +268,121 @@ describe("fleetModel", () => {
     expect(m).toHaveLength(1)
     expect(m[0]).toMatchObject({ key: "/home/u/r", label: "r" })
     expect(m[0]!.repo).toBeUndefined()
+  })
+
+  describe("every checkout an agent touches", () => {
+    const work = (session: string, shown: string, more: string[] = []): PaneWork => ({
+      session,
+      agent: "claude",
+      dirs: {},
+      shown,
+      more,
+    })
+    const local: LocalRepo[] = [
+      {
+        ...localR,
+        worktrees: [...localR.worktrees, { path: "/w/r-fix", branch: "fix" }],
+      },
+      { repo: "o/b", defaultBranch: "main", worktrees: [{ path: "/w/b", branch: "main" }] },
+    ]
+
+    it("an agent started outside any repo hangs on the PR of the checkout it edits", () => {
+      const m = fleetModel(
+        input(
+          session("s1", "p1", "/home/u/notes"),
+          {
+            p1: { noRepo: true },
+            "p1@edit": { root: "/w/r-wt", branch: "feat", pr: pr(7), forCwd: "/w/r-wt" },
+          },
+          { paneWork: { p1: work("s1", "/w/r-wt") }, local },
+        ),
+      )
+      expect(m).toHaveLength(1)
+      expect(m[0]!.prs[0]).toMatchObject({ number: 7, dirs: ["/w/r-wt"], linked: [] })
+      expect(m[0]!.prs[0]!.agents[0]).toMatchObject({ sessionId: "s1", dir: "/w/r-wt" })
+    })
+
+    it("placed by its edits, linked to its shell's PR and a +N checkout's PR (by branch)", () => {
+      const m = fleetModel(
+        input(
+          session("s1", "p1", "/w/r"),
+          {
+            p1: { root: "/w/r", branch: "main" },
+            "p1@edit": { root: "/w/r-wt", branch: "feat", pr: pr(7), forCwd: "/w/r-wt" },
+          },
+          {
+            paneWork: { p1: work("s1", "/w/r-wt", ["/w/r-fix"]) },
+            local,
+            mine: [row(9, { head: "fix", fork: false })],
+          },
+        ),
+      )
+      const r = m[0]!
+      expect(r.counts.agents).toBe(1)
+      expect(r.agents).toEqual([]) // (the default branch: not a place of its own here)
+      const p7 = r.prs.find((p) => p.number === 7)!
+      const p9 = r.prs.find((p) => p.number === 9)!
+      expect(p7.agents.map((a) => a.sessionId)).toEqual(["s1"])
+      expect(p9.agents).toEqual([])
+      expect(p9.linked.map((a) => a.sessionId)).toEqual(["s1"])
+      expect(p9.dirs).toEqual(["/w/r-fix"])
+      expect(p9.row?.title).toBe("PR 9")
+    })
+
+    it("a fork's PR of the same branch name isn't its checkout's", () => {
+      const m = fleetModel(
+        input(
+          session("s1", "p1", "/w/r-fix"),
+          { p1: { root: "/w/r-fix", branch: "fix" } },
+          { local, mine: [row(9, { head: "fix", fork: true })] },
+        ),
+      )
+      expect(m[0]!.branches.map((b) => b.name)).toEqual(["fix"])
+      expect(m[0]!.prs.find((p) => p.number === 9)!.dirs).toEqual([])
+    })
+
+    it("an agent touching two repos is in both, placed in each", () => {
+      const m = fleetModel(
+        input(
+          session("s1", "p1", "/w/b"),
+          {
+            p1: { root: "/w/b", branch: "main" },
+            "p1@edit": { root: "/w/r-wt", branch: "feat", pr: pr(7), forCwd: "/w/r-wt" },
+          },
+          { paneWork: { p1: work("s1", "/w/r-wt") }, local },
+        ),
+      )
+      expect(m.map((r) => r.key)).toEqual(["o/r", "o/b"])
+      expect(m[0]!.prs[0]!.agents[0]).toMatchObject({ sessionId: "s1", dir: "/w/r-wt" })
+      expect(m[1]!.agents[0]).toMatchObject({ sessionId: "s1", dir: "/w/b", branch: "main" })
+      expect(m.map((r) => r.counts.agents)).toEqual([1, 1])
+    })
+
+    it("an older session's edits aren't the new one's; an answer for another folder neither", () => {
+      const m = fleetModel(
+        input(
+          session("s2", "p1", "/w/r"),
+          {
+            p1: { root: "/w/r", branch: "main" },
+            "p1@edit": { root: "/w/r-wt", branch: "feat", pr: pr(7), forCwd: "/w/other" },
+          },
+          { paneWork: { p1: work("s1", "/w/r-wt", ["/w/r-fix"]) }, local },
+        ),
+      )
+      expect(m[0]!.agents.map((a) => a.sessionId)).toEqual(["s2"])
+      expect(m[0]!.prs).toEqual([])
+      expect(m[0]!.branches).toEqual([])
+    })
+
+    it("my PR with nobody on it says where it's checked out", () => {
+      const m = fleetModel(
+        input(
+          session("s1", "p1", "/w/r"),
+          { p1: { root: "/w/r", branch: "main" } },
+          { local, mine: [row(9, { head: "fix", fork: false })] },
+        ),
+      )
+      expect(m[0]!.prs[0]).toMatchObject({ number: 9, dirs: ["/w/r-fix"], agents: [] })
+    })
   })
 })

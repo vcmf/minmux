@@ -57,18 +57,20 @@ export function useFleetData(): FleetData {
   return data
 }
 
-type Slices = Pick<AppState, "agents" | "paneGit" | "sessions" | "agentMeta">
+type Slices = Pick<AppState, "agents" | "paneGit" | "sessions" | "agentMeta" | "paneWork">
 const slices = (s: AppState): Slices => ({
   agents: s.agents,
   paneGit: s.paneGit,
   sessions: s.sessions,
   agentMeta: s.agentMeta,
+  paneWork: s.paneWork,
 })
 const sameSlices = (a: Slices, b: AppState) =>
   a.agents === b.agents &&
   a.paneGit === b.paneGit &&
   a.sessions === b.sessions &&
-  a.agentMeta === b.agentMeta
+  a.agentMeta === b.agentMeta &&
+  a.paneWork === b.paneWork
 
 /** The store slices the fleet reads, followed together at most once per `ms` (one wake-up). */
 export function useThrottledSlices(ms: number): Slices {
@@ -106,9 +108,9 @@ export function useThrottledSlices(ms: number): Slices {
 /** The fleet model, following the store at most once a second. */
 export function useFleetModel(): FleetRepo[] {
   const { local, mine } = useFleetData()
-  const { agents, paneGit, sessions, agentMeta } = useThrottledSlices(1000)
+  const { agents, paneGit, sessions, agentMeta, paneWork } = useThrottledSlices(1000)
   return useMemo(
-    () => fleetModel({ agents, paneGit, sessions, meta: agentMeta, local, mine }),
-    [agents, paneGit, sessions, agentMeta, local, mine],
+    () => fleetModel({ agents, paneGit, sessions, paneWork, meta: agentMeta, local, mine }),
+    [agents, paneGit, sessions, paneWork, agentMeta, local, mine],
   )
 }

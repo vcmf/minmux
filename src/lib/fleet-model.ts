@@ -1,7 +1,8 @@
 // The fleet graph's model (docs/design/FLEET_GRAPH.md, "Data"): repos → PRs (or a branch with
 // no PR) → agent sessions → sub-agents, built from what minmux already tracks. Pure.
-//  - An agent works in its own checkout, by the sidebar's rule (agent-dirs): its `in` folder
-//    when it works elsewhere than the pane's shell, else the pane's.
+//  - An agent is tied to every checkout it touches (the sidebar's lines): the one it edits
+//    (`edits`), its own folder (`in`), its shell's (`from`) and the other ones it edited (the
+//    `+N`). In each repo the first of them places it; the others link it to their PR or branch.
 //  - Only repos with a live agent session are shown; in them, my open PRs with nobody on them
 //    show too.
 import type {
@@ -14,7 +15,8 @@ import type {
 } from "./agent-graph"
 import { paneLeads } from "./agent-graph"
 import { agentWorkDirs, gitKey, samePath, worksElsewhere } from "./agent-dirs"
-import type { PaneGitInfo, PrState } from "./pane-git"
+import { moreFolders, type PaneWork } from "./agent-work"
+import type { PaneGitInfo, PrInfo, PrState } from "./pane-git"
 import type { PrRow } from "./pr-dashboard"
 import type { LocalRepo } from "./pr-local"
 import type { SessionMeta } from "./session-color"
@@ -35,6 +37,7 @@ export interface FleetAgent {
   name?: string // /rename or the agent's own title
   color?: string | null
   cwd?: string
+  dir?: string // its checkout in this repo (the card's folder)
   branch?: string
   currentTool?: string
   tokens?: TokenUsage
@@ -47,12 +50,16 @@ export interface FleetPr {
   number: number
   state: PrState
   row?: PrRow // title, CI, review…: when the lists hold it
-  agents: FleetAgent[]
+  agents: FleetAgent[] // placed under it
+  linked: FleetAgent[] // placed elsewhere in the repo, touching it too
+  dirs: string[] // the checkouts it's in
 }
 
 export interface FleetBranch {
   name: string
   agents: FleetAgent[]
+  linked: FleetAgent[]
+  dirs: string[]
 }
 
 export interface FleetRepo {
@@ -71,6 +78,7 @@ export interface FleetInput {
   agents: AgentGraph
   paneGit: Record<string, PaneGitInfo>
   sessions: Record<string, Pick<Session, "cwd">>
+  paneWork: Record<string, PaneWork> // the checkouts each pane's agent edits in
   meta: Record<string, SessionMeta>
   local: LocalRepo[] // prs:local: each repo's GitHub name, worktrees, default branch
   mine: PrRow[] // my open PRs (the lists' `mine`)
@@ -88,6 +96,19 @@ const folderName = (p: string) =>
     .replace(/[\\/]+$/, "")
     .split(/[\\/]/)
     .pop() || p
+
+/** The agents placed in a repo (each once; one touching several repos is in each). */
+export const agentsIn = (r: FleetRepo): FleetAgent[] => [
+  ...r.prs.flatMap((p) => p.agents),
+  ...r.branches.flatMap((b) => b.agents),
+  ...r.agents,
+]
+
+/** Every agent in the fleet, once. */
+export function fleetAgentsOf(repos: FleetRepo[]): FleetAgent[] {
+  const seen = new Set<string>()
+  return repos.flatMap((r) => agentsIn(r)).filter((a) => !seen.has(a.id) && !!seen.add(a.id))
+}
 
 /** The git answer for the checkout a pane's agent works in (the sidebar's rule). */
 export function agentGit(
@@ -139,6 +160,91 @@ function toAgent(
   }
 }
 
+/** A checkout an agent touches: its root, branch and PR (when known). */
+interface Place {
+  root: string
+  branch?: string
+  pr?: PrInfo
+}
+
+/** Every checkout a pane's agent touches, deduplicated, in the order that places it: the one it
+ *  edits, its own folder, its shell's, then the other ones it edited. */
+export function touched(input: FleetInput, n: AgentNode, paneId: string): Place[] {
+  const { agents: graph, paneGit, sessions, paneWork, local, mine } = input
+  const out: Place[] = []
+  const add = (p: Place | undefined) => {
+    if (p?.root && !out.some((o) => samePath(o.root, p.root))) out.push(p)
+  }
+  const fromGit = (g: PaneGitInfo | undefined): Place | undefined =>
+    g?.root
+      ? { root: g.root, ...(g.branch ? { branch: g.branch } : {}), ...(g.pr ? { pr: g.pr } : {}) }
+      : undefined
+  // (the pane's record is its lead session's: another session's edits aren't this one's)
+  const work = paneWork[paneId]?.session === n.sessionId ? paneWork[paneId] : undefined
+  const shown = work?.shown
+  const edit = paneGit[gitKey(paneId, "edit")]
+  if (shown && edit?.forCwd && samePath(edit.forCwd, shown)) add(fromGit(edit))
+  const dir = agentWorkDirs(graph)[paneId]
+  const shellCwd = sessions[paneId]?.cwd
+  const inGit = paneGit[gitKey(paneId, "in")]
+  if (worksElsewhere(shellCwd, dir?.cwd, paneGit[paneId], inGit, dir?.agent)) add(fromGit(inGit))
+  add(fromGit(paneGit[paneId]))
+  // The `+N`: no lookup of their own; the branch from the repo's worktrees, the PR from mine.
+  for (const root of moreFolders(
+    (dir?.others ?? []).map((w) => w.path),
+    work?.more ?? [],
+    shown,
+  )) {
+    const loc = repoOfRoot(local, root)
+    const branch = loc?.worktrees.find((w) => samePath(w.path, root))?.branch
+    const row =
+      branch && loc?.repo
+        ? mine.find(
+            (r) => !r.fork && r.head === branch && r.repo.toLowerCase() === loc.repo!.toLowerCase(),
+          )
+        : undefined
+    add({
+      root,
+      ...(branch ? { branch } : {}),
+      ...(row ? { pr: { number: row.number, state: row.state, url: row.url } } : {}),
+    })
+  }
+  return out
+}
+
+/** Where a checkout ties an agent in its repo: its live PR, its branch's node, or the root
+ *  (the default branch). Made when first needed. */
+function targetOf(
+  repo: FleetRepo,
+  place: Place,
+  rowsByUrl: Map<string, PrRow>,
+): FleetPr | FleetBranch | "root" {
+  const pr = place.pr && isLive(place.pr.state) ? place.pr : undefined
+  if (pr) {
+    let node = repo.prs.find((p) => p.url === pr.url)
+    if (!node) {
+      const row = rowsByUrl.get(pr.url)
+      node = {
+        url: pr.url,
+        number: pr.number,
+        state: pr.state,
+        ...(row ? { row } : {}),
+        agents: [],
+        linked: [],
+        dirs: [],
+      }
+      repo.prs.push(node)
+    }
+    return node
+  }
+  // (no branch: a detached HEAD, mid-rebase or a checked-out tag; not the default branch)
+  if (place.branch && isDefault(place.branch, repo.defaultBranch)) return "root"
+  const name = place.branch ?? DETACHED
+  let b = repo.branches.find((x) => x.name === name)
+  if (!b) repo.branches.push((b = { name, agents: [], linked: [], dirs: [] }))
+  return b
+}
+
 /** Repos with a live agent session, in the order their first agent appeared. */
 export function fleetModel(input: FleetInput): FleetRepo[] {
   const { agents: graph, paneGit, sessions, local, mine } = input
@@ -155,60 +261,63 @@ export function fleetModel(input: FleetInput): FleetRepo[] {
 
   for (const n of order) {
     const paneId = n.paneId!
-    const git = agentGit(graph, paneGit, paneId, sessions[paneId]?.cwd)
-    const root = git?.root
-    if (!root) continue // not in a repo (or not looked up yet)
-    const loc = repoOfRoot(local, root)
-    const gh = loc?.repo ?? undefined
-    // No GitHub remote: its main worktree stands for the repo (all its worktrees, one node).
-    const key = gh ? gh.toLowerCase() : (loc?.worktrees[0]?.path ?? root)
-    let repo = repos.get(key)
-    if (!repo) {
-      // GitHub's (on a listed PR) first: the local remote HEAD is set at clone and goes stale
-      // when the default is renamed.
-      const defaultBranch =
-        mine.find((r) => gh && r.repo.toLowerCase() === key)?.defaultBranch ?? loc?.defaultBranch
-      repo = {
-        key,
-        label: gh ?? folderName(key),
-        ...(gh ? { repo: gh } : {}),
-        ...(defaultBranch ? { defaultBranch } : {}),
-        prs: [],
-        branches: [],
-        agents: [],
-        counts: { agents: 0, working: 0, waiting: 0, prs: 0 },
-        roots: [],
-      }
-      repos.set(key, repo)
-    }
-    if (!repo.roots.includes(root)) repo.roots.push(root)
-    const agent = toAgent(graph, n, paneId, input, git)
-    repo.counts.agents++
-    if (agent.status === "working") repo.counts.working++
-    if (agent.status === "waiting") repo.counts.waiting++
-
-    const pr = git?.pr && isLive(git.pr.state) ? git.pr : undefined
-    if (pr) {
-      let node = repo.prs.find((p) => p.url === pr.url)
-      if (!node) {
-        const row = rowsByUrl.get(pr.url)
-        node = {
-          url: pr.url,
-          number: pr.number,
-          state: pr.state,
-          ...(row ? { row } : {}),
+    const base = toAgent(
+      graph,
+      n,
+      paneId,
+      input,
+      agentGit(graph, paneGit, paneId, sessions[paneId]?.cwd),
+    )
+    // Its checkouts by repo, in the order they place it.
+    const byRepo = new Map<string, Place[]>()
+    for (const place of touched(input, n, paneId)) {
+      const loc = repoOfRoot(local, place.root)
+      const gh = loc?.repo ?? undefined
+      // No GitHub remote: its main worktree stands for the repo (all its worktrees, one node).
+      const key = gh ? gh.toLowerCase() : (loc?.worktrees[0]?.path ?? place.root)
+      if (!repos.has(key)) {
+        // GitHub's (on a listed PR) first: the local remote HEAD is set at clone and goes stale
+        // when the default is renamed.
+        const defaultBranch =
+          mine.find((r) => gh && r.repo.toLowerCase() === key)?.defaultBranch ?? loc?.defaultBranch
+        repos.set(key, {
+          key,
+          label: gh ?? folderName(key),
+          ...(gh ? { repo: gh } : {}),
+          ...(defaultBranch ? { defaultBranch } : {}),
+          prs: [],
+          branches: [],
           agents: [],
-        }
-        repo.prs.push(node)
+          counts: { agents: 0, working: 0, waiting: 0, prs: 0 },
+          roots: [],
+        })
       }
-      node.agents.push(agent)
-    } else if (!git?.branch || !isDefault(git.branch, repo.defaultBranch)) {
-      // (no branch: a detached HEAD, mid-rebase or a checked-out tag; not the default branch)
-      const name = git?.branch ?? DETACHED
-      let b = repo.branches.find((x) => x.name === name)
-      if (!b) repo.branches.push((b = { name, agents: [] }))
-      b.agents.push(agent)
-    } else repo.agents.push(agent)
+      const list = byRepo.get(key) ?? []
+      list.push(place)
+      byRepo.set(key, list)
+    }
+    for (const [key, places] of byRepo) {
+      const repo = repos.get(key)!
+      const agent: FleetAgent = { ...base, dir: places[0]!.root }
+      if (places[0]!.branch) agent.branch = places[0]!.branch
+      repo.counts.agents++
+      if (agent.status === "working") repo.counts.working++
+      if (agent.status === "waiting") repo.counts.waiting++
+      const seen = new Set<string>()
+      places.forEach((place, i) => {
+        if (!repo.roots.includes(place.root)) repo.roots.push(place.root)
+        const target = targetOf(repo, place, rowsByUrl)
+        if (target === "root") {
+          if (i === 0) repo.agents.push(agent)
+          return
+        }
+        if (!target.dirs.some((d) => samePath(d, place.root))) target.dirs.push(place.root)
+        const id = "url" in target ? target.url : `branch:${target.name}`
+        if (seen.has(id)) return
+        seen.add(id)
+        ;(i === 0 ? target.agents : target.linked).push(agent)
+      })
+    }
   }
 
   // My open PRs with nobody on them, in the repos shown (the lists' order).
@@ -216,7 +325,19 @@ export function fleetModel(input: FleetInput): FleetRepo[] {
     if (row.state !== "open" && row.state !== "draft") continue
     const repo = repos.get(row.repo.toLowerCase())
     if (!repo || repo.prs.some((p) => p.url === row.url)) continue
-    repo.prs.push({ url: row.url, number: row.number, state: row.state, row, agents: [] })
+    // (checked out here, its worktree says where)
+    const dirs = local
+      .filter((l) => l.repo?.toLowerCase() === row.repo.toLowerCase() && !row.fork)
+      .flatMap((l) => l.worktrees.filter((w) => w.branch === row.head).map((w) => w.path))
+    repo.prs.push({
+      url: row.url,
+      number: row.number,
+      state: row.state,
+      row,
+      agents: [],
+      linked: [],
+      dirs,
+    })
   }
   for (const repo of repos.values()) repo.counts.prs = repo.prs.length
   return [...repos.values()]

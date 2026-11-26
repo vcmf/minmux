@@ -33,3 +33,14 @@ export function contextWindow(
   if (!w) return undefined
   return { size: t.context > w.usual ? w.large : w.usual, guess: true }
 }
+
+/** The checkout a PR or branch card names: an agent's on it if any, else the first; and how
+ *  many others it's checked out in. */
+export function shownDir(
+  dirs: string[],
+  agents: { dir?: string }[],
+): { dir: string; more: number } | undefined {
+  if (!dirs.length) return undefined
+  const dir = dirs.find((d) => agents.some((a) => a.dir === d)) ?? dirs[0]!
+  return { dir, more: dirs.length - 1 }
+}

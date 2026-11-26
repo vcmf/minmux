@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest"
-import { contextWindow, folderName, shortModel } from "./fleet-facts"
+import { contextWindow, folderName, shortModel, shownDir } from "./fleet-facts"
 
 describe("fleet-facts", () => {
   it("a folder's name, a model's short name, ", () => {
@@ -26,5 +26,13 @@ describe("fleet-facts", () => {
     expect(contextWindow("claude", { context: 300_000, output: 0 })!.size).toBe(1_000_000)
     expect(contextWindow("opencode", { context: 5, output: 0 })).toBeUndefined()
     expect(contextWindow("claude", undefined)).toBeUndefined()
+  })
+})
+
+describe("shownDir", () => {
+  it("an agent's checkout first, else the first; +N for the others", () => {
+    expect(shownDir([], [])).toBeUndefined()
+    expect(shownDir(["/a", "/b"], [])).toEqual({ dir: "/a", more: 1 })
+    expect(shownDir(["/a", "/b"], [{ dir: "/b" }])).toEqual({ dir: "/b", more: 1 })
   })
 })
