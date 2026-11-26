@@ -436,6 +436,35 @@ describe("fleetModel", () => {
       expect(n[0]!.branches).toEqual([])
     })
 
+    it("a checkout whose PR its lookup doesn't know yet joins my PR of its branch", () => {
+      const m = fleetModel(
+        input(
+          session("s1", "p1", "/w/r-fix"),
+          { p1: { root: "/w/r-fix", branch: "fix" } },
+          { local, mine: [row(9, { head: "fix", fork: false })] },
+        ),
+      )
+      expect(m[0]!.branches).toEqual([])
+      expect(m[0]!.prs[0]).toMatchObject({ number: 9, dirs: ["/w/r-fix"] })
+      expect(m[0]!.prs[0]!.agents.map((a) => a.sessionId)).toEqual(["s1"])
+      expect(m[0]!.counts.prs).toBe(1)
+    })
+
+    it("detached checkouts never fold into a PR (one node gathers unrelated ones)", () => {
+      const m = fleetModel(
+        input(
+          [...session("s1", "p1", "/w/r-fix"), ...session("s2", "p2", "/w/r-wt")],
+          {
+            p1: { root: "/w/r-fix" },
+            p2: { root: "/w/r-wt" },
+          },
+          { local, mine: [row(9, { head: "fix", fork: false })] },
+        ),
+      )
+      expect(m[0]!.branches.map((b) => [b.name, b.agents.length])).toEqual([[DETACHED, 2]])
+      expect(m[0]!.prs[0]!.agents).toEqual([])
+    })
+
     it("my PR with nobody on it says where it's checked out", () => {
       const m = fleetModel(
         input(

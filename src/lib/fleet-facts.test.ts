@@ -34,5 +34,6 @@ describe("shownDir", () => {
     expect(shownDir([], [])).toBeUndefined()
     expect(shownDir(["/a", "/b"], [])).toEqual({ dir: "/a", more: 1 })
     expect(shownDir(["/a", "/b"], [{ dir: "/b" }])).toEqual({ dir: "/b", more: 1 })
+    expect(shownDir(["/a", "/b"], [{ dir: "/b/" }])).toEqual({ dir: "/b", more: 1 })
   })
 })

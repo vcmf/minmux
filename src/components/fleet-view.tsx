@@ -337,9 +337,13 @@ export function FleetView() {
     const sel = selectedAgent ? byId.get(nodeId.agent(selectedAgent)) : undefined
     for (const start of sel ? [sel.id, ...(sel.links ?? [])] : [])
       for (let id: string | undefined = start; id; id = byId.get(id)?.parent) path.add(id)
-    for (const { n, p, c } of edges) {
+    // (the selected paths last: nothing crossing them paints over them)
+    const onPath = (e: (typeof edges)[number]) => path.has(e.n.id) && path.has(e.p.id)
+    const drawn = path.size ? [...edges.filter((e) => !onPath(e)), ...edges.filter(onPath)] : edges
+    for (const e of drawn) {
+      const { n, p, c } = e
       const info = lookup.get(n.id)
-      const on = path.has(n.id) && path.has(p.id)
+      const on = onPath(e)
       const blocked = info?.pr?.row && cardLook(info.pr.row).tone === "red"
       ctx.beginPath()
       ctx.moveTo(n.x, n.y)

@@ -118,13 +118,7 @@ function repoOfRoot(local: LocalRepo[], root: string): LocalRepo | undefined {
   )
 }
 
-function toAgent(
-  graph: AgentGraph,
-  n: AgentNode,
-  paneId: string,
-  input: FleetInput,
-  git?: PaneGitInfo,
-): FleetAgent {
+function toAgent(graph: AgentGraph, n: AgentNode, paneId: string, input: FleetInput): FleetAgent {
   const meta = input.meta[paneId]
   return {
     id: n.id,
@@ -135,7 +129,6 @@ function toAgent(
     ...(meta?.name ? { name: meta.name } : {}),
     ...(meta?.color !== undefined ? { color: meta.color } : {}),
     ...(n.cwd ? { cwd: n.cwd } : {}),
-    ...(git?.branch ? { branch: git.branch } : {}),
     ...(n.currentTool ? { currentTool: n.currentTool } : {}),
     ...(n.tokens ? { tokens: n.tokens } : {}),
     ...(n.toolbox ? { toolbox: n.toolbox } : {}),
@@ -236,6 +229,8 @@ function targetOf(
 /** Branch nodes whose checkout a PR node holds, folded into that PR. */
 function mergeBranchesIntoPrs(repo: FleetRepo): void {
   repo.branches = repo.branches.filter((b) => {
+    // (the detached node gathers unrelated checkouts: none of them is a PR's branch)
+    if (b.name === DETACHED) return true
     const pr = repo.prs.find((p) => p.dirs.some((d) => b.dirs.some((x) => samePath(d, x))))
     if (!pr) return true
     const has = (list: FleetAgent[], a: FleetAgent) => list.some((x) => x.id === a.id)
@@ -324,10 +319,6 @@ export function fleetModel(input: FleetInput): FleetRepo[] {
     }
   }
 
-  // A checkout seen as a branch here (a `+N` one, its PR not in mine) and as a PR by another
-  // pane's lookup: one node, the PR's.
-  for (const repo of repos.values()) mergeBranchesIntoPrs(repo)
-
   // My open PRs with nobody on them, in the repos shown (the lists' order).
   for (const row of mine) {
     if (row.state !== "open" && row.state !== "draft") continue
@@ -347,6 +338,11 @@ export function fleetModel(input: FleetInput): FleetRepo[] {
       dirs,
     })
   }
-  for (const repo of repos.values()) repo.counts.prs = repo.prs.length
+  // A checkout seen as a branch (its PR not known by that lookup yet) and as a PR (another
+  // pane's lookup, or mine by its worktree): one node, the PR's.
+  for (const repo of repos.values()) {
+    mergeBranchesIntoPrs(repo)
+    repo.counts.prs = repo.prs.length
+  }
   return [...repos.values()]
 }
