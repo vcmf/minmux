@@ -3,6 +3,12 @@
 What changed in each minmux release, newest first. Generated from the pull request titles by
 [git-cliff](https://git-cliff.org): edit `cliff.toml`, not this file.
 
+## [0.1.71](https://github.com/vcmf/minmux/releases/tag/v0.1.71) - 2026-11-26
+
+### Added
+
+- Link stacked PRs with an arrow to the PR they're on ([#241](https://github.com/vcmf/minmux/pull/241))
+
 ## [0.1.70](https://github.com/vcmf/minmux/releases/tag/v0.1.70) - 2026-11-26
 
 ### Added
