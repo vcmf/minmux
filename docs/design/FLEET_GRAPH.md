@@ -139,7 +139,8 @@ sit on a ring, in a stable order (first seen).
 - While a view (the Fleet) shows, the agents panel is set aside (its state kept): it's back with
   the panes; the Agents button in a view goes back to them with it open.
 - PR cards reuse the PR graph's looks (`lib/pr-graph` `cardLook`: red for conflicts, failing CI
-  or changes requested, amber for CI running, dashed for a draft, an approved tick). A PR the
+  or changes requested, amber for CI running, dashed for a draft, an approved tick); a red or
+  amber card is tinted its colour too (still opaque). A PR the
   lists don't hold shows its number and state only. PR cards carry the pull-request icon. Agent cards: the agent's icon
   (Claude, Codex, OpenCode), name, sub-agent count; what it's doing as a word coloured by status
   (no dots); a third line with its folder, context and model; amber border when it needs you;
