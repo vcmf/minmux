@@ -29,10 +29,13 @@ export interface PlacesInput {
   paneWork: Record<string, PaneWork>
 }
 
-const placeOf = (g: PaneGitInfo): Place | null =>
+// A failed lookup (no root, yet not "not a repo") isn't an answer: undefined, as on the way.
+const placeOf = (g: PaneGitInfo): Place | null | undefined =>
   g.root
     ? { root: g.root, ...(g.branch ? { branch: g.branch } : {}), ...(g.pr ? { pr: g.pr } : {}) }
-    : null
+    : g.noRepo
+      ? null
+      : undefined
 
 // A Place, null (answered: none there), or undefined (not answered for its folder yet).
 /** What each lookup says now about a pane's lead session. */
@@ -51,7 +54,9 @@ export function answers(
     : edit?.forCwd && samePath(edit.forCwd, shown)
       ? edit.branch || edit.pr
         ? placeOf(edit)
-        : null
+        : edit.root || edit.noRepo
+          ? null // (answered: no branch, so one of the `+N`)
+          : undefined
       : undefined
   // `in`: only while it works elsewhere than the shell's checkout.
   const dir = agentWorkDirs(graph)[paneId]
@@ -59,13 +64,15 @@ export function answers(
   const shell = paneGit[paneId]
   const inGit = paneGit[gitKey(paneId, "in")]
   const inKnown = dir?.cwd ? inGitFor(inGit, dir.cwd, dir.agent) : undefined
-  const inAt = !dir?.cwd
-    ? null
-    : !inKnown
-      ? undefined
-      : worksElsewhere(shellCwd, dir.cwd, shell, inGit, dir.agent)
-        ? placeOf(inKnown)
-        : null
+  // (back in the shell's folder: its lookup is dropped, and it works nowhere else)
+  const inAt =
+    !dir?.cwd || (shellCwd && samePath(dir.cwd, shellCwd))
+      ? null
+      : !inKnown
+        ? undefined
+        : worksElsewhere(shellCwd, dir.cwd, shell, inGit, dir.agent)
+          ? placeOf(inKnown)
+          : null
   // `from`: the shell's, once answered for its folder.
   const fromAt = !shellCwd
     ? null

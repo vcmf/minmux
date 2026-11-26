@@ -38,4 +38,29 @@ describe("nextPlaces", () => {
     })
     expect(gone).toEqual({})
   })
+
+  it("a failed lookup isn't an answer: the slot keeps what it had", () => {
+    const ev = start("s1", "/w/r")
+    const a = nextPlaces({}, at(ev, { root: "/w/r", branch: "main", forCwd: "/w/r" }))
+    expect(nextPlaces(a, at(ev, { real: "/w/r", forCwd: "/w/r" }))).toBe(a)
+  })
+
+  it("back in the shell's folder, its own folder's slot empties (that lookup is dropped)", () => {
+    const ev: AgentEvent[] = [
+      ...start("s1", "/w/r"),
+      { event: "CwdChanged", sessionId: "s1", cwd: "/w/r-b" },
+    ]
+    const away = {
+      ...at(ev, { root: "/w/r", branch: "main", forCwd: "/w/r" }),
+      paneGit: {
+        p1: { root: "/w/r", branch: "main", forCwd: "/w/r" },
+        "p1@in": { root: "/w/r-b", branch: "b", forCwd: "/w/r-b" },
+      },
+    }
+    const a = nextPlaces({}, away)
+    expect(a.s1!.in).toEqual({ root: "/w/r-b", branch: "b" })
+    const back: AgentEvent[] = [...ev, { event: "CwdChanged", sessionId: "s1", cwd: "/w/r" }]
+    const b = nextPlaces(a, at(back, { root: "/w/r", branch: "main", forCwd: "/w/r" }))
+    expect(b.s1!.in).toBeUndefined()
+  })
 })

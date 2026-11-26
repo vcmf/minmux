@@ -143,7 +143,6 @@ function toAgent(graph: AgentGraph, n: AgentNode, paneId: string, input: FleetIn
   }
 }
 
-// In placing order: the one it edits, its own folder, its shell's (each with a lookup of its own:
 // In placing order: the one it edits, its own folder, its shell's, from the ledger (each slot
 // a lookup's last answer for its folder); the `+N` and an `edits` one with no branch: listed.
 /** The checkouts a pane's agent works in, once each, and the other ones it edited. */
@@ -164,7 +163,11 @@ export function touched(
   const shown = work?.shown
   const edit = paneGit[gitKey(paneId, "edit")]
   const unplacedEdit =
-    !!shown && !!edit?.forCwd && samePath(edit.forCwd, shown) && !(edit.branch || edit.pr)
+    !!shown &&
+    !!edit?.forCwd &&
+    samePath(edit.forCwd, shown) &&
+    !(edit.branch || edit.pr) &&
+    !!(edit.root || edit.noRepo) // (a failed lookup isn't an answer)
   const dir = agentWorkDirs(graph)[paneId]
   const more = moreFolders(
     (dir?.others ?? []).map((w) => w.path),
