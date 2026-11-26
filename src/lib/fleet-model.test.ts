@@ -202,7 +202,7 @@ describe("fleetModel", () => {
 
   it("places an agent working in another checkout by that checkout (the sidebar's `in`)", () => {
     const inp = input(session("s1", "p1", "/w/r-wt"), {
-      p1: { noRepo: true },
+      p1: { noRepo: true, forCwd: "/home/u" },
       "p1@in": { root: "/w/r-wt", branch: "feat", pr: pr(9), forCwd: "/w/r-wt" },
     })
     inp.sessions = { p1: { cwd: "/home/u" } } // the shell stayed home

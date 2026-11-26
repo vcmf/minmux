@@ -68,8 +68,8 @@ export function answers(
   const inAt =
     !dir?.cwd || (shellCwd && samePath(dir.cwd, shellCwd))
       ? null
-      : !inKnown
-        ? undefined
+      : !inKnown || !(shell?.forCwd && shellCwd && samePath(shell.forCwd, shellCwd))
+        ? undefined // (its answer, or the shell's it's weighed against, on the way)
         : worksElsewhere(shellCwd, dir.cwd, shell, inGit, dir.agent)
           ? placeOf(inKnown)
           : null

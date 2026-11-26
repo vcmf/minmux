@@ -63,4 +63,17 @@ describe("nextPlaces", () => {
     const b = nextPlaces(a, at(back, { root: "/w/r", branch: "main", forCwd: "/w/r" }))
     expect(b.s1!.in).toBeUndefined()
   })
+
+  it("its own folder waits for the shell's answer for the shell's folder", () => {
+    const ev: AgentEvent[] = [
+      ...start("s1", "/w/r"),
+      { event: "CwdChanged", sessionId: "s1", cwd: "/w/r-a" },
+    ]
+    const inp = (shell: PaneGitInfo) => ({
+      ...at(ev, shell, "/w/r-a"),
+      paneGit: { p1: shell, "p1@in": { root: "/w/r-a", branch: "a", forCwd: "/w/r-a" } },
+    })
+    // the shell cd'd to /w/r-a, its answer still for /w/r-b: nothing decided yet
+    expect(nextPlaces({}, inp({ root: "/w/r-b", forCwd: "/w/r-b" })).s1).toEqual({})
+  })
 })
