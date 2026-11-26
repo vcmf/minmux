@@ -38,6 +38,7 @@ export interface FleetAgent {
   status: AgentStatus
   name?: string // /rename or the agent's own title
   color?: string | null
+  nameAuto?: boolean // the agent's own title, not a /rename: it colours nothing
   cwd?: string
   dir?: string // its checkout in this repo (the card's folder)
   more?: string[] // the other checkouts it edited (no lookup of their own: listed, not linked)
@@ -132,6 +133,7 @@ function toAgent(graph: AgentGraph, n: AgentNode, paneId: string, input: FleetIn
     status: n.status,
     ...(meta?.name ? { name: meta.name } : {}),
     ...(meta?.color !== undefined ? { color: meta.color } : {}),
+    ...(meta?.auto ? { nameAuto: true } : {}),
     ...(n.cwd ? { cwd: n.cwd } : {}),
     ...(n.currentTool ? { currentTool: n.currentTool } : {}),
     ...(n.tokens ? { tokens: n.tokens } : {}),

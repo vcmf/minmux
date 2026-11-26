@@ -135,6 +135,21 @@ describe("FleetCard", () => {
     expect(onAgent).toHaveBeenCalledTimes(3)
   })
 
+  it("an agent card takes its session's colour, as in the agents panel", () => {
+    for (const [a, tinted] of [
+      [agent({ name: "fixer", color: "green" }), true], // /color
+      [agent({ name: "fixer" }), true], // a renamed session: its name's colour
+      [agent({ name: "fixer", nameAuto: true }), false], // the agent's own title: none
+      [agent({ name: "fixer", color: null }), false], // /color default
+    ] as const) {
+      const { unmount } = card("agent", { repo: repo(), agent: a })
+      const el = screen.getByRole("button")
+      expect(el.classList.contains("tinted")).toBe(tinted)
+      expect(!!el.style.getPropertyValue("--row-hue")).toBe(tinted)
+      unmount()
+    }
+  })
+
   it("a repo circle: its label and counts until it opens", () => {
     const onRoot = vi.fn()
     card("root", { repo: repo({ defaultBranch: "main" }) }, { onRoot })

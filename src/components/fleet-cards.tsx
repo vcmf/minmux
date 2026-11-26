@@ -1,7 +1,9 @@
 // The Fleet view's cards and side panel (docs/design/FLEET_GRAPH.md, "Cards", "Side panel"): what
 // each node and the selection show. Placement and motion stay in fleet-view.tsx.
 import { ArrowSquareOut, Folder, GitBranch, GitPullRequest } from "@phosphor-icons/react"
+import type { CSSProperties } from "react"
 import { useStore, activeTheme } from "../store"
+import { sessionColor } from "../lib/session-color"
 import { type FleetNode } from "../lib/fleet-layout"
 import {
   DETACHED,
@@ -106,6 +108,7 @@ export function FleetCard(props: {
   onAgent: (id: string) => void
 }) {
   const { node: n, info, open, selected } = props
+  const scheme = useStore((s) => activeTheme(s).scheme)
   if (!info) return null
   const style = { left: n.x - n.w / 2, top: n.y - n.h / 2, width: n.w, height: n.h }
   if (n.kind === "root") {
@@ -198,10 +201,12 @@ export function FleetCard(props: {
   if (n.kind === "agent" && info.agent) {
     const a = info.agent
     const st = AGENT_STATUS_UI[a.status]
+    // (its colour in the agents panel: /color, or its renamed name's)
+    const hue = sessionColor({ name: a.name, color: a.color, auto: a.nameAuto }, scheme)
     return (
       <button
-        className={`fleet-card fleet-agent ${a.status}${selected ? " sel" : ""}${props.marked ? " marked" : ""}`}
-        style={style}
+        className={`fleet-card fleet-agent ${a.status}${selected ? " sel" : ""}${props.marked ? " marked" : ""}${hue ? " tinted" : ""}`}
+        style={hue ? ({ ...style, "--row-hue": hue } as CSSProperties) : style}
         data-node={n.id}
         aria-label={`${agentInfo(a.kind).label} agent ${agentName(a)}, ${st.word}`}
         onClick={() => props.onAgent(a.id)}

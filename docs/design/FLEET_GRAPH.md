@@ -142,7 +142,8 @@ sit on a ring, in a stable order (first seen).
   or changes requested, amber for CI running, dashed for a draft, an approved tick). A PR the
   lists don't hold shows its number and state only. PR cards carry the pull-request icon. Agent cards: the agent's icon
   (Claude, Codex, OpenCode), name, sub-agent count; what it's doing as a word coloured by status
-  (no dots); a third line with its folder, context and model; amber border when it needs you;
+  (no dots); a third line with its folder, context and model; amber border when it needs you; tinted
+  by its session's colour (`/color`, or its renamed name's), as its box in the agents panel;
   idle ones dimmed by colour (never see-through: the edges behind stay hidden). The agent's
   panel has its context bar: amber past 75% of the window, red past 90%; a window the agent
   doesn't report is its kind's usual one, shown as a guess (`~200k`) and never coloured.
