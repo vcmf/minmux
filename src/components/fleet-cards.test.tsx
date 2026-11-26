@@ -178,7 +178,7 @@ describe("FleetPanel", () => {
     )
 
   it("an agent's checkout and its other PRs", () => {
-    const a = agent({ id: "a", dir: "/w/r-wt" })
+    const a = agent({ id: "a", dir: "/w/r-wt", more: ["/w/r-x", "/w/r-y"] })
     const r = repo({
       prs: [
         { ...pr(7, {}), agents: [a] },
@@ -190,6 +190,7 @@ describe("FleetPanel", () => {
     expect(screen.getByText("also")).toBeInTheDocument()
     expect(screen.getByText("#9 · fix")).toBeInTheDocument()
     expect(screen.getByText("/w/r-wt")).toBeInTheDocument()
+    expect(screen.getByText("r-x · r-y")).toBeInTheDocument()
   })
 
   it("an agent with no PR, sub-agents or tokens", () => {

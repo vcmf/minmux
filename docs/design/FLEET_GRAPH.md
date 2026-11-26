@@ -187,23 +187,28 @@ of plumbing.
 | --------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Sessions, status, sub-agents, current tool, tokens  | the agent graph (`lib/agent-graph`, hook-fed)                                                                                                                              |
 | Session name and colour                             | `agent-meta` (per pane)                                                                                                                                                    |
-| Which checkouts an agent touches                    | the sidebar's lines: the checkout it edits (`edits`, `lib/agent-work`), its own folder (`in`), the shell's (`from`), the others it edited (`+N`)                           |
+| Which checkouts an agent works in                   | the sidebar's lines: the checkout it edits (`edits`, `lib/agent-work`), its own folder (`in`), the shell's (`from`); the `+N` listed only                                  |
 | Branch and PR (number, state, url) of each checkout | `PaneGitInfo`, as the sidebar shows                                                                                                                                        |
 | `owner/name`                                        | the repo lookup the PR dialog caches per root (`repoFromRemotes`)                                                                                                          |
 | Default branch                                      | GitHub's `defaultBranchRef` on a listed PR; else the remote's HEAD (`prs:local`, cached; `origin`'s when the chosen remote has none); else `main`/`master`                 |
 | PR titles, CI, review; my open PRs                  | the PR lists' `mine` list, refreshed while the Fleet tab is shown                                                                                                          |
 | Context use                                         | the session's `tokens.context`; the window from Codex's report; Claude's is a guess (200k, 1M past it, from `agent-kinds`); none for OpenCode (tokens shown without a bar) |
 
-- **Every checkout an agent touches ties it to that checkout's PR** (or branch). In each repo
-  it touches, the first of `edits`, `in`, `from`, `+N` places it (its slice of the ring); the
-  others link it to their PRs and branches with edges of their own. An agent touching two repos
-  is in both sub-graphs (counted once in each). `edits`, `in` and `from` come with the
-  sidebar's lookups; a `+N` checkout's branch comes from its repo's worktree list and its PR
-  from my open PRs by branch (never a fork's), so it costs no GitHub call. The `edits` record
-  counts only when it's the pane's current session's.
-- A PR or branch card names the checkout it's in (its folder's name; `+N` when it's in several,
-  each listed on hover): an agent's on it first. My PRs with nobody on them name their worktree
-  too. An agent card's folder is its checkout in that repo.
+- **Every checkout an agent works in ties it to that checkout's PR** (or branch): the one it
+  edits (`edits`), its own folder (`in`) and its shell's (`from`), each with the sidebar's own
+  lookup of its branch and PR. In each repo, the first of them places it (its slice of the
+  ring); the others link it to their PRs and branches with edges of their own. An agent touching
+  two repos is in both sub-graphs (counted once in each). The `edits` record counts only when
+  it's the pane's current session's. A checkout no repo answer places yet (a WSL pane's, or
+  before the first answer) counts only as the agent's placing one: its folder stands for the
+  repo, so a second one would show the same repo twice.
+- **The other checkouts it edited (the sidebar's `+N`) are listed in its panel, not linked**:
+  they have no lookup of their own, and guessing their branch from the cached worktree list
+  went stale on a `git switch` (rejected after three review rounds). A later step can give
+  them lookups.
+- A PR or branch card names the checkout it's in (its folder's name; `+N` when several lookups
+  put it in several, each listed on hover): an agent's on it first. An agent card's folder is
+  its checkout in that repo.
 - An agent on its repo's default branch hangs off the repo. A branch with no PR shows as a
   branch node. A PR not in `mine` (someone else's, or past the list's 30) keeps the pane's
   number and state, without title or CI, in v1.

@@ -770,10 +770,10 @@ export function FleetView() {
     // a newer pick's own timer replaces this one)
     window.clearTimeout(pickTimer.current)
     pickTimer.current = window.setTimeout(() => (toFind.current = null), 3000)
-    toFind.current = ids[0] ?? null
-    // (one in several repos: the open one, if it's there, stays)
+    // (one in several repos: the open one, if it's there, stays; the glide goes to one it holds)
     const holds = (r: FleetRepo) => agentsIn(r).some((a) => ids.includes(a.id))
     const repo = open && holds(open) ? open : repos.find(holds)
+    toFind.current = (repo && agentsIn(repo).find((a) => ids.includes(a.id))?.id) ?? null
     if (repo && openKey !== repo.key) toggle(repo.key)
   }
 
