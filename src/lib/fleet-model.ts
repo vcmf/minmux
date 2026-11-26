@@ -15,9 +15,10 @@ import type {
   Toolbox,
 } from "./agent-graph"
 import { paneLeads } from "./agent-graph"
-import { agentWorkDirs, gitKey, samePath, worksElsewhere } from "./agent-dirs"
+import { agentWorkDirs, gitKey, samePath } from "./agent-dirs"
 import { moreFolders, type PaneWork } from "./agent-work"
-import type { PaneGitInfo, PrInfo, PrState } from "./pane-git"
+import { SLOTS, nextPlaces, type Place, type PlaceLedger } from "./fleet-places"
+import type { PaneGitInfo, PrState } from "./pane-git"
 import type { PrRow } from "./pr-dashboard"
 import type { LocalRepo } from "./pr-local"
 import type { SessionMeta } from "./session-color"
@@ -81,6 +82,7 @@ export interface FleetInput {
   paneGit: Record<string, PaneGitInfo>
   sessions: Record<string, Pick<Session, "cwd">>
   paneWork: Record<string, PaneWork> // the checkouts each pane's agent edits in
+  places?: PlaceLedger // where each session works (lib/fleet-places; none: from this round alone)
   meta: Record<string, SessionMeta>
   local: LocalRepo[] // prs:local: each repo's GitHub name, worktrees, default branch
   mine: PrRow[] // my open PRs (the lists' `mine`)
@@ -141,51 +143,32 @@ function toAgent(graph: AgentGraph, n: AgentNode, paneId: string, input: FleetIn
   }
 }
 
-/** A checkout an agent touches: its root, branch and PR (when known). */
-interface Place {
-  root: string
-  branch?: string
-  pr?: PrInfo
-}
-
 // In placing order: the one it edits, its own folder, its shell's (each with a lookup of its own:
-// the `+N` have none, so their branch and PR aren't known; the panel lists them).
-/** Every checkout a pane's agent touches, once each. */
+// In placing order: the one it edits, its own folder, its shell's, from the ledger (each slot
+// a lookup's last answer for its folder); the `+N` and an `edits` one with no branch: listed.
+/** The checkouts a pane's agent works in, once each, and the other ones it edited. */
 export function touched(
   input: FleetInput,
   n: AgentNode,
   paneId: string,
+  ledger: PlaceLedger,
 ): { places: Place[]; more: string[] } {
-  const { agents: graph, paneGit, sessions, paneWork } = input
+  const { agents: graph, paneGit, paneWork } = input
   const out: Place[] = []
-  const add = (p: Place | undefined) => {
-    if (p?.root && !out.some((o) => samePath(o.root, p.root))) out.push(p)
+  const slots = ledger[n.sessionId] ?? {}
+  for (const k of SLOTS) {
+    const p = slots[k]
+    if (p && !out.some((o) => samePath(o.root, p.root))) out.push(p)
   }
-  const fromGit = (g: PaneGitInfo | undefined): Place | undefined =>
-    g?.root
-      ? { root: g.root, ...(g.branch ? { branch: g.branch } : {}), ...(g.pr ? { pr: g.pr } : {}) }
-      : undefined
-  // (the pane's record is its lead session's: another session's edits aren't this one's)
   const work = paneWork[paneId]?.session === n.sessionId ? paneWork[paneId] : undefined
   const shown = work?.shown
   const edit = paneGit[gitKey(paneId, "edit")]
-  // (as the sidebar's `edits` line: only with a branch or a PR; else it's one of the `+N`)
-  const answered = !!shown && !!edit?.forCwd && samePath(edit.forCwd, shown)
-  const editPlaced = answered && !!(edit!.branch || edit!.pr)
-  // (it moved on to another checkout, its answer on the way: the last one stands meanwhile, or
-  // an agent with no other place would leave the graph between two polls)
-  const stale = !!shown && !answered && !!edit?.forCwd && !!(edit.branch || edit.pr)
-  if (editPlaced || stale) add(fromGit(edit))
+  const unplacedEdit =
+    !!shown && !!edit?.forCwd && samePath(edit.forCwd, shown) && !(edit.branch || edit.pr)
   const dir = agentWorkDirs(graph)[paneId]
-  const shellCwd = sessions[paneId]?.cwd
-  const inGit = paneGit[gitKey(paneId, "in")]
-  if (worksElsewhere(shellCwd, dir?.cwd, paneGit[paneId], inGit, dir?.agent)) add(fromGit(inGit))
-  add(fromGit(paneGit[paneId]))
-  // The other checkouts it edited (and its session's other worktrees): folders only. (The one it
-  // edits is one once its answer says no branch, as in the sidebar.)
   const more = moreFolders(
     (dir?.others ?? []).map((w) => w.path),
-    [...(answered && !editPlaced ? [shown!] : []), ...(work?.more ?? [])],
+    [...(unplacedEdit ? [shown!] : []), ...(work?.more ?? [])],
     undefined,
   )
   return { places: out, more }
@@ -227,6 +210,7 @@ function targetOf(
 /** Repos with a live agent session, in the order their first agent appeared. */
 export function fleetModel(input: FleetInput): FleetRepo[] {
   const { agents: graph, sessions, local, mine } = input
+  const ledger = input.places ?? nextPlaces({}, input)
   const repos = new Map<string, FleetRepo>()
   const rowsByUrl = new Map(mine.map((r) => [r.url, r]))
 
@@ -240,7 +224,7 @@ export function fleetModel(input: FleetInput): FleetRepo[] {
 
   for (const n of order) {
     const paneId = n.paneId!
-    const { places: all, more: others } = touched(input, n, paneId)
+    const { places: all, more: others } = touched(input, n, paneId, ledger)
     // Only checkouts a repo answer places count; with none placed yet (a WSL pane's, or before
     // the first answer) the first one's folder stands for its repo, alone: two folders could be
     // the same repo shown twice. The ones left out are listed with the `+N`.

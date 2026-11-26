@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest"
 import { DETACHED, fleetModel, type FleetInput } from "./fleet-model"
+import { nextPlaces } from "./fleet-places"
 import { reduceAgentEvents, type AgentEvent } from "./agent-graph"
 import type { PaneGitInfo } from "./pane-git"
 import type { PrRow } from "./pr-dashboard"
@@ -42,10 +43,18 @@ function input(
   over: Partial<FleetInput> = {},
 ): FleetInput {
   const panes = new Set(events.flatMap((e) => (e.paneId ? [e.paneId] : [])))
+  const sessions = Object.fromEntries([...panes].map((p) => [p, { cwd: paneGit[p]?.root ?? "/" }]))
+  // (each shell answer is for its pane's folder, as main's are once tagged)
+  const tagged = Object.fromEntries(
+    Object.entries(paneGit).map(([k, g]) => [
+      k,
+      k.includes("@") || g.forCwd ? g : { ...g, forCwd: sessions[k]?.cwd ?? "/" },
+    ]),
+  )
   return {
     agents: reduceAgentEvents(events),
-    paneGit,
-    sessions: Object.fromEntries([...panes].map((p) => [p, { cwd: paneGit[p]?.root ?? "/" }])),
+    paneGit: tagged,
+    sessions,
     paneWork: {},
     meta: {},
     local: [localR],
@@ -435,7 +444,7 @@ describe("fleetModel", () => {
       expect(m[0]!.agents[0]!.more).toEqual(["/w/r-new"])
     })
 
-    it("the edits checkout isn't listed while its lookup hasn't answered for it", () => {
+    it("the edits checkout isn't placed or listed while its lookup hasn't answered for it", () => {
       const m = fleetModel(
         input(
           session("s1", "p1", "/w/r"),
@@ -446,23 +455,38 @@ describe("fleetModel", () => {
           { paneWork: { p1: work("s1", "/w/r-wt") }, local },
         ),
       )
-      // (the last answer still places it meanwhile)
-      expect(m[0]!.branches[0]!.agents[0]!.more).toBeUndefined()
-      expect(m[0]!.branches.map((b) => [b.name, b.agents.length])).toEqual([["fix", 1]])
+      expect(m[0]!.branches).toEqual([])
+      expect(m[0]!.agents[0]!.more).toBeUndefined()
     })
 
     it("an agent placed only by its edits stays while the next checkout's answer is on the way", () => {
-      const m = fleetModel(
+      const at = (shown: string) =>
         input(
           session("s1", "p1", "/home/u/notes"),
           {
             p1: { noRepo: true },
             "p1@edit": { root: "/w/r-wt", branch: "feat", pr: pr(7), forCwd: "/w/r-wt" },
           },
-          { paneWork: { p1: work("s1", "/w/r-fix") }, local },
-        ),
-      )
+          { paneWork: { p1: work("s1", shown) }, local },
+        )
+      const first = nextPlaces({}, at("/w/r-wt"))
+      const later = at("/w/r-fix") // (its answer still for r-wt)
+      const m = fleetModel({ ...later, places: nextPlaces(first, later) })
       expect(m[0]!.prs[0]!.agents.map((a) => a.sessionId)).toEqual(["s1"])
+      // a new session in the pane starts with nothing of the last one's
+      const next = input(
+        [
+          ...session("s1", "p1", "/home/u/notes"),
+          { event: "SessionEnd", sessionId: "s1" },
+          ...session("s2", "p1", "/home/u/notes"),
+        ],
+        {
+          p1: { noRepo: true },
+          "p1@edit": { root: "/w/r-wt", branch: "feat", pr: pr(7), forCwd: "/w/r-wt" },
+        },
+        { paneWork: { p1: work("s2", "/w/other") }, local },
+      )
+      expect(fleetModel({ ...next, places: nextPlaces(first, next) })).toEqual([])
     })
 
     it("a WSL pane's checkouts main can't place: only its placing one stands for the repo", () => {

@@ -1,9 +1,10 @@
 // The Fleet tab's hooks: the data refresher (lib/fleet-refresh) wired to the app, and the model
 // over a throttled view of the store (the graph isn't live: following it once a second is plenty).
-import { useEffect, useMemo, useState, useSyncExternalStore } from "react"
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react"
 import { useStore, type AppState } from "../store"
 import { ipc } from "../lib/ipc"
 import { fleetModel, type FleetRepo } from "../lib/fleet-model"
+import { nextPlaces, type PlaceLedger } from "../lib/fleet-places"
 import { FleetRefresh, type FleetData } from "../lib/fleet-refresh"
 import { forgetRoots, rootsOf, splitRoots } from "../lib/pane-roots"
 import type { PaneGitInfo } from "../lib/pane-git"
@@ -109,8 +110,13 @@ export function useThrottledSlices(ms: number): Slices {
 export function useFleetModel(): FleetRepo[] {
   const { local, mine } = useFleetData()
   const { agents, paneGit, sessions, agentMeta, paneWork } = useThrottledSlices(1000)
-  return useMemo(
-    () => fleetModel({ agents, paneGit, sessions, paneWork, meta: agentMeta, local, mine }),
-    [agents, paneGit, sessions, paneWork, agentMeta, local, mine],
-  )
+  // Where each session works, kept across rounds: a lookup still on its way leaves its slot as
+  // it was (lib/fleet-places). (nextPlaces gives the same ledger for the same answers: a second
+  // run of this memo is harmless.)
+  const ledger = useRef<PlaceLedger>({})
+  return useMemo(() => {
+    const places = nextPlaces(ledger.current, { agents, paneGit, sessions, paneWork })
+    ledger.current = places
+    return fleetModel({ agents, paneGit, sessions, paneWork, places, meta: agentMeta, local, mine })
+  }, [agents, paneGit, sessions, paneWork, agentMeta, local, mine])
 }

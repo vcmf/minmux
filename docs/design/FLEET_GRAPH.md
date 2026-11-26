@@ -200,8 +200,15 @@ of plumbing.
   ring); the others link it to their PRs and branches with edges of their own. An agent touching
   two repos is in both sub-graphs (counted once in each). The `edits` record counts only when
   it's the pane's current session's, and, as in the sidebar, only with a branch or a PR
-  (else it's one of the `+N`); moved on to another checkout, its last answer stands until
-  the new one comes (else an agent with no other place would leave the graph between polls). Only checkouts a repo answer places count (a new worktree waits for the next
+  (else it's one of the `+N`).
+- **Placement ledger** (`lib/fleet-places`): per session, one slot per lookup (`edits`, `in`,
+  `from`). A slot changes only when its lookup has answered for the session's current folder
+  (an answer tagged with that folder); while one is on the way the slot keeps what it had. The
+  model reads only the ledger, so a half-answered mix (moved on, answer pending; a new session
+  in a pane that still holds the last one's answer) never shows. Slots belong to a session: a
+  new one starts empty. Lookups are rebuilt from scratch each round, the ledger isn't: it lives
+  beside the model in the Fleet's data hook. The `edits` poll runs while the Fleet shows, even
+  with the sidebar collapsed (as the shell's and `in` ones do). Only checkouts a repo answer places count (a new worktree waits for the next
   answer, listed meanwhile); with none placed yet (a WSL pane's), the first one's folder stands
   for its repo, alone, since two folders could be the same repo shown twice.
 - **The other checkouts it edited (the sidebar's `+N`) are listed in its panel (`also in`), not linked**:
