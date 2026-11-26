@@ -1,5 +1,6 @@
 // Short facts about an agent session for the Fleet's cards and panel: its folder's name, its
 // model's short name, its context window. Pure; agent specifics come from agent-kinds.
+import { samePath } from "./agent-dirs"
 import type { AgentKind, TokenUsage } from "./agent-graph"
 import { AGENT_KINDS } from "./agent-kinds"
 
@@ -32,4 +33,15 @@ export function contextWindow(
   const w = AGENT_KINDS[kind].window
   if (!w) return undefined
   return { size: t.context > w.usual ? w.large : w.usual, guess: true }
+}
+
+// An agent's on it first, else the first; `more`: how many others it's checked out in.
+/** The checkout a PR or branch card names. */
+export function shownDir(
+  dirs: string[],
+  agents: { dir?: string }[],
+): { dir: string; more: number } | undefined {
+  if (!dirs.length) return undefined
+  const dir = dirs.find((d) => agents.some((a) => !!a.dir && samePath(a.dir, d))) ?? dirs[0]!
+  return { dir, more: dirs.length - 1 }
 }

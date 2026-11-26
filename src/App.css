@@ -4451,6 +4451,13 @@ body.resizing-col {
   cursor: pointer;
   border-radius: 10px;
 }
+/* Its session's colour (as its box in the agents panel), mixed in: still opaque. */
+.fleet-agent.tinted {
+  background: color-mix(in srgb, var(--row-hue) 9%, var(--panel));
+}
+.fleet-agent.tinted.idle {
+  background: color-mix(in srgb, var(--row-hue) 5%, var(--panel));
+}
 .fleet-agent.waiting {
   border-color: color-mix(in srgb, var(--amber) 55%, transparent);
 }

@@ -15,6 +15,7 @@ export interface FleetNode {
   w: number
   h: number
   parent?: string // the node it hangs off (its edge goes there)
+  links?: string[] // an agent's other PRs / branches in the repo (an edge to each too)
 }
 
 /** The graph's area and its cards' sizes, in px. */
@@ -30,6 +31,7 @@ export const FLEET = {
   r2: 410, // agents
   r3: 110, // sub-agents, beyond their agent
   pr: [196, 56] as const,
+  prDir: 74, // a PR checked out here: a third line, its folder
   branch: [270, 34] as const,
   agent: [236, 80] as const, // (three lines: name, what it does, folder · context · model)
   sub: [168, 28] as const,
@@ -76,9 +78,19 @@ export function openLayout(repo: FleetRepo, theta = 0): FleetNode[] {
   out.push({ id: rootId, kind: "root", x: FLEET.cx, y: FLEET.cy, w: s, h: s })
 
   // The repo's children, each with its agents (a direct agent is its own child).
-  type Child = { id: string; kind: "pr" | "branch" | "agent"; agents: FleetRepo["agents"] }
+  type Child = {
+    id: string
+    kind: "pr" | "branch" | "agent"
+    agents: FleetRepo["agents"]
+    dir?: boolean
+  }
   const children: Child[] = [
-    ...repo.prs.map((p) => ({ id: nodeId.pr(p.url), kind: "pr" as const, agents: p.agents })),
+    ...repo.prs.map((p) => ({
+      id: nodeId.pr(p.url),
+      kind: "pr" as const,
+      agents: p.agents,
+      dir: p.dirs.length > 0,
+    })),
     ...repo.branches.map((b) => ({
       id: nodeId.branch(repo.key, b.name),
       kind: "branch" as const,
@@ -106,10 +118,27 @@ export function openLayout(repo: FleetRepo, theta = 0): FleetNode[] {
     y: FLEET.cy + Math.sin(ang) * r,
   })
 
+  // The PRs and branches each agent touches besides the one it hangs off.
+  const links = new Map<string, string[]>()
+  const link = (agents: FleetRepo["agents"], to: string) => {
+    for (const a of agents) links.set(a.id, [...(links.get(a.id) ?? []), to])
+  }
+  for (const p of repo.prs) link(p.linked, nodeId.pr(p.url))
+  for (const b of repo.branches) link(b.linked, nodeId.branch(repo.key, b.name))
+
   const placeAgent = (agent: FleetRepo["agents"][number], ang: number, parent: string) => {
     const p = at(r2, ang)
     const [w, h] = FLEET.agent
-    out.push({ id: nodeId.agent(agent.id), kind: "agent", ...p, w, h, parent })
+    const more = links.get(agent.id)
+    out.push({
+      id: nodeId.agent(agent.id),
+      kind: "agent",
+      ...p,
+      w,
+      h,
+      parent,
+      ...(more ? { links: more } : {}),
+    })
     const m = agent.subs.length
     agent.subs.forEach((sub, j) => {
       const sa = ang + (j - (m - 1) / 2) * 0.45
@@ -131,7 +160,8 @@ export function openLayout(repo: FleetRepo, theta = 0): FleetNode[] {
     const mid = a + sec / 2
     if (c.kind === "agent") placeAgent(c.agents[0]!, mid, rootId)
     else {
-      const [w, h] = c.kind === "pr" ? FLEET.pr : FLEET.branch
+      const [w, h0] = c.kind === "pr" ? FLEET.pr : FLEET.branch
+      const h = c.kind === "pr" && c.dir ? FLEET.prDir : h0
       out.push({ id: c.id, kind: c.kind, ...at(r1, mid), w, h, parent: rootId })
       // Its agents close to it: at most the slice, at least a card's width apart on screen.
       const tot = c.agents.reduce((n, ag) => n + agentWeight(ag.subs.length), 0)
@@ -146,6 +176,46 @@ export function openLayout(repo: FleetRepo, theta = 0): FleetNode[] {
     a += sec
   }
   return out
+}
+
+type Pt = { x: number; y: number }
+
+// Round the centre at the ends' mean ring (between the PRs' and the agents'), the short way.
+/** A link edge's two control points: it never cuts through the root. */
+export function linkCurve(a: Pt, b: Pt): [Pt, Pt] {
+  const polar = (q: Pt) => {
+    const dx = (q.x - FLEET.cx) / FLEET.ex
+    const dy = q.y - FLEET.cy
+    return { r: Math.hypot(dx, dy), t: Math.atan2(dy, dx) }
+  }
+  const pa = polar(a)
+  const pb = polar(b)
+  let d = pb.t - pa.t
+  while (d > Math.PI) d -= Math.PI * 2
+  while (d < -Math.PI) d += Math.PI * 2
+  // (nearly opposite: the positive way round, the long way if need be; a nudge across π would
+  // flip it to the other side of the root)
+  if (d < -(Math.PI - 0.3)) d += Math.PI * 2
+  // (a cubic's middle sits a quarter in from its control points: pushed out to make up for it)
+  const r = ((pa.r + pb.r) / 2) * (1 + Math.abs(d) / 12)
+  const at = (t: number) => ({
+    x: FLEET.cx + Math.cos(t) * r * FLEET.ex,
+    y: FLEET.cy + Math.sin(t) * r,
+  })
+  return [at(pa.t + d / 3), at(pa.t + (2 * d) / 3)]
+}
+
+/** A point on a cubic from `a` to `b` with control points `c`, at `t` in 0..1. */
+export function cubicAt(a: Pt, [c1, c2]: [Pt, Pt], b: Pt, t: number): Pt {
+  const u = 1 - t
+  const k0 = u * u * u
+  const k1 = 3 * u * u * t
+  const k2 = 3 * u * t * t
+  const k3 = t * t * t
+  return {
+    x: k0 * a.x + k1 * c1.x + k2 * c2.x + k3 * b.x,
+    y: k0 * a.y + k1 * c1.y + k2 * c2.y + k3 * b.y,
+  }
 }
 
 // Each overlapping pair is pushed apart along the line between their centres, by the least that

@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState, useSyncExternalStore } from "react"
 import { useStore, type AppState } from "../store"
 import { ipc } from "../lib/ipc"
 import { fleetModel, type FleetRepo } from "../lib/fleet-model"
+import { nextPlaces, type PlaceLedger } from "../lib/fleet-places"
 import { FleetRefresh, type FleetData } from "../lib/fleet-refresh"
 import { forgetRoots, rootsOf, splitRoots } from "../lib/pane-roots"
 import type { PaneGitInfo } from "../lib/pane-git"
@@ -57,18 +58,20 @@ export function useFleetData(): FleetData {
   return data
 }
 
-type Slices = Pick<AppState, "agents" | "paneGit" | "sessions" | "agentMeta">
+type Slices = Pick<AppState, "agents" | "paneGit" | "sessions" | "agentMeta" | "paneWork">
 const slices = (s: AppState): Slices => ({
   agents: s.agents,
   paneGit: s.paneGit,
   sessions: s.sessions,
   agentMeta: s.agentMeta,
+  paneWork: s.paneWork,
 })
 const sameSlices = (a: Slices, b: AppState) =>
   a.agents === b.agents &&
   a.paneGit === b.paneGit &&
   a.sessions === b.sessions &&
-  a.agentMeta === b.agentMeta
+  a.agentMeta === b.agentMeta &&
+  a.paneWork === b.paneWork
 
 /** The store slices the fleet reads, followed together at most once per `ms` (one wake-up). */
 export function useThrottledSlices(ms: number): Slices {
@@ -103,12 +106,18 @@ export function useThrottledSlices(ms: number): Slices {
   return value
 }
 
+// Where each session works, kept across rounds and across visits to the Fleet (a lookup still on
+// its way leaves its slot as it was; lib/fleet-places). nextPlaces drops ended sessions.
+let ledger: PlaceLedger = {}
+
 /** The fleet model, following the store at most once a second. */
 export function useFleetModel(): FleetRepo[] {
   const { local, mine } = useFleetData()
-  const { agents, paneGit, sessions, agentMeta } = useThrottledSlices(1000)
-  return useMemo(
-    () => fleetModel({ agents, paneGit, sessions, meta: agentMeta, local, mine }),
-    [agents, paneGit, sessions, agentMeta, local, mine],
-  )
+  const { agents, paneGit, sessions, agentMeta, paneWork } = useThrottledSlices(1000)
+  // (nextPlaces gives the same ledger for the same answers: a second run of this memo is harmless)
+  return useMemo(() => {
+    const places = nextPlaces(ledger, { agents, paneGit, sessions, paneWork })
+    ledger = places
+    return fleetModel({ agents, paneGit, sessions, paneWork, places, meta: agentMeta, local, mine })
+  }, [agents, paneGit, sessions, paneWork, agentMeta, local, mine])
 }

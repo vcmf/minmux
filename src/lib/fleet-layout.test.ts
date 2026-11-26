@@ -2,6 +2,8 @@ import { describe, it, expect } from "vitest"
 import {
   FLEET,
   bounds,
+  cubicAt,
+  linkCurve,
   clampCamera,
   unionBox,
   toScreen,
@@ -12,7 +14,7 @@ import {
   rootSize,
   type FleetNode,
 } from "./fleet-layout"
-import type { FleetAgent, FleetRepo } from "./fleet-model"
+import type { FleetAgent, FleetPr, FleetRepo } from "./fleet-model"
 
 const agent = (id: string, subs = 0): FleetAgent => ({
   id,
@@ -36,11 +38,13 @@ const repo = (over: Partial<FleetRepo> = {}): FleetRepo => ({
   roots: [],
   ...over,
 })
-const pr = (n: number, agents: FleetAgent[]) => ({
+const pr = (n: number, agents: FleetAgent[], linked: FleetAgent[] = []): FleetPr => ({
   url: `u/${n}`,
   number: n,
   state: "open" as const,
   agents,
+  linked,
+  dirs: [],
 })
 const byId = (ns: FleetNode[]) => new Map(ns.map((n) => [n.id, n]))
 const dist = (n: FleetNode) => Math.hypot((n.x - FLEET.cx) / FLEET.ex, n.y - FLEET.cy)
@@ -74,6 +78,18 @@ describe("overviewLayout", () => {
 })
 
 describe("openLayout", () => {
+  it("an agent on two PRs hangs off its own, linked to the other", () => {
+    const a = agent("a1")
+    const ns = byId(openLayout(repo({ prs: [pr(7, [a]), pr(9, [], [a])] })))
+    const n = ns.get(nodeId.agent("a1"))!
+    expect(n.parent).toBe(nodeId.pr("u/7"))
+    expect(n.links).toEqual([nodeId.pr("u/9")])
+    expect(ns.get(nodeId.pr("u/7"))!.h).toBe(FLEET.pr[1]) // (no checkout here: two lines)
+    const withDir = byId(openLayout(repo({ prs: [{ ...pr(7, [a]), dirs: ["/w/x"] }] })))
+    expect(withDir.get(nodeId.pr("u/7"))!.h).toBe(FLEET.prDir)
+    expect(withDir.get(nodeId.agent("a1"))!.links).toBeUndefined()
+  })
+
   it("one PR with two agents: the PR above the repo, its agents further out, each edge to its parent", () => {
     const r = repo({ prs: [pr(7, [agent("a1"), agent("a2")])] })
     const ns = byId(openLayout(r))
@@ -123,7 +139,7 @@ describe("openLayout", () => {
 
   it("branches and agents on the default branch get slices too", () => {
     const r = repo({
-      branches: [{ name: "fix", agents: [agent("b1")] }],
+      branches: [{ name: "fix", agents: [agent("b1")], linked: [], dirs: [] }],
       agents: [agent("d1")],
     })
     const ns = byId(openLayout(r))
@@ -140,7 +156,7 @@ describe("relax", () => {
         pr(2, [agent("d"), agent("e")]),
         pr(3, [agent("f")]),
       ],
-      branches: [{ name: "x", agents: [agent("g")] }],
+      branches: [{ name: "x", agents: [agent("g")], linked: [], dirs: [] }],
       agents: [agent("h")],
     })
     const ns = relax(openLayout(r)) // (the default the view uses)
@@ -197,5 +213,35 @@ describe("camera", () => {
     const box = unionBox(bounds(big), bounds(small))
     expect(clampCamera({ x: 2900, y: 0 }, small, box).x).toBe(2900) // still reachable
     expect(clampCamera({ x: 2900, y: 0 }, small).x).toBe(50) // (without the kept extent)
+  })
+})
+
+describe("linkCurve", () => {
+  it("goes round the centre, never through it, ends to ends", () => {
+    const a = { x: FLEET.cx, y: FLEET.cy - 400 } // top
+    const b = { x: FLEET.cx, y: FLEET.cy + 230 } // bottom, an inner ring
+    const c = linkCurve(a, b)
+    expect(cubicAt(a, c, b, 0)).toEqual(a)
+    expect(cubicAt(a, c, b, 1)).toEqual(b)
+    const mid = cubicAt(a, c, b, 0.5)
+    expect(Math.hypot((mid.x - FLEET.cx) / FLEET.ex, mid.y - FLEET.cy)).toBeGreaterThan(230)
+    // neighbours: a gentle bend, close to the straight line
+    const n = { x: FLEET.cx + 50, y: FLEET.cy - 400 }
+    const m = cubicAt(a, linkCurve(a, n), n, 0.5)
+    expect(Math.abs(m.y - (FLEET.cy - 400))).toBeLessThan(5)
+    // nearly opposite: the same side whichever way a nudge tips it, never inside the PR ring
+    const r = { x: FLEET.cx + 400 * FLEET.ex, y: FLEET.cy }
+    const midOf = (ang: number) => {
+      const l = { x: FLEET.cx + Math.cos(ang) * 230 * FLEET.ex, y: FLEET.cy + Math.sin(ang) * 230 }
+      return cubicAt(r, linkCurve(r, l), l, 0.5)
+    }
+    const sides = [Math.PI - 0.1, -(Math.PI - 0.1), Math.PI - 0.25, -(Math.PI - 0.25)].map((a) =>
+      Math.sign(midOf(a).y - FLEET.cy),
+    )
+    expect(new Set(sides).size).toBe(1)
+    for (const a of [-(Math.PI - 0.29), -(Math.PI - 0.31), Math.PI - 0.05]) {
+      const m = midOf(a)
+      expect(Math.hypot((m.x - FLEET.cx) / FLEET.ex, m.y - FLEET.cy)).toBeGreaterThan(230)
+    }
   })
 })

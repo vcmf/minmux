@@ -455,7 +455,9 @@ function App() {
     let lastShown = "" // each pane's shown checkout: a change asks for it at once
     const pollEdits = async () => {
       const s = useStore.getState()
-      if (document.visibilityState === "hidden" || s.sidebarCollapsed) return // not on screen
+      // (not on screen: the sidebar collapsed and no Fleet shown, which places agents by them)
+      if (document.visibilityState === "hidden" || (s.sidebarCollapsed && s.activeView !== "fleet"))
+        return
       if (editBusy) {
         editAgain = true
         return

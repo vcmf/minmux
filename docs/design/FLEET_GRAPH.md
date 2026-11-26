@@ -143,12 +143,14 @@ sit on a ring, in a stable order (first seen).
   amber card is tinted its colour too (still opaque). A PR the
   lists don't hold shows its number and state only. PR cards carry the pull-request icon. Agent cards: the agent's icon
   (Claude, Codex, OpenCode), name, sub-agent count; what it's doing as a word coloured by status
-  (no dots); a third line with its folder, context and model; amber border when it needs you;
+  (no dots); a third line with its folder, context and model; amber border when it needs you; tinted
+  by its session's colour (`/color`, or its renamed name's), as its box in the agents panel;
   idle ones dimmed by colour (never see-through: the edges behind stay hidden). The agent's
   panel has its context bar: amber past 75% of the window, red past 90%; a window the agent
   doesn't report is its kind's usual one, shown as a guess (`~200k`) and never coloured.
-- Edges: agent to PR in the agent kind's colour, PR to repo neutral (red when blocked),
-  sub-agent dashed. Selecting an agent tints its path to the repo green.
+- Edges (2.25 px; 3.5 selected): agent to each of its PRs in the agent kind's colour, PR to
+  repo neutral (red when blocked), sub-agent dashed. Selecting an agent tints its paths to the
+  repo green.
 - Sub-agents are the live ones: the agent graph drops a turn's finished sub-agents at the next
   prompt, so counts reset each turn.
 
@@ -187,13 +189,37 @@ of plumbing.
 | --------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Sessions, status, sub-agents, current tool, tokens  | the agent graph (`lib/agent-graph`, hook-fed)                                                                                                                              |
 | Session name and colour                             | `agent-meta` (per pane)                                                                                                                                                    |
-| Which checkout an agent works in                    | the sidebar's rule (`lib/agent-dirs`): Claude's `in` folder and the pane's work checkouts first, the pane's cwd otherwise                                                  |
-| Branch and PR (number, state, url) of that checkout | `PaneGitInfo`, as the sidebar shows                                                                                                                                        |
+| Which checkouts an agent works in                   | the sidebar's lines: the checkout it edits (`edits`, `lib/agent-work`), its own folder (`in`), the shell's (`from`); the `+N` listed only                                  |
+| Branch and PR (number, state, url) of each checkout | `PaneGitInfo`, as the sidebar shows                                                                                                                                        |
 | `owner/name`                                        | the repo lookup the PR dialog caches per root (`repoFromRemotes`)                                                                                                          |
 | Default branch                                      | GitHub's `defaultBranchRef` on a listed PR; else the remote's HEAD (`prs:local`, cached; `origin`'s when the chosen remote has none); else `main`/`master`                 |
 | PR titles, CI, review; my open PRs                  | the PR lists' `mine` list, refreshed while the Fleet tab is shown                                                                                                          |
 | Context use                                         | the session's `tokens.context`; the window from Codex's report; Claude's is a guess (200k, 1M past it, from `agent-kinds`); none for OpenCode (tokens shown without a bar) |
 
+- **Every checkout an agent works in ties it to that checkout's PR** (or branch): the one it
+  edits (`edits`), its own folder (`in`) and its shell's (`from`), each with the sidebar's own
+  lookup of its branch and PR. In each repo, the first of them places it (its slice of the
+  ring); the others link it to their PRs and branches with edges of their own. An agent touching
+  two repos is in both sub-graphs (counted once in each). The `edits` record counts only when
+  it's the pane's current session's, and, as in the sidebar, only with a branch or a PR
+  (else it's one of the `+N`).
+- **Placement ledger** (`lib/fleet-places`): per session, one slot per lookup (`edits`, `in`,
+  `from`). A slot changes only when its lookup has answered for the session's current folder
+  (an answer tagged with that folder); while one is on the way the slot keeps what it had. The
+  model reads only the ledger, so a half-answered mix (moved on, answer pending; a new session
+  in a pane that still holds the last one's answer) never shows. Slots belong to a session: a
+  new one starts empty. Lookups are rebuilt from scratch each round, the ledger isn't: it lives
+  beside the model in the Fleet's data hook. The `edits` poll runs while the Fleet shows, even
+  with the sidebar collapsed (as the shell's and `in` ones do). Only checkouts a repo answer places count (a new worktree waits for the next
+  answer, listed meanwhile); with none placed yet (a WSL pane's), the first one's folder stands
+  for its repo, alone, since two folders could be the same repo shown twice.
+- **The other checkouts it edited (the sidebar's `+N`) are listed in its panel (`also in`), not linked**:
+  they have no lookup of their own, and guessing their branch from the cached worktree list
+  went stale on a `git switch` (rejected after three review rounds). A later step can give
+  them lookups.
+- A PR or branch card names the checkout it's in (its folder's name; `+N` when several lookups
+  put it in several, each listed on hover): an agent's on it first. An agent card's folder is
+  its checkout in that repo.
 - An agent on its repo's default branch hangs off the repo. A branch with no PR shows as a
   branch node. A PR not in `mine` (someone else's, or past the list's 30) keeps the pane's
   number and state, without title or CI, in v1.
