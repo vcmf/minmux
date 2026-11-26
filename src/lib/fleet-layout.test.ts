@@ -240,6 +240,20 @@ describe("edgeEnd", () => {
       Math.abs(Math.abs(end.y - to.y) - to.h / 2) < 0.5
     expect(onEdge).toBe(true)
     expect(edgeEnd({ x: 310, y: 105 }, undefined, b)).toBeNull() // (starting on the card)
+    // a curve that clips a corner first, leaves and comes back: the tip is where it first enters
+    const box = { x: 100, y: 0, w: 40, h: 40 }
+    const clip = edgeEnd(
+      { x: 60, y: 0 },
+      [
+        { x: 100, y: -200 },
+        { x: 100, y: 200 },
+      ],
+      box,
+    )!
+    expect(clip.x).toBeLessThan(box.x)
+    expect(
+      Math.abs(clip.x - (box.x - box.w / 2)) < 0.5 || Math.abs(Math.abs(clip.y) - box.h / 2) < 0.5,
+    ).toBe(true)
     // a hair outside, below it: still heading up into it
     expect(edgeEnd({ x: 300, y: 120.5 }, undefined, b)!.angle).toBeCloseTo(-Math.PI / 2)
     expect(

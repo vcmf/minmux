@@ -206,6 +206,23 @@ describe("fleetModel", () => {
     ])
   })
 
+  it("a head two open PRs share stacks nothing on either", () => {
+    const m = fleetModel(
+      input(
+        session("s1", "p1", "/w/r"),
+        { p1: { root: "/w/r", branch: "main" } },
+        {
+          mine: [
+            row(4, { head: "feat", base: "main" }),
+            row(7, { head: "feat", base: "release" }),
+            row(9, { head: "top", base: "feat" }),
+          ],
+        },
+      ),
+    )
+    expect(m[0]!.prs.map((p) => p.on)).toEqual([undefined, undefined, undefined])
+  })
+
   it("a PR known only from a checkout (no list row) is no base: its branch is only local", () => {
     const m = fleetModel(
       input(

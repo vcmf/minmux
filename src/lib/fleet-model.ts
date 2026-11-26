@@ -326,13 +326,13 @@ export function fleetModel(input: FleetInput): FleetRepo[] {
 // As the pull requests dialog (lib/pr-stacks): B is stacked on A when B's base is A's head, from
 // their list rows (a PR without one, known only from a checkout, has no head or base GitHub
 // vouches for: a local branch can be named anything, or be a fork's). A cycle (A on B, B on A) is
-// broken at its first PR.
+// broken at its first PR; a head two PRs share stacks nothing.
 /** A repo's PRs with their base PR, each stack's PRs together: a PR right after its base. */
 export function stacked(prs: FleetPr[]): FleetPr[] {
-  const heads = new Map<string, FleetPr>()
+  const heads = new Map<string, FleetPr | null>() // (null: two open PRs share it, no telling which)
   for (const p of prs) {
     const head = p.row && !p.row.fork ? p.row.head : undefined
-    if (head && !heads.has(head)) heads.set(head, p)
+    if (head) heads.set(head, heads.has(head) ? null : p)
   }
   const kids = new Map<string, FleetPr[]>()
   const based = new Set<string>()

@@ -221,7 +221,7 @@ export function cubicAt(a: Pt, [c1, c2]: [Pt, Pt], b: Pt, t: number): Pt {
   }
 }
 
-// By halving: the last point outside the card (the edge starts outside it, ends at its centre).
+// The last point outside the card before the edge first enters it (it ends at its centre).
 /** Where an edge from `a` meets card `b`'s border, and its heading there (an arrowhead's). */
 export function edgeEnd(
   a: Pt,
@@ -232,8 +232,16 @@ export function edgeEnd(
     c ? cubicAt(a, c, b, t) : { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t }
   const inside = (q: Pt) => Math.abs(q.x - b.x) <= b.w / 2 && Math.abs(q.y - b.y) <= b.h / 2
   if (inside(a)) return null // (it starts on the card: dragged over it, no border to point at)
+  // (stepped forward to the first stretch that enters it: a curve can clip a corner, leave, and
+  // come back; halving 0..1 could settle on a way out)
   let lo = 0
   let hi = 1
+  for (let i = 1; i <= 32; i++)
+    if (inside(on(i / 32))) {
+      lo = (i - 1) / 32
+      hi = i / 32
+      break
+    }
   for (let i = 0; i < 20; i++) {
     const mid = (lo + hi) / 2
     if (inside(on(mid))) hi = mid
