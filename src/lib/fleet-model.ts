@@ -110,20 +110,6 @@ export function fleetAgentsOf(repos: FleetRepo[]): FleetAgent[] {
   return repos.flatMap((r) => agentsIn(r)).filter((a) => !seen.has(a.id) && !!seen.add(a.id))
 }
 
-/** The git answer for the checkout a pane's agent works in (the sidebar's rule). */
-export function agentGit(
-  graph: AgentGraph,
-  paneGit: Record<string, PaneGitInfo>,
-  paneId: string,
-  shellCwd?: string,
-): PaneGitInfo | undefined {
-  const dir = agentWorkDirs(graph)[paneId]
-  const inGit = paneGit[gitKey(paneId, "in")]
-  return worksElsewhere(shellCwd, dir?.cwd, paneGit[paneId], inGit, dir?.agent)
-    ? inGit
-    : paneGit[paneId]
-}
-
 /** The local repo a checkout root belongs to (asked about under it, or one of its worktrees). */
 function repoOfRoot(local: LocalRepo[], root: string): LocalRepo | undefined {
   return local.find(
@@ -167,8 +153,8 @@ interface Place {
   pr?: PrInfo
 }
 
-/** Every checkout a pane's agent touches, deduplicated, in the order that places it: the one it
- *  edits, its own folder, its shell's, then the other ones it edited. */
+// In placing order: the one it edits, its own folder, its shell's, the other ones it edited.
+/** Every checkout a pane's agent touches, once each. */
 export function touched(input: FleetInput, n: AgentNode, paneId: string): Place[] {
   const { agents: graph, paneGit, sessions, paneWork, local, mine } = input
   const out: Place[] = []
@@ -195,10 +181,12 @@ export function touched(input: FleetInput, n: AgentNode, paneId: string): Place[
     work?.more ?? [],
     shown,
   )) {
+    // (a repo no pane is in isn't looked up: its branch and name unknown, it's left out)
     const loc = repoOfRoot(local, root)
-    const branch = loc?.worktrees.find((w) => samePath(w.path, root))?.branch
+    if (!loc) continue
+    const branch = loc.worktrees.find((w) => samePath(w.path, root))?.branch
     const row =
-      branch && loc?.repo
+      branch && loc.repo
         ? mine.find(
             (r) => !r.fork && r.head === branch && r.repo.toLowerCase() === loc.repo!.toLowerCase(),
           )
@@ -212,8 +200,8 @@ export function touched(input: FleetInput, n: AgentNode, paneId: string): Place[
   return out
 }
 
-/** Where a checkout ties an agent in its repo: its live PR, its branch's node, or the root
- *  (the default branch). Made when first needed. */
+// Its live PR, its branch's node, or the root (the default branch); made when first needed.
+/** Where a checkout ties an agent in its repo. */
 function targetOf(
   repo: FleetRepo,
   place: Place,
@@ -245,9 +233,26 @@ function targetOf(
   return b
 }
 
+/** Branch nodes whose checkout a PR node holds, folded into that PR. */
+function mergeBranchesIntoPrs(repo: FleetRepo): void {
+  repo.branches = repo.branches.filter((b) => {
+    const pr = repo.prs.find((p) => p.dirs.some((d) => b.dirs.some((x) => samePath(d, x))))
+    if (!pr) return true
+    const has = (list: FleetAgent[], a: FleetAgent) => list.some((x) => x.id === a.id)
+    for (const a of b.agents) {
+      if (has(pr.agents, a)) continue
+      pr.linked = pr.linked.filter((x) => x.id !== a.id)
+      pr.agents.push(a)
+    }
+    for (const a of b.linked) if (!has(pr.agents, a) && !has(pr.linked, a)) pr.linked.push(a)
+    for (const d of b.dirs) if (!pr.dirs.some((x) => samePath(x, d))) pr.dirs.push(d)
+    return false
+  })
+}
+
 /** Repos with a live agent session, in the order their first agent appeared. */
 export function fleetModel(input: FleetInput): FleetRepo[] {
-  const { agents: graph, paneGit, sessions, local, mine } = input
+  const { agents: graph, sessions, local, mine } = input
   const repos = new Map<string, FleetRepo>()
   const rowsByUrl = new Map(mine.map((r) => [r.url, r]))
 
@@ -261,13 +266,7 @@ export function fleetModel(input: FleetInput): FleetRepo[] {
 
   for (const n of order) {
     const paneId = n.paneId!
-    const base = toAgent(
-      graph,
-      n,
-      paneId,
-      input,
-      agentGit(graph, paneGit, paneId, sessions[paneId]?.cwd),
-    )
+    const base = toAgent(graph, n, paneId, input) // (its branch: per repo, below)
     // Its checkouts by repo, in the order they place it.
     const byRepo = new Map<string, Place[]>()
     for (const place of touched(input, n, paneId)) {
@@ -298,8 +297,13 @@ export function fleetModel(input: FleetInput): FleetRepo[] {
     }
     for (const [key, places] of byRepo) {
       const repo = repos.get(key)!
-      const agent: FleetAgent = { ...base, dir: places[0]!.root }
-      if (places[0]!.branch) agent.branch = places[0]!.branch
+      // (its branch is its checkout's here, not the pane's: none when that one is detached)
+      const first = places[0]!
+      const agent: FleetAgent = {
+        ...base,
+        dir: first.root,
+        ...(first.branch ? { branch: first.branch } : {}),
+      }
       repo.counts.agents++
       if (agent.status === "working") repo.counts.working++
       if (agent.status === "waiting") repo.counts.waiting++
@@ -319,6 +323,10 @@ export function fleetModel(input: FleetInput): FleetRepo[] {
       })
     }
   }
+
+  // A checkout seen as a branch here (a `+N` one, its PR not in mine) and as a PR by another
+  // pane's lookup: one node, the PR's.
+  for (const repo of repos.values()) mergeBranchesIntoPrs(repo)
 
   // My open PRs with nobody on them, in the repos shown (the lists' order).
   for (const row of mine) {

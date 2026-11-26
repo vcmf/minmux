@@ -180,8 +180,8 @@ export function openLayout(repo: FleetRepo, theta = 0): FleetNode[] {
 
 type Pt = { x: number; y: number }
 
-/** A link edge's two control points: around the centre at the two ends' mean ring (between the
- *  PRs' and the agents'), the short way, so it never cuts through the root. */
+// Round the centre at the ends' mean ring (between the PRs' and the agents'), the short way.
+/** A link edge's two control points: it never cuts through the root. */
 export function linkCurve(a: Pt, b: Pt): [Pt, Pt] {
   const polar = (q: Pt) => {
     const dx = (q.x - FLEET.cx) / FLEET.ex

@@ -34,8 +34,8 @@ export function contextWindow(
   return { size: t.context > w.usual ? w.large : w.usual, guess: true }
 }
 
-/** The checkout a PR or branch card names: an agent's on it if any, else the first; and how
- *  many others it's checked out in. */
+// An agent's on it first, else the first; `more`: how many others it's checked out in.
+/** The checkout a PR or branch card names. */
 export function shownDir(
   dirs: string[],
   agents: { dir?: string }[],

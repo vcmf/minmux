@@ -374,6 +374,68 @@ describe("fleetModel", () => {
       expect(m[0]!.branches).toEqual([])
     })
 
+    it("a +N checkout in a repo no pane is in is left out (unknown branch and name)", () => {
+      const m = fleetModel(
+        input(
+          session("s1", "p1", "/w/r"),
+          { p1: { root: "/w/r", branch: "main" } },
+          { paneWork: { p1: work("s1", "/w/r", ["/w/elsewhere"]) }, local },
+        ),
+      )
+      expect(m.map((r) => r.key)).toEqual(["o/r"])
+      expect(m[0]!.branches).toEqual([])
+    })
+
+    it("its card's branch is its checkout's in that repo: none when that one is detached", () => {
+      const m = fleetModel(
+        input(
+          session("s1", "p1", "/w/b"),
+          {
+            p1: { root: "/w/b", branch: "main" },
+            "p1@edit": { root: "/w/r-wt", forCwd: "/w/r-wt" },
+          },
+          { paneWork: { p1: work("s1", "/w/r-wt") }, local },
+        ),
+      )
+      const r = m.find((x) => x.key === "o/r")!
+      expect(r.branches[0]!.name).toBe(DETACHED)
+      expect(r.branches[0]!.agents[0]!.branch).toBeUndefined()
+      expect(m.find((x) => x.key === "o/b")!.agents[0]!.branch).toBe("main")
+    })
+
+    it("a +N checkout another pane knows the PR of is that PR, not a second node", () => {
+      const m = fleetModel(
+        input(
+          [...session("s1", "p1", "/w/r"), ...session("s2", "p2", "/w/r-fix")],
+          {
+            p1: { root: "/w/r", branch: "main" },
+            p2: { root: "/w/r-fix", branch: "fix", pr: pr(9) },
+          },
+          { paneWork: { p1: work("s1", "/w/r", ["/w/r-fix"]) }, local },
+        ),
+      )
+      expect(m[0]!.branches).toEqual([])
+      const p9 = m[0]!.prs.find((p) => p.number === 9)!
+      expect(p9.agents.map((a) => a.sessionId)).toEqual(["s2"])
+      expect(p9.linked.map((a) => a.sessionId)).toEqual(["s1"])
+      expect(p9.dirs).toEqual(["/w/r-fix"])
+      // its only checkout there: the branch's agent becomes the PR's
+      const n = fleetModel(
+        input(
+          [...session("s2", "p2", "/w/r-fix"), ...session("s1", "p1", "/home/u")],
+          {
+            p1: { noRepo: true },
+            p2: { root: "/w/r-fix", branch: "fix", pr: pr(9) },
+          },
+          { paneWork: { p1: work("s1", "/w/r", ["/w/r-fix"]) }, local },
+        ),
+      )
+      const q9 = n[0]!.prs.find((p) => p.number === 9)!
+      expect(q9.agents.map((a) => a.sessionId).sort()).toEqual(["s1", "s2"])
+      expect(q9.linked).toEqual([])
+      expect(n[0]!.branches).toEqual([])
+    })
+
     it("my PR with nobody on it says where it's checked out", () => {
       const m = fleetModel(
         input(

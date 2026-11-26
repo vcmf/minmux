@@ -19,7 +19,7 @@ import {
   type Camera,
   type FleetNode,
 } from "../lib/fleet-layout"
-import { agentsIn, fleetAgentsOf, type FleetAgent } from "../lib/fleet-model"
+import { agentsIn, fleetAgentsOf, type FleetAgent, type FleetRepo } from "../lib/fleet-model"
 import { cardLook } from "../lib/pr-graph"
 import { agentColor } from "../lib/agent-kinds"
 import {
@@ -767,7 +767,9 @@ export function FleetView() {
     window.clearTimeout(pickTimer.current)
     pickTimer.current = window.setTimeout(() => (toFind.current = null), 3000)
     toFind.current = ids[0] ?? null
-    const repo = repos.find((r) => agentsIn(r).some((a) => ids.includes(a.id)))
+    // (one in several repos: the open one, if it's there, stays)
+    const holds = (r: FleetRepo) => agentsIn(r).some((a) => ids.includes(a.id))
+    const repo = open && holds(open) ? open : repos.find(holds)
     if (repo && openKey !== repo.key) toggle(repo.key)
   }
 
