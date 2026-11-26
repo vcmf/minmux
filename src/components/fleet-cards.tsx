@@ -1,12 +1,21 @@
 // The Fleet view's cards and side panel (docs/design/FLEET_GRAPH.md, "Cards", "Side panel"): what
 // each node and the selection show. Placement and motion stay in fleet-view.tsx.
-import { ArrowSquareOut, GitBranch, GitPullRequest } from "@phosphor-icons/react"
+import { ArrowSquareOut, Folder, GitBranch, GitPullRequest } from "@phosphor-icons/react"
+import type { CSSProperties } from "react"
 import { useStore, activeTheme } from "../store"
+import { sessionColor } from "../lib/session-color"
 import { type FleetNode } from "../lib/fleet-layout"
-import { DETACHED, type FleetAgent, type FleetPr, type FleetRepo } from "../lib/fleet-model"
+import {
+  DETACHED,
+  agentsIn,
+  type FleetAgent,
+  type FleetBranch,
+  type FleetPr,
+  type FleetRepo,
+} from "../lib/fleet-model"
 import { cardLook } from "../lib/pr-graph"
 import { mcpList, skillList, type ToolList } from "../lib/fleet-toolbox"
-import { contextWindow, folderName, shortModel } from "../lib/fleet-facts"
+import { contextWindow, folderName, shortModel, shownDir } from "../lib/fleet-facts"
 import { formatTokens } from "../lib/tokens"
 import { AGENT_STATUS_UI } from "../lib/agent-status-ui"
 import { agentColor, agentInfo } from "../lib/agent-kinds"
@@ -24,6 +33,7 @@ export interface NodeInfo {
   pr?: FleetPr
   agent?: FleetAgent
   branch?: string
+  branchNode?: FleetBranch
   sub?: FleetAgent["subs"][number]
 }
 
@@ -98,6 +108,7 @@ export function FleetCard(props: {
   onAgent: (id: string) => void
 }) {
   const { node: n, info, open, selected } = props
+  const scheme = useStore((s) => activeTheme(s).scheme)
   if (!info) return null
   const style = { left: n.x - n.w / 2, top: n.y - n.h / 2, width: n.w, height: n.h }
   if (n.kind === "root") {
@@ -145,12 +156,13 @@ export function FleetCard(props: {
           <span className="faint">#{p.number}</span> <b>{p.row?.title ?? ""}</b>
         </span>
         <span className={`one fleet-st ${st.cls}`}>{st.word}</span>
+        <CheckoutLine dirs={p.dirs} agents={[...p.agents, ...p.linked]} />
         <button
           className="fleet-link"
           title={`Open #${p.number}`}
           aria-label={`Open #${p.number}`}
           // (as a PR link clicked in a pane: the dialog, looked up with that pane's gh)
-          onClick={() => openLink(p.url, p.agents[0]?.paneId)}
+          onClick={() => openLink(p.url, (p.agents[0] ?? p.linked[0])?.paneId)}
         >
           <ArrowSquareOut size={11} />
         </button>
@@ -158,12 +170,17 @@ export function FleetCard(props: {
     )
   }
   if (n.kind === "branch") {
+    const dir =
+      info.branchNode &&
+      shownDir(info.branchNode.dirs, [...info.branchNode.agents, ...info.branchNode.linked])
     return (
       <div className="fleet-card fleet-branch" style={style} data-node={n.id}>
         <GitBranch size={12} />
         <span className="one">
           {info.branch === DETACHED ? "detached HEAD" : info.branch}{" "}
-          <span className="faint">· no PR</span>
+          <span className="faint">
+            · no PR{dir ? ` · ${folderName(dir.dir)}${dir.more ? ` +${dir.more}` : ""}` : ""}
+          </span>
         </span>
       </div>
     )
@@ -184,10 +201,12 @@ export function FleetCard(props: {
   if (n.kind === "agent" && info.agent) {
     const a = info.agent
     const st = AGENT_STATUS_UI[a.status]
+    // (its colour in the agents panel: /color, or its renamed name's)
+    const hue = sessionColor({ name: a.name, color: a.color, auto: a.nameAuto }, scheme)
     return (
       <button
-        className={`fleet-card fleet-agent ${a.status}${selected ? " sel" : ""}${props.marked ? " marked" : ""}`}
-        style={style}
+        className={`fleet-card fleet-agent ${a.status}${selected ? " sel" : ""}${props.marked ? " marked" : ""}${hue ? " tinted" : ""}`}
+        style={hue ? ({ ...style, "--row-hue": hue } as CSSProperties) : style}
         data-node={n.id}
         aria-label={`${agentInfo(a.kind).label} agent ${agentName(a)}, ${st.word}`}
         onClick={() => props.onAgent(a.id)}
@@ -208,10 +227,22 @@ export function FleetCard(props: {
   return null
 }
 
+/** A PR card's third line: the checkout it's in (its folder's name), `+N` for the others. */
+function CheckoutLine({ dirs, agents }: { dirs: string[]; agents: FleetAgent[] }) {
+  const d = shownDir(dirs, agents)
+  if (!d) return null
+  return (
+    <span className="one faint fleet-facts-line" title={dirs.join("\n")}>
+      <Folder size={11} /> {folderName(d.dir)}
+      {d.more ? ` +${d.more}` : ""}
+    </span>
+  )
+}
+
 /** An agent card's third line: its folder, its context and its model. */
 function AgentFacts({ a }: { a: FleetAgent }) {
   const facts = [
-    folderName(a.cwd),
+    folderName(a.dir ?? a.cwd),
     a.tokens?.context ? `${formatTokens(a.tokens.context)} ctx` : undefined,
     shortModel(a.kind, a.tokens?.model),
   ].filter(Boolean)
@@ -239,6 +270,15 @@ export function FleetPanel(props: {
   if (agent?.agent) {
     const a = agent.agent
     const pr = agent.repo.prs.find((p) => p.agents.some((x) => x.id === a.id))
+    // (the other PRs and branches it touches in this repo)
+    const also = [
+      ...agent.repo.prs
+        .filter((p) => p.linked.some((x) => x.id === a.id))
+        .map((p) => `#${p.number}`),
+      ...agent.repo.branches
+        .filter((b) => b.linked.some((x) => x.id === a.id))
+        .map((b) => (b.name === DETACHED ? "detached HEAD" : b.name)),
+    ]
     const window = contextWindow(a.kind, a.tokens)
     const ctx = a.tokens && window ? Math.round((a.tokens.context / window.size) * 100) : null
     return (
@@ -260,8 +300,30 @@ export function FleetPanel(props: {
         <dl className="fleet-facts">
           <dt>PR</dt>
           <dd className="one">{pr ? `#${pr.number} ${pr.row?.title ?? ""}` : "none"}</dd>
+          {also.length > 0 && (
+            <>
+              <dt>also</dt>
+              <dd className="one">{also.join(" · ")}</dd>
+            </>
+          )}
           <dt>branch</dt>
           <dd className="one">{a.branch ?? "—"}</dd>
+          {a.dir && (
+            <>
+              <dt>checkout</dt>
+              <dd className="one" title={a.dir}>
+                {a.dir}
+              </dd>
+            </>
+          )}
+          {!!a.more?.length && (
+            <>
+              <dt>also in</dt>
+              <dd className="one" title={a.more.join("\n")}>
+                {a.more.map((d) => folderName(d)).join(" · ")}
+              </dd>
+            </>
+          )}
           {a.cwd && (
             <>
               <dt>cwd</dt>
@@ -325,11 +387,7 @@ export function FleetPanel(props: {
   }
 
   if (repo) {
-    const agents = [
-      ...repo.prs.flatMap((p) => p.agents),
-      ...repo.branches.flatMap((b) => b.agents),
-      ...repo.agents,
-    ]
+    const agents = agentsIn(repo)
     return (
       <aside className="fleet-panel" aria-label="Repo">
         <button className="fleet-back" onClick={props.onAll}>

@@ -38,6 +38,7 @@ function seed() {
     paneGit: {
       p1: {
         root: "/w/r",
+        forCwd: "/w/r",
         branch: "feat",
         pr: { number: 7, state: "open", url: "https://github.com/o/r/pull/7" },
       },

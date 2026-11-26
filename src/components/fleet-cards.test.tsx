@@ -18,6 +18,8 @@ const pr = (n: number, over: Partial<PrRow> | null, state: FleetPr["state"] = "o
   state,
   ...(over ? { row: row({ number: n, title: `PR ${n}`, ...over }) } : {}),
   agents: [],
+  linked: [],
+  dirs: [],
 })
 const agent = (over: Partial<FleetAgent> = {}): FleetAgent => ({
   id: "a",
@@ -89,6 +91,26 @@ describe("FleetCard", () => {
     expect(useStore.getState().prLink).toMatchObject({ repo: "o/r", number: 3, pane: "p9" })
   })
 
+  it("a PR or branch checked out here names its folder, +N for the others", () => {
+    const p = { ...pr(4, {}), dirs: ["/w/r-a", "/w/r-b"], agents: [agent({ dir: "/w/r-b" })] }
+    card("pr", { repo: repo(), pr: p })
+    expect(screen.getByText(/r-b \+1/)).toBeInTheDocument()
+    const b = { name: "fix", agents: [], linked: [], dirs: ["/w/r-fix"] }
+    card("branch", { repo: repo(), branch: "fix", branchNode: b })
+    expect(screen.getByText(/no PR · r-fix/)).toBeInTheDocument()
+  })
+
+  it("a PR only linked agents touch opens with their pane", () => {
+    const p = {
+      ...pr(5, {}),
+      url: "https://github.com/o/r/pull/5",
+      linked: [agent({ paneId: "p7" })],
+    }
+    card("pr", { repo: repo(), pr: p })
+    fireEvent.click(screen.getByRole("button", { name: "Open #5" }))
+    expect(useStore.getState().prLink).toMatchObject({ number: 5, pane: "p7" })
+  })
+
   it("a branch, a detached checkout, a sub-agent", () => {
     card("branch", { repo: repo(), branch: "feat/x" })
     expect(screen.getByText(/feat\/x/)).toBeInTheDocument()
@@ -111,6 +133,21 @@ describe("FleetCard", () => {
       unmount()
     }
     expect(onAgent).toHaveBeenCalledTimes(3)
+  })
+
+  it("an agent card takes its session's colour, as in the agents panel", () => {
+    for (const [a, tinted] of [
+      [agent({ name: "fixer", color: "green" }), true], // /color
+      [agent({ name: "fixer" }), true], // a renamed session: its name's colour
+      [agent({ name: "fixer", nameAuto: true }), false], // the agent's own title: none
+      [agent({ name: "fixer", color: null }), false], // /color default
+    ] as const) {
+      const { unmount } = card("agent", { repo: repo(), agent: a })
+      const el = screen.getByRole("button")
+      expect(el.classList.contains("tinted")).toBe(tinted)
+      expect(!!el.style.getPropertyValue("--row-hue")).toBe(tinted)
+      unmount()
+    }
   })
 
   it("a repo circle: its label and counts until it opens", () => {
@@ -154,6 +191,22 @@ describe("FleetPanel", () => {
         {...over}
       />,
     )
+
+  it("an agent's checkout and its other PRs", () => {
+    const a = agent({ id: "a", dir: "/w/r-wt", more: ["/w/r-x", "/w/r-y"] })
+    const r = repo({
+      prs: [
+        { ...pr(7, {}), agents: [a] },
+        { ...pr(9, {}), linked: [a] },
+      ],
+      branches: [{ name: "fix", agents: [], linked: [a], dirs: [] }],
+    })
+    panel({ sel: { kind: "agent", id: "a" }, agentOf: () => ({ repo: r, agent: a }) })
+    expect(screen.getByText("also")).toBeInTheDocument()
+    expect(screen.getByText("#9 · fix")).toBeInTheDocument()
+    expect(screen.getByText("/w/r-wt")).toBeInTheDocument()
+    expect(screen.getByText("r-x · r-y")).toBeInTheDocument()
+  })
 
   it("an agent with no PR, sub-agents or tokens", () => {
     const a = agent({ status: "done" })
