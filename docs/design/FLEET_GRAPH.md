@@ -151,6 +151,11 @@ sit on a ring, in a stable order (first seen).
 - Edges (2.25 px; 3.5 selected): agent to each of its PRs in the agent kind's colour, PR to
   repo neutral (red when blocked), sub-agent dashed. Selecting an agent tints its paths to the
   repo green.
+- **Stacked PRs** (as the pull requests dialog, `lib/pr-stacks`: B is on A when B's base is A's
+  head, same repo): B hangs off A instead of the repo, right after it on the ring, its edge
+  curved along the ring with an arrow into A (where it merges). The card says `on #A`. So a
+  selected agent's green path runs up its whole stack: agent → B → A → repo. Only when A is
+  shown too (a live agent on it, or my open PR); a cycle leaves both unstacked.
 - Sub-agents are the live ones: the agent graph drops a turn's finished sub-agents at the next
   prompt, so counts reset each turn.
 

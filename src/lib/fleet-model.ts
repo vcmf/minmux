@@ -21,6 +21,7 @@ import { SLOTS, nextPlaces, type Place, type PlaceLedger } from "./fleet-places"
 import type { PaneGitInfo, PrState } from "./pane-git"
 import type { PrRow } from "./pr-dashboard"
 import type { LocalRepo } from "./pr-local"
+import { baseOf } from "./pr-stacks"
 import type { SessionMeta } from "./session-color"
 import type { Session } from "../types"
 
@@ -57,6 +58,7 @@ export interface FleetPr {
   agents: FleetAgent[] // placed under it
   linked: FleetAgent[] // placed elsewhere in the repo, touching it too
   dirs: string[] // the checkouts it's in
+  on?: { url: string; number: number } // the PR it's stacked on, when that one is shown too
 }
 
 export interface FleetBranch {
@@ -315,6 +317,34 @@ export function fleetModel(input: FleetInput): FleetRepo[] {
       dirs: [],
     })
   }
-  for (const repo of repos.values()) repo.counts.prs = repo.prs.length
+  for (const repo of repos.values()) {
+    repo.prs = stacked(repo.prs)
+    repo.counts.prs = repo.prs.length
+  }
   return [...repos.values()]
+}
+
+// As the pull requests dialog (lib/pr-stacks): B is stacked on A when B's base is A's head.
+/** A repo's PRs with their base PR, each stack's PRs together: a PR right after its base. */
+export function stacked(prs: FleetPr[]): FleetPr[] {
+  const rows = prs.flatMap((p) => (p.row ? [p.row] : []))
+  const on = new Map<string, FleetPr>()
+  for (const p of prs) {
+    const b = p.row && baseOf(p.row, rows)
+    const node = b && prs.find((q) => q.url === b.url)
+    if (node) on.set(p.url, node)
+  }
+  const out: FleetPr[] = []
+  const seen = new Set<string>()
+  const walk = (p: FleetPr) => {
+    if (seen.has(p.url)) return
+    seen.add(p.url)
+    const b = on.get(p.url)
+    out.push(b ? { ...p, on: { url: b.url, number: b.number } } : p)
+    for (const k of prs) if (on.get(k.url) === p) walk(k)
+  }
+  for (const p of prs) if (!on.has(p.url)) walk(p)
+  // (a cycle, A on B and B on A, has no bottom: its PRs as they came, unstacked)
+  for (const p of prs) if (!seen.has(p.url)) out.push(p)
+  return out
 }
