@@ -4388,11 +4388,14 @@ body.resizing-col {
   /* (a small, still shadow: cheap to paint as cards move) */
   box-shadow: 0 2px 8px -3px var(--shadow);
 }
+/* A tinted card stays opaque: the edges behind it never show through. */
 .fleet-pr.amber {
   border-color: color-mix(in srgb, var(--amber) 60%, transparent);
+  background: color-mix(in srgb, var(--amber) 9%, var(--panel));
 }
 .fleet-pr.red {
   border-color: color-mix(in srgb, var(--red) 60%, transparent);
+  background: color-mix(in srgb, var(--red) 9%, var(--panel));
 }
 .fleet-pr.draft {
   border-style: dashed;
