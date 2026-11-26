@@ -420,7 +420,7 @@ describe("fleetModel", () => {
       expect(m[0]!.branches).toEqual([])
     })
 
-    it("a placing checkout not placed in a repo yet: the others wait (one repo, not two)", () => {
+    it("a checkout no repo answer places yet: the known ones place it, it's listed", () => {
       const m = fleetModel(
         input(
           session("s1", "p1", "/w/r"),
@@ -431,7 +431,22 @@ describe("fleetModel", () => {
           { paneWork: { p1: work("s1", "/w/r-new") }, local },
         ),
       )
-      expect(m.map((r) => r.key)).toEqual(["/w/r-new"])
+      expect(m.map((r) => r.key)).toEqual(["o/r"])
+      expect(m[0]!.agents[0]!.more).toEqual(["/w/r-new"])
+    })
+
+    it("the edits checkout isn't listed while its lookup hasn't answered for it", () => {
+      const m = fleetModel(
+        input(
+          session("s1", "p1", "/w/r"),
+          {
+            p1: { root: "/w/r", branch: "main" },
+            "p1@edit": { root: "/w/old", branch: "x", forCwd: "/w/old" },
+          },
+          { paneWork: { p1: work("s1", "/w/r-wt") }, local },
+        ),
+      )
+      expect(m[0]!.agents[0]!.more).toBeUndefined()
     })
 
     it("a WSL pane's checkouts main can't place: only its placing one stands for the repo", () => {

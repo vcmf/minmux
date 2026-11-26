@@ -1,8 +1,9 @@
 // The fleet graph's model (docs/design/FLEET_GRAPH.md, "Data"): repos → PRs (or a branch with
 // no PR) → agent sessions → sub-agents, built from what minmux already tracks. Pure.
-//  - An agent is tied to every checkout it touches (the sidebar's lines): the one it edits
-//    (`edits`), its own folder (`in`), its shell's (`from`) and the other ones it edited (the
-//    `+N`). In each repo the first of them places it; the others link it to their PR or branch.
+//  - An agent is tied to the checkouts it works in (the sidebar's lines, each with a lookup):
+//    the one it edits (`edits`), its own folder (`in`), its shell's (`from`). In each repo the
+//    first of them places it; the others link it to their PR or branch. The other ones it
+//    edited (the `+N`, no lookup of their own) are only listed.
 //  - Only repos with a live agent session are shown; in them, my open PRs with nobody on them
 //    show too.
 import type {
@@ -169,20 +170,21 @@ export function touched(
   const shown = work?.shown
   const edit = paneGit[gitKey(paneId, "edit")]
   // (as the sidebar's `edits` line: only with a branch or a PR; else it's one of the `+N`)
-  const editPlaced =
-    !!shown && !!edit?.forCwd && samePath(edit.forCwd, shown) && !!(edit.branch || edit.pr)
+  const answered = !!shown && !!edit?.forCwd && samePath(edit.forCwd, shown)
+  const editPlaced = answered && !!(edit!.branch || edit!.pr)
   if (editPlaced) add(fromGit(edit))
   const dir = agentWorkDirs(graph)[paneId]
   const shellCwd = sessions[paneId]?.cwd
   const inGit = paneGit[gitKey(paneId, "in")]
   if (worksElsewhere(shellCwd, dir?.cwd, paneGit[paneId], inGit, dir?.agent)) add(fromGit(inGit))
   add(fromGit(paneGit[paneId]))
-  // The other checkouts it edited (and its session's other worktrees): folders only.
+  // The other checkouts it edited (and its session's other worktrees): folders only. (The one it
+  // edits is one once its answer says no branch, as in the sidebar.)
   const more = moreFolders(
     (dir?.others ?? []).map((w) => w.path),
-    [...(shown && !editPlaced ? [shown] : []), ...(work?.more ?? [])],
+    [...(answered && !editPlaced ? [shown!] : []), ...(work?.more ?? [])],
     undefined,
-  ).filter((d) => !out.some((o) => samePath(o.root, d)))
+  )
   return { places: out, more }
 }
 
@@ -235,18 +237,24 @@ export function fleetModel(input: FleetInput): FleetRepo[] {
 
   for (const n of order) {
     const paneId = n.paneId!
-    const { places: all, more } = touched(input, n, paneId)
+    const { places: all, more: others } = touched(input, n, paneId)
+    // Only checkouts a repo answer places count; with none placed yet (a WSL pane's, or before
+    // the first answer) the first one's folder stands for its repo, alone: two folders could be
+    // the same repo shown twice. The ones left out are listed with the `+N`.
+    const known = all.filter((p) => repoOfRoot(local, p.root))
+    const used = known.length ? known : all.slice(0, 1)
+    const more = moreFolders(
+      [],
+      [...all.filter((p) => !used.includes(p)).map((p) => p.root), ...others],
+    ).filter((d) => !used.some((p) => samePath(p.root, d)))
     const base = {
       ...toAgent(graph, n, paneId, input), // (its branch: per repo, below)
       ...(more.length ? { more } : {}),
     }
     // Its checkouts by repo, in the order they place it.
     const byRepo = new Map<string, Place[]>()
-    for (const [i, place] of all.entries()) {
+    for (const place of used) {
       const loc = repoOfRoot(local, place.root)
-      // Not placed in a repo yet (a WSL pane's, or before the first answer): its own folder
-      // stands for it, so only its placing checkout may, or one repo would show as several.
-      if (i > 0 && (!loc || !repoOfRoot(local, all[0]!.root))) continue
       const gh = loc?.repo ?? undefined
       // No GitHub remote: its main worktree stands for the repo (all its worktrees, one node).
       const key = gh ? gh.toLowerCase() : (loc?.worktrees[0]?.path ?? place.root)

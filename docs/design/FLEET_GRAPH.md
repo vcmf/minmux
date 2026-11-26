@@ -200,9 +200,9 @@ of plumbing.
   ring); the others link it to their PRs and branches with edges of their own. An agent touching
   two repos is in both sub-graphs (counted once in each). The `edits` record counts only when
   it's the pane's current session's, and, as in the sidebar, only with a branch or a PR
-  (else it's one of the `+N`). While the placing checkout has no repo answer yet (a WSL pane's, or a new worktree before
-  the next answer), it alone counts: its folder stands for the repo, and another checkout could
-  show the same repo twice.
+  (else it's one of the `+N`). Only checkouts a repo answer places count (a new worktree waits for the next
+  answer, listed meanwhile); with none placed yet (a WSL pane's), the first one's folder stands
+  for its repo, alone, since two folders could be the same repo shown twice.
 - **The other checkouts it edited (the sidebar's `+N`) are listed in its panel, not linked**:
   they have no lookup of their own, and guessing their branch from the cached worktree list
   went stale on a `git switch` (rejected after three review rounds). A later step can give
