@@ -229,12 +229,19 @@ describe("linkCurve", () => {
     const n = { x: FLEET.cx + 50, y: FLEET.cy - 400 }
     const m = cubicAt(a, linkCurve(a, n), n, 0.5)
     expect(Math.abs(m.y - (FLEET.cy - 400))).toBeLessThan(5)
-    // nearly opposite: the same side whichever way a nudge tips it
+    // nearly opposite: the same side whichever way a nudge tips it, never inside the PR ring
     const r = { x: FLEET.cx + 400 * FLEET.ex, y: FLEET.cy }
-    const side = (dy: number) => {
-      const l = { x: FLEET.cx - 230 * FLEET.ex, y: FLEET.cy + dy }
-      return Math.sign(cubicAt(r, linkCurve(r, l), l, 0.5).y - FLEET.cy)
+    const midOf = (ang: number) => {
+      const l = { x: FLEET.cx + Math.cos(ang) * 230 * FLEET.ex, y: FLEET.cy + Math.sin(ang) * 230 }
+      return cubicAt(r, linkCurve(r, l), l, 0.5)
     }
-    expect(side(3)).toBe(side(-3))
+    const sides = [Math.PI - 0.1, -(Math.PI - 0.1), Math.PI - 0.25, -(Math.PI - 0.25)].map((a) =>
+      Math.sign(midOf(a).y - FLEET.cy),
+    )
+    expect(new Set(sides).size).toBe(1)
+    for (const a of [-(Math.PI - 0.29), -(Math.PI - 0.31), Math.PI - 0.05]) {
+      const m = midOf(a)
+      expect(Math.hypot((m.x - FLEET.cx) / FLEET.ex, m.y - FLEET.cy)).toBeGreaterThan(230)
+    }
   })
 })

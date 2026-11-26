@@ -193,9 +193,9 @@ export function linkCurve(a: Pt, b: Pt): [Pt, Pt] {
   let d = pb.t - pa.t
   while (d > Math.PI) d -= Math.PI * 2
   while (d < -Math.PI) d += Math.PI * 2
-  // (nearly opposite: always the same way round, or a nudge across π would flip it to the other
-  // side of the root)
-  if (Math.abs(d) > Math.PI - 0.3) d = Math.abs(d)
+  // (nearly opposite: the positive way round, the long way if need be; a nudge across π would
+  // flip it to the other side of the root)
+  if (d < -(Math.PI - 0.3)) d += Math.PI * 2
   // (a cubic's middle sits a quarter in from its control points: pushed out to make up for it)
   const r = ((pa.r + pb.r) / 2) * (1 + Math.abs(d) / 12)
   const at = (t: number) => ({

@@ -153,7 +153,7 @@ export function FleetCard(props: {
           <span className="faint">#{p.number}</span> <b>{p.row?.title ?? ""}</b>
         </span>
         <span className={`one fleet-st ${st.cls}`}>{st.word}</span>
-        <CheckoutLine dirs={p.dirs} agents={p.agents} />
+        <CheckoutLine dirs={p.dirs} agents={[...p.agents, ...p.linked]} />
         <button
           className="fleet-link"
           title={`Open #${p.number}`}
@@ -167,7 +167,9 @@ export function FleetCard(props: {
     )
   }
   if (n.kind === "branch") {
-    const dir = info.branchNode && shownDir(info.branchNode.dirs, info.branchNode.agents)
+    const dir =
+      info.branchNode &&
+      shownDir(info.branchNode.dirs, [...info.branchNode.agents, ...info.branchNode.linked])
     return (
       <div className="fleet-card fleet-branch" style={style} data-node={n.id}>
         <GitBranch size={12} />

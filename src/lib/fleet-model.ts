@@ -168,7 +168,10 @@ export function touched(
   const work = paneWork[paneId]?.session === n.sessionId ? paneWork[paneId] : undefined
   const shown = work?.shown
   const edit = paneGit[gitKey(paneId, "edit")]
-  if (shown && edit?.forCwd && samePath(edit.forCwd, shown)) add(fromGit(edit))
+  // (as the sidebar's `edits` line: only with a branch or a PR; else it's one of the `+N`)
+  const editPlaced =
+    !!shown && !!edit?.forCwd && samePath(edit.forCwd, shown) && !!(edit.branch || edit.pr)
+  if (editPlaced) add(fromGit(edit))
   const dir = agentWorkDirs(graph)[paneId]
   const shellCwd = sessions[paneId]?.cwd
   const inGit = paneGit[gitKey(paneId, "in")]
@@ -177,8 +180,8 @@ export function touched(
   // The other checkouts it edited (and its session's other worktrees): folders only.
   const more = moreFolders(
     (dir?.others ?? []).map((w) => w.path),
-    work?.more ?? [],
-    shown,
+    [...(shown && !editPlaced ? [shown] : []), ...(work?.more ?? [])],
+    undefined,
   ).filter((d) => !out.some((o) => samePath(o.root, d)))
   return { places: out, more }
 }
@@ -243,7 +246,7 @@ export function fleetModel(input: FleetInput): FleetRepo[] {
       const loc = repoOfRoot(local, place.root)
       // Not placed in a repo yet (a WSL pane's, or before the first answer): its own folder
       // stands for it, so only its placing checkout may, or one repo would show as several.
-      if (!loc && i > 0) continue
+      if (i > 0 && (!loc || !repoOfRoot(local, all[0]!.root))) continue
       const gh = loc?.repo ?? undefined
       // No GitHub remote: its main worktree stands for the repo (all its worktrees, one node).
       const key = gh ? gh.toLowerCase() : (loc?.worktrees[0]?.path ?? place.root)

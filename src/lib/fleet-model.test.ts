@@ -391,18 +391,47 @@ describe("fleetModel", () => {
     it("its card's branch is its checkout's in that repo: none when that one is detached", () => {
       const m = fleetModel(
         input(
-          session("s1", "p1", "/w/b"),
+          session("s1", "p1", "/w/r-wt"),
           {
-            p1: { root: "/w/b", branch: "main" },
-            "p1@edit": { root: "/w/r-wt", forCwd: "/w/r-wt" },
+            p1: { root: "/w/r-wt" },
+            "p1@edit": { root: "/w/b", branch: "main", forCwd: "/w/b" },
           },
-          { paneWork: { p1: work("s1", "/w/r-wt") }, local },
+          { paneWork: { p1: work("s1", "/w/b") }, local },
         ),
       )
       const r = m.find((x) => x.key === "o/r")!
       expect(r.branches[0]!.name).toBe(DETACHED)
       expect(r.branches[0]!.agents[0]!.branch).toBeUndefined()
       expect(m.find((x) => x.key === "o/b")!.agents[0]!.branch).toBe("main")
+    })
+
+    it("an edits checkout with no branch or PR doesn't place it (the sidebar's +N): listed", () => {
+      const m = fleetModel(
+        input(
+          session("s1", "p1", "/w/r-fix"),
+          {
+            p1: { root: "/w/r-fix", branch: "fix", pr: pr(9) },
+            "p1@edit": { root: "/w/r-wt", forCwd: "/w/r-wt" },
+          },
+          { paneWork: { p1: work("s1", "/w/r-wt") }, local },
+        ),
+      )
+      expect(m[0]!.prs[0]!.agents[0]!.more).toEqual(["/w/r-wt"])
+      expect(m[0]!.branches).toEqual([])
+    })
+
+    it("a placing checkout not placed in a repo yet: the others wait (one repo, not two)", () => {
+      const m = fleetModel(
+        input(
+          session("s1", "p1", "/w/r"),
+          {
+            p1: { root: "/w/r", branch: "main" },
+            "p1@edit": { root: "/w/r-new", branch: "x", forCwd: "/w/r-new" },
+          },
+          { paneWork: { p1: work("s1", "/w/r-new") }, local },
+        ),
+      )
+      expect(m.map((r) => r.key)).toEqual(["/w/r-new"])
     })
 
     it("a WSL pane's checkouts main can't place: only its placing one stands for the repo", () => {
