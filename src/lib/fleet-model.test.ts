@@ -206,7 +206,7 @@ describe("fleetModel", () => {
     ])
   })
 
-  it("a PR shown for its agent alone (no list row) can be the base of mine", () => {
+  it("a PR known only from a checkout (no list row) is no base: its branch is only local", () => {
     const m = fleetModel(
       input(
         session("s1", "p1", "/w/r-wt"),
@@ -216,7 +216,7 @@ describe("fleetModel", () => {
     )
     expect(m[0]!.prs.map((p) => [p.number, p.on?.number])).toEqual([
       [7, undefined],
-      [9, 7],
+      [9, undefined],
     ])
   })
 

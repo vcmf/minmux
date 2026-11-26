@@ -240,6 +240,8 @@ describe("edgeEnd", () => {
       Math.abs(Math.abs(end.y - to.y) - to.h / 2) < 0.5
     expect(onEdge).toBe(true)
     expect(edgeEnd({ x: 310, y: 105 }, undefined, b)).toBeNull() // (starting on the card)
+    // a hair outside, below it: still heading up into it
+    expect(edgeEnd({ x: 300, y: 120.5 }, undefined, b)!.angle).toBeCloseTo(-Math.PI / 2)
     expect(
       Math.cos(end.angle) * (to.x - end.x) + Math.sin(end.angle) * (to.y - end.y),
     ).toBeGreaterThan(0)

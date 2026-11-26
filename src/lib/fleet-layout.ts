@@ -2,7 +2,8 @@
 // repo opened as a radial tree. Each child of the repo (a PR, a branch with no PR, an agent on the
 // default branch) gets a slice of the circle sized by the agents under it; PRs sit on an inner
 // ring, agents on an outer ring inside their PR's slice and close to it, sub-agents just beyond
-// their agent. A stacked PR hangs off the PR it's based on (the model keeps a stack together). `theta` turns every slice together (the motion step drives it). Pure.
+// their agent. A stacked PR hangs off the PR it's based on (the model keeps a stack together).
+// `theta` turns every slice together (the motion step drives it). Pure.
 import type { FleetRepo } from "./fleet-model"
 
 export type FleetNodeKind = "root" | "pr" | "branch" | "agent" | "sub"
@@ -220,7 +221,7 @@ export function cubicAt(a: Pt, [c1, c2]: [Pt, Pt], b: Pt, t: number): Pt {
   }
 }
 
-// The first point inside the card, by halving (the edge starts outside it, ends at its centre).
+// By halving: the last point outside the card (the edge starts outside it, ends at its centre).
 /** Where an edge from `a` meets card `b`'s border, and its heading there (an arrowhead's). */
 export function edgeEnd(
   a: Pt,
@@ -239,8 +240,10 @@ export function edgeEnd(
     else lo = mid
   }
   const tip = on(lo)
-  const back = on(Math.max(0, lo - 0.02))
-  return { ...tip, angle: Math.atan2(tip.y - back.y, tip.x - back.x) }
+  // (its heading: along the edge's last stretch; an edge too short for one, straight at the card)
+  const from = lo > 0.02 ? on(lo - 0.02) : tip
+  const [dx, dy] = from === tip ? [b.x - a.x, b.y - a.y] : [tip.x - from.x, tip.y - from.y]
+  return { ...tip, angle: Math.atan2(dy, dx) }
 }
 
 // Each overlapping pair is pushed apart along the line between their centres, by the least that

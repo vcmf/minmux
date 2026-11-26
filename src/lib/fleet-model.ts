@@ -58,7 +58,6 @@ export interface FleetPr {
   linked: FleetAgent[] // placed elsewhere in the repo, touching it too
   dirs: string[] // the checkouts it's in
   on?: { url: string; number: number } // the PR it's stacked on, when that one is shown too
-  head?: string // its branch, from a checkout (a PR with no list row: it can still be a base)
 }
 
 export interface FleetBranch {
@@ -198,7 +197,6 @@ function targetOf(
         number: pr.number,
         state: pr.state,
         ...(row ? { row } : {}),
-        ...(place.branch ? { head: place.branch } : {}),
         agents: [],
         linked: [],
         dirs: [],
@@ -325,14 +323,15 @@ export function fleetModel(input: FleetInput): FleetRepo[] {
   return [...repos.values()]
 }
 
-// As the pull requests dialog (lib/pr-stacks): B is stacked on A when B's base is A's head. A
-// PR with no list row (an agent's, not mine) has its checkout's branch as its head: it can be a
-// base, never stacked (its base is unknown). A cycle (A on B, B on A) is broken at its first PR.
+// As the pull requests dialog (lib/pr-stacks): B is stacked on A when B's base is A's head, from
+// their list rows (a PR without one, known only from a checkout, has no head or base GitHub
+// vouches for: a local branch can be named anything, or be a fork's). A cycle (A on B, B on A) is
+// broken at its first PR.
 /** A repo's PRs with their base PR, each stack's PRs together: a PR right after its base. */
 export function stacked(prs: FleetPr[]): FleetPr[] {
   const heads = new Map<string, FleetPr>()
   for (const p of prs) {
-    const head = p.row ? (p.row.fork ? undefined : p.row.head) : p.head
+    const head = p.row && !p.row.fork ? p.row.head : undefined
     if (head && !heads.has(head)) heads.set(head, p)
   }
   const kids = new Map<string, FleetPr[]>()

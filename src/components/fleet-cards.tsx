@@ -156,8 +156,9 @@ export function FleetCard(props: {
           <span className="faint">#{p.number}</span> <b>{p.row?.title ?? ""}</b>
         </span>
         <span className={`one fleet-st ${st.cls}`}>
+          {/* (first: a long status word is what the ellipsis cuts) */}
+          {p.on && <span className="faint">on #{p.on.number} · </span>}
           {st.word}
-          {p.on && <span className="faint"> · on #{p.on.number}</span>}
         </span>
         <CheckoutLine dirs={p.dirs} agents={[...p.agents, ...p.linked]} />
         <button
