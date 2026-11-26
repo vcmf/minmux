@@ -57,6 +57,7 @@ export interface FleetPr {
   agents: FleetAgent[] // placed under it
   linked: FleetAgent[] // placed elsewhere in the repo, touching it too
   dirs: string[] // the checkouts it's in
+  on?: { url: string; number: number } // the PR it's stacked on, when that one is shown too
 }
 
 export interface FleetBranch {
@@ -315,6 +316,41 @@ export function fleetModel(input: FleetInput): FleetRepo[] {
       dirs: [],
     })
   }
-  for (const repo of repos.values()) repo.counts.prs = repo.prs.length
+  for (const repo of repos.values()) {
+    repo.prs = stacked(repo.prs)
+    repo.counts.prs = repo.prs.length
+  }
   return [...repos.values()]
+}
+
+// As the pull requests dialog (lib/pr-stacks): B is stacked on A when B's base is A's head, from
+// their list rows (a PR without one, known only from a checkout, has no head or base GitHub
+// vouches for: a local branch can be named anything, or be a fork's). A cycle (A on B, B on A) is
+// broken at its first PR; a head two PRs share stacks nothing.
+/** A repo's PRs with their base PR, each stack's PRs together: a PR right after its base. */
+export function stacked(prs: FleetPr[]): FleetPr[] {
+  const heads = new Map<string, FleetPr | null>() // (null: two open PRs share it, no telling which)
+  for (const p of prs) {
+    const head = p.row && !p.row.fork ? p.row.head : undefined
+    if (head) heads.set(head, heads.has(head) ? null : p)
+  }
+  const kids = new Map<string, FleetPr[]>()
+  const based = new Set<string>()
+  for (const p of prs) {
+    const b = p.row ? heads.get(p.row.base) : undefined
+    if (!b || b === p) continue
+    based.add(p.url)
+    kids.set(b.url, [...(kids.get(b.url) ?? []), p])
+  }
+  const out: FleetPr[] = []
+  const seen = new Set<string>()
+  const walk = (p: FleetPr, on?: FleetPr) => {
+    if (seen.has(p.url)) return
+    seen.add(p.url)
+    out.push(on ? { ...p, on: { url: on.url, number: on.number } } : p)
+    for (const k of kids.get(p.url) ?? []) walk(k, p)
+  }
+  for (const p of prs) if (!based.has(p.url)) walk(p)
+  for (const p of prs) walk(p) // (a cycle: no bottom; its first PR stands as one)
+  return out
 }

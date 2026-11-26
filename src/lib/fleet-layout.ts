@@ -2,7 +2,8 @@
 // repo opened as a radial tree. Each child of the repo (a PR, a branch with no PR, an agent on the
 // default branch) gets a slice of the circle sized by the agents under it; PRs sit on an inner
 // ring, agents on an outer ring inside their PR's slice and close to it, sub-agents just beyond
-// their agent. `theta` turns every slice together (the motion step drives it). Pure.
+// their agent. A stacked PR hangs off the PR it's based on (the model keeps a stack together).
+// `theta` turns every slice together (the motion step drives it). Pure.
 import type { FleetRepo } from "./fleet-model"
 
 export type FleetNodeKind = "root" | "pr" | "branch" | "agent" | "sub"
@@ -83,6 +84,7 @@ export function openLayout(repo: FleetRepo, theta = 0): FleetNode[] {
     kind: "pr" | "branch" | "agent"
     agents: FleetRepo["agents"]
     dir?: boolean
+    on?: string // a stacked PR: the PR it's based on (its edge goes there, not to the root)
   }
   const children: Child[] = [
     ...repo.prs.map((p) => ({
@@ -90,6 +92,7 @@ export function openLayout(repo: FleetRepo, theta = 0): FleetNode[] {
       kind: "pr" as const,
       agents: p.agents,
       dir: p.dirs.length > 0,
+      ...(p.on ? { on: nodeId.pr(p.on.url) } : {}),
     })),
     ...repo.branches.map((b) => ({
       id: nodeId.branch(repo.key, b.name),
@@ -162,7 +165,7 @@ export function openLayout(repo: FleetRepo, theta = 0): FleetNode[] {
     else {
       const [w, h0] = c.kind === "pr" ? FLEET.pr : FLEET.branch
       const h = c.kind === "pr" && c.dir ? FLEET.prDir : h0
-      out.push({ id: c.id, kind: c.kind, ...at(r1, mid), w, h, parent: rootId })
+      out.push({ id: c.id, kind: c.kind, ...at(r1, mid), w, h, parent: c.on ?? rootId })
       // Its agents close to it: at most the slice, at least a card's width apart on screen.
       const tot = c.agents.reduce((n, ag) => n + agentWeight(ag.subs.length), 0)
       const span = Math.min(sec * 0.9, tot * Math.max(0.5, 280 / (r2 * FLEET.ex)))
@@ -216,6 +219,39 @@ export function cubicAt(a: Pt, [c1, c2]: [Pt, Pt], b: Pt, t: number): Pt {
     x: k0 * a.x + k1 * c1.x + k2 * c2.x + k3 * b.x,
     y: k0 * a.y + k1 * c1.y + k2 * c2.y + k3 * b.y,
   }
+}
+
+// The last point outside the card before the edge first enters it (it ends at its centre).
+/** Where an edge from `a` meets card `b`'s border, and its heading there (an arrowhead's). */
+export function edgeEnd(
+  a: Pt,
+  c: [Pt, Pt] | undefined,
+  b: { x: number; y: number; w: number; h: number },
+): { x: number; y: number; angle: number } | null {
+  const on = (t: number) =>
+    c ? cubicAt(a, c, b, t) : { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t }
+  const inside = (q: Pt) => Math.abs(q.x - b.x) <= b.w / 2 && Math.abs(q.y - b.y) <= b.h / 2
+  if (inside(a)) return null // (it starts on the card: dragged over it, no border to point at)
+  // (stepped forward to the first stretch that enters it: a curve can clip a corner, leave, and
+  // come back; halving 0..1 could settle on a way out)
+  let lo = 0
+  let hi = 1
+  for (let i = 1; i <= 32; i++)
+    if (inside(on(i / 32))) {
+      lo = (i - 1) / 32
+      hi = i / 32
+      break
+    }
+  for (let i = 0; i < 20; i++) {
+    const mid = (lo + hi) / 2
+    if (inside(on(mid))) hi = mid
+    else lo = mid
+  }
+  const tip = on(lo)
+  // (its heading: along the edge's last stretch; an edge too short for one, straight at the card)
+  const from = lo > 0.02 ? on(lo - 0.02) : tip
+  const [dx, dy] = from === tip ? [b.x - a.x, b.y - a.y] : [tip.x - from.x, tip.y - from.y]
+  return { ...tip, angle: Math.atan2(dy, dx) }
 }
 
 // Each overlapping pair is pushed apart along the line between their centres, by the least that

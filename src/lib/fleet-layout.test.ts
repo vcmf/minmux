@@ -3,6 +3,7 @@ import {
   FLEET,
   bounds,
   cubicAt,
+  edgeEnd,
   linkCurve,
   clampCamera,
   unionBox,
@@ -88,6 +89,13 @@ describe("openLayout", () => {
     const withDir = byId(openLayout(repo({ prs: [{ ...pr(7, [a]), dirs: ["/w/x"] }] })))
     expect(withDir.get(nodeId.pr("u/7"))!.h).toBe(FLEET.prDir)
     expect(withDir.get(nodeId.agent("a1"))!.links).toBeUndefined()
+  })
+
+  it("a stacked PR hangs off the PR it's on, not the root", () => {
+    const top = { ...pr(9, []), on: { url: "u/7", number: 7 } }
+    const ns = byId(openLayout(repo({ prs: [pr(7, [agent("a1")]), top] })))
+    expect(ns.get(nodeId.pr("u/9"))!.parent).toBe(nodeId.pr("u/7"))
+    expect(ns.get(nodeId.pr("u/7"))!.parent).toBe(nodeId.root("o/r"))
   })
 
   it("one PR with two agents: the PR above the repo, its agents further out, each edge to its parent", () => {
@@ -213,6 +221,44 @@ describe("camera", () => {
     const box = unionBox(bounds(big), bounds(small))
     expect(clampCamera({ x: 2900, y: 0 }, small, box).x).toBe(2900) // still reachable
     expect(clampCamera({ x: 2900, y: 0 }, small).x).toBe(50) // (without the kept extent)
+  })
+})
+
+describe("edgeEnd", () => {
+  it("stops at the card's border, heading into it", () => {
+    const b = { x: 300, y: 100, w: 100, h: 40 }
+    const line = edgeEnd({ x: 0, y: 100 }, undefined, b)!
+    expect(line.x).toBeCloseTo(250, 1)
+    expect(line.y).toBeCloseTo(100)
+    expect(line.angle).toBeCloseTo(0)
+    // a curve: on the border too, heading inwards
+    const a = { x: FLEET.cx - 400, y: FLEET.cy - 200 }
+    const to = { x: FLEET.cx + 300, y: FLEET.cy - 230, w: 196, h: 56 }
+    const end = edgeEnd(a, linkCurve(a, to), to)!
+    const onEdge =
+      Math.abs(Math.abs(end.x - to.x) - to.w / 2) < 0.5 ||
+      Math.abs(Math.abs(end.y - to.y) - to.h / 2) < 0.5
+    expect(onEdge).toBe(true)
+    expect(edgeEnd({ x: 310, y: 105 }, undefined, b)).toBeNull() // (starting on the card)
+    // a curve that clips a corner first, leaves and comes back: the tip is where it first enters
+    const box = { x: 100, y: 0, w: 40, h: 40 }
+    const clip = edgeEnd(
+      { x: 60, y: 0 },
+      [
+        { x: 100, y: -200 },
+        { x: 100, y: 200 },
+      ],
+      box,
+    )!
+    expect(clip.x).toBeLessThan(box.x)
+    expect(
+      Math.abs(clip.x - (box.x - box.w / 2)) < 0.5 || Math.abs(Math.abs(clip.y) - box.h / 2) < 0.5,
+    ).toBe(true)
+    // a hair outside, below it: still heading up into it
+    expect(edgeEnd({ x: 300, y: 120.5 }, undefined, b)!.angle).toBeCloseTo(-Math.PI / 2)
+    expect(
+      Math.cos(end.angle) * (to.x - end.x) + Math.sin(end.angle) * (to.y - end.y),
+    ).toBeGreaterThan(0)
   })
 })
 

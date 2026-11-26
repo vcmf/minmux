@@ -156,6 +156,87 @@ describe("fleetModel", () => {
     ])
   })
 
+  it("a stacked PR knows the PR it's on, and sits right after it", () => {
+    const at = (n: number, head: string, base: string) => row(n, { head, base, fork: false })
+    const m = fleetModel(
+      input(
+        session("s1", "p1", "/w/r"),
+        { p1: { root: "/w/r", branch: "main" } },
+        // #5 on #3 (listed before it), #3 on main, #6 on #3 too, #8 on a branch with no PR
+        {
+          mine: [
+            at(5, "b", "a"),
+            at(4, "x", "main"),
+            at(3, "a", "main"),
+            at(6, "c", "a"),
+            at(8, "d", "zz"),
+          ],
+        },
+      ),
+    )
+    const prs = m[0]!.prs
+    expect(prs.map((p) => [p.number, p.on?.number])).toEqual([
+      [4, undefined],
+      [3, undefined],
+      [5, 3],
+      [6, 3],
+      [8, undefined],
+    ])
+    expect(prs[2]!.on!.url).toBe(prs[1]!.url)
+  })
+
+  it("a stacking cycle is broken at its first PR; a PR on it keeps its link", () => {
+    const m = fleetModel(
+      input(
+        session("s1", "p1", "/w/r"),
+        { p1: { root: "/w/r", branch: "main" } },
+        {
+          mine: [
+            row(3, { head: "a", base: "b" }),
+            row(4, { head: "b", base: "a" }),
+            row(8, { head: "c", base: "a" }),
+          ],
+        },
+      ),
+    )
+    expect(m[0]!.prs.map((p) => [p.number, p.on?.number])).toEqual([
+      [3, undefined],
+      [4, 3],
+      [8, 3],
+    ])
+  })
+
+  it("a head two open PRs share stacks nothing on either", () => {
+    const m = fleetModel(
+      input(
+        session("s1", "p1", "/w/r"),
+        { p1: { root: "/w/r", branch: "main" } },
+        {
+          mine: [
+            row(4, { head: "feat", base: "main" }),
+            row(7, { head: "feat", base: "release" }),
+            row(9, { head: "top", base: "feat" }),
+          ],
+        },
+      ),
+    )
+    expect(m[0]!.prs.map((p) => p.on)).toEqual([undefined, undefined, undefined])
+  })
+
+  it("a PR known only from a checkout (no list row) is no base: its branch is only local", () => {
+    const m = fleetModel(
+      input(
+        session("s1", "p1", "/w/r-wt"),
+        { p1: { root: "/w/r-wt", branch: "feat", pr: pr(7) } },
+        { mine: [row(9, { head: "top", base: "feat" })] },
+      ),
+    )
+    expect(m[0]!.prs.map((p) => [p.number, p.on?.number])).toEqual([
+      [7, undefined],
+      [9, undefined],
+    ])
+  })
+
   it("leaves out agents not in a repo, and panes that are gone", () => {
     const events = [...session("s1", "p1", "/tmp"), ...session("s2", "p2", "/w/r")]
     const inp = input(events, { p1: { noRepo: true }, p2: { root: "/w/r", branch: "main" } })

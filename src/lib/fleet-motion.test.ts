@@ -120,6 +120,20 @@ describe("withPins", () => {
     expect(withPins(ns, new Map())).toBe(ns)
   })
 
+  it("a pinned base PR leaves the PRs stacked on it where they are", () => {
+    const ns: FleetNode[] = [
+      { id: "pr:a", kind: "pr", x: 0, y: 0, w: 10, h: 10 },
+      { id: "pr:b", kind: "pr", x: 50, y: 0, w: 10, h: 10, parent: "pr:a" },
+      { id: "agent:x", kind: "agent", x: 50, y: 50, w: 10, h: 10, parent: "pr:b" },
+    ]
+    const out = withPins(ns, new Map([["pr:a", { x: 100, y: 100 }]]))
+    expect(out.map((n) => [n.x, n.y])).toEqual([
+      [100, 100],
+      [50, 0],
+      [50, 50],
+    ])
+  })
+
   it("a short drag of a settled PR moves what hangs off it by as much, not by the overlap pass's own push", () => {
     const base = relax(openLayout(busy))
     const pr = base.find((n) => n.id === nodeId.pr("u/1"))!

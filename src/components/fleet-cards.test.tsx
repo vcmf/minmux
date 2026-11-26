@@ -58,6 +58,11 @@ describe("FleetCard", () => {
   beforeEach(() => resetStore())
   afterEach(() => vi.restoreAllMocks())
 
+  it("a stacked PR's card names the PR it's on", () => {
+    card("pr", { repo: repo(), pr: { ...pr(9, { ci: "pending" }), on: { url: "u/7", number: 7 } } })
+    expect(screen.getByText(/CI running/)).toHaveTextContent("on #7 · CI running")
+  })
+
   it("a PR card says what holds it up, most pressing first", () => {
     const cases: [Partial<PrRow> | null, string][] = [
       [{ merge: "conflicts" }, "conflicts"],

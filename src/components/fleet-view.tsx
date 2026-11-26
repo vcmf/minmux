@@ -15,6 +15,7 @@ import {
   unionBox,
   bounds,
   cubicAt,
+  edgeEnd,
   linkCurve,
   type Camera,
   type FleetNode,
@@ -324,13 +325,22 @@ export function FleetView() {
       }
       ctx.restore()
     }
-    // Every edge: each card to its parent, and an agent to its other PRs and branches.
-    const edges: { n: FleetNode; p: FleetNode; c?: [Camera, Camera] }[] = []
+    // Every edge: each card to its parent, and an agent to its other PRs and branches. A
+    // stacked PR's, to the PR it's based on, ends in an arrow.
+    const edges: { n: FleetNode; p: FleetNode; c?: [Camera, Camera]; arrow?: boolean }[] = []
     for (const n of ns)
       for (const to of n.parent ? [n.parent, ...(n.links ?? [])] : []) {
         const p = byId.get(to)
-        // (a link curves round the centre: across the graph, a line would cut through the root)
-        if (p) edges.push({ n, p, ...(to !== n.parent ? { c: linkCurve(n, p) } : {}) })
+        if (!p) continue
+        const stack = n.kind === "pr" && p.kind === "pr"
+        // (a link, or a stack's edge, curves round the centre: across the graph, a line would
+        // cut through the root)
+        edges.push({
+          n,
+          p,
+          ...(to !== n.parent || stack ? { c: linkCurve(n, p) } : {}),
+          ...(stack ? { arrow: true } : {}),
+        })
       }
     // The selected agent's ways to its repo, drawn green.
     const path = new Set<string>()
@@ -360,6 +370,24 @@ export function FleetView() {
             : faint
       ctx.globalAlpha = on ? 1 : n.kind === "agent" && info?.agent?.status === "idle" ? 0.35 : 0.7
       ctx.stroke()
+      const end = e.arrow ? edgeEnd(n, c, p) : null
+      if (end) {
+        const size = on ? 13 : 11
+        ctx.setLineDash([])
+        ctx.fillStyle = ctx.strokeStyle
+        ctx.beginPath()
+        ctx.moveTo(end.x, end.y)
+        ctx.lineTo(
+          end.x - size * Math.cos(end.angle - 0.45),
+          end.y - size * Math.sin(end.angle - 0.45),
+        )
+        ctx.lineTo(
+          end.x - size * Math.cos(end.angle + 0.45),
+          end.y - size * Math.sin(end.angle + 0.45),
+        )
+        ctx.closePath()
+        ctx.fill()
+      }
     }
     ctx.globalAlpha = 1
     // The dots running along the lines of working agents and sub-agents.
