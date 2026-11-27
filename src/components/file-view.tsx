@@ -1,5 +1,7 @@
 import {
+  Component,
   lazy,
+  type ReactNode,
   memo,
   Suspense,
   useEffect,
@@ -72,11 +74,27 @@ export function FileView({ entryId, tabId }: { entryId: string; tabId: string })
   }
   return (
     <div className="file-view">
-      <Suspense fallback={<div className="file-view-note">Loading the editor…</div>}>
-        <FileEditor entryId={entryId} tabId={tabId} path={path} onDone={done} />
-      </Suspense>
+      <EditorBoundary>
+        <Suspense fallback={<div className="file-view-note">Loading the editor…</div>}>
+          <FileEditor entryId={entryId} tabId={tabId} path={path} onDone={done} />
+        </Suspense>
+      </EditorBoundary>
     </div>
   )
+}
+
+// A chunk that won't load (the app updated under a running window) or an editor that throws
+// stays in this pane: the rest of the window keeps working, and the edit keeps its text.
+/** The editor, or a note in its place if it fails. */
+class EditorBoundary extends Component<{ children: ReactNode }, { failed: boolean }> {
+  state = { failed: false }
+  static getDerivedStateFromError() {
+    return { failed: true }
+  }
+  render() {
+    if (!this.state.failed) return this.props.children
+    return <div className="file-view-note">Couldn&apos;t load the editor: reload the window.</div>
+  }
 }
 
 // Read through the fs worker; highlighted in a worker (lib/highlight-client); only the lines in
@@ -299,8 +317,13 @@ function FileViewer({ entryId, tabId }: { entryId: string; tabId: string }) {
     if (el && view === "source") at = Math.floor(el.scrollTop / LINE_H) + 1
     const body = el?.firstElementChild as HTMLElement | null
     if (el && body && view === "preview") at = topBlock(el, body).line
+    if (el && view === "diff" && diff) {
+      // The diff row at the top: its line in the file (a deleted row: the next one with one).
+      const rows = diff.lines.slice(Math.floor(el.scrollTop / LINE_H))
+      at = rows.find((r) => r.newNo)?.newNo ?? at
+    }
     useStore.getState().keepEntry(entryId) // a peek being edited is a kept tab: never replaced
-    edits.start(entryId, path, wsl, data.text, data.hash, at)
+    edits.start(entryId, path, wsl, data.text, data.hash, at, asked)
   }
   const canReveal = !wsl && isAbsoluteHostPath(path, platform)
   // A WSL file too: main opens it through the distro's share.

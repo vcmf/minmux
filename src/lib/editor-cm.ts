@@ -43,7 +43,8 @@ const kept = (b: KeyBinding) => !(b.key && DROPPED.has(b.key)) && !(b.mac && DRO
 /** The editor's keys: ours first, then CodeMirror's defaults without the ones that clash. */
 export function editorKeymap(save: Command, isMac: boolean): KeyBinding[] {
   return [
-    { key: "Mod-s", run: save, preventDefault: true },
+    // Also from the find / replace panel's fields.
+    { key: "Mod-s", run: save, preventDefault: true, scope: "editor search-panel" },
     { key: "Tab", run: insertIndent, shift: indentLess },
     { key: "Enter", run: insertNewlineAndIndent },
     // Find in the file: ⌘F (CodeMirror's), and Linux / Windows' Ctrl+Shift+F, the app's find key.

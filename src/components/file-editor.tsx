@@ -7,6 +7,7 @@ import {
   EditorState,
   Text,
   type Extension,
+  type StateEffect,
   type TransactionSpec,
 } from "@codemirror/state"
 import {
@@ -184,9 +185,13 @@ export default function FileEditor({
       const line = Math.min(Math.max(1, edits.startLine(entryId)), doc.lines)
       state = EditorState.create({ doc, extensions, selection: { anchor: doc.line(line).from } })
     }
+    // Back where it was scrolled (a surface switch), as CodeMirror's own snapshot: a scrollTop
+    // set before the new view has measured its text would be clamped to 0.
+    const snapshot = fresh ? null : (edits.scrollOf(entryId) as StateEffect<unknown> | null)
     const view: EditorView = new EditorView({
       state,
       parent: host.current,
+      ...(snapshot ? { scrollTo: snapshot } : {}),
       dispatch: (tr) => {
         view.update([tr])
         edits.keep(entryId, view.state)
@@ -195,19 +200,22 @@ export default function FileEditor({
     })
     viewRef.current = view
     mounted.set(entryId, view)
+    // A fresh edit's document is its base: no second copy made on the first keystroke.
+    if (fresh) baseDocs.set(entryId, { hash: base.hash, doc: view.state.doc })
+    // Where it's scrolled, kept as it moves (an unmount reads a detached element).
+    const onScroll = () => edits.setScroll(entryId, view.scrollSnapshot())
+    view.scrollDOM.addEventListener("scroll", onScroll, { passive: true })
     edits.keep(entryId, view.state)
     loadLanguage(entryId, path, view.state) // (again after a remount that beat the first load)
-    // Back where it was scrolled (a surface switch); a fresh one at its start line.
-    const kept = edits.scrollOf(entryId)
-    if (!fresh && kept !== null) view.scrollDOM.scrollTop = kept
-    else {
+    // A fresh one at its start line; a remount never scrolled: at its cursor.
+    if (!snapshot) {
       const head = view.state.selection.main.head
       view.dispatch({ effects: EditorView.scrollIntoView(head, { y: fresh ? "start" : "center" }) })
     }
     // The keyboard follows the store, never "whatever just mounted" (the chunk loads late).
     if (isFocusedEntry(tabId, entryId)) view.focus()
     return () => {
-      edits.setScroll(entryId, view.scrollDOM.scrollTop)
+      view.scrollDOM.removeEventListener("scroll", onScroll)
       if (mounted.get(entryId) === view) mounted.delete(entryId)
       viewRef.current = null
       view.destroy()
@@ -232,10 +240,10 @@ export default function FileEditor({
     })
   }, [entryId, goKey, line])
   const asked = file ? viewOf(file) : "source"
-  const askedAtStart = useRef(asked)
   useEffect(() => {
-    if (asked === askedAtStart.current) return
-    askedAtStart.current = asked
+    // Against what the edit last saw (in the store): a request made while it was hidden counts.
+    if (asked === edits.asked(entryId)) return
+    edits.setAsked(entryId, asked)
     flushDirty(entryId)
     const now = edits.get(entryId)
     if (asked === "diff" && now && !now.dirty && !now.saving) leaveRef.current()

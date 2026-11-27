@@ -29,11 +29,12 @@ export type EditBase = EditorText & { hash: string }
 
 interface Edit extends EditShown {
   startLine: number // the line it opened at
+  asked: string // the view its entry was asked for, last seen by the editor (a Diff request)
   path: string
   wsl?: WslContext
   base: EditBase
   state: unknown // the editor's own state (CodeMirror's EditorState)
-  scrollTop: number | null // where the editor was scrolled when it unmounted
+  scroll: unknown // where the editor was scrolled (CodeMirror's scroll snapshot), or null
 }
 
 type Write = (
@@ -80,16 +81,18 @@ export class EditStore {
     raw: string,
     hash: string,
     startLine = 1,
+    asked = "source",
   ): void {
     if (this.edits.has(id)) return
     const text = fromDisk(raw)
     this.edits.set(id, {
       startLine,
+      asked,
       path,
       ...(wsl ? { wsl } : {}),
       base: { ...text, hash },
       state: null,
-      scrollTop: null,
+      scroll: null,
       dirty: false,
       saving: false,
       notice: null,
@@ -120,14 +123,24 @@ export class EditStore {
     if (e) e.state = state
   }
 
-  /** Where its editor was scrolled (kept while it's unmounted). */
-  setScroll(id: string, top: number): void {
-    const e = this.edits.get(id)
-    if (e) e.scrollTop = top
+  /** The view its entry was last asked for, as the editor saw it (and that it now has). */
+  asked(id: string): string | undefined {
+    return this.edits.get(id)?.asked
   }
 
-  scrollOf(id: string): number | null {
-    return this.edits.get(id)?.scrollTop ?? null
+  setAsked(id: string, view: string): void {
+    const e = this.edits.get(id)
+    if (e) e.asked = view
+  }
+
+  /** Where its editor was scrolled (kept while it's unmounted). */
+  setScroll(id: string, snapshot: unknown): void {
+    const e = this.edits.get(id)
+    if (e) e.scroll = snapshot
+  }
+
+  scrollOf(id: string): unknown {
+    return this.edits.get(id)?.scroll ?? null
   }
 
   /** Its text differs from its base, or no longer does. */
