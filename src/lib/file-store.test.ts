@@ -109,6 +109,20 @@ describe("FileStore", () => {
     expect(s.get("a")).toBeUndefined() // unpinned: evictable again
   })
 
+  it("a read that started before a save doesn't land after it (it reads again)", async () => {
+    const { read, pending } = reads()
+    const s = new FileStore(read, hl)
+    s.show("e", "/e")
+    pending.shift()!.resolve(text("v0"))
+    await tick()
+    s.refresh("e") // a read starts…
+    s.saved("e", "v1\n", { size: 3, mtimeMs: 9 }, "h1") // …a save lands…
+    pending.shift()!.resolve(text("v0", 5)) // …the old read answers with the old text
+    await tick()
+    expect(s.get("e")!.data).toMatchObject({ text: "v1\n" }) // not taken
+    expect(read).toHaveBeenCalledTimes(3) // read again instead
+  })
+
   it("leaving Edit: the view's line, taken once", () => {
     const { read } = reads()
     const s = new FileStore(read, hl)

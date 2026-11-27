@@ -59,8 +59,56 @@ const subscribeEdits = (fn: () => void) => edits.subscribe(fn)
 // CodeMirror and the editor load the first time a file enters Edit (their own chunk).
 const FileEditor = lazy(() => import("./file-editor"))
 
+// Read while it shows, the viewer or the editor: any change in its folder (a content-only one
+// too, on Linux) asks the store to re-read, every RELOAD_MS at most, a big file every
+// BIG_RELOAD_MS. A WSL file can't be watched (its share): its stamp is checked every WSL_POLL_MS.
+/** Keep entry `entryId`'s file read, and re-read as it changes, while it shows. */
+function useFollowFile(entryId: string): void {
+  const file = useStore((s) => s.objects[entryId]) as FileEntry | undefined
+  const platform = useStore((s) => s.platform)
+  const path = file?.path ?? ""
+  const wsl = file?.wsl
+  const dir = file ? placeOf(file).path : ""
+  const big = useSyncExternalStore(subscribeFiles, () => {
+    const d = files.get(entryId)?.data
+    return (d && "size" in d ? d.size : 0) > HIGHLIGHT_MAX
+  })
+  useEffect(() => {
+    if (!path) return
+    files.show(entryId, path, wsl)
+    return () => files.hide(entryId) // it may be evicted from now on, not while it shows
+  }, [entryId, path, wsl])
+  useEffect(() => {
+    if (!dir) return
+    if (wsl) {
+      const t = setInterval(() => files.refresh(entryId), WSL_POLL_MS)
+      return () => clearInterval(t)
+    }
+    if (!isAbsoluteHostPath(dir, platform)) return
+    const owner = `file:${entryId}`
+    watches.set(owner, [dir], true) // its content changes too (an agent editing it in place)
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const off = ipc.onFsChanged((dirs, content) => {
+      if ((!dirs.includes(dir) && !content.includes(dir)) || timer) return
+      timer = setTimeout(
+        () => {
+          timer = undefined
+          files.refresh(entryId)
+        },
+        big ? BIG_RELOAD_MS : RELOAD_MS,
+      )
+    })
+    return () => {
+      off()
+      clearTimeout(timer)
+      watches.set(owner, [])
+    }
+  }, [dir, wsl, platform, entryId, big])
+}
+
 /** A file entry in its pane: the file's view, or its editor while it's in Edit. */
 export function FileView({ entryId, tabId }: { entryId: string; tabId: string }) {
+  useFollowFile(entryId)
   const editing = useSyncExternalStore(subscribeEdits, () => !!edits.get(entryId))
   const path = useStore((s) => (s.objects[entryId] as FileEntry | undefined)?.path ?? "")
   if (!editing) return <FileViewer entryId={entryId} tabId={tabId} />
@@ -110,15 +158,6 @@ function FileViewer({ entryId, tabId }: { entryId: string; tabId: string }) {
   const shown = useSyncExternalStore(subscribeFiles, () => files.get(entryId) ?? EMPTY)
   const data = shown.data
   const diff = shown.diff
-  useEffect(() => {
-    if (!path) return
-    files.show(entryId, path, wsl)
-    return () => files.hide(entryId) // it may be evicted from now on, not while it shows
-  }, [entryId, path, wsl])
-
-  // Watched while it shows; any change in its folder (a content-only one too, on Linux) asks
-  // the store to re-read: every RELOAD_MS at most, a big file every BIG_RELOAD_MS. A WSL file
-  // can't be watched (its share): its stamp is checked every WSL_POLL_MS while it shows.
   const dir = file ? placeOf(file).path : ""
 
   // Its git status: its folder's repo (the folder tabs' own poll; the focused terminal's when
@@ -163,33 +202,6 @@ function FileViewer({ entryId, tabId }: { entryId: string; tabId: string }) {
   const showPreview = !showDiff && canPreview && asked !== "source"
   const view: ViewName = showDiff ? "diff" : showPreview ? "preview" : "source"
   const lines = showDiff ? diff!.html : shown.lines
-  const big = (data && "size" in data ? data.size : 0) > HIGHLIGHT_MAX
-  useEffect(() => {
-    if (!dir) return
-    if (wsl) {
-      const t = setInterval(() => files.refresh(entryId), WSL_POLL_MS)
-      return () => clearInterval(t)
-    }
-    if (!isAbsoluteHostPath(dir, platform)) return
-    const owner = `file:${entryId}`
-    watches.set(owner, [dir], true) // its content changes too (an agent editing it in place)
-    let timer: ReturnType<typeof setTimeout> | undefined
-    const off = ipc.onFsChanged((dirs, content) => {
-      if ((!dirs.includes(dir) && !content.includes(dir)) || timer) return
-      timer = setTimeout(
-        () => {
-          timer = undefined
-          files.refresh(entryId)
-        },
-        big ? BIG_RELOAD_MS : RELOAD_MS,
-      )
-    })
-    return () => {
-      off()
-      clearTimeout(timer)
-      watches.set(owner, [])
-    }
-  }, [dir, wsl, platform, entryId, big])
 
   // The lines in view (and a margin), from the scroll position, read once a frame at most.
   const scrollRef = useRef<HTMLDivElement>(null)

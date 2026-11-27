@@ -49,6 +49,7 @@ interface Entry extends FileShown {
   diffTimer?: ReturnType<typeof setTimeout> // a re-read waiting out DIFF_MIN_MS
   diffWant: DiffWant | null // the latest diff asked for
   diffReading: boolean // a diff read in flight: a newer key waits for it
+  savedAt: number // bumped by a save: a read that started before it is stale when it lands
 }
 
 type Read = (path: string, wsl?: WslContext, since?: FileStamp) => Promise<FileData>
@@ -107,6 +108,7 @@ export class FileStore {
         diffReading: false,
         reading: false,
         again: false,
+        savedAt: 0,
         highlighted: null,
       }
     }
@@ -262,6 +264,7 @@ export class FileStore {
   saved(id: string, text: string, stamp: FileStamp, hash: string): void {
     const e = this.files.get(id)
     if (!e) return
+    e.savedAt++
     e.stamp = stamp
     e.data = { kind: "text", text, truncated: false, size: stamp.size, stamp, hash, editable: true }
     if (text !== e.highlighted) void this.highlightNow(id, e, text)
@@ -280,11 +283,17 @@ export class FileStore {
 
   private async readNow(id: string, e: Entry): Promise<void> {
     e.reading = true
+    const savedAt = e.savedAt
     try {
       const d = await this.read(e.path, e.wsl, e.data ? e.stamp : undefined).catch(
         (err): FileData => ({ kind: "error", message: String(err) }),
       )
       if (this.files.get(id) !== e) return // closed or reused meanwhile
+      // Saved meanwhile: this read is of the file before the save; the next one is current.
+      if (e.savedAt !== savedAt) {
+        e.again = true
+        return
+      }
       if (d.kind !== "same") {
         e.stamp = d.stamp
         e.data = d

@@ -6,6 +6,7 @@ import {
   Compartment,
   EditorState,
   Text,
+  Transaction,
   type Extension,
   type StateEffect,
   type TransactionSpec,
@@ -25,7 +26,7 @@ import { search } from "@codemirror/search"
 import { languages } from "@codemirror/language-data"
 import { useStore } from "../store"
 import { edits, type EditShown } from "../lib/edit-store"
-import { detectIndent, keepsTrailingSpace, saveCleanup } from "../lib/editor-text"
+import { changedRange, detectIndent, keepsTrailingSpace, saveCleanup } from "../lib/editor-text"
 import { editorKeymap, highlighting, indentFor } from "../lib/editor-cm"
 import { shortCwd } from "../lib/session-label"
 import { files } from "../lib/file-store"
@@ -148,7 +149,32 @@ function stopEditing(id: string): void {
   edits.stop(id)
 }
 
+// An agent writes the file while it's in Edit (docs/design/FILE_EDITING.md, "Files that change
+// on disk while editing"). With nothing unsaved the editor follows it: the new text goes in as
+// one change covering only what differs, kept out of undo, so the cursor and scroll stay where
+// they were. With unsaved text it stops following and says so; a deleted file says so too.
+/** Follow the file's latest read (lib/file-store) into its edit. */
+function follow(id: string): void {
+  const data = files.get(id)?.data
+  const base = edits.base(id)
+  const now = edits.get(id)
+  if (!data || !base || !now || now.saving) return // (a save in flight: its own write lands next)
+  if (data.kind === "error" && data.gone) return edits.note(id, { kind: "missing" })
+  if (data.kind !== "text" || !data.hash || data.hash === base.hash) return
+  flushDirty(id)
+  if (edits.get(id)?.dirty || data.editable === false) return edits.note(id, { kind: "changed" })
+  const next = edits.follow(id, data.text, data.hash)
+  if (!next) return
+  apply(id, (st) => {
+    const r = changedRange(st.doc.toString(), next.text)
+    return r ? { changes: r, annotations: Transaction.addToHistory.of(false) } : {}
+  })
+  const st = current(id)
+  if (st) refreshDirty(id, st, true)
+}
+
 const subscribe = (fn: () => void) => edits.subscribe(fn)
+const subscribeFiles = (fn: () => void) => files.subscribe(fn)
 const NOT_EDITING: EditShown = { dirty: false, saving: false, notice: null, mixed: false }
 
 /** The editor for entry `entryId` (its edit already started: lib/edit-store `start`). */
@@ -262,6 +288,10 @@ export default function FileEditor({
     if (asked === "diff" && now && !now.dirty && !now.saving) leaveRef.current()
   }, [asked, entryId])
   const leaveRef = useRef(() => {})
+
+  // Each new read of the file (the watcher, a tab coming back) is followed.
+  const read = useSyncExternalStore(subscribeFiles, () => files.get(entryId)?.data ?? null)
+  useEffect(() => follow(entryId), [read, entryId])
 
   // The setting is the width for files that show none of their own.
   useEffect(() => {

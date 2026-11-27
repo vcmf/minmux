@@ -1,10 +1,12 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest"
 import { act, render, screen, fireEvent, waitFor } from "@testing-library/react"
 import { EditorView } from "@codemirror/view"
+import { undoDepth } from "@codemirror/commands"
 import FileEditor from "./file-editor"
 import { useStore } from "../store"
 import { ipc } from "../lib/ipc"
 import { edits } from "../lib/edit-store"
+import { files } from "../lib/file-store"
 import { resetStore, testShell } from "../test/helpers"
 import type { FileData, SaveResult } from "../lib/file-tab"
 
@@ -217,5 +219,51 @@ describe("FileEditor", () => {
     finish(saved())
     await waitFor(() => expect(settled).toBe(true))
     expect(edits.isUnsaved(entryId)).toBe(false)
+  })
+
+  describe("an agent writing the file while it's in Edit", () => {
+    const agentWrites = async (t: string, hash: string) => {
+      vi.mocked(ipc.readFile).mockResolvedValue(text(t, hash))
+      await act(async () => {
+        files.refresh(entryId)
+        await new Promise((r) => setTimeout(r, 0))
+      })
+    }
+    const open = async (raw: string) => {
+      vi.mocked(ipc.readFile).mockResolvedValue(text(raw, "h0"))
+      await mount(raw)
+      act(() => files.show(entryId, "/w/a.ts"))
+      await waitFor(() => expect(files.get(entryId)?.data).toMatchObject({ hash: "h0" }))
+    }
+    afterEach(() => files.forget(entryId))
+
+    it("nothing unsaved: it follows, cursor in place, and the change isn't undone by Cmd-Z", async () => {
+      await open("one\ntwo\n")
+      act(() => view().dispatch({ selection: { anchor: 5 } })) // on "two"
+      await agentWrites("zero\none\ntwo\n", "h1")
+      await waitFor(() => expect(doc()).toBe("zero\none\ntwo\n"))
+      expect(view().state.doc.lineAt(view().state.selection.main.head).text).toBe("two")
+      expect(edits.base(entryId)?.hash).toBe("h1")
+      expect(document.querySelector(".file-editor-dot")).toBeNull()
+      expect(undoDepth(view().state)).toBe(0)
+    })
+
+    it("unsaved text: it stops following and says the file changed", async () => {
+      await open("one\n")
+      type("mine\n")
+      await agentWrites("theirs\n", "h1")
+      await screen.findByText("The file changed on disk since you opened it.")
+      expect(doc()).toBe("one\nmine\n")
+    })
+
+    it("deleted: it says so", async () => {
+      await open("one\n")
+      vi.mocked(ipc.readFile).mockResolvedValue({ kind: "error", message: "gone", gone: true })
+      await act(async () => {
+        files.refresh(entryId)
+        await new Promise((r) => setTimeout(r, 0))
+      })
+      await screen.findByText("The file was deleted.")
+    })
   })
 })

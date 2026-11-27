@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
 import {
   applyChanges,
+  changedRange,
   detectIndent,
   fromDisk,
   keepsTrailingSpace,
@@ -108,6 +109,29 @@ describe("saveCleanup", () => {
   it("edits are in order and don't overlap", () => {
     const ch = saveCleanup("a \nb \n\n", new Set())
     for (let i = 1; i < ch.length; i++) expect(ch[i]!.from).toBeGreaterThanOrEqual(ch[i - 1]!.to)
+  })
+})
+
+describe("changedRange", () => {
+  const roundTrip = (a: string, b: string) => {
+    const r = changedRange(a, b)
+    return r ? applyChanges(a, [r]) : a
+  }
+  it("just the part that changed", () => {
+    expect(changedRange("abcdef", "abXYef")).toEqual({ from: 2, to: 4, insert: "XY" })
+    expect(changedRange("a\nb\n", "a\nb\nc\n")).toEqual({ from: 4, to: 4, insert: "c\n" })
+    expect(changedRange("same", "same")).toBeNull()
+  })
+  it("round-trips appends, deletions, repeats and empties", () => {
+    for (const [a, b] of [
+      ["aaa", "aaaa"],
+      ["aaaa", "aa"],
+      ["", "x"],
+      ["x", ""],
+      ["abcabc", "abc"],
+      ["line1\nline2\n", "line0\nline1\nline2\n"],
+    ] as const)
+      expect(roundTrip(a, b)).toBe(b)
   })
 })
 

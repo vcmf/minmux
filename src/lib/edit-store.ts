@@ -216,6 +216,27 @@ export class EditStore {
     this.publish(id)
   }
 
+  /** The file changed on disk (an agent wrote it): its new text is the base now (the editor
+   *  follows it while nothing is unsaved). */
+  follow(id: string, raw: string, hash: string): EditBase | null {
+    const e = this.edits.get(id)
+    if (!e) return null
+    const text = fromDisk(raw)
+    e.base = { ...text, hash }
+    e.mixed = text.mixed
+    e.notice = null
+    this.publish(id)
+    return e.base
+  }
+
+  /** Show `notice` (a change on disk with unsaved text, a deleted file), unless it already is. */
+  note(id: string, notice: EditNotice): void {
+    const e = this.edits.get(id)
+    if (!e || e.notice?.kind === notice.kind) return
+    e.notice = notice
+    this.publish(id)
+  }
+
   /** Drop a notice (the bar's ×). */
   dismiss(id: string): void {
     const e = this.edits.get(id)
