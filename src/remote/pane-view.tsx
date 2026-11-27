@@ -67,7 +67,7 @@ export function PaneView({
   }, [chat.items, out])
 
   const agentName = AGENT[pane.agent ?? ""] ?? "The agent"
-  const asking = pane.kind === "agent" && pane.status === "waiting"
+  const asking = !!pane.asking
   const canSend = permission !== "view" && online && pane.started && !asking
 
   const submit = (e: React.FormEvent) => {

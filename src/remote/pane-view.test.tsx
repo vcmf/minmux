@@ -84,9 +84,18 @@ describe("PaneView", () => {
   })
 
   it("while the agent asks, says so and doesn't send", () => {
-    setup({ pane: pane({ status: "waiting", detail: "Claude needs your permission" }) })
+    setup({
+      pane: pane({ status: "waiting", asking: true, detail: "Claude needs your permission" }),
+    })
     expect(screen.getByText(/Claude is asking something/)).toBeInTheDocument()
     expect(screen.getByText("Send")).toBeDisabled()
+  })
+
+  it("waiting for a message (the idle reminder) still lets you send", () => {
+    setup({ pane: pane({ status: "waiting" }) })
+    fireEvent.change(screen.getByLabelText("Message"), { target: { value: "next step" } })
+    expect(screen.getByText("Send")).not.toBeDisabled()
+    expect(screen.queryByText(/is asking something/)).toBeNull()
   })
 
   it("view-only and unavailable panes", () => {

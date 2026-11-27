@@ -41,7 +41,14 @@ function resultText(content: unknown): string {
 }
 
 export function claudeLine(o: Record<string, unknown>, log: ChatLog, lineNo: number): void {
-  if (o.isSidechain === true || o.isMeta === true) return
+  // Sub-agents, meta lines, and /compact's summary (written as a user line nobody typed).
+  if (
+    o.isSidechain === true ||
+    o.isMeta === true ||
+    o.isCompactSummary === true ||
+    o.isVisibleInTranscriptOnly === true
+  )
+    return
   const type = o.type
   if (type !== "user" && type !== "assistant") return
   const msg = (o.message ?? {}) as { content?: unknown }

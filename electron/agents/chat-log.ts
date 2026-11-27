@@ -59,6 +59,7 @@ export class ChatLog {
 export interface ChatReader {
   read(): Promise<ChatItem[]>
   readonly log: ChatLog
+  restarted?: boolean // read() started over: send everything as a fresh start
   close(): void
 }
 
@@ -69,7 +70,9 @@ const pause = () => new Promise<void>((r) => setImmediate(r))
 
 /** An append-only JSONL transcript, read from where it left off. */
 export class JsonlChat implements ChatReader {
-  readonly log = new ChatLog()
+  log = new ChatLog()
+  /** Set when the transcript was rewritten from the start: the feed sends a fresh start. */
+  restarted = false
   private offset = -1 // -1: not read yet (the first read may start near the end)
   private rest: string[] = [] // a line still being written, in pieces (never re-joined per chunk)
   private restLen = 0
@@ -108,7 +111,10 @@ export class JsonlChat implements ChatReader {
         this.offset = Math.max(0, size - FIRST_READ_MAX)
         skipFirst = this.offset > 0 // started mid-line: drop the partial first one
       } else if (size < this.offset) {
-        // Rewritten from the start (rare): read it again.
+        // Rewritten from the start (rare): read it again, into a fresh conversation (ids that fall
+        // back to line numbers would land on old items otherwise).
+        this.log = new ChatLog()
+        this.restarted = true
         this.offset = 0
         this.rest = []
         this.restLen = 0

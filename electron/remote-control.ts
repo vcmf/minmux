@@ -10,6 +10,7 @@ import type { RemoteView } from "../src/lib/remote-view"
 import type { AgentKind } from "../src/lib/agent-graph"
 import type { ChatLead } from "./agents/chat"
 import { Sender } from "./remote/typing"
+import { WaitTracker } from "./remote/waits"
 import { DeviceTable, PENDING_MS, type SetPinResult } from "./remote/devices"
 import { RemoteHost, type Decision, type HostProc } from "./remote/host-client"
 
@@ -29,18 +30,6 @@ export interface RemoteControlDeps {
   /** Writes to a pane's PTY as typing would; false when there's no live one. */
   writePty?: (pane: string, data: string) => boolean
 }
-
-// Hook events that mean the agent is asking (a dialog is up), and ones that mean it moved on.
-const ASKS = new Set(["Notification", "PermissionRequest"])
-const MOVES_ON = new Set([
-  "UserPromptSubmit",
-  "PreToolUse",
-  "PostToolUse",
-  "PermissionReplied",
-  "Stop",
-  "SessionStart",
-  "SessionEnd",
-])
 
 /** 7420 for the installed app, 7421 for a dev build, and one of 7430–7489 per other profile. */
 export function autoPort(profile: string): number {
@@ -155,7 +144,7 @@ export function setupRemoteControl(deps: RemoteControlDeps) {
   // The desktop window is gone (⌘W on macOS keeps sessions running): the list goes stale.
   let lastPanes: RemotePanes | null = null
   const windowClosed = () => {
-    if (lastPanes) host.setPanes({ ...lastPanes, stale: true })
+    if (lastPanes) host.setPanes({ ...annotated(lastPanes), stale: true })
   }
 
   /** The renderer's pane list (pushed only while a client is connected). */
@@ -163,7 +152,7 @@ export function setupRemoteControl(deps: RemoteControlDeps) {
     const p = panes as RemotePanes | null
     if (!p || !Array.isArray(p.panes) || !Array.isArray(p.tabs)) return
     lastPanes = { tabs: p.tabs, panes: p.panes, stale: false }
-    host.setPanes(lastPanes)
+    host.setPanes(annotated(lastPanes))
     pushLeads()
   }
 
@@ -171,7 +160,7 @@ export function setupRemoteControl(deps: RemoteControlDeps) {
   const sender = new Sender({
     pane: (id) => lastPanes?.panes.find((p) => p.id === id),
     write: (pane, data) => deps.writePty?.(pane, data) ?? false,
-    asking: (pane) => asking.has(pane),
+    asking: (pane) => waits.asking(pane),
     // Main decides, not the worker: the device must still exist, be unlocked and able to send.
     allowed: async (deviceId) => {
       const p = (await devices()).permissionOf(deviceId)
@@ -179,9 +168,31 @@ export function setupRemoteControl(deps: RemoteControlDeps) {
     },
   })
 
-  // Panes whose agent is asking right now, from hook events as they land (fresher than the
-  // renderer's throttled pane list): a message's Enter must never answer the agent's dialog.
-  const asking = new Set<string>()
+  // Which panes' agents show a dialog right now, from hook events as they land (fresher than the
+  // renderer's throttled pane list): a message's Enter must never answer one.
+  const waits = new WaitTracker()
+  let askingNow = ""
+  /** The pane list as devices see it: each pane's asking state is main's. */
+  const annotated = (p: RemotePanes): RemotePanes => ({
+    ...p,
+    panes: p.panes.map((x) => {
+      const w = waits.waits(x.id)[0]
+      const { asking: _old, ...rest } = x
+      void _old
+      return w ? { ...rest, asking: true, ...(w.message ? { detail: w.message } : {}) } : rest
+    }),
+  })
+  /** Re-sends the list when a pane's asking state changed. */
+  const askingChanged = () => {
+    if (!lastPanes) return
+    const now = lastPanes.panes
+      .filter((p) => waits.asking(p.id))
+      .map((p) => p.id)
+      .join(",")
+    if (now === askingNow) return
+    askingNow = now
+    host.setPanes(annotated(lastPanes))
+  }
 
   // Each listed pane's lead agent session, for the chat view (sent only while someone's connected).
   let lastLeads = ""
@@ -203,12 +214,9 @@ export function setupRemoteControl(deps: RemoteControlDeps) {
   }
 
   /** A batch of agent hook events: leads may have moved; the panes' transcripts grew. */
-  const agentEvents = (events: { paneId?: string; agentId?: string; event?: string }[]) => {
-    for (const ev of events) {
-      if (!ev.paneId || ev.agentId) continue // the pane's own session, not its sub-agents
-      if (ASKS.has(ev.event ?? "")) asking.add(ev.paneId)
-      else if (MOVES_ON.has(ev.event ?? "")) asking.delete(ev.paneId)
-    }
+  const agentEvents = (events: Parameters<WaitTracker["apply"]>[0][]) => {
+    for (const ev of events) waits.apply(ev) // always: a dialog may be up before anyone connects
+    askingChanged()
     if (!host.wanted) return
     pushLeads()
     host.nudge([...new Set(events.flatMap((e) => (e.paneId ? [e.paneId] : [])))])
@@ -249,6 +257,17 @@ export function setupRemoteControl(deps: RemoteControlDeps) {
     apply,
     windowClosed,
     agentEvents,
+    /** Typed at the desktop into a pane: an answer key closes its dialogs. Per keystroke: O(1). */
+    localInput: (pane: string, data: string) => {
+      if (!waits.any) return
+      waits.localInput(pane, data)
+      askingChanged()
+    },
+    /** A pane's process ended or it closed. */
+    paneGone: (pane: string) => {
+      waits.drop(pane)
+      askingChanged()
+    },
     dispose: () => {
       host.dispose()
       store.close() // quitting: a change still queued is written now, not lost

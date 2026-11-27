@@ -148,7 +148,7 @@ describe("setupRemoteControl", () => {
         },
       ],
     })
-    rc.agentEvents([{ paneId: "p1" }])
+    rc.agentEvents([{ paneId: "p1", event: "PostToolUse" }])
     // Nobody connected: only the empty list a new worker starts with.
     expect(p.sent.filter((m) => (m as { t: string }).t === "leads")).toEqual([
       { t: "leads", leads: {} },
@@ -158,7 +158,11 @@ describe("setupRemoteControl", () => {
       t: "leads",
       leads: { p1: { agent: "claude", sessionId: "s1", files: ["/t.jsonl", "/t.jsonl.alt"] } },
     })
-    rc.agentEvents([{ paneId: "p1" }, { paneId: "p1" }, {}])
+    rc.agentEvents([
+      { paneId: "p1", event: "PostToolUse" },
+      { paneId: "p1", event: "PostToolUse" },
+      { event: "Stop" },
+    ])
     expect(p.sent).toContainEqual({ t: "nudge", panes: ["p1"] })
 
     // An unknown device can't type; an approved one can.
@@ -189,6 +193,43 @@ describe("setupRemoteControl", () => {
       ["p1", "\x1b[200~go\x1b[201~"],
       ["p1", "\r"],
     ])
+    rc.dispose()
+  })
+
+  it("a permission prompt marks the pane asking for devices; the idle reminder doesn't", () => {
+    settings = JSON.stringify({ remote: { enabled: true } })
+    const rc = make()
+    rc.apply()
+    const p = forks[0]!
+    rc.setPanes({
+      tabs: [],
+      panes: [{ id: "p1", tab: "t", title: "a", kind: "agent", status: "idle", started: true }],
+    })
+    const lastPanes = () =>
+      (
+        p.sent.filter((m) => (m as { t: string }).t === "panes").at(-1) as {
+          panes: { panes: { asking?: boolean; detail?: string }[] }
+        }
+      ).panes.panes[0]!
+    rc.agentEvents([{ paneId: "p1", event: "Notification", notificationType: "idle_prompt" }])
+    expect(lastPanes().asking).toBeUndefined()
+    rc.agentEvents([
+      {
+        paneId: "p1",
+        event: "Notification",
+        notificationType: "permission_prompt",
+        message: "Claude needs your permission to use Bash",
+      },
+    ])
+    expect(lastPanes()).toMatchObject({
+      asking: true,
+      detail: "Claude needs your permission to use Bash",
+    })
+    rc.localInput("p1", "\x1b") // Esc at the desktop
+    expect(lastPanes().asking).toBeUndefined()
+    rc.agentEvents([{ paneId: "p1", event: "PermissionRequest", toolKey: "k" }])
+    rc.paneGone("p1")
+    expect(lastPanes().asking).toBeUndefined()
     rc.dispose()
   })
 })

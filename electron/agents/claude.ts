@@ -99,6 +99,7 @@ export function normalizeHookEvent(raw: unknown, paneId?: string): AgentEvent | 
     toolKey: toolName && r.tool_input !== undefined ? toolCallKey(toolName, ti) : undefined,
     filePath,
     message: str(r.message) ?? str(r.last_assistant_message),
+    notificationType: str(r.notification_type),
     worktreePath: str(r.worktree_path),
     baseBranch: str(r.base_branch),
     transcriptPath: str(r.transcript_path),

@@ -30,7 +30,9 @@ export const firstWrite = (text: string, paste: boolean): string =>
 export function refusal(pane: RemotePane | undefined, asking = false): SendRefusal | null {
   if (!pane) return "no-pane"
   if (!pane.started) return "not-started"
-  if (pane.kind === "agent" && (asking || pane.status === "waiting")) return "waiting"
+  // Main's wait tracker decides (the pane list's "waiting" also covers the idle reminder, when
+  // a message is exactly what the agent wants).
+  if (asking || pane.asking) return "waiting"
   return null
 }
 

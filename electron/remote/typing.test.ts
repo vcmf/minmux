@@ -44,11 +44,11 @@ describe("typing a phone's message", () => {
   })
 
   it("refuses while the agent is asking; holds Enter if it started asking meanwhile", async () => {
-    expect(await setup(pane({ status: "waiting" })).s.send("d", "p", "x", "1")).toEqual({
+    expect(await setup(pane({ asking: true })).s.send("d", "p", "x", "1")).toEqual({
       ok: false,
       reason: "waiting",
     })
-    const held = setup(pane({ paste: true }), { status: "waiting" })
+    const held = setup(pane({ paste: true }), { asking: true })
     expect(await held.s.send("d", "p", "x", "1")).toEqual({ ok: false, reason: "held" })
     expect(held.writes).toEqual(["\x1b[200~x\x1b[201~"]) // no Enter
   })
@@ -57,6 +57,7 @@ describe("typing a phone's message", () => {
     expect(refusal(undefined)).toBe("no-pane")
     expect(refusal(pane({ started: false }))).toBe("not-started")
     expect(refusal(pane({ kind: "shell", status: "waiting" }))).toBeNull()
+    expect(refusal(pane({ status: "waiting" }))).toBeNull() // the idle reminder: a message is welcome
     expect(await setup(pane()).s.send("d", "p", "  \x1b ", "1")).toEqual({
       ok: false,
       reason: "empty",

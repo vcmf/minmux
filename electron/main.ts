@@ -945,6 +945,7 @@ function startPty(sender: Electron.WebContents, opts: SpawnOpts, spec: StartSpec
       untrackMeta(opts.id) // shell (and any agent in it) gone — drop the accent
       agentProcs.forget(opts.id)
       sessionLedger().drop(opts.id) // …and nothing to resume there (no-op during a quit)
+      remoteControl?.paneGone(opts.id)
     }
     livePtys.delete(live)
     markExited()
@@ -1164,6 +1165,7 @@ function registerIpc() {
     // Still preparing: swallowed (see pending-spawns.ts), never replayed into the new ssh.
     if (typeof data !== "string" || pendingSpawns.pending(id)) return
     sessions.get(id)?.proc.write(data)
+    remoteControl?.localInput(id, data) // an answer key closes the pane's dialogs (O(1) if none)
   })
   ipcMain.on("pty:resize", (_e, id: string, cols: number, rows: number) => {
     if (pendingSpawns.resize(id, cols, rows)) return // applied when it starts
@@ -1179,6 +1181,7 @@ function registerIpc() {
   ipcMain.on("pty:kill", (_e, id: string) => {
     untrackMeta(id, false) // the pane is gone — nothing left to accent
     sessionLedger().drop(id) // closed on purpose — don't resume its Claude session
+    remoteControl?.paneGone(id)
     pendingSpawns.kill(id) // still preparing: it must not start at all
     const rec = sessions.get(id)
     if (!rec) return

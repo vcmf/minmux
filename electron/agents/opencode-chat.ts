@@ -60,7 +60,6 @@ export function opencodeItem(row: Row): ChatItem | null {
 
 export class OpenCodeChat implements ChatReader {
   readonly log = new ChatLog()
-  private db: DatabaseSync | null = null
   private seen = new Map<string, number>() // part id → its time_updated (changed parts only)
 
   constructor(
@@ -69,12 +68,21 @@ export class OpenCodeChat implements ChatReader {
   ) {}
 
   async read(): Promise<ChatItem[]> {
-    // OpenCode may hold a lock for a moment (a checkpoint): wait for it like opencode-history.
-    this.db ??= new DatabaseSync(this.file, { readOnly: true, timeout: BUSY_WAIT_MS })
+    // Open, read, close (OpenCode keeps writing it, like opencode-history), waiting out a lock.
+    const db = new DatabaseSync(this.file, { readOnly: true, timeout: BUSY_WAIT_MS })
+    try {
+      this.readFrom(db)
+    } finally {
+      db.close()
+    }
+    return this.log.takeChanged()
+  }
+
+  private readFrom(db: DatabaseSync): void {
     const recent = (
-      this.db.prepare(RECENT_SQL).all(this.sessionId) as { id: string; t: number }[]
+      db.prepare(RECENT_SQL).all(this.sessionId) as { id: string; t: number }[]
     ).reverse()
-    const data = this.db.prepare(DATA_SQL)
+    const data = db.prepare(DATA_SQL)
     const keep = new Map<string, number>()
     for (const { id, t } of recent) {
       keep.set(id, t)
@@ -84,13 +92,9 @@ export class OpenCodeChat implements ChatReader {
       if (item) this.log.upsert(item)
     }
     this.seen = keep // only the parts still among the newest
-    return this.log.takeChanged()
   }
 
-  close(): void {
-    this.db?.close()
-    this.db = null
-  }
+  close(): void {}
 }
 
 export const opencodeChat = (sessionId: string): ChatReader => new OpenCodeChat(sessionId)

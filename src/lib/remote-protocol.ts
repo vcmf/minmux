@@ -29,6 +29,7 @@ export interface RemotePane {
   cwd?: string
   started: boolean // false: a restored pane in a tab the desktop hasn't shown yet
   paste?: boolean // its program turned on bracketed paste (how a message is typed into it)
+  asking?: boolean // its agent shows a dialog now (main's wait tracker; not the idle reminder)
 }
 
 export interface RemoteTab {

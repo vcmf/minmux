@@ -255,10 +255,30 @@ never throw out of the reader.
 A shell pane, an ssh pane, or an agent pane before its first hook opens in Terminal view (from
 step 3; in step 2 it shows a placeholder).
 
+## Wait tracker (step 2)
+
+Moved here from step 4 (2026-11-27, with the user): sending needs to know when an agent shows a
+dialog, or a message's Enter could answer it. `electron/remote/waits.ts`, pure, its own test
+matrix, apart from the renderer's reducer and its known flaw. Main feeds it every hook event
+(always, not only while a device is connected), the desktop's answer keys, and pane ends.
+
+- Opens on a permission prompt (Claude's Notification of kind `permission_prompt`, or an unknown
+  kind that isn't the idle reminder; Codex's and OpenCode's PermissionRequest) and on a question
+  tool starting (PreToolUse of AskUserQuestion, request_user_input, question), per agent (the
+  session or a sub-agent) and per tool call when known.
+- Closes when that agent moves on: the call finishes (PostToolUse), another call starts
+  (Codex sends nothing when answered), PermissionReplied, SubagentStop; for the pane on Stop,
+  UserPromptSubmit, SessionStart/End and the idle reminder; when someone at the desktop presses
+  an answer key (Enter, Esc, a digit, y/n: Esc denies a Claude prompt without any hook); when the
+  pane closes.
+- The pane list devices get carries `asking` (and the prompt's message) from it. The desktop's
+  "needs input" also covers the idle reminder, when a message is exactly what the agent wants, so
+  it no longer gates sending.
+
 ## Sending a message (step 2)
 
-- **Refused while the pane is waiting** (agent graph says waiting, or the screen shows a
-  dialog once the mirror exists). The phone shows "Claude is asking something: answer it on the
+- **Refused while the agent shows a dialog** (the wait tracker; the screen check joins in
+  step 4). The phone shows "Claude is asking something: answer it on the
   desktop" until step 4 brings answer buttons. Reason: the paste's Enter would confirm the
   highlighted option of a permission dialog, usually "Yes".
 - `paste` on (the foreground program enabled bracketed paste): `ESC[200~` + text + `ESC[201~`,
@@ -295,11 +315,8 @@ step 3; in step 2 it shows a placeholder).
 
 ## Answering (step 4)
 
-- **Wait tracker in main.** A pure module with its own test matrix (`lib/remote-waits` or
-  `electron/remote-waits`): per pane, the current wait `{ waitId, agent, question, toolKey? }`
-  from hook events, cleared by the agent's resolving events, by new output after the answer, and
-  by the screen no longer showing the dialog. Built separately from the renderer's reducer and its
-  known flaw (ARCHITECTURE §9a), sharing tests where they agree.
+- **Wait tracker in main**: built in step 2 (above). Step 4 gives each wait a `waitId` and adds
+  the screen as a further way to close one.
 - **Claude** needs the `PermissionRequest` hook added to its armed events (it has `Notification`
   only today, which carries a message and no choices). The hook keeps acking at once; it never
   decides.

@@ -44,6 +44,7 @@ const panes: RemotePanes = {
       kind: "agent",
       agent: "claude",
       status: "waiting",
+      asking: true,
       detail: "Claude needs your permission",
       started: true,
     },

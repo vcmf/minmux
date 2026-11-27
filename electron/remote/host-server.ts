@@ -470,13 +470,12 @@ export function createHostServer(d: HostServerDeps) {
     poll: ReturnType<typeof setInterval> | null
     idle: ReturnType<typeof setTimeout> | null
     reading: Promise<void> | null // one read at a time; callers share it
-    errors: number // consecutive failed reads
-    failed: boolean // gave up: FEED_MAX_ERRORS in a row
+    errors: number // consecutive failed reads (the page is told at FEED_MAX_ERRORS)
   }
   let leads: Record<string, ChatLead> = {}
   const feeds = new Map<string, Feed>()
   const leadKey = (l: ChatLead) => `${l.agent}:${l.sessionId}`
-  const FEED_MAX_ERRORS = 5 // a locked database or a passing fs error is retried, not latched
+  const FEED_MAX_ERRORS = 5 // failed reads in a row before the page hears (reads go on)
 
   function closeFeed(pane: string) {
     const f = feeds.get(pane)
@@ -506,7 +505,6 @@ export function createHostServer(d: HostServerDeps) {
       idle: null,
       reading: null,
       errors: 0,
-      failed: false,
     }
     feeds.set(pane, f)
     return f
@@ -526,20 +524,26 @@ export function createHostServer(d: HostServerDeps) {
 
   /** Reads what's new and sends it to the watchers that have their fresh start. */
   function readFeed(pane: string, f: Feed): Promise<void> {
-    if (f.failed) return Promise.resolve()
     f.reading ??= (async () => {
       let changed: ChatItem[]
       try {
         changed = await f.reader.read()
-        f.errors = 0
       } catch {
-        if (++f.errors < FEED_MAX_ERRORS) return // next poll tries again
-        f.failed = true
-        for (const w of f.watchers)
-          sendTo(w, { t: "chat", pane, items: [], reset: true, unavailable: "error" })
+        // Tell the page after a few in a row, but never stop trying (a lock clears; a file comes).
+        if (++f.errors === FEED_MAX_ERRORS)
+          for (const w of f.ready)
+            sendTo(w, { t: "chat", pane, items: [], reset: true, unavailable: "error" })
         return
       }
-      if (feeds.get(pane) !== f || changed.length === 0) return
+      const recovered = f.errors >= FEED_MAX_ERRORS
+      f.errors = 0
+      if (feeds.get(pane) !== f) return
+      if (recovered || f.reader.restarted) {
+        f.reader.restarted = false
+        for (const w of f.ready) sendTo(w, tailOf(pane, f))
+        return
+      }
+      if (changed.length === 0) return
       for (const w of f.ready) sendTo(w, { t: "chat", pane, items: changed })
     })().finally(() => (f.reading = null))
     return f.reading
@@ -559,9 +563,9 @@ export function createHostServer(d: HostServerDeps) {
     if (f.reading) await f.reading // one already running when we came: what it read is ours too
     // The pane moved to another session (or the watch ended) while reading: that one answers.
     if (feeds.get(pane) !== f || !c.watching.has(pane)) return
-    if (f.failed)
-      return sendTo(c, { t: "chat", pane, items: [], reset: true, unavailable: "error" })
-    sendTo(c, tailOf(pane, f))
+    if (f.errors >= FEED_MAX_ERRORS)
+      sendTo(c, { t: "chat", pane, items: [], reset: true, unavailable: "error" })
+    else sendTo(c, tailOf(pane, f))
     f.ready.add(c)
   }
 
