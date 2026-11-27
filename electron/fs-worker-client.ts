@@ -2,8 +2,8 @@
 // A request unanswered for HUNG_MS is stuck on a dead mount: that request alone fails, the
 // worker is retired (no new requests; its other reads may still finish) and a fresh one takes
 // new requests. A retired worker is killed once nothing it holds can still finish. A process
-// blocked in a dead mount may not die even when killed, so at most MAX_RETIRED of them may be
-// waiting to exit; past that, requests fail fast instead of spawning more. A worker idle for
+// blocked in a dead mount may not die even when killed, so at most `maxRetired` of them (per
+// client: MAX_RETIRED, none for saves) may be waiting to exit; past that, requests fail fast. A worker idle for
 // IDLE_MS is shut down (unless it holds watchers). The files browser's folder reads and
 // watches never touch a possibly-dead path in main.
 //
@@ -34,6 +34,7 @@ type Pending = {
   reject: (e: Error) => void
   at: number
   hung?: boolean // failed as hung; its late reply is ignored
+  ended?: () => void // left its worker: answered, or the worker exited (see `track`)
 }
 
 /** One worker process and the requests it holds. */
@@ -42,6 +43,7 @@ type Worker = {
   pending: Map<number, Pending>
   retired: boolean
   killed?: boolean
+  afterExit?: (() => void)[] // `ended` of requests failed before the process went (see end)
 }
 
 const fail = (code: string) => Object.assign(new Error(code), { code })
@@ -72,16 +74,37 @@ export class FsWorkerClient {
     private readonly spawn: () => WorkerProc,
     private readonly hungMs = HUNG_MS,
     private readonly idleMs = IDLE_MS,
+    private readonly maxRetired = MAX_RETIRED,
   ) {}
 
   call(req: FsCall): Promise<FsResult> {
     return new Promise<FsResult>((resolve, reject) => this.send({ req, resolve, reject, at: 0 }))
   }
 
+  // A hung write's `ended` waits for its process to go, which a dead mount may never let happen.
+  /** A call, and when it can no longer run: answered, or its worker's process gone. */
+  track(req: FsCall): { result: Promise<FsResult>; ended: Promise<void> } {
+    let ended!: () => void
+    const left = new Promise<void>((r) => (ended = r))
+    const result = new Promise<FsResult>((resolve, reject) =>
+      this.send({
+        req,
+        resolve,
+        reject: (e) => {
+          if ((e as { code?: string }).code === "EBUSY") ended() // never sent: no worker for it
+          reject(e)
+        },
+        at: 0,
+        ended,
+      }),
+    )
+    return { result, ended: left }
+  }
+
   /** Hand a request to the live worker (starting one if needed). */
   private send(p: Pending): void {
     const w = this.ensure()
-    if (!w) return p.reject(fail("EBUSY")) // too many stuck workers: don't add another
+    if (!w) return p.reject(fail("EBUSY")) // too many stuck workers, or none would start
     const id = this.nextId++
     p.at = Date.now()
     w.pending.set(id, p)
@@ -90,6 +113,11 @@ export class FsWorkerClient {
     try {
       w.proc.postMessage({ ...p.req, id })
     } catch {
+      // Never sent: a write says so (nothing written), rather than unknown.
+      if (p.req.op === "writefile") {
+        w.pending.delete(id)
+        p.reject(fail("EBUSY"))
+      }
       this.end(w, "EWORKER")
     }
   }
@@ -196,8 +224,14 @@ export class FsWorkerClient {
 
   private ensure(): Worker | null {
     if (this.live) return this.live
-    if (this.retired.size >= MAX_RETIRED) return null
-    const w: Worker = { proc: this.spawn(), pending: new Map(), retired: false }
+    if (this.retired.size >= this.maxRetired) return null
+    let proc: WorkerProc
+    try {
+      proc = this.spawn()
+    } catch {
+      return null // couldn't start one: the request fails as never sent
+    }
+    const w: Worker = { proc, pending: new Map(), retired: false }
     this.spawnedAt = Date.now()
     this.live = w
     w.proc.on("message", (msg) => {
@@ -217,6 +251,7 @@ export class FsWorkerClient {
       const p = w.pending.get(reply.id)
       if (!p) return
       w.pending.delete(reply.id)
+      p.ended?.()
       if (!p.hung) {
         if (reply.ok) p.resolve(reply.value)
         else p.reject(fail(reply.code))
@@ -226,9 +261,9 @@ export class FsWorkerClient {
     w.proc.on("exit", () => {
       this.retired.delete(w) // a retired one finally exited: room for another
       if (this.live === w)
-        this.end(w, "EWORKER") // crashed: fail what it held
+        this.end(w, "EWORKER", true) // crashed: fail what it held
       else for (const p of w.pending.values()) if (!p.hung) p.reject(fail("EWORKER"))
-      w.pending.clear()
+      this.gone(w)
     })
     return w
   }
@@ -268,7 +303,7 @@ export class FsWorkerClient {
 
   /** Stop sending to `w`; the next call starts a fresh worker. Its other reads may be queued
    *  behind the hung ones on its threads: re-send them to the fresh worker (a read is
-   *  idempotent; the old worker's late reply is ignored). */
+   *  idempotent; the old worker's late reply is ignored). A write stays. */
   private retire(w: Worker): void {
     w.retired = true
     this.retired.add(w)
@@ -278,6 +313,9 @@ export class FsWorkerClient {
     }
     for (const [id, p] of [...w.pending]) {
       if (p.hung) continue
+      // A write isn't re-sent (it may have started, and would land twice): it stays on its
+      // worker, and its reply counts. The worker isn't killed under it.
+      if (p.req.op === "writefile") continue
       w.pending.delete(id)
       // A stranded watch / unwatch isn't re-sent: the fresh worker starts with no watchers
       // and the watch set is re-added to it (lostWorker).
@@ -292,24 +330,41 @@ export class FsWorkerClient {
     try {
       w.proc.kill()
     } catch {
-      this.retired.delete(w) // already gone
+      this.retired.delete(w) // already gone: no exit will come
+      this.gone(w)
     }
   }
 
-  /** Fail everything `w` holds with `code` and kill it. */
-  private end(w: Worker, code: string): void {
+  /** `w`'s process is gone: nothing it held can run any more. */
+  private gone(w: Worker): void {
+    for (const p of w.pending.values()) p.ended?.()
+    w.pending.clear()
+    for (const f of w.afterExit ?? []) f()
+    w.afterExit = []
+  }
+
+  /** Fail everything `w` holds with `code` and kill it (`exited`: it's already gone). */
+  private end(w: Worker, code: string, exited = false): void {
     if (this.live === w) {
       this.live = null
       this.lostWorker()
     }
     this.retired.delete(w)
     for (const p of w.pending.values()) if (!p.hung) p.reject(fail(code))
+    // Failed now, but a write may still run until the process is really gone.
+    w.afterExit = [...(w.afterExit ?? []), ...[...w.pending.values()].flatMap((p) => p.ended ?? [])]
     w.pending.clear()
+    if (exited) return this.finishEnd(w, true)
     try {
       w.proc.kill()
     } catch {
-      // already gone
+      return this.finishEnd(w, true) // already gone
     }
+    this.finishEnd(w, false)
+  }
+
+  private finishEnd(w: Worker, exited: boolean): void {
+    if (exited) this.gone(w)
     this.clearIdle()
     this.armHungCheck()
   }

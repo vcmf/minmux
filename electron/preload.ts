@@ -154,8 +154,27 @@ const api = {
   },
   readFile: (path: string, wsl?: WslContext, since?: unknown) =>
     ipcRenderer.invoke("fs:read-file", path, wsl, since),
+  writeFile: (
+    path: string,
+    text: string,
+    base: string | null,
+    wsl?: WslContext,
+    create?: boolean,
+  ) => ipcRenderer.invoke("fs:write-file", path, text, base, wsl, create),
   readFilePreview: (path: string, wsl?: WslContext) =>
     ipcRenderer.invoke("fs:read-preview", path, wsl),
+  setUnsaved: (paths: string[]) => ipcRenderer.send("editor:unsaved", paths),
+  quitReady: () => ipcRenderer.send("editor:quit-ready"),
+  onQuitCheck: (answer: () => Promise<string[]>) => {
+    const listener = (_e: unknown, id: number) =>
+      // A failed answer sends nothing: main falls back to the last list (never "none unsaved").
+      void answer().then(
+        (paths) => ipcRenderer.send("editor:quit-check-reply", id, paths),
+        () => {},
+      )
+    ipcRenderer.on("editor:quit-check", listener)
+    return () => ipcRenderer.removeListener("editor:quit-check", listener)
+  },
   fetchImage: (url: string) => ipcRenderer.invoke("image:fetch", url),
   pickDirectory: (defaultPath?: string, wsl?: WslContext) =>
     ipcRenderer.invoke("dialog:pick-directory", defaultPath, wsl),

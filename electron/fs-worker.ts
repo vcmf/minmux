@@ -1,5 +1,5 @@
-// The fs worker: a utility process that does the files browser's folder reads and watches (and
-// the sidebar's `.git` searches), so a call that never returns (a dead NFS / SMB / 9p mount)
+// The fs worker: a utility process that does the files browser's folder reads and watches (and,
+// as separate processes, the sidebar's `.git` searches and saves of edited files), so a call that never returns (a dead NFS / SMB / 9p mount)
 // ties up THIS process, never main (main carries every terminal's I/O and its own fs work).
 // Main kills and replaces it when a request hangs (fs-worker-client).
 import { handleFsRequest, Watches, type FsRequest } from "./fs-worker-ops"
