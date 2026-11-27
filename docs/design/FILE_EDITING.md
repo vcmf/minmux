@@ -244,8 +244,13 @@ This is the common case in minmux: the agent beside the tab is writing the same 
   handler in main, Electron cancels the unload silently. Main also hears the unsaved count from the
   renderer and checks it first in `before-quit`, ahead of the live-terminal confirm, regardless of
   live terminals and the "Don't warn again" setting, and before the drain hides the window.
-- What's not covered: an OS shutdown that kills the app at once, and a renderer crash. Unsaved text
-  is lost there, as it is in a terminal's scrollback.
+- **How a quit knows what's unsaved:** it asks the page once, when it decides. The page settles
+  pending checks and waits for its saves (4 s at most), then answers; no answer within 6 s, or no
+  page ready to give one, falls back to the list the page last pushed. It never reads silence as
+  "nothing unsaved". The pushed list only names files in the unload dialog.
+- What's not covered: an OS shutdown that kills the app at once, a renderer crash, and text typed
+  in the second or two between a quit's check and the window closing (in full screen, where the
+  window isn't hidden first). Unsaved text is lost there, as it is in a terminal's scrollback.
 
 ### Performance
 
