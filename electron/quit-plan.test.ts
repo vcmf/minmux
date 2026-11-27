@@ -12,6 +12,21 @@ const base: QuitState = {
 const step = (o: Partial<QuitState>) => quitStep({ ...base, ...o })
 
 describe("quitStep", () => {
+  it("unsaved files ask first, whatever the confirm setting and with no terminal left", () => {
+    expect(step({ unsaved: 1, livePtys: 0 })).toBe("askUnsaved")
+    expect(step({ unsaved: 2, needsConfirm: true })).toBe("askUnsaved") // before the live confirm
+    expect(step({ unsaved: 1, asking: true })).toBe("hold")
+    expect(step({ unsaved: 1, unsavedDiscarded: true, livePtys: 0 })).toBe("proceed")
+  })
+  it("waits for saves in flight (once), before the drain hides the window", () => {
+    expect(step({ savesInFlight: 1 })).toBe("waitSaves")
+    expect(step({ savesInFlight: 1, waitingSaves: true })).toBe("hold")
+    expect(step({ unsaved: 1, unsavedDiscarded: true, savesInFlight: 1 })).toBe("waitSaves")
+  })
+  it("an OS logout is never held for unsaved files or saves", () => {
+    expect(step({ osEnding: true, unsaved: 1, savesInFlight: 1 })).toBe("killNow")
+  })
+
   it("live PTYs → drain first; nothing alive → quit right away", () => {
     expect(step({})).toBe("drain")
     expect(step({ livePtys: 0 })).toBe("proceed")

@@ -8,7 +8,7 @@
 import type { PaneNode } from "../types"
 import type { AgentKind } from "./agent-graph"
 import { agentInfo } from "./agent-kinds"
-import { allSessionIds, findPaneById } from "./pane-tree"
+import { allSessionIds, findPane, findPaneById } from "./pane-tree"
 
 /** A close awaiting the confirm dialog. */
 export type CloseConfirm =
@@ -22,6 +22,10 @@ export type CloseConfirm =
       agent?: AgentKind
       paneId?: string // closing this pane (its only terminal, beside folders), not just the terminal
     }
+  // A file with unsaved changes (docs/design/FILE_EDITING.md): Save, Don't save or Cancel.
+  | { kind: "file"; tabId: string; entryId: string; title: string }
+  // A pane or a session holding files with unsaved changes: closing drops them.
+  | { kind: "unsaved"; tabId: string; paneId?: string; files: string[]; terminals: number }
 
 /** A terminal's state, as far as closing it is concerned. */
 export interface TerminalState {
@@ -41,6 +45,8 @@ export function confirmStillValid(
   if (!tab) return false
   if (c.kind === "terminal") return allSessionIds(tab.root).includes(c.sessionId)
   if (c.kind === "pane") return !!findPaneById(tab.root, c.paneId)
+  if (c.kind === "file") return !!findPane(tab.root, c.entryId)
+  if (c.kind === "unsaved" && c.paneId) return !!findPaneById(tab.root, c.paneId)
   return true
 }
 
@@ -77,9 +83,47 @@ const agentRunning = (agent: AgentKind, where: string) => {
   return `${name} is running in ${where}. Closing it stops ${name} and the shell.`
 }
 
+/** Closing a pane or a session that holds unsaved files: the confirm, or null (none unsaved). */
+export function unsavedCloseConfirm(
+  tabId: string,
+  files: string[],
+  terminals: number,
+  paneId?: string,
+): CloseConfirm | null {
+  if (!files.length) return null
+  return { kind: "unsaved", tabId, files, terminals, ...(paneId ? { paneId } : {}) }
+}
+
+const listed = (files: string[]) =>
+  files.length <= 3
+    ? files.map((f) => `"${f}"`).join(", ")
+    : `${files
+        .slice(0, 2)
+        .map((f) => `"${f}"`)
+        .join(", ")} and ${files.length - 2} more`
+
 /** The dialog's heading, body and confirm button for a pending close. */
 export function closeConfirmText(c: CloseConfirm): { title: string; body: string; action: string } {
   switch (c.kind) {
+    case "file":
+      return {
+        title: `Save changes to "${c.title}"?`,
+        body: "Your changes are lost if you don't save them.",
+        action: "Don't save",
+      }
+    case "unsaved":
+      return {
+        title:
+          c.files.length === 1
+            ? "Close a file with unsaved changes?"
+            : `Close ${c.files.length} files with unsaved changes?`,
+        body:
+          `${listed(c.files)} ${c.files.length === 1 ? "has" : "have"} unsaved changes: closing drops them.` +
+          (c.terminals
+            ? ` ${plural(c.terminals, "terminal")} close too, and whatever runs in them stops.`
+            : ""),
+        action: "Discard and close",
+      }
     case "pane":
       return {
         title: `Close pane with ${c.count} terminals?`,

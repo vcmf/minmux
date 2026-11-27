@@ -1497,6 +1497,14 @@ body.resizing-col {
   margin-right: 6px;
   vertical-align: 1px;
 }
+.unsaved-mark {
+  flex: 0 0 auto;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--amber);
+  margin-left: 5px;
+}
 .file-editor-bar {
   display: flex;
   align-items: center;

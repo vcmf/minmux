@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect } from "react"
 import { nextGitPollDelay } from "./lib/git-poll"
 import { ipc } from "./lib/ipc"
+import { edits } from "./lib/edit-store"
 import { TopBar } from "./components/top-bar"
 import { Sidebar } from "./components/sidebar"
 import { StatusBar } from "./components/status-bar"
@@ -670,6 +671,30 @@ function App() {
       window.removeEventListener("mousedown", end, true)
       window.removeEventListener("dragend", end)
       window.removeEventListener("drop", end)
+    }
+  }, [])
+
+  // Files with unsaved changes (lib/edit-store): main hears which (it asks before a quit drops
+  // them), and the page holds its unload (a reload, ⌘W, the window closing) so main can ask then.
+  useEffect(() => {
+    let last = ""
+    const report = () => {
+      const paths = edits.unsavedPaths()
+      const key = paths.join("\0")
+      if (key === last) return // only when the set changes, never per keystroke
+      last = key
+      ipc.setUnsaved(paths)
+    }
+    const off = edits.subscribe(report)
+    const onUnload = (e: BeforeUnloadEvent) => {
+      if (!edits.unsaved().length) return
+      e.preventDefault()
+      e.returnValue = "" // Electron: main's will-prevent-unload decides
+    }
+    window.addEventListener("beforeunload", onUnload)
+    return () => {
+      off()
+      window.removeEventListener("beforeunload", onUnload)
     }
   }, [])
 

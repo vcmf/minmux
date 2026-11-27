@@ -163,6 +163,7 @@ const api = {
   ) => ipcRenderer.invoke("fs:write-file", path, text, base, wsl, create),
   readFilePreview: (path: string, wsl?: WslContext) =>
     ipcRenderer.invoke("fs:read-preview", path, wsl),
+  setUnsaved: (paths: string[]) => ipcRenderer.send("editor:unsaved", paths),
   fetchImage: (url: string) => ipcRenderer.invoke("image:fetch", url),
   pickDirectory: (defaultPath?: string, wsl?: WslContext) =>
     ipcRenderer.invoke("dialog:pick-directory", defaultPath, wsl),

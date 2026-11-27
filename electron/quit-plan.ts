@@ -10,15 +10,26 @@ export interface QuitState {
   needsConfirm: boolean // live sessions + the confirm setting on + a window to ask in
   livePtys: number // node-ptys not yet exited (closed panes winding down included)
   osEnding: boolean // the OS is logging out / restarting (powerMonitor 'shutdown')
+  unsaved?: number // files with unsaved changes in the window (docs/design/FILE_EDITING.md)
+  unsavedDiscarded?: boolean // the user said to drop them
+  savesInFlight?: number // edited files being written now
+  waitingSaves?: boolean // already waiting for them
 }
 
+// askUnsaved = ask before dropping unsaved files (always, setting or not) · waitSaves = hold
+// until the saves being written land (stopping their worker mid-write leaves a file half done).
 /** proceed = let it quit · confirm = ask first · drain = hold, end the PTYs, quit again ·
  *  hold = a drain is running · killNow = end them without holding (don't cancel the OS). */
-export type QuitStep = "proceed" | "confirm" | "drain" | "hold" | "killNow"
+export type QuitStep =
+  "proceed" | "confirm" | "drain" | "hold" | "killNow" | "askUnsaved" | "waitSaves"
 
 export function quitStep(s: QuitState): QuitStep {
   if (s.phase === "drained") return "proceed" // second pass, after the drain
   if (s.phase === "draining") return "hold" // no dialog, no second drain
+  // An OS logout can't be held: unsaved text is lost there (the design says so).
+  if (!s.osEnding && (s.unsaved ?? 0) > 0 && !s.unsavedDiscarded)
+    return s.asking ? "hold" : "askUnsaved"
+  if (!s.osEnding && (s.savesInFlight ?? 0) > 0) return s.waitingSaves ? "hold" : "waitSaves"
   if (s.needsConfirm && !s.confirmed) return s.asking ? "hold" : "confirm"
   if (s.livePtys === 0) return "proceed"
   // Holding the quit here would make macOS report "minmux cancelled restart/logout".

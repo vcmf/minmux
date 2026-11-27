@@ -19,6 +19,7 @@ export function CloseConfirmDialog() {
   }, [pending])
   const confirmRef = useRef<HTMLButtonElement>(null)
   const cancelRef = useRef<HTMLButtonElement>(null)
+  const saveRef = useRef<HTMLButtonElement>(null) // a file's close: Save
 
   // Hand keyboard focus back to the focused terminal once the dialog is gone.
   const refocus = () => requestAnimationFrame(focusActiveEntry)
@@ -30,20 +31,23 @@ export function CloseConfirmDialog() {
     useStore.getState().confirmClose()
     refocus()
   }
+  const save = () => void useStore.getState().saveAndClose()
 
   useEffect(() => {
     if (!pending) return
-    confirmRef.current?.focus()
+    ;(saveRef.current ?? confirmRef.current)?.focus()
     // Window-level, so the trap holds even if focus drifted off the buttons.
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         e.preventDefault()
         cancel()
       } else if (e.key === "Tab") {
-        // Modal: Tab cycles between the two buttons, never out to the terminal behind.
+        // Modal: Tab cycles through the buttons, never out to the terminal behind.
         e.preventDefault()
-        const next = document.activeElement === confirmRef.current ? cancelRef : confirmRef
-        next.current?.focus()
+        const order = [cancelRef, confirmRef, saveRef].filter((r) => r.current)
+        const at = order.findIndex((r) => r.current === document.activeElement)
+        const step = e.shiftKey ? order.length - 1 : 1
+        order[(at + step) % order.length]?.current?.focus()
       }
     }
     window.addEventListener("keydown", onKey)
@@ -74,6 +78,11 @@ export function CloseConfirmDialog() {
           <button ref={confirmRef} className="btn danger" onClick={confirm}>
             {text.action}
           </button>
+          {pending.kind === "file" && (
+            <button ref={saveRef} className="btn primary" onClick={save}>
+              Save
+            </button>
+          )}
         </div>
       </div>
     </div>
