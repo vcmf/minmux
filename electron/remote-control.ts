@@ -28,6 +28,8 @@ export interface RemoteControlDeps {
   ) => { agent?: AgentKind; sessionId: string; transcriptPath?: string } | null
   /** Host paths for a transcript a hook reported (a WSL pane's through its distro). */
   transcriptTargets?: (p: string, pane: string) => string[]
+  /** The pane's terminal's bracketed-paste mode now (asks the renderer; undefined if it can't). */
+  pasteMode?: (pane: string) => Promise<boolean | undefined>
   /** A WSL pane (its agents' files live inside the distro). */
   wslPane?: (pane: string) => boolean
   /** Writes to a pane's PTY as typing would; false when there's no live one. */
@@ -168,6 +170,11 @@ export function setupRemoteControl(deps: RemoteControlDeps) {
     asking: (pane) => waits.asking(pane),
     between: (pane) => turns.turn(pane) === "between",
     isAgent: (pane) => !!deps.leadOf?.(pane),
+    pasteNow: (pane) => deps.pasteMode?.(pane) ?? Promise.resolve(undefined),
+    submitted: (pane) => {
+      turns.started(pane) // a turn is on now, ahead of its hook: the next message waits
+      askingChanged()
+    },
     // Main decides, not the worker: the device must still exist, be unlocked and able to send.
     allowed: async (deviceId) => {
       const p = (await devices()).permissionOf(deviceId)
@@ -294,6 +301,11 @@ export function setupRemoteControl(deps: RemoteControlDeps) {
     /** Typed at the desktop into a pane: an answer key closes its dialogs. Per keystroke: O(1). */
     localInput: (pane: string, data: string) => {
       if (waits.any && waits.localInput(pane, data)) askingChanged()
+      // Enter at the desktop between turns submits a prompt: the turn is on, ahead of its hook.
+      if (data === "\r" && turns.turn(pane) === "between") {
+        turns.started(pane)
+        askingChanged()
+      }
     },
     /** A pane's process ended or it closed. */
     paneGone: (pane: string) => {

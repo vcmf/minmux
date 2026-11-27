@@ -21,6 +21,7 @@ export function cleanText(text: string): string {
       // eslint-disable-next-line no-control-regex
       .replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g, "")
       .slice(0, SEND_MAX)
+      .replace(/[\ud800-\udbff]$/, "") // never half an emoji
   )
 }
 
@@ -51,6 +52,8 @@ export interface SenderDeps {
   asking?: (pane: string) => boolean // main's latest hook state: the agent is asking
   between?: (pane: string) => boolean // the agent's turn is over (unset: always)
   isAgent?: (pane: string) => boolean // main knows an agent leads the pane
+  pasteNow?: (pane: string) => Promise<boolean | undefined> // the terminal's mode right now
+  submitted?: (pane: string) => void // a message was submitted (Enter written)
   allowed?: (deviceId: string) => Promise<boolean> // main's device check (may send)
   delay?: (ms: number) => Promise<void>
   now?: () => number
@@ -104,7 +107,9 @@ export class Sender {
     const text = cleanText(raw)
     if (!text.trim()) return { ok: false, reason: "empty" }
     // A pane whose program never said (no renderer): agents paste, shells don't.
-    const paste = pane!.paste ?? agent
+    // The terminal's own mode, asked now (the pushed list can be a second old: a shell turns it
+    // off as a command starts); the list's, then "agents paste", when it can't say.
+    const paste = (await this.d.pasteNow?.(paneId)) ?? pane!.paste ?? agent
     // Without bracketed paste every newline is an Enter: a multi-line message would run line by
     // line, past every check here.
     if (!paste && text.includes("\n")) return { ok: false, reason: "multiline" }
@@ -116,6 +121,8 @@ export class Sender {
     // A turn started (someone at the desktop) or a dialog opened between the paste and Enter.
     if (refusal(this.d.pane(paneId), asking(), between(), agent))
       return { ok: false, reason: "held" }
-    return this.d.write(paneId, "\r") ? { ok: true } : { ok: false, reason: "no-pane" }
+    if (!this.d.write(paneId, "\r")) return { ok: false, reason: "no-pane" }
+    this.d.submitted?.(paneId)
+    return { ok: true }
   }
 }

@@ -120,7 +120,8 @@ export class WaitTracker {
           this.open(pane, { agent, key, kind: "question", message: ev.message })
         return
       }
-      case "PostToolUse": {
+      case "PostToolUse":
+      case "PostToolUseFailure": {
         const key = ev.toolKey ?? "?"
         const running = this.runningOf(slot)
         running.delete(key)

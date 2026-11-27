@@ -66,4 +66,21 @@ describe("turn tracker", () => {
     expect(t.turn(P)).toBe("working")
     t.apply({ event: "Stop" } as E) // no pane: ignored
   })
+
+  it("an interrupted sub-agent (no SubagentStop) doesn't keep the pane working for good", () => {
+    const t = new TurnTracker()
+    run(t, { event: "SubagentStart", agentId: "a" }, { event: "Stop" })
+    expect(t.turn(P)).toBe("working")
+    expect(run(t, { event: "Notification", notificationType: "idle_prompt" })).toBe("between")
+    run(t, { event: "SubagentStart", agentId: "b" })
+    run(t, { event: "UserPromptSubmit" })
+    expect(run(t, { event: "Stop" })).toBe("between")
+  })
+
+  it("a submitted message starts the turn at once", () => {
+    const t = new TurnTracker()
+    run(t, { event: "Stop" })
+    t.started(P)
+    expect(t.turn(P)).toBe("working")
+  })
 })

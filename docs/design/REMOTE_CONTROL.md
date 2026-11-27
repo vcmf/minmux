@@ -283,7 +283,7 @@ matrix, apart from the renderer's reducer and its known flaw. Main feeds it ever
 - Closes when that agent moves on: the call finishes (PostToolUse), another call starts
   (Codex sends nothing when answered), PermissionReplied, SubagentStop; for the pane on Stop,
   UserPromptSubmit, SessionStart/End and the idle reminder; when someone at the desktop presses
-  an answer key (Enter, Esc, a digit, y/n: Esc denies a Claude prompt without any hook); when the
+  an answer key (Enter, Esc, Ctrl+C, a digit 1-9: Esc denies a Claude prompt without any hook); when the
   pane closes.
 - The pane list devices get carries `asking` (and the prompt's message) from it. The desktop's
   "needs input" also covers the idle reminder, when a message is exactly what the agent wants, so

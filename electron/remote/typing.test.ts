@@ -171,4 +171,20 @@ describe("typing a phone's message", () => {
     expect(await s.send("d", "p", "x", "1")).toEqual({ ok: false, reason: "working" })
     expect(refusal(pane({ kind: "shell", asking: true }))).toBe("waiting") // any pane
   })
+
+  it("asks the terminal's paste mode now; tells main a message was submitted", async () => {
+    const writes: string[] = []
+    const submitted: string[] = []
+    const s = new Sender({
+      pane: () => pane({ kind: "shell", paste: true }), // the list still says paste
+      write: (_id, d) => (writes.push(d), true),
+      pasteNow: async () => false, // the shell just started a command
+      submitted: (p) => submitted.push(p),
+    })
+    expect(await s.send("d", "p", "a\nb", "1")).toEqual({ ok: false, reason: "multiline" })
+    expect(await s.send("d", "p", "ls", "2")).toEqual({ ok: true })
+    expect(writes).toEqual(["ls", "\r"])
+    expect(submitted).toEqual(["p"])
+    expect(cleanText("x".repeat(16 * 1024 - 1) + "😀")).toHaveLength(16 * 1024 - 1)
+  })
 })

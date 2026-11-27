@@ -8,7 +8,7 @@ import { JsonlChat, type ChatLog, type ChatReader } from "./chat-log"
 const str = (v: unknown): string => (typeof v === "string" ? v : "")
 // Text Claude Code puts in the user's turn that the user didn't type.
 const NOT_TYPED =
-  /^\s*<(command-|local-command-|system-reminder|bash-|user-memory|task-notification)/
+  /^\s*(<(command-|local-command-|system-reminder|bash-|user-memory|task-notification)|\[Request interrupted by user)/
 
 /** One line describing a tool call (the command, the file, the pattern…). */
 export function toolSummary(name: string, input: unknown): string {

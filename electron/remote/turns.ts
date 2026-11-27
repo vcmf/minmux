@@ -20,6 +20,7 @@ const IN_TURN = new Set([
   "UserPromptSubmit",
   "PreToolUse",
   "PostToolUse",
+  "PostToolUseFailure",
   "PermissionRequest",
   "PermissionReplied",
   "SubagentStart",
@@ -64,12 +65,24 @@ export class TurnTracker {
         return
       case "Notification":
         if (isIdleNotification(ev)) {
-          if (root) t.stopped = true
+          // At its prompt: nothing of an earlier turn runs on (an interrupted sub-agent may
+          // never send its SubagentStop).
+          if (root) {
+            t.stopped = true
+            t.subs.clear()
+          }
         } else if (!isQuietNotification(ev)) this.inTurn(t, ev)
         return
       default:
         if (IN_TURN.has(ev.event)) this.inTurn(t, ev)
     }
+  }
+
+  /** A message was just submitted to the pane: a turn is on, ahead of its hook. */
+  started(pane: string): void {
+    const t = this.panes.get(pane) ?? { stopped: false, subs: new Set<string>() }
+    t.stopped = false
+    this.panes.set(pane, t)
   }
 
   drop(pane: string): void {
@@ -78,6 +91,10 @@ export class TurnTracker {
 
   private inTurn(t: PaneTurn, ev: Ev): void {
     if (ev.agentId) t.subs.add(ev.agentId)
-    else t.stopped = false
+    else {
+      t.stopped = false
+      // A new prompt: sub-agents of an earlier, interrupted turn are gone.
+      if (ev.event === "UserPromptSubmit") t.subs.clear()
+    }
   }
 }

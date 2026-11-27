@@ -76,6 +76,15 @@ function App() {
   const sidebarCollapsed = useStore((s) => s.sidebarCollapsed)
   const activeCwd = useActiveWorkCwd() // Claude's folder while it runs (worktree), else the shell's
 
+  // Remote control: main asks a terminal's bracketed-paste mode before typing a message.
+  useEffect(
+    () =>
+      ipc.onRemotePasteQuery((id, pane) =>
+        ipc.remotePasteReply(id, TerminalManager.bracketedPaste(pane)),
+      ),
+    [],
+  )
+
   // Remote control: show which device typed into a pane (sidebar chip).
   useEffect(
     () => ipc.onRemoteTyped((pane, device) => useRemoteTyped.getState().typed(pane, device)),

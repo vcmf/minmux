@@ -189,4 +189,11 @@ describe("wait tracker: the desktop and the pane", () => {
     expect(run(w, { event: "SessionStart", source: "compact" })).toBe(true)
     expect(run(w, { event: "SessionStart", source: "startup" })).toBe(false)
   })
+
+  it("a failed call is done too (PostToolUseFailure)", () => {
+    const w = t()
+    run(w, { event: "PreToolUse", toolKey: "a" })
+    run(w, { event: "Notification", notificationType: "permission_prompt" })
+    expect(run(w, { event: "PostToolUseFailure", toolKey: "a" })).toBe(false)
+  })
 })

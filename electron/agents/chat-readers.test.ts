@@ -24,6 +24,11 @@ describe("Claude transcript", () => {
         message: { content: "<command-name>/clear</command-name>" },
       }) +
         line({ type: "user", uuid: "u1", message: { content: "fix it" } }) +
+        line({
+          type: "user",
+          uuid: "int",
+          message: { content: [{ type: "text", text: "[Request interrupted by user]" }] },
+        }) +
         line({ type: "user", uuid: "m", isMeta: true, message: { content: "meta" } }) +
         line({
           type: "assistant",

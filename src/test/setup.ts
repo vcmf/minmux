@@ -76,6 +76,8 @@ const minmuxStub = {
   onRemoteWanted: vi.fn(unsub),
   remotePanes: vi.fn(),
   onRemoteTyped: vi.fn(unsub),
+  onRemotePasteQuery: vi.fn(unsub),
+  remotePasteReply: vi.fn(),
   remoteRevoke: vi.fn(async () => true),
   remoteRename: vi.fn(async () => true),
   remotePermission: vi.fn(async () => true),

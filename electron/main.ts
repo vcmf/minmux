@@ -354,6 +354,27 @@ const historyWorker = new SessionsWorkerClient(
     }) as unknown as SessionsProc,
 )
 const TOUCHED_MS = 5000 // the worker may be starting or mid-search
+// A pane's bracketed-paste mode, asked of the renderer's terminal when a remote message is typed
+// (its own state, not in the store). Undefined when there's no window or it doesn't answer soon.
+let pasteAsks = 0
+const pasteReplies = new Map<number, (v: boolean | undefined) => void>()
+function askPasteMode(pane: string): Promise<boolean | undefined> {
+  const w = mainWindow
+  if (!w || w.isDestroyed()) return Promise.resolve(undefined)
+  const id = ++pasteAsks
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      pasteReplies.delete(id)
+      resolve(undefined)
+    }, 300)
+    pasteReplies.set(id, (v) => {
+      clearTimeout(timer)
+      resolve(v)
+    })
+    w.webContents.send("remote:paste-mode?", id, pane)
+  })
+}
+
 // Remote control over Tailscale (docs/design/REMOTE_CONTROL.md): no worker until it's turned on.
 let remoteControl: ReturnType<typeof setupRemoteControl> | null = null
 /** The agents' commands: a process running one is an agent (one started outside the wrapper). */
@@ -1608,6 +1629,11 @@ function registerIpc() {
     (_e, id: unknown, p: unknown) => remoteControl?.setPermission(id, p) ?? false,
   )
   ipcMain.handle("remote:set-pin", (_e, pin: unknown) => remoteControl?.setPin(pin) ?? "error")
+  ipcMain.on("remote:paste-mode", (_e, id: unknown, value: unknown) => {
+    if (typeof id !== "number") return
+    pasteReplies.get(id)?.(typeof value === "boolean" ? value : undefined)
+    pasteReplies.delete(id)
+  })
   ipcMain.handle("remote:disconnect-all", () => {
     remoteControl?.disconnectAll()
     return true
@@ -2076,6 +2102,7 @@ app.whenReady().then(async () => {
     },
     transcriptTargets,
     wslPane: (pane) => !!sessions.get(pane)?.wslDistro,
+    pasteMode: askPasteMode,
     // Same rules as the renderer's typing (pty:write): a pending ssh spawn swallows it.
     writePty: (pane, data) => {
       const rec = sessions.get(pane)

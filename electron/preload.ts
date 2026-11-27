@@ -158,6 +158,13 @@ const api = {
     return () => ipcRenderer.removeListener("remote:wanted", listener)
   },
   remotePanes: (panes: RemotePanes) => ipcRenderer.send("remote:panes", panes),
+  onRemotePasteQuery: (cb: (id: number, pane: string) => void) => {
+    const listener = (_e: unknown, id: number, pane: string) => cb(id, pane)
+    ipcRenderer.on("remote:paste-mode?", listener)
+    return () => ipcRenderer.removeListener("remote:paste-mode?", listener)
+  },
+  remotePasteReply: (id: number, value: boolean | undefined) =>
+    ipcRenderer.send("remote:paste-mode", id, value),
   onRemoteTyped: (cb: (pane: string, device: string) => void) => {
     const listener = (_e: unknown, pane: string, device: string) => cb(pane, device)
     ipcRenderer.on("remote:typed", listener)
