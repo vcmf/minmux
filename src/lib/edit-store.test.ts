@@ -14,7 +14,7 @@ const text = (t: string, hash: string): FileData => ({
 })
 
 function make(write: (...a: unknown[]) => Promise<SaveResult>, read = vi.fn()) {
-  const fileStore = { pin: vi.fn(), saved: vi.fn() }
+  const fileStore = { pin: vi.fn(), saved: vi.fn(), ticket: vi.fn(() => 7) }
   const store = new EditStore(write as never, read as never, fileStore)
   return { store, fileStore, read }
 }
@@ -48,7 +48,7 @@ describe("EditStore", () => {
     expect(await store.save("e", "a\nb\n")).toBe("saved")
     expect(write).toHaveBeenCalledWith("/a", "a\r\nb\r\n", "h0", undefined, false)
     expect(store.base("e")).toMatchObject({ text: "a\nb\n", hash: "h1" })
-    expect(fileStore.saved).toHaveBeenCalledWith("e", "a\r\nb\r\n", stamp, "h1")
+    expect(fileStore.saved).toHaveBeenCalledWith("e", "a\r\nb\r\n", stamp, "h1", 7)
   })
 
   it("changed and missing become notices", async () => {
@@ -130,7 +130,7 @@ describe("EditStore", () => {
     const { store } = make(vi.fn(), read)
     store.start("e", "/a", undefined, "a", "h0")
     store.setDirty("e", true)
-    expect(await store.reload("e")).toMatchObject({ text: "theirs\n", hash: "hT" })
+    expect(await store.reload("e")).toMatchObject({ text: "theirs\n", hash: "hT", seq: 7 })
     expect(store.get("e")?.dirty).toBe(false)
   })
 
@@ -221,5 +221,16 @@ describe("EditStore", () => {
     await store.settled("e")
     await store.settledAll()
     expect(done).toBe(true)
+  })
+
+  it("a notice dismissed comes back only for a newer read", () => {
+    const { store } = make(vi.fn())
+    store.start("e", "/a", undefined, "a", "h0")
+    store.note("e", { kind: "missing" }, 3)
+    store.dismiss("e")
+    store.note("e", { kind: "missing" }, 3)
+    expect(store.get("e")?.notice).toBeNull()
+    store.note("e", { kind: "missing" }, 4)
+    expect(store.get("e")?.notice).toEqual({ kind: "missing" })
   })
 })

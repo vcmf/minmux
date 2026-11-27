@@ -1,10 +1,12 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest"
 import { act, render, screen, fireEvent, waitFor } from "@testing-library/react"
 import { EditorView } from "@codemirror/view"
+import { undoDepth } from "@codemirror/commands"
 import FileEditor from "./file-editor"
 import { useStore } from "../store"
 import { ipc } from "../lib/ipc"
 import { edits } from "../lib/edit-store"
+import { files } from "../lib/file-store"
 import { resetStore, testShell } from "../test/helpers"
 import type { FileData, SaveResult } from "../lib/file-tab"
 
@@ -217,5 +219,126 @@ describe("FileEditor", () => {
     finish(saved())
     await waitFor(() => expect(settled).toBe(true))
     expect(edits.isUnsaved(entryId)).toBe(false)
+  })
+
+  describe("an agent writing the file while it's in Edit", () => {
+    const agentWrites = async (t: string, hash: string) => {
+      vi.mocked(ipc.readFile).mockResolvedValue(text(t, hash))
+      await act(async () => {
+        files.refresh(entryId)
+        await new Promise((r) => setTimeout(r, 0))
+      })
+    }
+    const open = async (raw: string) => {
+      vi.mocked(ipc.readFile).mockResolvedValue(text(raw, "h0"))
+      await mount(raw)
+      act(() => files.show(entryId, "/w/a.ts"))
+      await waitFor(() => expect(files.get(entryId)?.data).toMatchObject({ hash: "h0" }))
+    }
+    afterEach(() => files.forget(entryId))
+
+    it("nothing unsaved: it follows, cursor in place, and the change isn't undone by Cmd-Z", async () => {
+      await open("one\ntwo\n")
+      act(() => view().dispatch({ selection: { anchor: 5 } })) // on "two"
+      await agentWrites("zero\none\ntwo\n", "h1")
+      await waitFor(() => expect(doc()).toBe("zero\none\ntwo\n"))
+      expect(view().state.doc.lineAt(view().state.selection.main.head).text).toBe("two")
+      expect(edits.base(entryId)?.hash).toBe("h1")
+      expect(document.querySelector(".file-editor-dot")).toBeNull()
+      expect(undoDepth(view().state)).toBe(0)
+    })
+
+    it("unsaved text: it stops following and says the file changed", async () => {
+      await open("one\n")
+      type("mine\n")
+      await agentWrites("theirs\n", "h1")
+      await screen.findByText("The file changed on disk since you opened it.")
+      expect(doc()).toBe("one\nmine\n")
+    })
+
+    it("deleted, then back with the same bytes: the bar goes", async () => {
+      await open("one\n")
+      vi.mocked(ipc.readFile).mockResolvedValue({ kind: "error", message: "gone", gone: true })
+      await act(async () => {
+        files.refresh(entryId)
+        await new Promise((r) => setTimeout(r, 0))
+      })
+      await screen.findByText("The file was deleted.")
+      await agentWrites("one\n", "h0") // git checkout back
+      await waitFor(() => expect(screen.queryByText("The file was deleted.")).toBeNull())
+    })
+
+    it("a dismissed deleted bar stays dismissed on the next keystroke", async () => {
+      await open("one\n")
+      vi.mocked(ipc.readFile).mockResolvedValue({ kind: "error", message: "gone", gone: true })
+      await act(async () => {
+        files.refresh(entryId)
+        await new Promise((r) => setTimeout(r, 0))
+      })
+      await screen.findByText("The file was deleted.")
+      fireEvent.click(screen.getByTitle("Dismiss"))
+      type("x") // dirty flips: follow runs again on the same read
+      await new Promise((r) => setTimeout(r, 20))
+      expect(screen.queryByText("The file was deleted.")).toBeNull()
+    })
+
+    it("Reload theirs, with a newer read landing meanwhile: that one is followed after", async () => {
+      await open("one\n")
+      type("mine\n")
+      vi.mocked(ipc.writeFile).mockResolvedValueOnce({ kind: "changed" })
+      fireEvent.click(screen.getByText("Save"))
+      await screen.findByText(/changed on disk/)
+      let land!: (d: FileData) => void
+      vi.mocked(ipc.readFile).mockImplementationOnce(() => new Promise((r) => (land = r))) // the reload
+      fireEvent.click(screen.getByText("Reload theirs (drop mine)"))
+      await agentWrites("A2\n", "hA2") // the watcher's read starts later, lands first
+      expect(doc()).toBe("one\nmine\n") // not followed into the dirty text mid-reload
+      await act(async () => land(text("A1\n", "hA1")))
+      await waitFor(() => expect(doc()).toBe("A2\n")) // the reload went in, then the newer read
+      expect(edits.base(entryId)?.hash).toBe("hA2")
+    })
+
+    it("grown too large to edit: it says the file changed", async () => {
+      await open("one\n")
+      vi.mocked(ipc.readFile).mockResolvedValue({ kind: "too-large", size: 3_000_000 })
+      await act(async () => {
+        files.refresh(entryId)
+        await new Promise((r) => setTimeout(r, 0))
+      })
+      await screen.findByText("The file changed on disk since you opened it.")
+      expect(doc()).toBe("one\n")
+    })
+
+    it("a read older than the base (after Reload) isn't followed", async () => {
+      await open("one\n")
+      vi.mocked(ipc.readFile).mockResolvedValue(text("theirs\n", "hT"))
+      await act(async () => void (await edits.reload(entryId)))
+      edits.endReload(entryId)
+      // The editor shows what the reload read; the file store's older data (seq) can't win.
+      act(() =>
+        view().dispatch({ changes: { from: 0, to: view().state.doc.length, insert: "theirs\n" } }),
+      )
+      expect(edits.base(entryId)?.hash).toBe("hT")
+      expect(files.seqOf(entryId)).toBe(edits.base(entryId)?.seq)
+    })
+
+    it("unsaved text the file now holds exactly: no bar, it's saved", async () => {
+      await open("one\n")
+      type("two\n")
+      await agentWrites("one\ntwo\n", "h1")
+      await waitFor(() => expect(edits.base(entryId)?.hash).toBe("h1"))
+      expect(screen.queryByText(/changed on disk/)).toBeNull()
+      await waitFor(() => expect(document.querySelector(".file-editor-dot")).toBeNull())
+    })
+
+    it("deleted: it says so", async () => {
+      await open("one\n")
+      vi.mocked(ipc.readFile).mockResolvedValue({ kind: "error", message: "gone", gone: true })
+      await act(async () => {
+        files.refresh(entryId)
+        await new Promise((r) => setTimeout(r, 0))
+      })
+      await screen.findByText("The file was deleted.")
+    })
   })
 })

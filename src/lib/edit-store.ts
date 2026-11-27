@@ -25,7 +25,7 @@ export interface EditShown {
 }
 
 /** The text an edit started from (or last saved), as the editor holds it, with its bytes' hash. */
-export type EditBase = EditorText & { hash: string }
+export type EditBase = EditorText & { hash: string; seq: number } // seq: the read it came from
 
 interface Edit extends EditShown {
   startLine: number // the line it opened at
@@ -34,6 +34,8 @@ interface Edit extends EditShown {
   wsl?: WslContext
   base: EditBase
   state: unknown // the editor's own state (CodeMirror's EditorState)
+  noticeSeq: number // the file store number the notice was raised at (a later read may clear it)
+  reloading: boolean // Reload is swapping the editor's text: nothing follows meanwhile
   scroll: unknown // where the editor was scrolled (CodeMirror's scroll snapshot), or null
 }
 
@@ -61,7 +63,7 @@ export class EditStore {
   constructor(
     private readonly write: Write = (p, t, b, w, c) => ipc.writeFile(p, t, b, w, c),
     private readonly read: Read = (p, w) => ipc.readFile(p, w),
-    private readonly fileStore: Pick<typeof files, "pin" | "saved"> = files,
+    private readonly fileStore: Pick<typeof files, "pin" | "saved" | "ticket"> = files,
   ) {}
 
   subscribe(fn: () => void): () => void {
@@ -147,6 +149,7 @@ export class EditStore {
     hash: string,
     startLine = 1,
     asked = "source",
+    seq = 0,
   ): void {
     if (this.edits.has(id)) return
     const text = fromDisk(raw)
@@ -155,9 +158,11 @@ export class EditStore {
       asked,
       path,
       ...(wsl ? { wsl } : {}),
-      base: { ...text, hash },
+      base: { ...text, hash, seq },
       state: null,
       scroll: null,
+      noticeSeq: 0,
+      reloading: false,
       dirty: false,
       saving: false,
       notice: null,
@@ -216,6 +221,47 @@ export class EditStore {
     this.publish(id)
   }
 
+  // The editor follows it while nothing is unsaved (file-editor `follow`).
+  /** The file changed on disk (an agent wrote it): its new text, from read `seq`, is the base. */
+  follow(id: string, text: EditorText, hash: string, seq: number): EditBase | null {
+    const e = this.edits.get(id)
+    if (!e) return null
+    e.base = { ...text, hash, seq }
+    e.mixed = text.mixed
+    e.notice = null
+    this.publish(id)
+    return e.base
+  }
+
+  // A save's own trouble (an error, an unsure save) stays: it says why the text isn't on disk.
+  /** Show `notice` (a change on disk with unsaved text, a deleted file), unless it already is. */
+  note(id: string, notice: EditNotice, seq: number): void {
+    const e = this.edits.get(id)
+    const kind = e?.notice?.kind
+    if (!e || kind === notice.kind || kind === "error" || kind === "unknown") return
+    // Raised (and maybe dismissed) for this read already: only a newer one raises it again.
+    if (seq <= e.noticeSeq) return
+    e.notice = notice
+    e.noticeSeq = seq
+    this.publish(id)
+  }
+
+  /** Reload is swapping the editor's text (between `reload` and `endReload`). */
+  isReloading(id: string): boolean {
+    return !!this.edits.get(id)?.reloading
+  }
+
+  /** The editor has its reloaded text in: following goes on. */
+  endReload(id: string): void {
+    const e = this.edits.get(id)
+    if (e) e.reloading = false
+  }
+
+  /** The file store number its notice was raised at. */
+  noticeSeq(id: string): number {
+    return this.edits.get(id)?.noticeSeq ?? 0
+  }
+
   /** Drop a notice (the bar's ×). */
   dismiss(id: string): void {
     const e = this.edits.get(id)
@@ -228,15 +274,21 @@ export class EditStore {
   async reload(id: string): Promise<EditBase | null> {
     const e = this.edits.get(id)
     if (!e) return null
+    const ticket = this.fileStore.ticket(id) // a read: numbered as it starts (a later one beats it)
+    e.reloading = true // the editor doesn't follow while it swaps its text (endReload)
     const r = await this.read(e.path, e.wsl).catch(() => null)
     if (this.edits.get(id) !== e) return null
     if (r?.kind !== "text" || !r.hash || r.editable === false) {
+      e.reloading = false
       e.notice = { kind: "error", message: "It can't be read as text now" }
       this.publish(id)
       return null
     }
     const text = fromDisk(r.text)
-    e.base = { ...text, hash: r.hash }
+    // The file store takes this read too, unless something newer landed meanwhile (then the
+    // editor follows that one: its number is higher than this base's).
+    if (r.stamp) this.fileStore.saved(id, r.text, r.stamp, r.hash, ticket)
+    e.base = { ...text, hash: r.hash, seq: ticket }
     e.mixed = text.mixed
     e.notice = null
     e.dirty = false
@@ -260,6 +312,7 @@ export class EditStore {
     this.publish(id)
     const disk = toDisk(text, e.base)
     let r: SaveResult
+    let ticket = 0
     try {
       let base: string | null = e.base.hash
       let create = !!opts.create
@@ -276,17 +329,21 @@ export class EditStore {
           ? { kind: "error", message: "It can't be read as text now" }
           : await this.write(e.path, disk, base, e.wsl, create)
       if (r.kind === "unknown") r = await this.settle(e, disk)
+      // Numbered as the write ends (a read reads the disk at its start; a write changes it at
+      // its end): a read that started before now may hold the bytes from before the write.
+      ticket = this.fileStore.ticket(id)
     } catch (err) {
       r = { kind: "error", message: String(err) }
     }
     if (this.edits.get(id) !== e) return r.kind // closed meanwhile
     e.saving = false
     if (r.kind === "saved") {
-      e.base = { text, bom: e.base.bom, eol: e.base.eol, mixed: false, hash: r.hash }
+      this.fileStore.saved(id, disk, r.stamp, r.hash, ticket)
+      e.base = { text, bom: e.base.bom, eol: e.base.eol, mixed: false, hash: r.hash, seq: ticket }
       e.mixed = false
-      this.fileStore.saved(id, disk, r.stamp, r.hash)
     } else {
       e.notice = r.kind === "error" ? { kind: "error", message: r.message } : { kind: r.kind }
+      e.noticeSeq = ticket // only a read that started after this save can clear its bar
     }
     this.publish(id)
     return r.kind

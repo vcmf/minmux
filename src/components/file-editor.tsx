@@ -3,9 +3,11 @@
 // lib/edit-store, so a surface switch unmounts this and coming back finds it as it was.
 import { useEffect, useRef, useState, useSyncExternalStore } from "react"
 import {
+  Annotation,
   Compartment,
   EditorState,
   Text,
+  Transaction,
   type Extension,
   type StateEffect,
   type TransactionSpec,
@@ -25,14 +27,15 @@ import { search } from "@codemirror/search"
 import { languages } from "@codemirror/language-data"
 import { useStore } from "../store"
 import { edits, type EditShown } from "../lib/edit-store"
-import { detectIndent, keepsTrailingSpace, saveCleanup } from "../lib/editor-text"
-import { editorKeymap, highlighting, indentFor } from "../lib/editor-cm"
+import { detectIndent, fromDisk, keepsTrailingSpace, saveCleanup } from "../lib/editor-text"
+import { changesBetween, editorKeymap, highlighting, indentFor } from "../lib/editor-cm"
 import { shortCwd } from "../lib/session-label"
 import { files } from "../lib/file-store"
 import { goKeyOf, viewOf, type FileEntry } from "../lib/folder-entries"
 import { isFocusedEntry } from "./refocus-terminal"
 
 const indentSlot = new Compartment()
+const following = Annotation.define<boolean>() // a change that follows the file on disk
 const languageSlot = new Compartment()
 const DIRTY_MS = 150 // a same-length text is compared with its base after typing pauses this long
 
@@ -148,7 +151,67 @@ function stopEditing(id: string): void {
   edits.stop(id)
 }
 
+// An agent writes the file while it's in Edit (docs/design/FILE_EDITING.md, "Files that change
+// on disk while editing"). With nothing unsaved the editor follows it: the new text goes in as
+// one change covering only what differs, kept out of undo, so the cursor and scroll stay where
+// they were. With unsaved text it stops following and says so; a deleted file says so too.
+/** Follow the file's latest read (lib/file-store) into its edit. */
+function follow(id: string): void {
+  const data = files.get(id)?.data
+  const base = edits.base(id)
+  const now = edits.get(id)
+  const path = edits.path(id)
+  // (A save in flight: its own write lands next. A reload: its text goes in first.)
+  if (!data || !base || !now || !path || now.saving || edits.isReloading(id)) return
+  // Only a read newer than the base counts: an older one (landing late, or still in the file
+  // store when the editor mounts again) would take the file back in time, or clear a bar a
+  // save just put up.
+  const seq = files.seqOf(id)
+  if (seq <= base.seq) return
+  const notice = now.notice?.kind
+  // Back to the bytes it was edited from (a checkout and back): a deleted / changed bar goes,
+  // if this read started after the bar went up (an older one says nothing about it).
+  if (data.kind === "text" && data.hash === base.hash) {
+    if ((notice === "missing" || notice === "changed") && seq > edits.noticeSeq(id))
+      edits.dismiss(id)
+    return
+  }
+  if (data.kind === "error") {
+    if (data.gone) edits.note(id, { kind: "missing" }, seq)
+    return // (another error is the read's, not the file's: the next read decides)
+  }
+  // Too large or not text any more: it can't be followed; saving over it asks first.
+  if (data.kind !== "text" || !data.hash || data.editable === false)
+    return edits.note(id, { kind: "changed" }, seq)
+  flushDirty(id)
+  const st = current(id)
+  if (!st) return
+  const incoming = fromDisk(data.text)
+  const dirty = !!edits.get(id)?.dirty
+  // Unsaved text: it stops following, unless the file now holds exactly that text (a length
+  // that differs settles it without making a string of the document).
+  if (dirty && (st.doc.length !== incoming.text.length || st.doc.toString() !== incoming.text))
+    return edits.note(id, { kind: "changed" }, seq)
+  // Clean, the document is the base: its string stands in (no copy of a 2 MB document).
+  const was = dirty ? st.doc.toString() : base.text
+  const next = edits.follow(id, incoming, data.hash, seq)
+  if (!next) return
+  const indent = indentFor(detectIndent(next.text, path, useStore.getState().settings.editorIndent))
+  apply(id, () => ({
+    changes: changesBetween(was, next.text),
+    effects: indentSlot.reconfigure(indent),
+    // Out of undo; and not checked against the base (it IS the base: set just below).
+    annotations: [Transaction.addToHistory.of(false), following.of(true)],
+  }))
+  // The document is the new base now: it becomes the base's text (no second copy built), clean.
+  const after = current(id)
+  if (!after) return
+  baseDocs.set(id, { hash: next.hash, doc: after.doc })
+  edits.setDirty(id, false)
+}
+
 const subscribe = (fn: () => void) => edits.subscribe(fn)
+const subscribeFiles = (fn: () => void) => files.subscribe(fn)
 const NOT_EDITING: EditShown = { dirty: false, saving: false, notice: null, mixed: false }
 
 /** The editor for entry `entryId` (its edit already started: lib/edit-store `start`). */
@@ -208,7 +271,7 @@ export default function FileEditor({
       dispatch: (tr) => {
         view.update([tr])
         edits.keep(entryId, view.state)
-        if (tr.docChanged) refreshDirty(entryId, view.state)
+        if (tr.docChanged && !tr.annotation(following)) refreshDirty(entryId, view.state)
       },
     })
     viewRef.current = view
@@ -263,6 +326,11 @@ export default function FileEditor({
   }, [asked, entryId])
   const leaveRef = useRef(() => {})
 
+  // Each new read of the file (the watcher, a tab coming back) is followed.
+  const read = useSyncExternalStore(subscribeFiles, () => files.get(entryId)?.data ?? null)
+  // …and again when a save ends or the text is clean again (a change that came meanwhile).
+  useEffect(() => follow(entryId), [read, entryId, shown.saving, shown.dirty])
+
   // The setting is the width for files that show none of their own.
   useEffect(() => {
     const base = edits.base(entryId)
@@ -289,6 +357,8 @@ export default function FileEditor({
     }))
     const now = current(entryId)
     if (now) refreshDirty(entryId, now, true)
+    edits.endReload(entryId)
+    follow(entryId) // a read that landed meanwhile, newer than the reload's
   }
   const leave = () => {
     const line = topLine()

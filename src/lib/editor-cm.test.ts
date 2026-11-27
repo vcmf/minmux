@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 import { EditorSelection, EditorState, type Transaction } from "@codemirror/state"
-import { insertIndent, editorKeymap, indentFor } from "./editor-cm"
+import { changesBetween, insertIndent, editorKeymap, indentFor } from "./editor-cm"
 
 const run = (doc: string, sel: EditorSelection, indent: { tabs: boolean; width: number }) => {
   let state = EditorState.create({ doc, selection: sel, extensions: [indentFor(indent)] })
@@ -53,5 +53,20 @@ describe("editorKeymap", () => {
     expect(keys(true)).toEqual(expect.arrayContaining(["Mod-s", "Tab", "Mod-f"]))
     expect(keys(false)).toContain("Ctrl-Shift-f")
     expect(keys(true)).not.toContain("Ctrl-Shift-f")
+  })
+})
+
+describe("changesBetween", () => {
+  const lines = Array.from({ length: 1000 }, (_, i) => `line ${i}`)
+  it("two distant edits stay two: a cursor between them stays put", () => {
+    const a = lines.join("\n")
+    const b = ["import x", ...lines.slice(0, 900), "changed", ...lines.slice(901)].join("\n")
+    let state = EditorState.create({ doc: a, selection: { anchor: a.indexOf("line 500") } })
+    state = state.update({ changes: changesBetween(a, b) }).state
+    expect(state.doc.toString()).toBe(b)
+    expect(state.doc.lineAt(state.selection.main.head).text).toBe("line 500")
+  })
+  it("no change, no edits", () => {
+    expect(changesBetween("same", "same")).toEqual([])
   })
 })

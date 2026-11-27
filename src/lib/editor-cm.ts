@@ -1,7 +1,12 @@
 // The editor's CodeMirror pieces (docs/design/FILE_EDITING.md): the Tab command, the keymap the
 // app's shortcuts can live with, and the highlight style on the file tab's theme colours. Only
 // the editor's lazy chunk imports this: CodeMirror never loads with the app.
-import { EditorSelection, type Extension, type StateCommand } from "@codemirror/state"
+import {
+  EditorSelection,
+  type ChangeSpec,
+  type Extension,
+  type StateCommand,
+} from "@codemirror/state"
 import { type Command, type KeyBinding } from "@codemirror/view"
 import {
   defaultKeymap,
@@ -13,6 +18,7 @@ import {
 import { HighlightStyle, getIndentUnit, indentUnit, syntaxHighlighting } from "@codemirror/language"
 import { openSearchPanel, searchKeymap } from "@codemirror/search"
 import { tags as t } from "@lezer/highlight"
+import { diff } from "@codemirror/merge"
 
 // CodeMirror's own `insertTab` always types a tab character.
 /** Tab: spaces to the next indent stop (a tab in a tab-indented file); a selection indents. */
@@ -63,6 +69,32 @@ export function editorKeymap(save: Command, isMac: boolean): KeyBinding[] {
     ...defaultKeymap.filter(kept),
   ]
 }
+
+// Each changed stretch on its own, so the text between two distant edits (an import at the top,
+// a line near the end) is untouched and a cursor there stays. A diff that would take too long
+// falls back to coarser stretches (the package's own timeout).
+/** The edits turning `from` into `to`, as CodeMirror changes (in `from`'s positions). */
+export function changesBetween(from: string, to: string): ChangeSpec[] {
+  // The shared start and end first (one cheap pass): an agent appending, or editing one spot,
+  // leaves a small middle, and only that is diffed (on the thread xterm draws on).
+  const max = Math.min(from.length, to.length)
+  let a = 0
+  while (a < max && from.charCodeAt(a) === to.charCodeAt(a)) a++
+  let b = 0
+  while (b < max - a && from.charCodeAt(from.length - 1 - b) === to.charCodeAt(to.length - 1 - b))
+    b++
+  const midA = from.slice(a, from.length - b)
+  const midB = to.slice(a, to.length - b)
+  if (!midA && !midB) return []
+  // A big middle (a rewrite): one change; a diff there would cost more than it keeps.
+  if (midA.length + midB.length > DIFF_MAX) return [{ from: a, to: from.length - b, insert: midB }]
+  return diff(midA, midB, { scanLimit: 500, timeout: 10 }).map((c) => ({
+    from: a + c.fromA,
+    to: a + c.toA,
+    insert: midB.slice(c.fromB, c.toB),
+  }))
+}
+const DIFF_MAX = 50_000 // characters of changed middle diffed edit by edit
 
 /** The indent unit for a file's indentation (lib/editor-text detectIndent). */
 export function indentFor(indent: { tabs: boolean; width: number }): Extension {
