@@ -51,7 +51,14 @@ export interface HostServerDeps {
   findCli?: () => string | null
   run?: (cli: string, args: string[], timeoutMs?: number) => Promise<string>
   /** Shorter intervals for tests. */
-  timing?: { ping?: number; recheck?: number; touch?: number; chatPoll?: number; feedIdle?: number }
+  timing?: {
+    ping?: number
+    recheck?: number
+    touch?: number
+    chatPoll?: number
+    feedIdle?: number
+    termBehind?: number
+  }
 }
 
 const defaultFindCli = () =>
@@ -78,7 +85,7 @@ export function createHostServer(d: HostServerDeps) {
   const CHAT_POLL_MS = d.timing?.chatPoll ?? 1000
   const FEED_IDLE_MS = d.timing?.feedIdle ?? 30_000
   const TERM_FLUSH_MS = 60 // a device's terminal output, batched
-  const TERM_BEHIND = 256 * 1024 // a socket's unsent bytes past which a device is skipped
+  const TERM_BEHIND = d.timing?.termBehind ?? 256 * 1024 // unsent bytes past which a device is skipped
 
   let config: HostConfig | null = null
   let cli: string | null = null

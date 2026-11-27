@@ -1,6 +1,7 @@
 // @vitest-environment node
 // End to end in one process: main's RemoteHost + DeviceTable talking to the real server, on
 // loopback, with a fake `tailscale` CLI.
+import crypto from "node:crypto"
 import fs from "node:fs"
 import http from "node:http"
 import net from "node:net"
@@ -121,7 +122,14 @@ describe("remote host server", () => {
           },
           findCli: () => "tailscale",
           run: (c, a) => cli(c, a),
-          timing: { ping: 40, recheck: 60, touch: 80, chatPoll: 50, feedIdle: 50 },
+          timing: {
+            ping: 40,
+            recheck: 60,
+            touch: 80,
+            chatPoll: 50,
+            feedIdle: 50,
+            termBehind: 64_000,
+          },
         })
         stops.push(server.stop)
         const proc: HostProc = {
@@ -634,6 +642,47 @@ describe("remote host server", () => {
 
     s.ws.send(JSON.stringify({ t: "term", pane: "p1", on: false }))
     await until(() => untapped.includes("p1"))
+  })
+
+  it("terminal: a device that falls behind is skipped, then sent a fresh screen", async () => {
+    host.setPanes({
+      tabs: [{ id: "t", title: "t" }],
+      panes: [{ id: "p1", tab: "t", title: "a", kind: "shell", status: "idle", started: true }],
+      stale: false,
+    })
+    const s = await hello(await approve())
+    s.ws.send(JSON.stringify({ t: "term", pane: "p1", on: true }))
+    await until(() => s.got.some((m) => m.t === "tsnap"))
+    // The phone stops reading: the server's socket buffer fills up.
+    const sock = (s.ws as unknown as { _socket: { pause(): void; resume(): void } })._socket
+    sock.pause()
+    let offset = 5
+    // Random text: the socket compresses, and a run of one letter would shrink to nothing.
+    const big = crypto.randomBytes(150_000).toString("base64")
+    for (let i = 0; i < 40; i++) {
+      host.tap({ t: "tout", pane: "p1", epoch: 1, offset, data: big })
+      offset += big.length
+      await new Promise((r) => setTimeout(r, 70))
+    }
+    const before = s.got.filter((m) => m.t === "tsnap").length
+    sock.resume()
+    await until(() => s.got.filter((m) => m.t === "tsnap").length > before, 15_000)
+  }, 40_000)
+
+  it("terminal: a new size after what was queued at the old one", async () => {
+    host.setPanes({
+      tabs: [{ id: "t", title: "t" }],
+      panes: [{ id: "p1", tab: "t", title: "a", kind: "shell", status: "idle", started: true }],
+      stale: false,
+    })
+    const s = await hello(await approve())
+    s.ws.send(JSON.stringify({ t: "term", pane: "p1", on: true }))
+    await until(() => s.got.some((m) => m.t === "tsnap"))
+    host.tap({ t: "tout", pane: "p1", epoch: 1, offset: 5, data: "old-size" })
+    host.tap({ t: "tsize", pane: "p1", cols: 90, rows: 20 })
+    await until(() => s.got.some((m) => m.t === "tsize"))
+    const order = s.got.filter((m) => m.t === "tout" || m.t === "tsize").map((m) => m.t)
+    expect(order).toEqual(["tout", "tsize"])
   })
 
   it("terminal: a snapshot that failed is retried, not reported gone", async () => {

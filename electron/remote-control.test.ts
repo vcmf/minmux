@@ -316,4 +316,29 @@ describe("setupRemoteControl", () => {
     expect(writes).toEqual([["p1", "\u0003"]])
     rc.dispose()
   })
+
+  it("the tap: batches, resets and sizes go to the worker; its exit stops every tap", () => {
+    settings = JSON.stringify({ remote: { enabled: true } })
+    let untapped = 0
+    const rc = setupRemoteControl({
+      dir: "/app/out/main",
+      configDir: () => cfg,
+      readSettings: () => settings,
+      profile: "",
+      window: () => null,
+      terminal: { snapshot: () => null, untap: () => {}, untapAll: () => void untapped++ },
+    })
+    rc.apply()
+    const p = forks[0]!
+    rc.tapOutput("p1", 2, 10, "abc")
+    rc.tapReset("p1")
+    rc.tapResize("p1", 100, 30)
+    expect(p.sent).toContainEqual({ t: "tout", pane: "p1", epoch: 2, offset: 10, data: "abc" })
+    expect(p.sent).toContainEqual({ t: "treset", pane: "p1" })
+    expect(p.sent).toContainEqual({ t: "tsize", pane: "p1", cols: 100, rows: 30 })
+    settings = JSON.stringify({ remote: { enabled: false } })
+    rc.apply() // the worker stops: its taps go with it
+    expect(untapped).toBe(1)
+    rc.dispose()
+  })
 })
