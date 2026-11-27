@@ -4,10 +4,13 @@
 // by part id. A schema OpenCode changed makes a query throw: the pane says Chat view is unavailable.
 
 import { DatabaseSync } from "node:sqlite"
-import { clip, questionsOf, RESULT_MAX, TEXT_MAX, type ChatItem } from "../../src/lib/remote-chat"
+import { clip, RESULT_MAX, TEXT_MAX, type ChatItem } from "../../src/lib/remote-chat"
+import { questionsOf } from "./questions"
 import { ChatLog, type ChatReader } from "./chat-log"
 import { toolSummary } from "./claude-chat"
-import { BUSY_WAIT_MS, opencodeDb } from "./opencode-history"
+import { opencodeDb } from "./opencode-history"
+
+const CHAT_BUSY_WAIT_MS = 150
 
 const TAIL = 300 // parts read per refresh (the latest ones)
 
@@ -68,8 +71,10 @@ export class OpenCodeChat implements ChatReader {
   ) {}
 
   async read(): Promise<ChatItem[]> {
-    // Open, read, close (OpenCode keeps writing it, like opencode-history), waiting out a lock.
-    const db = new DatabaseSync(this.file, { readOnly: true, timeout: BUSY_WAIT_MS })
+    // Open, read, close (OpenCode keeps writing it, like opencode-history).
+    // A short wait: this runs in the worker that also serves the phones; a lock still held is
+    // just tried again on the next poll.
+    const db = new DatabaseSync(this.file, { readOnly: true, timeout: CHAT_BUSY_WAIT_MS })
     try {
       this.readFrom(db)
     } finally {

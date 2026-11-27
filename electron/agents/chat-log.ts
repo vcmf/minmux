@@ -115,7 +115,12 @@ export class JsonlChat implements ChatReader {
       let skipFirst = false
       if (this.offset < 0) {
         this.offset = Math.max(0, size - FIRST_READ_MAX)
-        skipFirst = this.offset > 0 // started mid-line: drop the partial first one
+        if (this.offset > 0) {
+          // Started mid-line (unless the byte before is a newline): drop that partial line.
+          const one = Buffer.alloc(1)
+          await fh.read(one, 0, 1, this.offset - 1)
+          skipFirst = one[0] !== 0x0a
+        }
       } else if (size < this.offset) {
         // Rewritten from the start (rare): read it again, into a fresh conversation (ids that fall
         // back to line numbers would land on old items otherwise).

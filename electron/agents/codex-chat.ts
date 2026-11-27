@@ -2,7 +2,8 @@
 // unknown records are skipped; text Codex injects into the user's turn is left out.
 
 import { isTypedPrompt } from "../../src/lib/past-sessions"
-import { clip, questionsOf, RESULT_MAX, TEXT_MAX } from "../../src/lib/remote-chat"
+import { clip, RESULT_MAX, TEXT_MAX } from "../../src/lib/remote-chat"
+import { questionsOf } from "./questions"
 import { JsonlChat, type ChatLog, type ChatReader } from "./chat-log"
 import { toolSummary } from "./claude-chat"
 import { INJECTED, typedText } from "./codex-history"

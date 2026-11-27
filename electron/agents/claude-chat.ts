@@ -1,7 +1,8 @@
 // Claude Code's transcript as chat items (the phone's chat view). Best-effort over an internal
 // format: unknown records are skipped. Sub-agents' lines (isSidechain) stay out of the main thread.
 
-import { clip, questionsOf, RESULT_MAX, TEXT_MAX } from "../../src/lib/remote-chat"
+import { clip, RESULT_MAX, TEXT_MAX } from "../../src/lib/remote-chat"
+import { questionsOf } from "./questions"
 import { JsonlChat, type ChatLog, type ChatReader } from "./chat-log"
 
 const str = (v: unknown): string => (typeof v === "string" ? v : "")

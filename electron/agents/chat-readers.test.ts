@@ -5,7 +5,7 @@ import path from "node:path"
 import { DatabaseSync } from "node:sqlite"
 import { describe, expect, it } from "vitest"
 import { chatReaderFor } from "./chat"
-import { ChatLog, JsonlChat, MAX_ITEMS } from "./chat-log"
+import { ChatLog, FIRST_READ_MAX, JsonlChat, MAX_ITEMS } from "./chat-log"
 import { claudeChat, toolSummary } from "./claude-chat"
 import { codexChat } from "./codex-chat"
 import { OpenCodeChat, opencodeItem } from "./opencode-chat"
@@ -314,6 +314,19 @@ describe("chat log and dispatch", () => {
     await r.read()
     expect(seen).not.toContain("huge")
     expect(seen.at(-1)).toBe("after")
+  }, 30_000)
+
+  it("a first read that starts exactly at a line start keeps that line", async () => {
+    const f = tmp("edge.jsonl")
+    const big = line({ uuid: "pad", pad: "p".repeat(FIRST_READ_MAX) }) // ends with a newline
+    const keep = line({ uuid: "first-kept" })
+    // The read starts FIRST_READ_MAX before the end: right after the padding line's newline.
+    const rest = "x".repeat(FIRST_READ_MAX - keep.length - 1) + "\n"
+    fs.writeFileSync(f, big + keep + rest)
+    const seen: string[] = []
+    const r = new JsonlChat([f], (o) => void seen.push(String(o.uuid)))
+    await r.read()
+    expect(seen[0]).toBe("first-kept")
   }, 30_000)
 
   it("picks a reader per agent", () => {

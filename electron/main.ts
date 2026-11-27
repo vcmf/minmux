@@ -2075,6 +2075,7 @@ app.whenReady().then(async () => {
       return e && !e.carried ? e : null
     },
     transcriptTargets,
+    wslPane: (pane) => !!sessions.get(pane)?.wslDistro,
     // Same rules as the renderer's typing (pty:write): a pending ssh spawn swallows it.
     writePty: (pane, data) => {
       const rec = sessions.get(pane)

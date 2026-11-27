@@ -14,7 +14,12 @@
 // localInput), and when the pane closes.
 
 import type { AgentEvent } from "../../src/lib/agent-graph"
-import { isIdleNotification, isQuietNotification, QUESTION_TOOLS } from "../agents/dialogs"
+import {
+  answersSilently,
+  isIdleNotification,
+  isQuietNotification,
+  QUESTION_TOOLS,
+} from "../agents/dialogs"
 
 export interface Wait {
   agent: string // "" for the pane's session, else the sub-agent's id
@@ -26,7 +31,7 @@ export interface Wait {
 
 type Ev = Pick<
   AgentEvent,
-  "event" | "paneId" | "agentId" | "toolKey" | "toolName" | "message" | "notificationType"
+  "event" | "agent" | "paneId" | "agentId" | "toolKey" | "toolName" | "message" | "notificationType"
 >
 
 /** Keys someone at the desktop answers a dialog with. Arrows and typing don't. */
@@ -35,7 +40,7 @@ export const isAnswerKey = (data: string): boolean =>
 
 export class WaitTracker {
   private panes = new Map<string, Wait[]>()
-  private lastPre = new Map<string, string>() // pane + agent → its latest PreToolUse toolKey
+  private running = new Map<string, Set<string>>() // pane + agent → its calls started, not done
 
   constructor(private readonly now: () => number = Date.now) {}
 
@@ -65,12 +70,16 @@ export class WaitTracker {
       case "UserPromptSubmit":
         if (!ev.agentId) this.clear(pane)
         else this.close(pane, (w) => w.agent === agent)
+        this.running.delete(slot)
         return
       case "Stop":
         this.clear(pane) // the turn is over: no dialog of it can still be up
+        for (const k of [...this.running.keys()])
+          if (k.startsWith(`${pane}\u0000`)) this.running.delete(k)
         return
       case "SubagentStop":
         this.close(pane, (w) => w.agent === agent)
+        this.running.delete(slot)
         return
       case "PermissionReplied":
         this.close(pane, (w) => w.agent === agent && w.kind === "permission")
@@ -81,12 +90,9 @@ export class WaitTracker {
           return
         }
         if (isQuietNotification(ev)) return
-        this.open(pane, {
-          agent,
-          key: this.lastPre.get(slot) ?? "?",
-          kind: "permission",
-          message: ev.message,
-        })
+        // Claude doesn't say which call it asks about: keyless, it stays open until every call
+        // this agent has running finished (the one asked about only runs once it's answered).
+        this.open(pane, { agent, key: "?", kind: "permission", message: ev.message })
         return
       }
       case "PermissionRequest":
@@ -94,21 +100,35 @@ export class WaitTracker {
         return
       case "PreToolUse": {
         const key = ev.toolKey ?? "?"
-        // Another call of this agent started: its earlier dialogs were answered. (The same call:
-        // Codex sends PermissionRequest and PreToolUse ~40 ms apart, either order.)
-        this.close(pane, (w) => w.agent === agent && w.key !== key && w.key !== "?")
-        this.lastPre.set(slot, key)
+        this.runningOf(slot).add(key)
+        // An agent that says nothing when a prompt is answered (Codex): its next call shows it
+        // moved on. Others run calls in parallel, so a new call proves nothing there. (The same
+        // call: Codex sends PermissionRequest and PreToolUse ~40 ms apart, either order.)
+        if (answersSilently(ev.agent))
+          this.close(pane, (w) => w.agent === agent && w.key !== key && w.key !== "?")
         if (QUESTION_TOOLS.has(ev.toolName ?? ""))
           this.open(pane, { agent, key, kind: "question", message: ev.message })
         return
       }
       case "PostToolUse": {
         const key = ev.toolKey ?? "?"
-        // That call ran (so its dialog was answered); a keyless prompt of this agent too.
-        this.close(pane, (w) => w.agent === agent && (w.key === key || w.key === "?"))
+        const running = this.runningOf(slot)
+        running.delete(key)
+        // That call ran, so its own dialog was answered. A keyless prompt closes only once none
+        // of this agent's calls is still running (one of them is the call it asked about).
+        this.close(
+          pane,
+          (w) => w.agent === agent && (w.key === key || (w.key === "?" && running.size === 0)),
+        )
         return
       }
     }
+  }
+
+  private runningOf(slot: string): Set<string> {
+    let s = this.running.get(slot)
+    if (!s) this.running.set(slot, (s = new Set()))
+    return s
   }
 
   /** Someone at the desktop typed into the pane. Ctrl+C interrupts: every dialog goes. Esc
@@ -131,8 +151,8 @@ export class WaitTracker {
   /** The pane closed (or its process ended). */
   drop(pane: string): void {
     this.clear(pane)
-    for (const k of [...this.lastPre.keys()])
-      if (k.startsWith(`${pane}\u0000`)) this.lastPre.delete(k)
+    for (const k of [...this.running.keys()])
+      if (k.startsWith(`${pane}\u0000`)) this.running.delete(k)
   }
 
   private open(pane: string, w: Omit<Wait, "since">): void {

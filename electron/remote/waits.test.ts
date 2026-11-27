@@ -20,7 +20,7 @@ describe("wait tracker: Claude", () => {
         message: "Claude needs your permission to use Bash",
       }),
     ).toBe(true)
-    expect(w.waits(P)[0]).toMatchObject({ key: "bash1", kind: "permission" })
+    expect(w.waits(P)[0]).toMatchObject({ key: "?", kind: "permission" })
     expect(run(w, { event: "PostToolUse", toolKey: "bash1" })).toBe(false)
   })
 
@@ -44,6 +44,15 @@ describe("wait tracker: Claude", () => {
     expect(
       run(t(), { event: "Notification", message: "Claude needs your permission to use Edit" }),
     ).toBe(true)
+  })
+
+  it("Claude: a parallel call that needed no permission finishing keeps the prompt open", () => {
+    const w = t()
+    run(w, { event: "PreToolUse", toolKey: "read" }) // needs permission
+    run(w, { event: "PreToolUse", toolKey: "grep" }) // allowed
+    run(w, { event: "Notification", notificationType: "permission_prompt" })
+    expect(run(w, { event: "PostToolUse", toolKey: "grep" })).toBe(true)
+    expect(run(w, { event: "PostToolUse", toolKey: "read" })).toBe(false)
   })
 
   it("a parallel call finishing doesn't close another call's prompt", () => {
@@ -94,8 +103,17 @@ describe("wait tracker: Codex and OpenCode", () => {
 
   it("Codex says nothing when answered: the next call shows it moved on", () => {
     const w = t()
-    run(w, { event: "PermissionRequest", toolKey: "k" })
-    expect(run(w, { event: "PreToolUse", toolKey: "other" })).toBe(false)
+    run(w, { event: "PermissionRequest", toolKey: "k", agent: "codex" })
+    expect(run(w, { event: "PreToolUse", toolKey: "other", agent: "codex" })).toBe(false)
+  })
+
+  it("OpenCode runs calls in parallel: another call starting doesn't close a prompt", () => {
+    const w = t()
+    run(w, { event: "PreToolUse", toolKey: "a", agent: "opencode" })
+    run(w, { event: "PermissionRequest", toolKey: "a", agent: "opencode" })
+    expect(run(w, { event: "PreToolUse", toolKey: "b", agent: "opencode" })).toBe(true)
+    expect(run(w, { event: "PostToolUse", toolKey: "b", agent: "opencode" })).toBe(true)
+    expect(run(w, { event: "PostToolUse", toolKey: "a", agent: "opencode" })).toBe(false)
   })
 
   it("OpenCode: PermissionReplied closes", () => {

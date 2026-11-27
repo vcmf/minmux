@@ -27,6 +27,8 @@ export interface RemoteControlDeps {
   ) => { agent?: AgentKind; sessionId: string; transcriptPath?: string } | null
   /** Host paths for a transcript a hook reported (a WSL pane's through its distro). */
   transcriptTargets?: (p: string, pane: string) => string[]
+  /** A WSL pane (its agents' files live inside the distro). */
+  wslPane?: (pane: string) => boolean
   /** Writes to a pane's PTY as typing would; false when there's no live one. */
   writePty?: (pane: string, data: string) => boolean
 }
@@ -210,6 +212,8 @@ export function setupRemoteControl(deps: RemoteControlDeps) {
     for (const p of lastPanes.panes) {
       const l = deps.leadOf(p.id)
       if (!l) continue
+      // OpenCode's database is inside the distro for a WSL pane: no chat view there (yet).
+      if (l.agent === "opencode" && deps.wslPane?.(p.id)) continue
       const files = l.transcriptPath
         ? (deps.transcriptTargets?.(l.transcriptPath, p.id) ?? [l.transcriptPath])
         : []

@@ -84,7 +84,7 @@ export function PaneView({
 
   const older = () => {
     const first = chat.items[0]
-    if (first) send({ t: "more", pane: pane.id, before: first.id })
+    if (first) send({ t: "more", pane: pane.id, before: first.id, seq: first.seq })
   }
 
   return (
@@ -115,13 +115,19 @@ export function PaneView({
           </button>
         )}
         {!chat.loaded && <p className="dim pad">Loading…</p>}
-        {chat.unavailable === "no-agent" && (
-          <p className="dim pad">
-            No agent conversation here. You can still send a line to this{" "}
-            {pane.kind === "ssh" ? "ssh session" : "shell"}; its terminal view comes in a later
-            update.
-          </p>
-        )}
+        {chat.unavailable === "no-agent" &&
+          (pane.kind === "agent" ? (
+            <p className="dim pad">
+              This agent&apos;s conversation can&apos;t be shown here. Its terminal view comes in a
+              later update.
+            </p>
+          ) : (
+            <p className="dim pad">
+              No agent conversation here. You can still send a line to this{" "}
+              {pane.kind === "ssh" ? "ssh session" : "shell"}; its terminal view comes in a later
+              update.
+            </p>
+          ))}
         {chat.unavailable === "error" && (
           <p className="warn pad">
             This agent's conversation couldn't be read. Its terminal view comes in a later update.
@@ -137,7 +143,8 @@ export function PaneView({
               <div className="text">{o.text}</div>
               <div className="meta">
                 {o.state === "sending" ? "Sending…" : refusalText(o.reason)}
-                {o.state === "failed" && o.reason !== "not-allowed" && (
+                {/* Held: the text is already in the agent's input box; another try would paste it twice. */}
+                {o.state === "failed" && o.reason !== "not-allowed" && o.reason !== "held" && (
                   <button
                     className="retry"
                     onClick={() => {

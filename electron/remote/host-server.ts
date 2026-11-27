@@ -50,7 +50,7 @@ export interface HostServerDeps {
   findCli?: () => string | null
   run?: (cli: string, args: string[], timeoutMs?: number) => Promise<string>
   /** Shorter intervals for tests. */
-  timing?: { ping?: number; recheck?: number; touch?: number; chatPoll?: number }
+  timing?: { ping?: number; recheck?: number; touch?: number; chatPoll?: number; feedIdle?: number }
 }
 
 const defaultFindCli = () =>
@@ -75,7 +75,7 @@ export function createHostServer(d: HostServerDeps) {
   const SEND_TIMEOUT_MS = 30_000
   const CHAT_TAIL = 50 // items sent on a watch, and per `more`
   const CHAT_POLL_MS = d.timing?.chatPoll ?? 1000
-  const FEED_IDLE_MS = 30_000
+  const FEED_IDLE_MS = d.timing?.feedIdle ?? 30_000
 
   let config: HostConfig | null = null
   let cli: string | null = null
@@ -426,7 +426,7 @@ export function createHostServer(d: HostServerDeps) {
     if (m.t !== "hello" && !c.hello) return
     if (m.t === "watch") return void watch(c, m.pane)
     if (m.t === "unwatch") return unwatch(c, m.pane)
-    if (m.t === "more") return more(c, m.pane, m.before)
+    if (m.t === "more") return more(c, m.pane, m.before, m.seq)
     if (m.t === "send") {
       if (c.permission === "view")
         return sendTo(c, { t: "ack", id: m.id, ok: false, reason: "not-allowed" })
@@ -479,6 +479,8 @@ export function createHostServer(d: HostServerDeps) {
     errors: number // consecutive failed reads (the page is told at FEED_MAX_ERRORS)
   }
   let leads: Record<string, ChatLead> = {}
+  // Each pane's last lead, kept after its session ends: its conversation can still be opened.
+  const lastLead = new Map<string, ChatLead>()
   const feeds = new Map<string, Feed>()
   const leadKey = (l: ChatLead) => `${l.agent}:${l.sessionId}`
   const FEED_MAX_ERRORS = 5 // failed reads in a row before the page hears (reads go on)
@@ -494,7 +496,7 @@ export function createHostServer(d: HostServerDeps) {
 
   /** The pane's feed for its current lead (a new session gets a new reader), or null. */
   function feedFor(pane: string): Feed | null {
-    const lead = leads[pane]
+    const lead = leads[pane] ?? lastLead.get(pane)
     const have = feeds.get(pane)
     // Same session, or the session ended (no lead now): its conversation stays on screen.
     if (have && (!lead || have.key === leadKey(lead))) return have
@@ -587,11 +589,13 @@ export function createHostServer(d: HostServerDeps) {
     f.idle ??= setTimeout(() => closeFeed(pane), FEED_IDLE_MS)
   }
 
-  function more(c: Client, pane: string, before: string) {
+  function more(c: Client, pane: string, before: string, beforeSeq?: number) {
     const f = feeds.get(pane)
     if (!f || !f.ready.has(c)) return
     const items = f.reader.log.items
-    const at = items.findIndex((it) => it.id === before)
+    let at = items.findIndex((it) => it.id === before)
+    // That item was trimmed from the log: the ones before its place still are.
+    if (at < 0 && beforeSeq !== undefined) at = items.findIndex((it) => (it.seq ?? 0) >= beforeSeq)
     if (at <= 0) return sendTo(c, { t: "chat", pane, items: [], older: true, more: false })
     const from = Math.max(0, at - CHAT_TAIL)
     sendTo(c, { t: "chat", pane, items: items.slice(from, at), older: true, more: from > 0 })
@@ -600,6 +604,7 @@ export function createHostServer(d: HostServerDeps) {
   /** Main's new leads: a pane whose session changed starts over for its watchers. */
   function setLeads(next: Record<string, ChatLead>) {
     leads = next
+    for (const [pane, l] of Object.entries(next)) lastLead.set(pane, l)
     for (const pane of new Set([...feeds.keys(), ...watchedPanes()])) {
       const f = feeds.get(pane)
       const lead = leads[pane]

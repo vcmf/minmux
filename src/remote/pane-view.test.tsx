@@ -77,10 +77,14 @@ describe("PaneView", () => {
     const msg = sent[sent.length - 1]!
     expect(msg).toMatchObject({ t: "send", pane: "p", text: "run the tests" })
     expect(screen.getByText("Sending…")).toBeInTheDocument()
-    push({ t: "ack", id: msg.id as string, ok: false, reason: "held" })
-    expect(screen.getByText(/Pasted but not sent/)).toBeInTheDocument()
+    push({ t: "ack", id: msg.id as string, ok: false, reason: "error" })
     fireEvent.click(screen.getByText("Edit and retry"))
     expect((screen.getByLabelText("Message") as HTMLTextAreaElement).value).toBe("run the tests")
+    fireEvent.click(screen.getByText("Send"))
+    const again = sent[sent.length - 1]!
+    push({ t: "ack", id: again.id as string, ok: false, reason: "held" })
+    expect(screen.getByText(/In the agent's input box, not sent/)).toBeInTheDocument()
+    expect(screen.queryByText("Edit and retry")).toBeNull() // it's already pasted there
   })
 
   it("while the agent asks, says so and doesn't send", () => {
@@ -98,11 +102,18 @@ describe("PaneView", () => {
     expect(screen.queryByText(/is asking something/)).toBeNull()
   })
 
+  it("an agent pane without a readable conversation doesn't call itself a shell", () => {
+    const { push } = setup()
+    push({ t: "chat", pane: "p", items: [], reset: true, unavailable: "no-agent" })
+    expect(screen.getByText(/conversation can't be shown here/)).toBeInTheDocument()
+  })
+
   it("view-only and unavailable panes", () => {
     const { push } = setup({ permission: "view", pane: pane({ kind: "shell", agent: undefined }) })
     expect(screen.getByLabelText("Message")).toBeDisabled()
     push({ t: "chat", pane: "p", items: [], reset: true, unavailable: "no-agent" })
     expect(screen.getByText(/No agent conversation here/)).toBeInTheDocument()
+    expect(screen.getByText(/this shell/)).toBeInTheDocument()
     push({ t: "chat", pane: "p", items: [], reset: true, unavailable: "error" })
     expect(screen.getByText(/couldn't be read/)).toBeInTheDocument()
   })

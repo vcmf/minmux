@@ -73,7 +73,7 @@ export const acked = (out: Outgoing[], m: Extract<HostMessage, { t: "ack" }>): O
 const REFUSALS: Record<NonNullable<Outgoing["reason"]>, string> = {
   "not-allowed": "This device can only view. Change it in minmux's Settings.",
   waiting: "The agent is asking something. Answer it on the computer first.",
-  held: "Pasted but not sent: the agent started asking. Press Enter on the computer, or answer it.",
+  held: "In the agent's input box, not sent: it started asking. Answer it, then press Enter on the computer.",
   "no-pane": "That pane is gone.",
   "not-started": "That pane hasn't started on the computer yet.",
   empty: "Nothing to send.",

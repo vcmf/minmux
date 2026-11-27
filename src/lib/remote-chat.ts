@@ -30,32 +30,3 @@ export const RESULT_MAX = 2000
 /** Text cut to `max` characters (with a marker), for the wire. */
 export const clip = (s: string, max: number): string =>
   s.length > max ? `${s.slice(0, max)}\n… (${s.length - max} more characters)` : s
-
-/** A multiple-choice ask's questions, from the shape Claude, Codex and OpenCode share. */
-export function questionsOf(input: unknown): ChatQuestion[] | null {
-  const qs = (input as { questions?: unknown } | null)?.questions
-  if (!Array.isArray(qs) || qs.length === 0) return null
-  const out: ChatQuestion[] = []
-  for (const q of qs) {
-    const o = q as Record<string, unknown>
-    if (typeof o?.question !== "string") continue
-    const options = Array.isArray(o.options)
-      ? o.options.flatMap((x) => {
-          const p = x as Record<string, unknown>
-          if (typeof p?.label !== "string") return []
-          return [
-            typeof p.description === "string"
-              ? { label: p.label, description: p.description }
-              : { label: p.label },
-          ]
-        })
-      : []
-    out.push({
-      ...(typeof o.header === "string" ? { header: o.header } : {}),
-      question: o.question,
-      multi: o.multiSelect === true || o.multiple === true || o.multi_select === true,
-      options,
-    })
-  }
-  return out.length ? out : null
-}

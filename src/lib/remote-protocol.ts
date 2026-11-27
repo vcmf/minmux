@@ -49,7 +49,7 @@ export type ClientMessage =
   | { t: "seen" } // the page is in front of its user: counts as use (the 24 h lock)
   | { t: "watch"; pane: string } // start the chat feed for a pane
   | { t: "unwatch"; pane: string }
-  | { t: "more"; pane: string; before: string } // older chat items, before this item id
+  | { t: "more"; pane: string; before: string; seq?: number } // older items, before this one
   | { t: "send"; pane: string; text: string; id: string } // a message for the pane's agent or shell
 
 export const SEEN_EVERY_MS = 60_000
@@ -126,7 +126,12 @@ export function parseClientMessage(raw: unknown): ClientMessage | null {
       return typeof m.pane === "string" && m.pane.length <= 200 ? { t: m.t, pane: m.pane } : null
     case "more":
       return typeof m.pane === "string" && typeof m.before === "string"
-        ? { t: "more", pane: m.pane, before: m.before }
+        ? {
+            t: "more",
+            pane: m.pane,
+            before: m.before,
+            ...(typeof m.seq === "number" ? { seq: m.seq } : {}),
+          }
         : null
     case "send":
       return typeof m.pane === "string" &&

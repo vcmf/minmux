@@ -15,3 +15,7 @@ export const isIdleNotification = (ev: Pick<AgentEvent, "notificationType" | "me
 /** A notification that shows nothing to answer (Claude's auth_success). */
 export const isQuietNotification = (ev: Pick<AgentEvent, "notificationType">) =>
   ev.notificationType === "auth_success"
+
+/** Agents that send nothing when a permission prompt is answered (Codex): their next tool call is
+ *  the sign. Claude and OpenCode report it (the call runs, or PermissionReplied). */
+export const answersSilently = (agent: AgentEvent["agent"]) => agent === "codex"

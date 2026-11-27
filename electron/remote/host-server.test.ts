@@ -115,7 +115,7 @@ describe("remote host server", () => {
           },
           findCli: () => "tailscale",
           run: (c, a) => cli(c, a),
-          timing: { ping: 40, recheck: 60, touch: 80, chatPoll: 50 },
+          timing: { ping: 40, recheck: 60, touch: 80, chatPoll: 50, feedIdle: 50 },
         })
         stops.push(server.stop)
         const proc: HostProc = {
@@ -504,6 +504,38 @@ describe("remote host server", () => {
       items: { id: string }[]
     }
     expect(last.items.map((i) => i.id)).toEqual(["fromB"])
+  })
+
+  it("chat: an ended session's conversation can be opened again later", async () => {
+    const f = path.join(dir, "ended.jsonl")
+    fs.writeFileSync(
+      f,
+      JSON.stringify({ type: "user", uuid: "kept", message: { content: "x" } }) + "\n",
+    )
+    host.setPanes({
+      tabs: [{ id: "t", title: "t" }],
+      panes: [{ id: "p1", tab: "t", title: "a", kind: "agent", status: "idle", started: true }],
+      stale: false,
+    })
+    host.setLeads({ p1: { agent: "claude", sessionId: "s1", files: [f] } })
+    const s = await hello(await approve())
+    s.ws.send(JSON.stringify({ t: "watch", pane: "p1" }))
+    await until(() => s.got.some((m) => m.t === "chat" && m.reset))
+    host.setLeads({}) // the session ended
+    s.ws.send(JSON.stringify({ t: "unwatch", pane: "p1" }))
+    await new Promise((r) => setTimeout(r, 150)) // the idle feed closes
+    s.got.length = 0
+    s.ws.send(JSON.stringify({ t: "watch", pane: "p1" }))
+    await until(() => s.got.some((m) => m.t === "chat" && m.reset))
+    const again = s.got.find((m) => m.t === "chat" && m.reset) as unknown as {
+      items: { id: string }[]
+      unavailable?: string
+    }
+    expect(again.unavailable).toBeUndefined()
+    expect(again.items.map((i) => i.id)).toEqual(["kept"])
+    // Load earlier for an item no longer in the log: by its place.
+    s.ws.send(JSON.stringify({ t: "more", pane: "p1", before: "gone", seq: 1 }))
+    await until(() => s.got.some((m) => m.t === "chat" && m.older))
   })
 
   it("send: relayed to main and acked; view-only devices refused here", async () => {
