@@ -444,11 +444,20 @@ export function createHostServer(d: HostServerDeps) {
     if (m.t === "more") return more(c, m.pane, m.before, m.seq)
     if (m.t === "term") return void (m.on ? termOn(c, m.pane) : termOff(c, m.pane))
     if (m.t === "dialog") {
+      if (!panes.panes.some((p) => p.id === m.pane))
+        return sendTo(c, {
+          t: "dialog",
+          pane: m.pane,
+          waitId: m.waitId,
+          dialog: null,
+          answerable: false,
+        })
       const lines = await screenOf(m.pane)
       const answerable = await rpc({ op: "answerable", pane: m.pane })
       return sendTo(c, {
         t: "dialog",
         pane: m.pane,
+        waitId: m.waitId,
         dialog: lines ? parseDialog(lines) : null,
         answerable,
       })
@@ -749,10 +758,12 @@ export function createHostServer(d: HostServerDeps) {
    *  taken for this look only (the tap stops again right after). */
   async function screenOf(pane: string): Promise<string[] | null> {
     const f = termFeeds.get(pane)
+    if (f?.snapping) await f.snapping // a re-snapshot under way: the screen after it
     if (f?.mirror) return f.mirror.lines()
     const snap = await rpc({ op: "snapshot", pane })
+    // Asked or not, main may have started the tap: stop it unless someone watches now.
+    if (!termFeeds.has(pane)) post({ t: "untap", pane })
     if (!snap || snap === "failed") return null
-    if (!termFeeds.has(pane)) post({ t: "untap", pane }) // nobody started watching meanwhile
     const m = new TermMirror(snap)
     try {
       return await m.lines()

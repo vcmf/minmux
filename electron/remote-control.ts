@@ -121,17 +121,19 @@ export function setupRemoteControl(deps: RemoteControlDeps) {
     snapshot: (pane) => deps.terminal?.snapshot(pane) ?? null,
     untap: (pane) => deps.terminal?.untap(pane),
     workerGone: () => deps.terminal?.untapAll(),
-    // Raw keys from a device allowed them (Terminal view's keys bar): typed as they come, like the
-    // desktop's own keys, so an answer key also closes the pane's dialog.
-    answerable: (pane) => answerKeys(deps.leadOf?.(pane)?.agent, 1) !== null,
+    // The dialog in front: is it one a device may answer by number (its agent and kind)?
+    answerable: (pane) => {
+      const w = waits.waits(pane)[0]
+      return !!w && answerKeys(w.agentKind, w.kind, 1) !== null
+    },
     // An answer from a device: still that dialog (wait id), still on screen (the option at that
     // number, by its label), an agent that takes numbers; then its key, like the desktop's.
     answer: async (call) => {
       const p = (await devices()).permissionOf(call.deviceId)
       if (p !== "send" && p !== "keys") return { ok: false, reason: "not-allowed" }
-      const open = waits.waits(call.pane)
-      if (!open.some((w) => w.id === call.waitId)) return { ok: false, reason: "stale" }
-      const keys = answerKeys(deps.leadOf?.(call.pane)?.agent, call.n)
+      const wait = waits.waits(call.pane).find((w) => w.id === call.waitId)
+      if (!wait) return { ok: false, reason: "stale" }
+      const keys = answerKeys(wait.agentKind, wait.kind, call.n)
       if (!keys) return { ok: false, reason: "unsupported" }
       const option = parseDialog(call.lines)?.options.find((o) => o.n === call.n)
       if (!option || option.label !== call.label) return { ok: false, reason: "changed" }
@@ -142,6 +144,8 @@ export function setupRemoteControl(deps: RemoteControlDeps) {
       send("remote:typed", call.pane, name)
       return { ok: true }
     },
+    // Raw keys from a device allowed them (Terminal view's keys bar): typed as they come, like the
+    // desktop's own keys, so an answer key also closes the pane's dialog.
     keys: async (deviceId, pane, data) => {
       if ((await devices()).permissionOf(deviceId) !== "keys") return false
       if (!lastPanes?.panes.some((p) => p.id === pane)) return false

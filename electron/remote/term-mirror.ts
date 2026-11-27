@@ -65,19 +65,23 @@ export class TermMirror {
 
   /** The screen and recent scrollback as escape sequences, every write so far parsed. */
   async serialize(): Promise<string> {
-    // Batches can arrive while we wait: wait again until none is pending, then serialize at
-    // once, so the screen holds everything fed so far (callers drop what they queued meanwhile).
+    await this.settled()
+    return this.serializer.serialize({ scrollback: SNAPSHOT_LINES })
+  }
+
+  // Batches can arrive while we wait: wait again until none is pending, so what follows sees
+  // everything fed so far (callers drop what they queued meanwhile).
+  private async settled(): Promise<void> {
     let w: Promise<void>
     do {
       w = this.writing
       await w
     } while (w !== this.writing)
-    return this.serializer.serialize({ scrollback: SNAPSHOT_LINES })
   }
 
   /** The screen's lines as text, once every write so far is parsed (the dialog check). */
   async lines(): Promise<string[]> {
-    await this.serialize() // same wait: everything fed is on screen
+    await this.settled()
     const b = this.term.buffer.active
     const out: string[] = []
     for (let i = 0; i < this.term.rows; i++)

@@ -179,6 +179,8 @@ export function PaneView({
           pane={pane}
           agentName={agentName}
           canAnswer={permission !== "view" && online}
+          online={online}
+          epoch={epoch}
           send={send}
           subscribe={subscribe}
           openTerminal={() => setView("terminal")}

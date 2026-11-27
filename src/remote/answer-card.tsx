@@ -13,13 +13,24 @@ interface Props {
   pane: RemotePane
   agentName: string
   canAnswer: boolean // the device may send
+  online: boolean
+  epoch: number // bumps on every welcome: read the screen again
   send: (m: unknown) => boolean
   subscribe: (fn: (m: HostMessage) => void) => () => void
   openTerminal: () => void
 }
 
 /** The agent's open question, as its screen shows it, with a button per option. */
-export function AnswerCard({ pane, agentName, canAnswer, send, subscribe, openTerminal }: Props) {
+export function AnswerCard({
+  pane,
+  agentName,
+  canAnswer,
+  online,
+  epoch,
+  send,
+  subscribe,
+  openTerminal,
+}: Props) {
   const [dialog, setDialog] = useState<{ d: Dialog | null; answerable: boolean } | null>(null)
   const [busy, setBusy] = useState<number | null>(null)
   const [note, setNote] = useState("")
@@ -28,7 +39,8 @@ export function AnswerCard({ pane, agentName, canAnswer, send, subscribe, openTe
   useEffect(
     () =>
       subscribe((m) => {
-        if (m.t === "dialog" && m.pane === pane.id)
+        // Only the reply about this dialog: one about an earlier one (still on its way) is dropped.
+        if (m.t === "dialog" && m.pane === pane.id && m.waitId === waitId)
           setDialog({ d: m.dialog, answerable: m.answerable })
         if (m.t === "answered" && m.pane === pane.id && m.waitId === waitId) {
           setBusy(null)
@@ -38,17 +50,18 @@ export function AnswerCard({ pane, agentName, canAnswer, send, subscribe, openTe
     [subscribe, pane.id, waitId],
   )
 
-  // Read the screen when the question appears (or another one replaces it).
+  // Read the screen when the question appears, another one replaces it, or the link comes back.
   useEffect(() => {
     setDialog(null)
     setNote("")
-    send({ t: "dialog", pane: pane.id })
-  }, [send, pane.id, waitId])
+    setBusy(null)
+    if (online) send({ t: "dialog", pane: pane.id, waitId })
+  }, [send, pane.id, waitId, online, epoch])
 
   const answer = (n: number, label: string) => {
-    setBusy(n)
     setNote("")
-    send({ t: "answer", pane: pane.id, waitId, n, label })
+    if (!send({ t: "answer", pane: pane.id, waitId, n, label })) return setNote(REASON.error)
+    setBusy(n)
   }
 
   return (
@@ -81,7 +94,13 @@ export function AnswerCard({ pane, agentName, canAnswer, send, subscribe, openTe
         </div>
       )}
       {note && <div className="answer-note">{note}</div>}
-      <button className="link" onClick={() => send({ t: "dialog", pane: pane.id })}>
+      <button
+        className="link"
+        onClick={() => {
+          setBusy(null)
+          send({ t: "dialog", pane: pane.id, waitId })
+        }}
+      >
         Look again
       </button>
     </div>

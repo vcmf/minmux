@@ -25,6 +25,8 @@ function setup(canAnswer = true) {
       pane={pane}
       agentName="Claude"
       canAnswer={canAnswer}
+      online
+      epoch={1}
       send={(m) => (sent.push(m as Record<string, unknown>), true)}
       subscribe={(fn) => (listeners.add(fn), () => void listeners.delete(fn))}
       openTerminal={openTerminal}
@@ -44,8 +46,16 @@ const dialog = {
 describe("AnswerCard", () => {
   it("reads the dialog, answers with the option's number and label, explains a refusal", () => {
     const { sent, push } = setup()
-    expect(sent[0]).toEqual({ t: "dialog", pane: "p" })
-    push({ t: "dialog", pane: "p", dialog, answerable: true })
+    expect(sent[0]).toEqual({ t: "dialog", pane: "p", waitId: "w1" })
+    push({
+      t: "dialog",
+      pane: "p",
+      waitId: "w0",
+      dialog: { ...dialog, question: "Old?" },
+      answerable: true,
+    })
+    expect(screen.queryByText("Old?")).toBeNull() // a reply about an earlier dialog
+    push({ t: "dialog", pane: "p", waitId: "w1", dialog, answerable: true })
     expect(screen.getByText("Do you want to proceed?")).toBeInTheDocument()
     fireEvent.click(screen.getByText("Yes"))
     expect(sent[sent.length - 1]).toEqual({
@@ -58,12 +68,12 @@ describe("AnswerCard", () => {
     push({ t: "answered", pane: "p", waitId: "w1", ok: false, reason: "changed" })
     expect(screen.getByText(/The screen changed/)).toBeInTheDocument()
     fireEvent.click(screen.getByText("Look again"))
-    expect(sent[sent.length - 1]).toEqual({ t: "dialog", pane: "p" })
+    expect(sent[sent.length - 1]).toEqual({ t: "dialog", pane: "p", waitId: "w1" })
   })
 
   it("an agent that isn't answered by number, or a view-only device: options shown, no buttons", () => {
     const { push, openTerminal } = setup()
-    push({ t: "dialog", pane: "p", dialog, answerable: false })
+    push({ t: "dialog", pane: "p", waitId: "w1", dialog, answerable: false })
     expect(screen.queryByRole("button", { name: /Yes/ })).toBeNull()
     fireEvent.click(screen.getByText("Open the Terminal view"))
     expect(openTerminal).toHaveBeenCalled()
@@ -71,7 +81,7 @@ describe("AnswerCard", () => {
 
   it("no options on screen: says so", () => {
     const { push } = setup(false)
-    push({ t: "dialog", pane: "p", dialog: null, answerable: true })
+    push({ t: "dialog", pane: "p", waitId: "w1", dialog: null, answerable: true })
     expect(screen.getByText(/options aren't on screen/)).toBeInTheDocument()
     expect(screen.getByText(/needs your permission/)).toBeInTheDocument()
   })

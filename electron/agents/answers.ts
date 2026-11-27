@@ -11,6 +11,9 @@ export type { Dialog, DialogOption }
 
 // "❯ 1. Yes", "  2. Yes, and don't ask again for …", "› 3. No, and tell Codex …"
 const OPTION = /^\s*(?:[❯›>▶▸]\s*)?([1-9])\.\s+(.+?)\s*$/
+// A box's top or bottom edge.
+const EDGE = /^\s*[╭╰┌└─━]/
+const MAX_GAP = 3 // description lines allowed between two options
 // The box's side borders, when the dialog is drawn in one.
 const BORDER = /^\s*[│|]\s?|\s?[│|]\s*$/g
 
@@ -27,11 +30,17 @@ export function parseDialog(lines: string[]): Dialog | null {
   if (end < 0) return null
   const options: DialogOption[] = []
   let i = end
-  // Walk up over the block (descriptions between options are allowed).
-  for (; i >= 0 && i >= end - 40; i--) {
-    const m = OPTION.exec(clean[i]!)
-    if (m) options.unshift({ n: Number(m[1]), label: m[2]! })
-    else if (options.length && options[0]!.n === 1) break
+  let gap = 0
+  // Walk up over one block: an option's description lines may sit between options (a few), but a
+  // blank line or the box's edge ends it (a numbered list higher up is something else).
+  for (; i >= 0; i--) {
+    const line = clean[i]!
+    const m = OPTION.exec(line)
+    if (m) {
+      options.unshift({ n: Number(m[1]), label: m[2]! })
+      gap = 0
+      if (m[1] === "1") break
+    } else if (!line.trim() || EDGE.test(line) || ++gap > MAX_GAP) break
   }
   if (!options.length || options[0]!.n !== 1) return null
   if (options.some((o, k) => o.n !== k + 1)) return null
@@ -48,9 +57,15 @@ export function parseDialog(lines: string[]): Dialog | null {
   return { question, options }
 }
 
-/** The keys that pick option `n`, for an agent whose dialogs take its number (Claude). Others:
- *  null (the phone points to the Terminal view and its keys bar). */
-export function answerKeys(agent: AgentKind | undefined, n: number): string | null {
-  if (n < 1 || n > 9) return null
-  return (agent ?? "claude") === "claude" ? String(n) : null
+// Claude's permission prompts take the option's number (Claude Code's own strings). Its question
+// dialogs don't end on a digit (a multi-select or multi-question ask only picks), and Codex's and
+// OpenCode's keys aren't verified: those are answered in the Terminal view.
+/** The keys that answer a permission prompt with option `n`, or null where we don't type. */
+export function answerKeys(
+  agent: AgentKind | undefined,
+  kind: "permission" | "question",
+  n: number,
+): string | null {
+  if (n < 1 || n > 9 || kind !== "permission") return null
+  return agent === "claude" ? String(n) : null
 }

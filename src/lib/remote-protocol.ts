@@ -55,7 +55,7 @@ export type ClientMessage =
   | { t: "send"; pane: string; text: string; id: string } // a message for the pane's agent or shell
   | { t: "term"; pane: string; on: boolean } // follow (or stop) the pane's terminal
   | { t: "keys"; pane: string; data: string } // raw keys (devices allowed them)
-  | { t: "dialog"; pane: string } // what the pane's dialog offers, read from its screen
+  | { t: "dialog"; pane: string; waitId?: string } // the dialog as its screen shows it
   | { t: "answer"; pane: string; waitId: string; n: number; label: string }
 
 export const SEEN_EVERY_MS = 60_000
@@ -79,7 +79,7 @@ export type HostMessage =
   | { t: "tout"; pane: string; data: string }
   | { t: "tsize"; pane: string; cols: number; rows: number }
   // The pane's dialog as its screen shows it (null: none there); answerable: buttons may type.
-  | { t: "dialog"; pane: string; dialog: Dialog | null; answerable: boolean }
+  | { t: "dialog"; pane: string; waitId?: string; dialog: Dialog | null; answerable: boolean }
   | { t: "answered"; pane: string; waitId: string; ok: boolean; reason?: AnswerRefusal }
   | { t: "locked"; reason: LockReason }
   | { t: "error"; code: string; message: string }

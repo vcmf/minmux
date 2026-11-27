@@ -345,14 +345,13 @@ describe("setupRemoteControl", () => {
 it("answers: only the open dialog, only an option still on screen, only agents that take numbers", async () => {
     settings = JSON.stringify({ remote: { enabled: true } })
     const writes: [string, string][] = []
-    let agent: "claude" | "codex" = "claude"
     const rc = setupRemoteControl({
       dir: "/app/out/main",
       configDir: () => cfg,
       readSettings: () => settings,
       profile: "",
       window: () => null,
-      leadOf: () => ({ agent, sessionId: "s" }),
+      leadOf: () => ({ agent: "claude", sessionId: "s" }),
       writePty: (pane, data) => (writes.push([pane, data]), true),
     })
     rc.apply()
@@ -399,12 +398,18 @@ it("answers: only the open dialog, only an option still on screen, only agents t
     expect(await answer({ waitId: "w999" })).toEqual({ ok: false, reason: "stale" })
     expect(await answer({ label: "No" })).toEqual({ ok: false, reason: "changed" })
     expect(await answer({ lines: ["$ "] })).toEqual({ ok: false, reason: "changed" })
-    agent = "codex"
-    expect(await answer({})).toEqual({ ok: false, reason: "unsupported" })
-    agent = "claude"
     expect(await answer({})).toEqual({ ok: true })
     expect(writes).toEqual([["p1", "1"]])
     expect(await answer({})).toEqual({ ok: false, reason: "stale" }) // answered: closed
+    // A Codex dialog: its keys aren't verified, so nothing is typed.
+    rc.agentEvents([{ paneId: "p1", event: "PermissionRequest", agent: "codex", toolKey: "k" }])
+    const codexWait = (
+      p.sent.filter((m) => (m as { t: string }).t === "panes").at(-1) as {
+        panes: { panes: { waitId?: string }[] }
+      }
+    ).panes.panes[0]!.waitId!
+    expect(await answer({ waitId: codexWait })).toEqual({ ok: false, reason: "unsupported" })
+    expect(writes).toHaveLength(1)
     rc.dispose()
   })
 })

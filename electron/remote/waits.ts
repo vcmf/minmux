@@ -13,7 +13,7 @@
 // reminder (the agent is at its prompt), when someone at the desktop answers with a key (see
 // localInput), and when the pane closes.
 
-import type { AgentEvent } from "../../src/lib/agent-graph"
+import { agentOf, type AgentEvent, type AgentKind } from "../../src/lib/agent-graph"
 import {
   answersSilently,
   isCompactRestart,
@@ -24,6 +24,7 @@ import {
 
 export interface Wait {
   id: string // this dialog, as a device names it when answering
+  agentKind: AgentKind // which agent asked (its dialogs' keys differ)
   agent: string // "" for the pane's session, else the sub-agent's id
   key: string // the tool call (toolKey) when known, else "?"
   kind: "permission" | "question"
@@ -72,6 +73,7 @@ export class WaitTracker {
   apply(ev: Ev): void {
     const pane = ev.paneId
     if (!pane) return
+    this.kind = agentOf(ev)
     const agent = ev.agentId ?? ""
     const slot = `${pane}\u0000${agent}`
     switch (ev.event) {
@@ -170,10 +172,13 @@ export class WaitTracker {
 
   private nextId = 0
 
-  private open(pane: string, w: Omit<Wait, "since" | "id">): void {
+  private kind: AgentKind = "claude" // the event being applied's agent (set by apply)
+
+  private open(pane: string, w: Omit<Wait, "since" | "id" | "agentKind">): void {
     const list = this.panes.get(pane) ?? []
     if (list.some((x) => x.agent === w.agent && x.key === w.key && x.kind === w.kind)) return
-    this.panes.set(pane, [...list, { ...w, id: `w${++this.nextId}`, since: this.now() }])
+    const wait = { ...w, agentKind: this.kind, id: `w${++this.nextId}`, since: this.now() }
+    this.panes.set(pane, [...list, wait])
   }
 
   /** A device answered this dialog (the keys are typed): it's closed. */

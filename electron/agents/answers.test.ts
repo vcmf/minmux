@@ -43,6 +43,18 @@ describe("parseDialog", () => {
     expect(parseDialog(lines)?.options.map((o) => o.label)).toEqual(["Staging", "Production"])
   })
 
+  it("a numbered list higher up isn't joined to a dialog whose option 1 scrolled away", () => {
+    const lines = [
+      "Which approach?",
+      "1. Refactor",
+      "",
+      "Do you want to proceed?",
+      "  2. b",
+      "  3. c",
+    ]
+    expect(parseDialog(lines)).toBeNull()
+  })
+
   it("nothing that isn't a dialog: no options, numbering that doesn't start at 1, no question", () => {
     expect(parseDialog(["$ ls", "a b c"])).toBeNull()
     expect(parseDialog(["Pick?", "  2. b", "  3. c"])).toBeNull()
@@ -52,10 +64,11 @@ describe("parseDialog", () => {
 })
 
 describe("answerKeys", () => {
-  it("Claude takes the option's number; others aren't typed into", () => {
-    expect(answerKeys("claude", 2)).toBe("2")
-    expect(answerKeys(undefined, 1)).toBe("1")
-    expect(answerKeys("codex", 1)).toBeNull()
-    expect(answerKeys("claude", 0)).toBeNull()
+  it("Claude's permission prompts take the option's number; nothing else is typed into", () => {
+    expect(answerKeys("claude", "permission", 2)).toBe("2")
+    expect(answerKeys(undefined, "permission", 1)).toBeNull() // unknown agent: never assumed
+    expect(answerKeys("codex", "permission", 1)).toBeNull()
+    expect(answerKeys("claude", "question", 1)).toBeNull() // a digit only picks there
+    expect(answerKeys("claude", "permission", 0)).toBeNull()
   })
 })
