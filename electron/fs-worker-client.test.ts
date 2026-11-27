@@ -104,6 +104,25 @@ describe("FsWorkerClient", () => {
     await t.ended
   })
 
+  it("a client without a stuck-worker limit (saves) keeps starting workers", async () => {
+    const c = new FsWorkerClient(
+      () => {
+        const p = fakeProc()
+        procs.push(p)
+        return p as unknown as WorkerProc
+      },
+      1000,
+      5000,
+      Infinity,
+    )
+    for (let i = 0; i < 5; i++) {
+      const save = c.call({ op: "writefile", path: `/dead/${i}`, text: "x", base: "h" })
+      vi.advanceTimersByTime(1300)
+      await expect(save).rejects.toMatchObject({ code: "EHUNG" }) // its process never exits
+    }
+    expect(procs).toHaveLength(5) // each save still got a worker
+  })
+
   it("a hung request fails alone; reads stranded behind it move to a fresh worker", async () => {
     const c = client()
     const stuck = c.call({ op: "readdir", path: "/mnt/dead" })

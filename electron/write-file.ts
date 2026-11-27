@@ -21,12 +21,21 @@ export async function writeFileForTab(
   const bytes = Buffer.from(text, "utf8")
   if (bytes.length > FILE_READ_CAP) return { kind: "error", message: "Too large to save" }
   if (create) {
-    // Written back only where nothing is: a link whose target is gone isn't followed.
+    // Written back only where nothing is: a link whose target is gone isn't followed, and one
+    // to a file is a file (`changed`, as `wx` would say).
     const link = await fs.promises.lstat(file).then(
       (st) => st.isSymbolicLink(),
       () => false,
     )
-    if (link) return { kind: "error", message: "It's a link whose file is gone" }
+    if (link) {
+      const resolves = await fs.promises.stat(file).then(
+        () => true,
+        () => false,
+      )
+      return resolves
+        ? { kind: "changed" }
+        : { kind: "error", message: "It's a link whose file is gone" }
+    }
   }
   if (!create) {
     // A pipe or a device isn't opened for writing at all (that alone can block, or act).

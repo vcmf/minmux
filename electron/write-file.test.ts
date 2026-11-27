@@ -80,6 +80,14 @@ describe("writeFileForTab", () => {
     expect(fs.existsSync(path.join(dir, "nowhere.txt"))).toBe(false)
   })
 
+  it("create at a working link is a file that came back: changed", async () => {
+    const target = put("theirs\n")
+    const link = path.join(dir, `back${n++}`)
+    fs.symlinkSync(target, link)
+    expect(await writeFileForTab(link, "x", null, true)).toEqual({ kind: "changed" })
+    expect(fs.readFileSync(target, "utf8")).toBe("theirs\n")
+  })
+
   it("text with a lone surrogate isn't written (it would become U+FFFD)", async () => {
     const p = put("a")
     expect(await writeFileForTab(p, "x\uD800y", h("a"))).toMatchObject({ kind: "error" })

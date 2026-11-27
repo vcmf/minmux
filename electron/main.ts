@@ -352,6 +352,10 @@ const saveWorker = new FsWorkerClient(
       serviceName: "minmux saves",
       stdio: "ignore",
     }) as unknown as WorkerProc,
+  undefined,
+  undefined,
+  // Stuck saves are already one per file (SaveLocks): a few of them must not stop other saves.
+  Infinity,
 )
 // Past sessions are read and searched in their own utility process: gigabytes of transcripts
 // never touch main (docs/design/AGENT_SESSIONS.md).
@@ -1763,7 +1767,8 @@ function registerIpc() {
       if (!validSave(p, text, base, create, path.isAbsolute))
         return { kind: "error", message: "Bad save request" }
       // One save of a file at a time, never past one that may still land (SaveLocks).
-      return saves.run(`${wsl?.distro ?? ""}:${p}`, (track) =>
+      const distro = wsl ? (wsl.distro ?? defaultWslDistro() ?? "") : ""
+      return saves.run(`${distro}:${p}`, (track) =>
         saveAcross(wslTargets(p, wsl), (target) => {
           const call = saveWorker.track({
             op: "writefile",

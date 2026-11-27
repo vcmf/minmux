@@ -74,14 +74,15 @@ export class FsWorkerClient {
     private readonly spawn: () => WorkerProc,
     private readonly hungMs = HUNG_MS,
     private readonly idleMs = IDLE_MS,
+    private readonly maxRetired = MAX_RETIRED,
   ) {}
 
   call(req: FsCall): Promise<FsResult> {
     return new Promise<FsResult>((resolve, reject) => this.send({ req, resolve, reject, at: 0 }))
   }
 
-  /** A call, and when it left its worker: answered, or the worker exited (it can't run any more).
-   *  A hung write's `ended` waits for its process to go, which a dead mount may never let happen. */
+  // A hung write's `ended` waits for its process to go, which a dead mount may never let happen.
+  /** A call, and when it can no longer run: answered, or its worker's process gone. */
   track(req: FsCall): { result: Promise<FsResult>; ended: Promise<void> } {
     let ended!: () => void
     const left = new Promise<void>((r) => (ended = r))
@@ -112,6 +113,11 @@ export class FsWorkerClient {
     try {
       w.proc.postMessage({ ...p.req, id })
     } catch {
+      // Never sent: a write says so (nothing written), rather than unknown.
+      if (p.req.op === "writefile") {
+        w.pending.delete(id)
+        p.reject(fail("EBUSY"))
+      }
       this.end(w, "EWORKER")
     }
   }
@@ -218,7 +224,7 @@ export class FsWorkerClient {
 
   private ensure(): Worker | null {
     if (this.live) return this.live
-    if (this.retired.size >= MAX_RETIRED) return null
+    if (this.retired.size >= this.maxRetired) return null
     const w: Worker = { proc: this.spawn(), pending: new Map(), retired: false }
     this.spawnedAt = Date.now()
     this.live = w
