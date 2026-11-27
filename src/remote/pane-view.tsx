@@ -199,13 +199,16 @@ function Item({ item }: { item: ChatItem }) {
       )
     case "tool":
       return (
-        <button className={`tool${item.error ? " error" : ""}`} onClick={() => setOpen((v) => !v)}>
-          <span className="tool-name">{item.name}</span>
-          <span className="tool-summary">{item.summary}</span>
+        <div className={`tool${item.error ? " error" : ""}`}>
+          {/* Only the header toggles: the output below can be selected and copied. */}
+          <button className="tool-head" aria-expanded={open} onClick={() => setOpen((v) => !v)}>
+            <span className="tool-name">{item.name}</span>
+            <span className="tool-summary">{item.summary}</span>
+          </button>
           {open && item.result !== undefined && (
             <pre className="tool-result">{item.result || "(no output)"}</pre>
           )}
-        </button>
+        </div>
       )
     case "question":
       return <QuestionCard item={item} />

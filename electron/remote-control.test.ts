@@ -266,6 +266,14 @@ describe("setupRemoteControl", () => {
     expect(last().working).toBeUndefined()
     rc.agentEvents([{ paneId: "p1", sessionId: "lead", event: "UserPromptSubmit" }])
     expect(last().working).toBe(true)
+    // The agent crashed: the shell's prompt came back. Its pane no longer counts as an agent's.
+    rc.shellIdle("p1")
+    expect(last().working).toBeUndefined()
+    // A new session there makes it an agent pane again (working until it says otherwise).
+    rc.agentEvents([{ paneId: "p1", sessionId: "lead", event: "SessionStart", source: "startup" }])
+    expect(last().working).toBeUndefined()
+    rc.agentEvents([{ paneId: "p1", sessionId: "lead", event: "UserPromptSubmit" }])
+    expect(last().working).toBe(true)
     rc.dispose()
   })
 })

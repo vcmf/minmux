@@ -10,7 +10,7 @@ import type { RemoteView } from "../src/lib/remote-view"
 import type { AgentKind } from "../src/lib/agent-graph"
 import { chatLeadFor, type ChatLead } from "./agents/chat-lead"
 import { Sender } from "./remote/typing"
-import { TurnTracker } from "./remote/turns"
+import { ASSUMED_TURN_MS, TurnTracker } from "./remote/turns"
 import { WaitTracker } from "./remote/waits"
 import { DeviceTable, PENDING_MS, type SetPinResult } from "./remote/devices"
 import { RemoteHost, type Decision, type HostProc } from "./remote/host-client"
@@ -169,12 +169,12 @@ export function setupRemoteControl(deps: RemoteControlDeps) {
     write: (pane, data) => deps.writePty?.(pane, data) ?? false,
     asking: (pane) => waits.asking(pane),
     between: (pane) => turns.turn(pane) === "between",
-    isAgent: (pane) => !!deps.leadOf?.(pane),
-    pasteNow: (pane) => deps.pasteMode?.(pane) ?? Promise.resolve(undefined),
-    submitted: (pane) => {
-      turns.started(pane) // a turn is on now, ahead of its hook: the next message waits
-      askingChanged()
+    isAgent: (pane) => {
+      const p = lastPanes?.panes.find((x) => x.id === pane)
+      return p ? isAgentPane(p) : !!deps.leadOf?.(pane)
     },
+    pasteNow: (pane) => deps.pasteMode?.(pane) ?? Promise.resolve(undefined),
+    submitted: (pane) => assumeTurn(pane),
     // Main decides, not the worker: the device must still exist, be unlocked and able to send.
     allowed: async (deviceId) => {
       const p = (await devices()).permissionOf(deviceId)
@@ -187,6 +187,13 @@ export function setupRemoteControl(deps: RemoteControlDeps) {
   const waits = new WaitTracker()
   // Whether each pane's agent is between turns: the rule for sending (turns.ts).
   const turns = new TurnTracker()
+  /** A turn is on now, ahead of its hook (the next message waits); devices hear again when an
+   *  unconfirmed one expires. */
+  const assumeTurn = (pane: string) => {
+    turns.started(pane)
+    askingChanged()
+    setTimeout(askingChanged, ASSUMED_TURN_MS + 50)
+  }
   let askingNow = "" // what devices were last told: each asking pane and its prompt
   /** The pane list as devices see it: each pane's asking state is main's. */
   const annotated = (p: RemotePanes): RemotePanes => ({
@@ -200,7 +207,11 @@ export function setupRemoteControl(deps: RemoteControlDeps) {
       return w ? { ...out, asking: true, ...(w.message ? { detail: w.message } : {}) } : out
     }),
   })
-  const isAgentPane = (x: RemotePane) => x.kind === "agent" || !!deps.leadOf?.(x.id)
+  // Panes whose shell prompt came back (the agent is gone, even one that died without a word):
+  // plain shells until their next session starts, whatever the renderer's list still says.
+  const shellAgain = new Set<string>()
+  const isAgentPane = (x: RemotePane) =>
+    !shellAgain.has(x.id) && (x.kind === "agent" || !!deps.leadOf?.(x.id))
   const askingKey = (p: RemotePanes) =>
     p.panes
       .flatMap((x) => {
@@ -254,6 +265,8 @@ export function setupRemoteControl(deps: RemoteControlDeps) {
     // session: a background or nested session in the same pane says nothing about the lead's TUI.
     for (const ev of events) {
       if (!isLeadEvent(ev)) continue
+      // A hook from an agent session there: an agent runs in the pane again.
+      if (ev.event !== "SessionEnd") shellAgain.delete(ev.paneId!)
       waits.apply(ev)
       turns.apply(ev)
     }
@@ -302,15 +315,20 @@ export function setupRemoteControl(deps: RemoteControlDeps) {
     localInput: (pane: string, data: string) => {
       if (waits.any && waits.localInput(pane, data)) askingChanged()
       // Enter at the desktop between turns submits a prompt: the turn is on, ahead of its hook.
-      if (data === "\r" && turns.turn(pane) === "between") {
-        turns.started(pane)
-        askingChanged()
-      }
+      if (data === "\r" && turns.turn(pane) === "between") assumeTurn(pane)
+    },
+    /** The pane's shell prompt came back: no agent runs there now (a crash sends no SessionEnd). */
+    shellIdle: (pane: string) => {
+      waits.drop(pane)
+      turns.drop(pane)
+      shellAgain.add(pane)
+      askingChanged()
     },
     /** A pane's process ended or it closed. */
     paneGone: (pane: string) => {
       waits.drop(pane)
       turns.drop(pane)
+      shellAgain.delete(pane)
       askingChanged()
     },
     dispose: () => {

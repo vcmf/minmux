@@ -271,7 +271,8 @@ describe("OpenCode backoff", () => {
   it("after a failed read, waits before trying again", async () => {
     const r = new OpenCodeChat("s", "/no/such/opencode.db")
     await expect(r.read()).rejects.toThrow()
-    expect(await r.read()).toEqual([]) // within the backoff: no new try, no error
+    // Within the backoff: no new try, but still a failure (the feed must reach "couldn't be read").
+    await expect(r.read()).rejects.toThrow(/waiting after a failed read/)
   })
 })
 

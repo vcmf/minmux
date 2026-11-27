@@ -558,8 +558,10 @@ export function createHostServer(d: HostServerDeps) {
   }
 
   async function watch(c: Client, pane: string) {
-    if (!panes.panes.some((p) => p.id === pane)) return
     c.watching.add(pane)
+    // Not listed yet (a fresh worker gets the list a moment after the first device): answered
+    // when a list that has it arrives.
+    if (!panes.panes.some((p) => p.id === pane)) return
     const f = feedFor(pane)
     if (!f) return sendTo(c, { t: "chat", pane, items: [], reset: true, unavailable: "no-agent" })
     if (f.idle) clearTimeout(f.idle)
@@ -762,13 +764,19 @@ export function createHostServer(d: HostServerDeps) {
         post({ t: "status", status: { state: "starting" } })
         void refresh()
         break
-      case "panes":
+      case "panes": {
+        const had = new Set(panes.panes.map((p) => p.id))
         panes = m.panes
         // Closed panes' last leads go (an ended session stays openable only while its pane is).
         for (const pane of [...lastLead.keys()])
           if (!panes.panes.some((p) => p.id === pane)) lastLead.delete(pane)
         for (const c of clients) if (c.hello) sendTo(c, { t: "panes", panes })
+        // Watches that came before their pane was listed.
+        for (const c of clients)
+          for (const pane of c.watching)
+            if (!had.has(pane) && panes.panes.some((p) => p.id === pane)) void watch(c, pane)
         break
+      }
       case "leads":
         setLeads(m.leads)
         break

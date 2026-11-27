@@ -29,14 +29,25 @@ const IN_TURN = new Set([
 interface PaneTurn {
   stopped: boolean // the lead's own turn is over
   subs: Set<string> // sub-agents still running (they can ask too)
+  startedAt?: number // set by started(): a turn assumed on until its hook confirms (or expires)
 }
+
+// An Enter that started nothing (a built-in slash command, a menu pick, an empty prompt) fires no
+// hook: the assumed turn ends after this long without one.
+export const ASSUMED_TURN_MS = 5000
 
 export class TurnTracker {
   private panes = new Map<string, PaneTurn>()
 
+  constructor(private readonly now: () => number = Date.now) {}
+
   /** "between" only after the lead said so; unknown (no event since launch) counts as working. */
   turn(pane: string): Turn {
     const t = this.panes.get(pane)
+    if (t?.startedAt !== undefined && this.now() - t.startedAt >= ASSUMED_TURN_MS) {
+      t.startedAt = undefined
+      t.stopped = true // nothing confirmed it: back to between
+    }
     return t && t.stopped && t.subs.size === 0 ? "between" : "working"
   }
 
@@ -45,6 +56,7 @@ export class TurnTracker {
     if (!pane) return
     const t = this.panes.get(pane) ?? { stopped: false, subs: new Set<string>() }
     this.panes.set(pane, t)
+    t.startedAt = undefined // a hook speaks for itself from here
     const root = !ev.agentId
     switch (ev.event) {
       case "SessionStart":
@@ -80,9 +92,10 @@ export class TurnTracker {
 
   /** A message was just submitted to the pane: a turn is on, ahead of its hook. */
   started(pane: string): void {
-    const t = this.panes.get(pane) ?? { stopped: false, subs: new Set<string>() }
+    const t = this.panes.get(pane)
+    if (!t || !t.stopped) return // not known to be between: nothing to assume
     t.stopped = false
-    this.panes.set(pane, t)
+    t.startedAt = this.now()
   }
 
   drop(pane: string): void {

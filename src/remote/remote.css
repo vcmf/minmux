@@ -322,17 +322,29 @@ button {
 }
 .tool {
   display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  align-items: baseline;
-  text-align: left;
+  flex-direction: column;
   width: 100%;
-  background: none;
-  border: none;
   border-left: 2px solid var(--border);
   padding: 2px 8px;
   font-size: 12px;
   color: var(--dim);
+}
+.tool-head {
+  display: flex;
+  gap: 6px;
+  align-items: baseline;
+  width: 100%;
+  min-width: 0;
+  text-align: left;
+  background: none;
+  border: none;
+  padding: 0;
+  color: inherit;
+  font: inherit;
+}
+.tool-result {
+  user-select: text;
+  -webkit-user-select: text;
 }
 .tool.error {
   border-left-color: var(--red);

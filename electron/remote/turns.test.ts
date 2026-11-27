@@ -77,10 +77,19 @@ describe("turn tracker", () => {
     expect(run(t, { event: "Stop" })).toBe("between")
   })
 
-  it("a submitted message starts the turn at once", () => {
-    const t = new TurnTracker()
+  it("a submitted message starts the turn at once; one that started nothing expires", () => {
+    let now = 0
+    const t = new TurnTracker(() => now)
     run(t, { event: "Stop" })
     t.started(P)
+    expect(t.turn(P)).toBe("working")
+    now = 4999
+    expect(t.turn(P)).toBe("working")
+    now = 5000 // a slash command: no hook came
+    expect(t.turn(P)).toBe("between")
+    t.started(P)
+    run(t, { event: "UserPromptSubmit" }) // confirmed: no expiry
+    now = 20_000
     expect(t.turn(P)).toBe("working")
   })
 })

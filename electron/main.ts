@@ -1418,7 +1418,10 @@ function registerIpc() {
   })
   // The pane's shell prompt came back after a command → its foreground program (Claude or
   // not) has exited: nothing to resume there even if Claude died without a SessionEnd.
-  ipcMain.on("agents:shell-idle", (_e, paneId: string) => sessionLedger().shellIdle(paneId))
+  ipcMain.on("agents:shell-idle", (_e, paneId: string) => {
+    sessionLedger().shellIdle(paneId)
+    remoteControl?.shellIdle(paneId) // the agent is gone (even one that died without a word)
+  })
   // One shot per session: attempted (or dismissed) → forget it.
   ipcMain.on("agents:resume-consume", (_e, paneId: string, sessionId: string) =>
     sessionLedger().consume(paneId, sessionId),

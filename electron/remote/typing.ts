@@ -51,7 +51,7 @@ export interface SenderDeps {
   write: (pane: string, data: string) => boolean // false: no such PTY (or still connecting)
   asking?: (pane: string) => boolean // main's latest hook state: the agent is asking
   between?: (pane: string) => boolean // the agent's turn is over (unset: always)
-  isAgent?: (pane: string) => boolean // main knows an agent leads the pane
+  isAgent?: (pane: string) => boolean // main's say on whether an agent leads the pane
   pasteNow?: (pane: string) => Promise<boolean | undefined> // the terminal's mode right now
   submitted?: (pane: string) => void // a message was submitted (Enter written)
   allowed?: (deviceId: string) => Promise<boolean> // main's device check (may send)
@@ -101,7 +101,7 @@ export class Sender {
     const asking = () => this.d.asking?.(paneId) ?? false
     const between = () => this.d.between?.(paneId) ?? true
     const pane = this.d.pane(paneId)
-    const agent = pane?.kind === "agent" || (this.d.isAgent?.(paneId) ?? false)
+    const agent = this.d.isAgent ? this.d.isAgent(paneId) : pane?.kind === "agent"
     const no = refusal(pane, asking(), between(), agent)
     if (no) return { ok: false, reason: no }
     const text = cleanText(raw)
@@ -110,6 +110,9 @@ export class Sender {
     // The terminal's own mode, asked now (the pushed list can be a second old: a shell turns it
     // off as a command starts); the list's, then "agents paste", when it can't say.
     const paste = (await this.d.pasteNow?.(paneId)) ?? pane!.paste ?? agent
+    // That took a moment: a turn may have started or a dialog opened meanwhile.
+    const late = refusal(this.d.pane(paneId), asking(), between(), agent)
+    if (late) return { ok: false, reason: late }
     // Without bracketed paste every newline is an Enter: a multi-line message would run line by
     // line, past every check here.
     if (!paste && text.includes("\n")) return { ok: false, reason: "multiline" }

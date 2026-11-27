@@ -538,6 +538,26 @@ describe("remote host server", () => {
     await until(() => s.got.some((m) => m.t === "chat" && m.older))
   })
 
+  it("chat: a watch that comes before its pane is listed is answered once it is", async () => {
+    const f = path.join(dir, "early.jsonl")
+    fs.writeFileSync(
+      f,
+      JSON.stringify({ type: "user", uuid: "e1", message: { content: "x" } }) + "\n",
+    )
+    host.setPanes({ tabs: [], panes: [], stale: false }) // a fresh list: nothing yet
+    host.setLeads({ p9: { agent: "claude", sessionId: "s", files: [f] } })
+    const s = await hello(await approve())
+    s.ws.send(JSON.stringify({ t: "watch", pane: "p9" }))
+    await new Promise((r) => setTimeout(r, 100))
+    expect(s.got.some((m) => m.t === "chat")).toBe(false)
+    host.setPanes({
+      tabs: [{ id: "t", title: "t" }],
+      panes: [{ id: "p9", tab: "t", title: "a", kind: "agent", status: "idle", started: true }],
+      stale: false,
+    })
+    await until(() => s.got.some((m) => m.t === "chat" && m.reset))
+  })
+
   it("send: relayed to main and acked; view-only devices refused here", async () => {
     const cookie = await approve()
     const s = await hello(cookie)

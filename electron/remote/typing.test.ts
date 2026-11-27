@@ -187,4 +187,20 @@ describe("typing a phone's message", () => {
     expect(submitted).toEqual(["p"])
     expect(cleanText("x".repeat(16 * 1024 - 1) + "😀")).toHaveLength(16 * 1024 - 1)
   })
+
+  it("checks again after asking the paste mode (a turn may start meanwhile)", async () => {
+    let between = true
+    const writes: string[] = []
+    const s = new Sender({
+      pane: () => pane({ paste: true }),
+      write: (_id, d) => (writes.push(d), true),
+      between: () => between,
+      pasteNow: async () => {
+        between = false // Enter at the desktop while main waited
+        return true
+      },
+    })
+    expect(await s.send("d", "p", "x", "1")).toEqual({ ok: false, reason: "working" })
+    expect(writes).toEqual([])
+  })
 })
