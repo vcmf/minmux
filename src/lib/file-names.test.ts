@@ -12,6 +12,12 @@ describe("shortNames", () => {
       "x.md",
     ])
   })
+  it("as many folders as it takes", () => {
+    expect(shortNames(["/repo-a/src/index.ts", "/repo-b/src/index.ts"])).toEqual([
+      "repo-a/src/index.ts",
+      "repo-b/src/index.ts",
+    ])
+  })
   it("Windows paths too", () => {
     expect(shortNames(["C:\\w\\a.ts"])).toEqual(["a.ts"])
   })

@@ -26,6 +26,8 @@ describe("quitStep", () => {
   })
   it("an OS logout is never held for unsaved files or saves", () => {
     expect(step({ osEnding: true, canAskUnsaved: true, savesInFlight: 1 })).toBe("killNow")
+    expect(step({ osEnding: true, needsConfirm: true })).toBe("killNow") // no confirm either
+    expect(step({ osEnding: true, needsConfirm: true, livePtys: 0 })).toBe("proceed")
   })
 
   it("live PTYs → drain first; nothing alive → quit right away", () => {

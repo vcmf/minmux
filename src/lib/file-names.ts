@@ -2,14 +2,16 @@
 
 const parts = (p: string) => p.split(/[\\/]/).filter(Boolean)
 
-/** Each distinct path's name, with its folder when another has the same name. */
+/** Each distinct path's name, with as many of its folders as tell it from the others. */
 export function shortNames(paths: string[]): string[] {
   const unique = [...new Set(paths)]
-  const base = (p: string) => parts(p).pop() ?? p
-  const count = new Map<string, number>()
-  for (const p of unique) count.set(base(p), (count.get(base(p)) ?? 0) + 1)
-  return unique.map((p) => {
-    if ((count.get(base(p)) ?? 0) < 2) return base(p)
-    return parts(p).slice(-2).join("/")
+  const split = unique.map(parts)
+  return split.map((ps, i) => {
+    for (let n = 1; n < ps.length; n++) {
+      const tail = ps.slice(-n).join("/")
+      const clash = split.some((o, j) => j !== i && o.slice(-n).join("/") === tail)
+      if (!clash) return tail
+    }
+    return ps.join("/") || unique[i]!
   })
 }

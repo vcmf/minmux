@@ -693,6 +693,14 @@ function App() {
       e.returnValue = "" // Electron: main's will-prevent-unload decides
     }
     window.addEventListener("beforeunload", onUnload)
+    // A file from the OS dropped where nothing takes it would navigate the page to it (refused
+    // by main, but only after asking about unsaved files): nothing happens instead.
+    const fromOs = (e: DragEvent) => !!e.dataTransfer?.types.includes("Files")
+    const noNavigate = (e: DragEvent) => {
+      if (fromOs(e) && !e.defaultPrevented) e.preventDefault()
+    }
+    window.addEventListener("dragover", noNavigate)
+    window.addEventListener("drop", noNavigate)
     // A quit asks once: settle what's pending (a just-typed edit, saves landing), then answer.
     // Saves get QUIT_SETTLE_MS to land; one still running then counts as unsaved (main asks).
     const offQuit = ipc.onQuitCheck(async () => {
@@ -709,6 +717,8 @@ function App() {
     return () => {
       off()
       offQuit()
+      window.removeEventListener("dragover", noNavigate)
+      window.removeEventListener("drop", noNavigate)
       window.removeEventListener("beforeunload", onUnload)
     }
   }, [])

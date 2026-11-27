@@ -32,6 +32,8 @@ export function quitStep(s: QuitState): QuitStep {
   if (!s.osEnding && s.canAskUnsaved && !s.unsavedChecked)
     return s.checkingUnsaved || s.asking ? "hold" : "checkUnsaved"
   if (!s.osEnding && (s.savesInFlight ?? 0) > 0) return s.waitingSaves ? "hold" : "waitSaves"
+  // Nor for the live-session confirm: a dialog there makes macOS report the logout cancelled.
+  if (s.osEnding) return s.livePtys === 0 ? "proceed" : "killNow"
   if (s.needsConfirm && !s.confirmed) return s.asking ? "hold" : "confirm"
   if (s.livePtys === 0) return "proceed"
   // Holding the quit here would make macOS report "minmux cancelled restart/logout".
