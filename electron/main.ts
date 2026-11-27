@@ -180,6 +180,12 @@ interface PtySession {
   hello?: HelloWatch // an integrated ssh pane, until its bootstrap's hello is answered
   pendingNonce?: string // …the nonce it was offered…
   remoteNonce?: string // …and, once the host confirmed it (ok), what its shell's reports carry
+  // Remote control's terminal view (docs/design/REMOTE_CONTROL.md): every char of output counted
+  // (offsets), an epoch bumped when in-flight output is dropped (reattach), and whether a device
+  // watches it (then each batch sent to the renderer is copied to the remote-host worker).
+  bytesIn: number
+  epoch: number
+  tapped?: boolean
 }
 const sessions = new Map<string, PtySession>()
 // Every node-pty that hasn't reported its exit yet — including closed panes still winding
@@ -311,6 +317,9 @@ function emit(rec: PtySession, data: string): void {
   // Quitting: the dying shells' last output (a bell, OSC 9) mustn't reach the hidden window.
   if (draining()) return
   if (!rec.sender.isDestroyed()) rec.sender.send(`pty:data:${rec.id}`, data)
+  // A device watches this pane: the same batch, with its place in the output (a flush emits all
+  // that's pending, so it ends at bytesIn). One check per batch otherwise.
+  if (rec.tapped) remoteControl?.tapOutput(rec.id, rec.epoch, rec.bytesIn - data.length, data)
 }
 
 function defaultShell(): string {
@@ -840,6 +849,8 @@ function reattach(rec: PtySession, sender: Electron.WebContents, opts: SpawnOpts
   // resize to the new xterm, then replay history.
   rec.sender = sender
   rec.coalescer?.reset()
+  rec.epoch++ // the dropped in-flight bytes never reach the tap: its watchers start again
+  if (rec.tapped) remoteControl?.tapReset(rec.id)
   try {
     rec.proc.resize(opts.cols || 80, opts.rows || 24)
   } catch {
@@ -908,6 +919,8 @@ function startPty(sender: Electron.WebContents, opts: SpawnOpts, spec: StartSpec
     id: opts.id,
     proc,
     buffer: new OutputBuffer(PTY_REPLAY_BYTES),
+    bytesIn: 0,
+    epoch: 0,
     sender,
     shell: spec.file,
     wslDistro: spec.wslDistro,
@@ -933,6 +946,7 @@ function startPty(sender: Electron.WebContents, opts: SpawnOpts, spec: StartSpec
         sendNonce(rec)
       }
     }
+    rec.bytesIn += data.length // the tap's offsets (one add per chunk)
     rec.buffer.push(data) // keep for replay on reattach
     if (rec.coalescer) rec.coalescer.push(data)
     else emit(rec, data) // A/B baseline: one IPC message per node-pty chunk
@@ -953,6 +967,7 @@ function startPty(sender: Electron.WebContents, opts: SpawnOpts, spec: StartSpec
       })
     ) {
       ssh().markPlain(spec.remote.hostId)
+      rec.bytesIn += INTEGRATION_FAILED_NOTE.length
       rec.buffer.push(INTEGRATION_FAILED_NOTE)
       emit(rec, INTEGRATION_FAILED_NOTE)
     }
@@ -1192,6 +1207,7 @@ function registerIpc() {
     if (pendingSpawns.resize(id, cols, rows)) return // applied when it starts
     try {
       sessions.get(id)?.proc.resize(cols, rows)
+      if (sessions.get(id)?.tapped) remoteControl?.tapResize(id, cols, rows)
     } catch {
       // ignore transient 0-size during layout
     }
@@ -2106,6 +2122,27 @@ app.whenReady().then(async () => {
     transcriptTargets,
     wslPane: (pane) => !!sessions.get(pane)?.wslDistro,
     pasteMode: askPasteMode,
+    // The terminal view: a pane's output so far (coalescer flushed first, so the tap carries on
+    // exactly from here), and the tap turned on or off.
+    terminal: {
+      snapshot: (pane) => {
+        const rec = sessions.get(pane)
+        if (!rec) return null
+        rec.coalescer?.flush()
+        rec.tapped = true
+        return {
+          epoch: rec.epoch,
+          offset: rec.bytesIn,
+          cols: rec.proc.cols,
+          rows: rec.proc.rows,
+          text: rec.buffer.dump(),
+        }
+      },
+      untap: (pane) => {
+        const rec = sessions.get(pane)
+        if (rec) rec.tapped = false
+      },
+    },
     // Same rules as the renderer's typing (pty:write): a pending ssh spawn swallows it.
     writePty: (pane, data) => {
       const rec = sessions.get(pane)

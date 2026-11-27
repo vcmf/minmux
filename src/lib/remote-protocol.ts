@@ -52,6 +52,8 @@ export type ClientMessage =
   | { t: "unwatch"; pane: string }
   | { t: "more"; pane: string; before: string; seq?: number } // older items, before this one
   | { t: "send"; pane: string; text: string; id: string } // a message for the pane's agent or shell
+  | { t: "term"; pane: string; on: boolean } // follow (or stop) the pane's terminal
+  | { t: "keys"; pane: string; data: string } // raw keys (devices allowed them)
 
 export const SEEN_EVERY_MS = 60_000
 
@@ -69,6 +71,10 @@ export type HostMessage =
       unavailable?: "no-agent" | "error" // nothing to show as chat (Terminal view, later)
     }
   | { t: "ack"; id: string; ok: boolean; reason?: SendRefusal }
+  // The terminal view: a clean start (screen + recent scrollback), then output as it comes.
+  | { t: "tsnap"; pane: string; cols: number; rows: number; data: string; gone?: boolean }
+  | { t: "tout"; pane: string; data: string }
+  | { t: "tsize"; pane: string; cols: number; rows: number }
   | { t: "locked"; reason: LockReason }
   | { t: "error"; code: string; message: string }
   | { t: "bye"; reason: ByeReason }
@@ -137,6 +143,18 @@ export function parseClientMessage(raw: unknown): ClientMessage | null {
             before: m.before,
             ...(typeof m.seq === "number" ? { seq: m.seq } : {}),
           }
+        : null
+    case "term":
+      return typeof m.pane === "string" && m.pane.length <= 200 && typeof m.on === "boolean"
+        ? { t: "term", pane: m.pane, on: m.on }
+        : null
+    case "keys":
+      return typeof m.pane === "string" &&
+        m.pane.length <= 200 &&
+        typeof m.data === "string" &&
+        m.data.length > 0 &&
+        m.data.length <= 1024
+        ? { t: "keys", pane: m.pane, data: m.data }
         : null
     case "send":
       return typeof m.pane === "string" &&

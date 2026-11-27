@@ -42,6 +42,7 @@ import {
 import { LOCK_AFTER_MS } from "./devices"
 import { chatReaderFor, type ChatLead } from "../agents/chat"
 import type { ChatReader } from "../agents/chat-log"
+import { TermMirror } from "./term-mirror"
 import type { ChatItem } from "../../src/lib/remote-chat"
 import { FAILED } from "./host-client"
 
@@ -76,6 +77,8 @@ export function createHostServer(d: HostServerDeps) {
   const CHAT_TAIL = 50 // items sent on a watch, and per `more`
   const CHAT_POLL_MS = d.timing?.chatPoll ?? 1000
   const FEED_IDLE_MS = d.timing?.feedIdle ?? 30_000
+  const TERM_FLUSH_MS = 60 // a device's terminal output, batched
+  const TERM_BEHIND = 256 * 1024 // a socket's unsent bytes past which a device is skipped
 
   let config: HostConfig | null = null
   let cli: string | null = null
@@ -342,6 +345,7 @@ export function createHostServer(d: HostServerDeps) {
     hello: boolean
     permission: Permission
     watching: Set<string> // panes whose chat feed it follows
+    terms: Set<string> // panes whose terminal it follows
   }
   const clients = new Set<Client>()
   const wss = new WebSocketServer({
@@ -390,6 +394,7 @@ export function createHostServer(d: HostServerDeps) {
         hello: false,
         permission: a.device.permission,
         watching: new Set(),
+        terms: new Set(),
       }
       clients.add(c)
       ws.on("pong", () => (c.lastPong = Date.now()))
@@ -397,6 +402,7 @@ export function createHostServer(d: HostServerDeps) {
       ws.on("close", () => {
         clients.delete(c)
         for (const pane of c.watching) unwatch(c, pane)
+        for (const pane of c.terms) termOff(c, pane)
         reportClients()
       })
       ws.on("error", () => ws.terminate())
@@ -427,6 +433,12 @@ export function createHostServer(d: HostServerDeps) {
     if (m.t === "watch") return void watch(c, m.pane)
     if (m.t === "unwatch") return unwatch(c, m.pane)
     if (m.t === "more") return more(c, m.pane, m.before, m.seq)
+    if (m.t === "term") return void (m.on ? termOn(c, m.pane) : termOff(c, m.pane))
+    if (m.t === "keys") {
+      if (c.permission !== "keys") return
+      await rpc({ op: "keys", deviceId: c.deviceId, pane: m.pane, data: m.data })
+      return
+    }
     if (m.t === "send") {
       if (c.permission === "view")
         return sendTo(c, { t: "ack", id: m.id, ok: false, reason: "not-allowed" })
@@ -627,6 +639,119 @@ export function createHostServer(d: HostServerDeps) {
     for (const c of clients) yield* c.watching
   }
 
+  // ── Terminal feeds (docs/design/REMOTE_CONTROL.md, "Terminal view") ─────────────────────────
+  // One mirror per watched pane, fed by main's tap. Each device gets output batched every
+  // TERM_FLUSH_MS; one that falls behind (its socket's buffer over TERM_BEHIND) is skipped, then
+  // sent a fresh screen once it drains. The PTY is never paused for anyone.
+  interface TermFeed {
+    mirror: TermMirror | null
+    watchers: Set<Client>
+    pending: Map<Client, string>
+    behind: Set<Client>
+    snapping: Promise<void> | null
+    timer: ReturnType<typeof setTimeout> | null
+  }
+  const termFeeds = new Map<string, TermFeed>()
+
+  function termFeed(pane: string): TermFeed {
+    let f = termFeeds.get(pane)
+    if (!f) {
+      f = {
+        mirror: null,
+        watchers: new Set(),
+        pending: new Map(),
+        behind: new Set(),
+        snapping: null,
+        timer: null,
+      }
+      termFeeds.set(pane, f)
+    }
+    return f
+  }
+
+  async function sendScreen(c: Client, pane: string, f: TermFeed) {
+    const m = f.mirror
+    if (!m) return
+    const data = await m.serialize()
+    if (f.mirror !== m || !f.watchers.has(c)) return
+    f.pending.delete(c)
+    sendTo(c, { t: "tsnap", pane, cols: m.cols, rows: m.rows, data })
+  }
+
+  /** A new snapshot from main (first watcher, a gap, a reattach): everyone starts again. */
+  function resnap(pane: string, f: TermFeed): Promise<void> {
+    f.snapping ??= (async () => {
+      const snap = await rpc({ op: "snapshot", pane })
+      if (termFeeds.get(pane) !== f) return
+      f.mirror?.dispose()
+      f.mirror = snap ? new TermMirror(snap) : null
+      f.pending.clear()
+      f.behind.clear()
+      for (const c of f.watchers)
+        if (snap) void sendScreen(c, pane, f)
+        else sendTo(c, { t: "tsnap", pane, cols: 0, rows: 0, data: "", gone: true })
+    })().finally(() => (f.snapping = null))
+    return f.snapping
+  }
+
+  async function termOn(c: Client, pane: string) {
+    c.terms.add(pane)
+    if (!panes.panes.some((p) => p.id === pane)) return // answered when a list has it
+    const f = termFeed(pane)
+    f.watchers.add(c)
+    if (f.mirror) await sendScreen(c, pane, f)
+    else await resnap(pane, f)
+  }
+
+  function termOff(c: Client, pane: string) {
+    c.terms.delete(pane)
+    const f = termFeeds.get(pane)
+    if (!f) return
+    f.watchers.delete(c)
+    f.pending.delete(c)
+    f.behind.delete(c)
+    if (f.watchers.size) return
+    if (f.timer) clearTimeout(f.timer)
+    f.mirror?.dispose()
+    termFeeds.delete(pane)
+    post({ t: "untap", pane }) // main stops copying its output
+  }
+
+  function onTapOutput(pane: string, epoch: number, offset: number, data: string) {
+    const f = termFeeds.get(pane)
+    if (!f?.mirror || f.snapping) return // a snapshot on its way covers this
+    if (f.mirror.write(epoch, offset, data) === "gap") return void resnap(pane, f)
+    for (const c of f.watchers)
+      if (!f.behind.has(c)) f.pending.set(c, (f.pending.get(c) ?? "") + data)
+    f.timer ??= setTimeout(() => flushTerm(pane, f), TERM_FLUSH_MS)
+  }
+
+  function flushTerm(pane: string, f: TermFeed) {
+    f.timer = null
+    for (const c of f.watchers) {
+      const buffered = c.ws.bufferedAmount
+      if (f.behind.has(c)) {
+        // Caught up: a fresh screen (what it missed is in there).
+        if (buffered < TERM_BEHIND / 4) {
+          f.behind.delete(c)
+          void sendScreen(c, pane, f)
+        }
+        continue
+      }
+      if (buffered > TERM_BEHIND) {
+        f.behind.add(c)
+        f.pending.delete(c)
+        continue
+      }
+      const data = f.pending.get(c)
+      if (data) sendTo(c, { t: "tout", pane, data })
+      f.pending.delete(c)
+    }
+    // Someone is behind: look again soon even if no output comes.
+    if (f.behind.size && termFeeds.get(pane) === f)
+      f.timer ??= setTimeout(() => flushTerm(pane, f), TERM_FLUSH_MS * 4)
+  }
+
   let recheckAt = 0
   const pingTimer = setInterval(() => {
     const now = Date.now()
@@ -776,14 +901,33 @@ export function createHostServer(d: HostServerDeps) {
           if (!panes.panes.some((p) => p.id === pane)) lastLead.delete(pane)
         for (const c of clients) if (c.hello) sendTo(c, { t: "panes", panes })
         // Watches that came before their pane was listed.
-        for (const c of clients)
+        for (const c of clients) {
           for (const pane of c.watching)
             if (!had.has(pane) && panes.panes.some((p) => p.id === pane)) void watch(c, pane)
+          for (const pane of c.terms)
+            if (!had.has(pane) && panes.panes.some((p) => p.id === pane)) void termOn(c, pane)
+        }
         break
       }
       case "leads":
         setLeads(m.leads)
         break
+      case "tout":
+        onTapOutput(m.pane, m.epoch, m.offset, m.data)
+        break
+      case "treset": {
+        const f = termFeeds.get(m.pane)
+        if (f) void resnap(m.pane, f)
+        break
+      }
+      case "tsize": {
+        const f = termFeeds.get(m.pane)
+        if (!f?.mirror) break
+        f.mirror.resize(m.cols, m.rows)
+        for (const c of f.watchers)
+          sendTo(c, { t: "tsize", pane: m.pane, cols: m.cols, rows: m.rows })
+        break
+      }
       case "nudge":
         for (const pane of m.panes) {
           const f = feeds.get(pane)
@@ -815,6 +959,11 @@ export function createHostServer(d: HostServerDeps) {
   /** Stops everything (tests; the worker just exits). */
   function stop() {
     for (const pane of [...feeds.keys()]) closeFeed(pane)
+    for (const f of termFeeds.values()) {
+      if (f.timer) clearTimeout(f.timer)
+      f.mirror?.dispose()
+    }
+    termFeeds.clear()
     clearInterval(pingTimer)
     clearInterval(refreshTimer)
     for (const c of clients) c.ws.terminate()

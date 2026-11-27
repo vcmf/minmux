@@ -89,6 +89,9 @@ describe("remote host server", () => {
   let cli: ReturnType<typeof fakeCli>
   let stops: (() => void)[]
   let sent: { deviceId: string; pane: string; text: string; id: string }[]
+  let snaps: string[] // panes main was asked a snapshot of
+  let untapped: string[]
+  let keys: string[]
 
   beforeEach(async () => {
     port = await freePort()
@@ -102,6 +105,9 @@ describe("remote host server", () => {
     cli = fakeCli()
     stops = []
     sent = []
+    snaps = []
+    untapped = []
+    keys = []
     host = new RemoteHost({
       fork: () => {
         const handlers: { message: ((m: FromHost) => void)[]; exit: (() => void)[] } = {
@@ -129,6 +135,12 @@ describe("remote host server", () => {
       devices: async () => table,
       ask: async () => answer,
       onChange: () => {},
+      snapshot: (pane) => {
+        snaps.push(pane)
+        return pane === "gone" ? null : { epoch: 1, offset: 5, cols: 40, rows: 5, text: "hello" }
+      },
+      untap: (pane) => void untapped.push(pane),
+      keys: async (_d, pane, data) => (keys.push(`${pane}:${JSON.stringify(data)}`), true),
       send: async (deviceId, pane, text, id) => {
         sent.push({ deviceId, pane, text, id })
         return { ok: true }
@@ -584,6 +596,53 @@ describe("remote host server", () => {
         (m) => m.t === "chat" && m.reset && (m.items as { id: string }[])[0]?.id === "inWorktree",
       ),
     )
+  })
+
+  it("terminal: snapshot, live output, gaps, resize, raw keys, the tap stopped", async () => {
+    host.setPanes({
+      tabs: [{ id: "t", title: "t" }],
+      panes: [{ id: "p1", tab: "t", title: "a", kind: "shell", status: "idle", started: true }],
+      stale: false,
+    })
+    const cookie = await approve()
+    table.setPermission(table.list()[0]!.id, "keys")
+    const s = await hello(cookie)
+    s.ws.send(JSON.stringify({ t: "term", pane: "p1", on: true }))
+    await until(() => s.got.some((m) => m.t === "tsnap"))
+    expect(s.got.find((m) => m.t === "tsnap")).toMatchObject({ cols: 40, rows: 5 })
+    expect(String((s.got.find((m) => m.t === "tsnap") as { data: string }).data)).toContain("hello")
+    expect(snaps).toEqual(["p1"])
+
+    host.tap({ t: "tout", pane: "p1", epoch: 1, offset: 5, data: " world" })
+    await until(() => s.got.some((m) => m.t === "tout" && m.data === " world"))
+    host.tap({ t: "tout", pane: "p1", epoch: 1, offset: 999, data: "lost" }) // a gap
+    await until(() => snaps.length === 2)
+    await until(() => s.got.filter((m) => m.t === "tsnap").length === 2)
+    host.tap({ t: "treset", pane: "p1" })
+    await until(() => snaps.length === 3)
+    host.tap({ t: "tsize", pane: "p1", cols: 60, rows: 8 })
+    await until(() => s.got.some((m) => m.t === "tsize" && m.cols === 60))
+
+    s.ws.send(JSON.stringify({ t: "keys", pane: "p1", data: "\u0003" }))
+    await until(() => keys.length === 1)
+    expect(keys[0]).toBe('p1:"\\u0003"')
+
+    s.ws.send(JSON.stringify({ t: "term", pane: "p1", on: false }))
+    await until(() => untapped.includes("p1"))
+  })
+
+  it("terminal: a pane gone on the computer; keys refused without the permission", async () => {
+    host.setPanes({
+      tabs: [{ id: "t", title: "t" }],
+      panes: [{ id: "gone", tab: "t", title: "a", kind: "shell", status: "idle", started: true }],
+      stale: false,
+    })
+    const s = await hello(await approve())
+    s.ws.send(JSON.stringify({ t: "term", pane: "gone", on: true }))
+    await until(() => s.got.some((m) => m.t === "tsnap" && m.gone))
+    s.ws.send(JSON.stringify({ t: "keys", pane: "gone", data: "x" }))
+    await new Promise((r) => setTimeout(r, 100))
+    expect(keys).toEqual([]) // "send" devices can't type raw keys
   })
 
   it("send: relayed to main and acked; view-only devices refused here", async () => {

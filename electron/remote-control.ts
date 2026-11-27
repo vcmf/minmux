@@ -10,6 +10,7 @@ import type { RemoteView } from "../src/lib/remote-view"
 import type { AgentKind } from "../src/lib/agent-graph"
 import { chatLeadFor, type ChatLead } from "./agents/chat-lead"
 import { Sender } from "./remote/typing"
+import type { TermSnapshot } from "./remote/term-mirror"
 import { ASSUMED_TURN_MS, TurnTracker } from "./remote/turns"
 import { WaitTracker } from "./remote/waits"
 import { DeviceTable, PENDING_MS, type SetPinResult } from "./remote/devices"
@@ -32,9 +33,16 @@ export interface RemoteControlDeps {
   pasteMode?: (pane: string) => Promise<boolean | undefined>
   /** A WSL pane (its agents' files live inside the distro). */
   wslPane?: (pane: string) => boolean
+  /** The terminal view: a pane's output so far (its tap starts), and the tap stopped. */
+  terminal?: {
+    snapshot: (pane: string) => TermSnapshot | null
+    untap: (pane: string) => void
+  }
   /** Writes to a pane's PTY as typing would; false when there's no live one. */
   writePty?: (pane: string, data: string) => boolean
 }
+
+const KEYS_MAX = 1024 // one keys message (a key, a short sequence)
 
 /** 7420 for the installed app, 7421 for a dev build, and one of 7430–7489 per other profile. */
 export function autoPort(profile: string): number {
@@ -107,6 +115,20 @@ export function setupRemoteControl(deps: RemoteControlDeps) {
         send("remote:wanted", lastWanted)
         if (lastWanted) pushLeads()
       }
+    },
+    snapshot: (pane) => deps.terminal?.snapshot(pane) ?? null,
+    untap: (pane) => deps.terminal?.untap(pane),
+    // Raw keys from a device allowed them (Terminal view's keys bar): typed as they come, like the
+    // desktop's own keys, so an answer key also closes the pane's dialog.
+    keys: async (deviceId, pane, data) => {
+      if ((await devices()).permissionOf(deviceId) !== "keys") return false
+      if (!lastPanes?.panes.some((p) => p.id === pane)) return false
+      if (typeof data !== "string" || !data || data.length > KEYS_MAX) return false
+      if (!(deps.writePty?.(pane, data) ?? false)) return false
+      localKeys(pane, data)
+      const name = (await devices()).list().find((d) => d.id === deviceId)?.name ?? "a device"
+      send("remote:typed", pane, name)
+      return true
     },
     send: async (deviceId, pane, text, id) => {
       const r = await sender.send(deviceId, pane, text, id)
@@ -187,6 +209,12 @@ export function setupRemoteControl(deps: RemoteControlDeps) {
   const waits = new WaitTracker()
   // Whether each pane's agent is between turns: the rule for sending (turns.ts).
   const turns = new TurnTracker()
+  /** Keys typed into a pane (the desktop's, or a device's raw keys): answer keys close dialogs. */
+  const localKeys = (pane: string, data: string) => {
+    if (waits.any && waits.localInput(pane, data)) askingChanged()
+    // Enter between turns submits a prompt: the turn is on, ahead of its hook.
+    if (data === "\r" && turns.turn(pane) === "between") assumeTurn(pane)
+  }
   /** A turn is on now, ahead of its hook (the next message waits); devices hear again when an
    *  unconfirmed one expires. */
   const assumeTurn = (pane: string) => {
@@ -312,11 +340,13 @@ export function setupRemoteControl(deps: RemoteControlDeps) {
     windowClosed,
     agentEvents,
     /** Typed at the desktop into a pane: an answer key closes its dialogs. Per keystroke: O(1). */
-    localInput: (pane: string, data: string) => {
-      if (waits.any && waits.localInput(pane, data)) askingChanged()
-      // Enter at the desktop between turns submits a prompt: the turn is on, ahead of its hook.
-      if (data === "\r" && turns.turn(pane) === "between") assumeTurn(pane)
-    },
+    localInput: (pane: string, data: string) => localKeys(pane, data),
+    // The terminal view's tap: main's batches, a reattach, a new size (only for tapped panes).
+    tapOutput: (pane: string, epoch: number, offset: number, data: string) =>
+      host.tap({ t: "tout", pane, epoch, offset, data }),
+    tapReset: (pane: string) => host.tap({ t: "treset", pane }),
+    tapResize: (pane: string, cols: number, rows: number) =>
+      host.tap({ t: "tsize", pane, cols, rows }),
     /** The pane's shell prompt came back: no agent runs there now (a crash sends no SessionEnd). */
     shellIdle: (pane: string) => {
       waits.drop(pane)

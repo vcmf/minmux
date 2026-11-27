@@ -1,6 +1,18 @@
 import { describe, expect, it, vi } from "vitest"
 import { act, fireEvent, render, screen } from "@testing-library/react"
 import { PaneView, type PaneViewProps } from "./pane-view"
+
+vi.mock("@xterm/xterm", () => ({
+  Terminal: class {
+    options = {}
+    open() {}
+    reset() {}
+    resize() {}
+    write() {}
+    dispose() {}
+  },
+}))
+vi.mock("@xterm/xterm/css/xterm.css", () => ({}))
 import { useOutbox } from "./outbox"
 import type { HostMessage, RemotePane } from "../lib/remote-protocol"
 
@@ -130,10 +142,12 @@ describe("PaneView", () => {
 
   it("view-only and unavailable panes", () => {
     const { push } = setup({ permission: "view", pane: pane({ kind: "shell", agent: undefined }) })
+    expect(screen.getByRole("tab", { name: "Terminal" })).toHaveAttribute("aria-selected", "true")
+    fireEvent.click(screen.getByRole("tab", { name: "Chat" }))
     expect(screen.getByLabelText("Message")).toBeDisabled()
     push({ t: "chat", pane: "p", items: [], reset: true, unavailable: "no-agent" })
     expect(screen.getByText(/No agent conversation here/)).toBeInTheDocument()
-    expect(screen.getByText(/this shell/)).toBeInTheDocument()
+    expect(screen.getByText(/shows the shell/)).toBeInTheDocument()
     push({ t: "chat", pane: "p", items: [], reset: true, unavailable: "error" })
     expect(screen.getByText(/couldn't be read/)).toBeInTheDocument()
   })

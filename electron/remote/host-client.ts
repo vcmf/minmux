@@ -4,6 +4,7 @@
 
 import type { RemotePanes, SendRefusal } from "../../src/lib/remote-protocol"
 import type { ChatLead } from "../agents/chat-lead"
+import type { TermSnapshot } from "./term-mirror"
 import type { DeviceTable } from "./devices"
 import type {
   ClientInfo,
@@ -32,6 +33,10 @@ export interface RemoteHostDeps {
   ask: (name: string, code: string) => Promise<Decision>
   /** Status or clients changed (for the renderer). */
   onChange: () => void
+  /** The terminal view: a pane's output so far (the tap starts), raw keys, the tap stopped. */
+  snapshot?: (pane: string) => TermSnapshot | null
+  keys?: (deviceId: string, pane: string, data: string) => Promise<boolean>
+  untap?: (pane: string) => void
   /** A device's message for a pane (main checks and types it). */
   send?: (
     deviceId: string,
@@ -52,6 +57,8 @@ export const FAILED: { [K in RpcCall["op"]]: Extract<RpcResult, { op: K }> } = {
   pending: { op: "pending", result: { state: "expired" } },
   unlock: { op: "unlock", result: "unknown" },
   send: { op: "send", result: { ok: false, reason: "error" } },
+  snapshot: { op: "snapshot", result: null },
+  keys: { op: "keys", result: false },
 }
 
 export class RemoteHost {
@@ -93,6 +100,11 @@ export class RemoteHost {
   setLeads(leads: Record<string, ChatLead>): void {
     this.leads = leads
     this.proc?.postMessage({ t: "leads", leads })
+  }
+
+  /** A tapped pane's batch, reset or new size (the terminal view). */
+  tap(m: Extract<ToHost, { t: "tout" | "treset" | "tsize" }>): void {
+    this.proc?.postMessage(m)
   }
 
   /** These panes' agents did something: the worker reads their transcripts if watched. */
@@ -171,6 +183,9 @@ export class RemoteHost {
       case "touch":
         void this.deps.devices().then((t) => t.touch(m.deviceId))
         break
+      case "untap":
+        this.deps.untap?.(m.pane)
+        break
       case "rpc":
         // Only to the worker that asked: a replacement numbers its requests from 1 again.
         void this.answer(m.call)
@@ -205,6 +220,13 @@ export class RemoteHost {
         this.deps.onChange()
         return { op: "unlock", result }
       }
+      case "snapshot":
+        return { op: "snapshot", result: this.deps.snapshot?.(call.pane) ?? null }
+      case "keys":
+        return {
+          op: "keys",
+          result: (await this.deps.keys?.(call.deviceId, call.pane, call.data)) ?? false,
+        }
       case "send": {
         const result = this.deps.send
           ? await this.deps.send(call.deviceId, call.pane, call.text, call.id)

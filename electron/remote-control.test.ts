@@ -276,4 +276,44 @@ describe("setupRemoteControl", () => {
     expect(last().working).toBe(true)
     rc.dispose()
   })
+
+  it("raw keys: only devices allowed them, only listed panes; they count as desktop keys", async () => {
+    settings = JSON.stringify({ remote: { enabled: true } })
+    const writes: [string, string][] = []
+    const rc = setupRemoteControl({
+      dir: "/app/out/main",
+      configDir: () => cfg,
+      readSettings: () => settings,
+      profile: "",
+      window: () => null,
+      writePty: (pane, data) => (writes.push([pane, data]), true),
+      terminal: { snapshot: () => null, untap: () => {} },
+    })
+    rc.apply()
+    const p = forks[0]!
+    rc.setPanes({
+      tabs: [],
+      panes: [{ id: "p1", tab: "t", title: "a", kind: "shell", status: "idle", started: true }],
+    })
+    p.emit({ t: "rpc", id: 1, call: { op: "approve", nodeId: "n1", name: "iphone" } })
+    await vi.waitFor(async () => expect((await rc.view()).devices).toHaveLength(1))
+    const id = (await rc.view()).devices[0]!.id
+    const keys = (rid: number, pane: string) =>
+      p.emit({ t: "rpc", id: rid, call: { op: "keys", deviceId: id, pane, data: "\u0003" } })
+    keys(2, "p1")
+    await vi.waitFor(() =>
+      expect(p.sent).toContainEqual({ t: "rpc", id: 2, result: { op: "keys", result: false } }),
+    )
+    await rc.setPermission(id, "keys")
+    keys(3, "p1")
+    keys(4, "nope")
+    await vi.waitFor(() =>
+      expect(p.sent).toContainEqual({ t: "rpc", id: 3, result: { op: "keys", result: true } }),
+    )
+    await vi.waitFor(() =>
+      expect(p.sent).toContainEqual({ t: "rpc", id: 4, result: { op: "keys", result: false } }),
+    )
+    expect(writes).toEqual([["p1", "\u0003"]])
+    rc.dispose()
+  })
 })
