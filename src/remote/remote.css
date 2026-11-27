@@ -425,6 +425,23 @@ button {
   background: var(--elev);
   border-top: 1px solid var(--border);
 }
+.answer-body {
+  margin: 8px 0 4px;
+  padding: 8px 10px;
+  background: var(--panel);
+  border-radius: 7px;
+  color: var(--text);
+  font: 12px/1.4 var(--font);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 160px;
+  overflow-y: auto;
+}
+.answer-question {
+  margin-top: 6px;
+  color: var(--text);
+  font-weight: 600;
+}
 .answer-options {
   display: flex;
   flex-direction: column;

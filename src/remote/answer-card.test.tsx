@@ -16,7 +16,7 @@ const pane: RemotePane = {
   started: true,
 }
 
-function setup(canAnswer = true) {
+function setup(canAnswer = true, keysAllowed = true) {
   const sent: Record<string, unknown>[] = []
   const listeners = new Set<(m: HostMessage) => void>()
   const openTerminal = vi.fn()
@@ -25,6 +25,7 @@ function setup(canAnswer = true) {
       pane={pane}
       agentName="Claude"
       canAnswer={canAnswer}
+      keysAllowed={keysAllowed}
       online
       epoch={1}
       send={(m) => (sent.push(m as Record<string, unknown>), true)}
@@ -37,6 +38,7 @@ function setup(canAnswer = true) {
 
 const dialog = {
   question: "Do you want to proceed?",
+  body: ["Bash command", "rm -rf build"],
   options: [
     { n: 1, label: "Yes" },
     { n: 2, label: "No" },
@@ -57,13 +59,22 @@ describe("AnswerCard", () => {
     expect(screen.queryByText("Old?")).toBeNull() // a reply about an earlier dialog
     push({ t: "dialog", pane: "p", waitId: "w1", dialog, answerable: true })
     expect(screen.getByText("Do you want to proceed?")).toBeInTheDocument()
+    expect(screen.getByText(/rm -rf build/)).toBeInTheDocument() // what it asks about
+    expect(screen.getByText(/needs your permission/)).toBeInTheDocument()
     fireEvent.click(screen.getByText("Yes"))
     expect(sent[sent.length - 1]).toEqual({
       t: "answer",
       pane: "p",
       waitId: "w1",
       n: 1,
-      label: "Yes",
+      seen: JSON.stringify([
+        dialog.question,
+        dialog.body,
+        [
+          [1, "Yes"],
+          [2, "No"],
+        ],
+      ]),
     })
     push({ t: "answered", pane: "p", waitId: "w1", ok: false, reason: "changed" })
     expect(screen.getByText(/The screen changed/)).toBeInTheDocument()
@@ -77,6 +88,22 @@ describe("AnswerCard", () => {
     expect(screen.queryByRole("button", { name: /Yes/ })).toBeNull()
     fireEvent.click(screen.getByText("Open the Terminal view"))
     expect(openTerminal).toHaveBeenCalled()
+  })
+
+  it("a view-only device, or one without raw keys, is told where to answer", () => {
+    const a = setup(false)
+    a.push({ t: "dialog", pane: "p", waitId: "w1", dialog, answerable: true })
+    expect(screen.getByText(/can only view/)).toBeInTheDocument()
+    void a
+  })
+
+  it("an error reply frees the buttons", () => {
+    const { push } = setup()
+    push({ t: "dialog", pane: "p", waitId: "w1", dialog, answerable: true })
+    fireEvent.click(screen.getByText("Yes"))
+    expect(screen.getByText("No").closest("button")).toBeDisabled()
+    push({ t: "error", code: "bad-message", message: "x" })
+    expect(screen.getByText("No").closest("button")).not.toBeDisabled()
   })
 
   it("no options on screen: says so", () => {

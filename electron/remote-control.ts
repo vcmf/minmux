@@ -10,7 +10,7 @@ import type { RemoteView } from "../src/lib/remote-view"
 import type { AgentKind } from "../src/lib/agent-graph"
 import { chatLeadFor, type ChatLead } from "./agents/chat-lead"
 import { Sender } from "./remote/typing"
-import { answerKeys, parseDialog } from "./agents/answers"
+import { answerKeys, dialogSignature, parseDialog } from "./agents/answers"
 import type { TermSnapshot } from "./remote/term-mirror"
 import { ASSUMED_TURN_MS, TurnTracker } from "./remote/turns"
 import { WaitTracker } from "./remote/waits"
@@ -131,12 +131,16 @@ export function setupRemoteControl(deps: RemoteControlDeps) {
     answer: async (call) => {
       const p = (await devices()).permissionOf(call.deviceId)
       if (p !== "send" && p !== "keys") return { ok: false, reason: "not-allowed" }
-      const wait = waits.waits(call.pane).find((w) => w.id === call.waitId)
-      if (!wait) return { ok: false, reason: "stale" }
+      // The dialog in front only: the one on screen, the one the device was shown.
+      const wait = waits.waits(call.pane)[0]
+      if (!wait || wait.id !== call.waitId) return { ok: false, reason: "stale" }
       const keys = answerKeys(wait.agentKind, wait.kind, call.n)
       if (!keys) return { ok: false, reason: "unsupported" }
-      const option = parseDialog(call.lines)?.options.find((o) => o.n === call.n)
-      if (!option || option.label !== call.label) return { ok: false, reason: "changed" }
+      // The whole dialog as the device saw it (question, what it asks about, options) must still be
+      // on screen: every Claude prompt says "Do you want to proceed?" and "1. Yes".
+      const now = parseDialog(call.lines)
+      if (!now || dialogSignature(now) !== call.seen || !now.options.some((o) => o.n === call.n))
+        return { ok: false, reason: "changed" }
       if (!(deps.writePty?.(call.pane, keys) ?? false)) return { ok: false, reason: "error" }
       waits.answered(call.pane, call.waitId)
       askingChanged()

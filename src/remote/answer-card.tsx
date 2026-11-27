@@ -13,6 +13,7 @@ interface Props {
   pane: RemotePane
   agentName: string
   canAnswer: boolean // the device may send
+  keysAllowed: boolean // …and type raw keys (the Terminal view's keys bar)
   online: boolean
   epoch: number // bumps on every welcome: read the screen again
   send: (m: unknown) => boolean
@@ -25,6 +26,7 @@ export function AnswerCard({
   pane,
   agentName,
   canAnswer,
+  keysAllowed,
   online,
   epoch,
   send,
@@ -42,6 +44,7 @@ export function AnswerCard({
         // Only the reply about this dialog: one about an earlier one (still on its way) is dropped.
         if (m.t === "dialog" && m.pane === pane.id && m.waitId === waitId)
           setDialog({ d: m.dialog, answerable: m.answerable })
+        if (m.t === "error") setBusy(null) // a refused request: never leave the buttons stuck
         if (m.t === "answered" && m.pane === pane.id && m.waitId === waitId) {
           setBusy(null)
           if (!m.ok) setNote(m.reason ? REASON[m.reason] : REASON.error)
@@ -58,20 +61,36 @@ export function AnswerCard({
     if (online) send({ t: "dialog", pane: pane.id, waitId })
   }, [send, pane.id, waitId, online, epoch])
 
-  const answer = (n: number, label: string) => {
+  const answer = (n: number) => {
+    if (!dialog?.d) return
     setNote("")
-    if (!send({ t: "answer", pane: pane.id, waitId, n, label })) return setNote(REASON.error)
+    // What this phone showed: main types the key only if the screen still shows exactly that.
+    const seen = JSON.stringify([
+      dialog.d.question,
+      dialog.d.body,
+      dialog.d.options.map((o) => [o.n, o.label]),
+    ])
+    if (!send({ t: "answer", pane: pane.id, waitId, n, seen })) return setNote(REASON.error)
     setBusy(n)
   }
 
   return (
     <div className="asking">
-      <b>{agentName} is asking:</b> {dialog?.d ? dialog.d.question : (pane.detail ?? "a question")}
+      <b>{agentName} is asking:</b> {pane.detail ?? "a question"}
+      {dialog?.d && (
+        <>
+          {/* What it asks about (the command, the file): never approve something unseen. */}
+          {dialog.d.body.length > 0 && (
+            <pre className="answer-body">{dialog.d.body.join("\n")}</pre>
+          )}
+          <div className="answer-question">{dialog.d.question}</div>
+        </>
+      )}
       {dialog?.d && (
         <div className="answer-options">
           {dialog.d.options.map((o) =>
             dialog.answerable && canAnswer ? (
-              <button key={o.n} disabled={busy !== null} onClick={() => answer(o.n, o.label)}>
+              <button key={o.n} disabled={busy !== null} onClick={() => answer(o.n)}>
                 <span className="answer-n">{o.n}</span> {o.label}
                 {busy === o.n && " …"}
               </button>
@@ -83,14 +102,20 @@ export function AnswerCard({
           )}
         </div>
       )}
-      {dialog && (!dialog.d || !dialog.answerable) && (
+      {dialog && (!dialog.d || !dialog.answerable || !canAnswer) && (
         <div className="answer-foot">
-          {dialog.d
-            ? "Answer it in the Terminal view, with the keys bar."
-            : "Its options aren't on screen."}{" "}
-          <button className="link" onClick={openTerminal}>
-            Open the Terminal view
-          </button>
+          {!dialog.d
+            ? "Its options aren't on screen."
+            : !canAnswer
+              ? "This device can only view: answer it on the computer."
+              : keysAllowed
+                ? "Answer it in the Terminal view, with the keys bar."
+                : "Answer it on the computer (this device can't type raw keys)."}{" "}
+          {(!dialog.d || keysAllowed) && (
+            <button className="link" onClick={openTerminal}>
+              Open the Terminal view
+            </button>
+          )}
         </div>
       )}
       {note && <div className="answer-note">{note}</div>}

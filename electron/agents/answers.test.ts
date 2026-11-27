@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { answerKeys, parseDialog } from "./answers"
+import { answerKeys, dialogSignature, parseDialog } from "./answers"
 
 const claudePermission = [
   "⏺ Bash(rm -rf build)",
@@ -21,6 +21,7 @@ describe("parseDialog", () => {
   it("reads Claude's permission prompt: question and options, by number", () => {
     expect(parseDialog(claudePermission)).toEqual({
       question: "Do you want to proceed?",
+      body: ["Bash command", "rm -rf build"], // what it asks about: shown on the phone
       options: [
         { n: 1, label: "Yes" },
         { n: 2, label: "Yes, and don't ask again for rm" },
@@ -60,6 +61,15 @@ describe("parseDialog", () => {
     expect(parseDialog(["Pick?", "  2. b", "  3. c"])).toBeNull()
     expect(parseDialog(["  1. a", "  2. b"])).toBeNull()
     expect(parseDialog(["Pick?", "  1. a", "  3. c"])).toBeNull()
+  })
+})
+
+describe("dialogSignature", () => {
+  it("tells apart two prompts that ask the same question about different commands", () => {
+    const a = parseDialog(claudePermission)!
+    const b = parseDialog(claudePermission.map((l) => l.replace("rm -rf build", "rm -rf dist ")))!
+    expect(a.question).toBe(b.question)
+    expect(dialogSignature(a)).not.toBe(dialogSignature(b))
   })
 })
 

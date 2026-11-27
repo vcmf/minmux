@@ -26,10 +26,10 @@ describe("parseClientMessage", () => {
     })
     expect(parseClientMessage('{"t":"dialog","pane":"p"}')).toEqual({ t: "dialog", pane: "p" })
     expect(
-      parseClientMessage('{"t":"answer","pane":"p","waitId":"w3","n":2,"label":"No"}'),
-    ).toEqual({ t: "answer", pane: "p", waitId: "w3", n: 2, label: "No" })
+      parseClientMessage('{"t":"answer","pane":"p","waitId":"w3","n":2,"seen":"sig"}'),
+    ).toEqual({ t: "answer", pane: "p", waitId: "w3", n: 2, seen: "sig" })
     expect(
-      parseClientMessage('{"t":"answer","pane":"p","waitId":"w3","n":0,"label":"x"}'),
+      parseClientMessage('{"t":"answer","pane":"p","waitId":"w3","n":0,"seen":"x"}'),
     ).toBeNull()
   })
 

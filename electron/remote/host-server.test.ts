@@ -93,7 +93,7 @@ describe("remote host server", () => {
   let snaps: string[] // panes main was asked a snapshot of
   let untapped: string[]
   let keys: string[]
-  let answers: { n: number; label: string; lines: string[] }[]
+  let answers: { n: number; seen: string; lines: string[] }[]
 
   beforeEach(async () => {
     port = await freePort()
@@ -749,10 +749,10 @@ describe("remote host server", () => {
       answerable: true,
     })
     expect(untapped).toContain("asks") // a look only: the tap stops again
-    s.ws.send(JSON.stringify({ t: "answer", pane: "asks", waitId: "w1", n: 1, label: "Yes" }))
+    s.ws.send(JSON.stringify({ t: "answer", pane: "asks", waitId: "w1", n: 1, seen: "sig" }))
     await until(() => s.got.some((m) => m.t === "answered"))
     expect(s.got.find((m) => m.t === "answered")).toMatchObject({ ok: true, waitId: "w1" })
-    expect(answers[0]).toMatchObject({ n: 1, label: "Yes" })
+    expect(answers[0]).toMatchObject({ n: 1, seen: "sig" })
     expect(answers[0]!.lines.join("\n")).toContain("1. Yes")
   })
 

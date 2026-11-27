@@ -27,6 +27,7 @@ vi.mock("electron", () => ({
 }))
 
 const { autoPort, setupRemoteControl } = await import("./remote-control")
+const { dialogSignature, parseDialog } = await import("./agents/answers")
 
 describe("autoPort", () => {
   it("gives the app, a dev build and other profiles their own ports", () => {
@@ -372,7 +373,8 @@ describe("setupRemoteControl", () => {
     expect(waitId).toBeTruthy()
     const screen = ["Do you want to proceed?", "❯ 1. Yes", "  2. No"]
     let rid = 10
-    const answer = async (o: { waitId?: string; n?: number; label?: string; lines?: string[] }) => {
+    const sig = (lines: string[]) => dialogSignature(parseDialog(lines)!)
+    const answer = async (o: { waitId?: string; n?: number; seen?: string; lines?: string[] }) => {
       const id = ++rid
       p.emit({
         t: "rpc",
@@ -383,7 +385,7 @@ describe("setupRemoteControl", () => {
           pane: "p1",
           waitId: o.waitId ?? waitId,
           n: o.n ?? 1,
-          label: o.label ?? "Yes",
+          seen: o.seen ?? sig(screen),
           lines: o.lines ?? screen,
         },
       })
@@ -396,7 +398,13 @@ describe("setupRemoteControl", () => {
       })
     }
     expect(await answer({ waitId: "w999" })).toEqual({ ok: false, reason: "stale" })
-    expect(await answer({ label: "No" })).toEqual({ ok: false, reason: "changed" })
+    // The device was shown another dialog (another command under the same question).
+    expect(
+      await answer({ seen: sig(["Do you want to proceed?", "❯ 1. Yes", "  2. Maybe"]) }),
+    ).toEqual({
+      ok: false,
+      reason: "changed",
+    })
     expect(await answer({ lines: ["$ "] })).toEqual({ ok: false, reason: "changed" })
     expect(await answer({})).toEqual({ ok: true })
     expect(writes).toEqual([["p1", "1"]])

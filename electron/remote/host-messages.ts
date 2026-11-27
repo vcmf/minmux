@@ -37,7 +37,7 @@ export type RpcCall =
       pane: string
       waitId: string
       n: number
-      label: string
+      seen: string // the dialog the device was shown (dialogSignature)
       lines: string[] // the pane's screen as the worker's mirror has it now
     }
 

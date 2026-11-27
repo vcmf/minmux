@@ -87,6 +87,8 @@ export function createHostServer(d: HostServerDeps) {
   const CHAT_POLL_MS = d.timing?.chatPoll ?? 1000
   const FEED_IDLE_MS = d.timing?.feedIdle ?? 30_000
   const TERM_FLUSH_MS = 60 // a device's terminal output, batched
+  const DIALOG_RETRIES = 4
+  const DIALOG_RETRY_MS = 250
   const TERM_BEHIND = d.timing?.termBehind ?? 256 * 1024 // unsent bytes past which a device is skipped
 
   let config: HostConfig | null = null
@@ -452,7 +454,12 @@ export function createHostServer(d: HostServerDeps) {
           dialog: null,
           answerable: false,
         })
-      const lines = await screenOf(m.pane)
+      // The hook can come before the agent draws its dialog: look again a few times.
+      let lines = await screenOf(m.pane)
+      for (let k = 0; k < DIALOG_RETRIES && !(lines && parseDialog(lines)); k++) {
+        await new Promise((r) => setTimeout(r, DIALOG_RETRY_MS))
+        lines = await screenOf(m.pane)
+      }
       const answerable = await rpc({ op: "answerable", pane: m.pane })
       return sendTo(c, {
         t: "dialog",
@@ -466,6 +473,7 @@ export function createHostServer(d: HostServerDeps) {
       const ack = (ok: boolean, reason?: AnswerRefusal) =>
         sendTo(c, { t: "answered", pane: m.pane, waitId: m.waitId, ok, reason })
       if (c.permission === "view") return ack(false, "not-allowed")
+      if (!panes.panes.some((p) => p.id === m.pane)) return ack(false, "stale")
       // The screen as it is now: main types the key only if the option is still there.
       const lines = await screenOf(m.pane)
       if (!lines) return ack(false, "changed")
@@ -475,7 +483,7 @@ export function createHostServer(d: HostServerDeps) {
         pane: m.pane,
         waitId: m.waitId,
         n: m.n,
-        label: m.label,
+        seen: m.seen,
         lines,
       })
       return ack(r.ok, r.reason)
@@ -754,8 +762,9 @@ export function createHostServer(d: HostServerDeps) {
     else await resnap(pane, f)
   }
 
-  /** The pane's screen lines: from its mirror if someone watches its terminal, else a snapshot
-   *  taken for this look only (the tap stops again right after). */
+  // From its mirror if someone watches its terminal, else a snapshot for this look only (the tap
+  // stops again right after).
+  /** The pane's screen lines. */
   async function screenOf(pane: string): Promise<string[] | null> {
     const f = termFeeds.get(pane)
     if (f?.snapping) await f.snapping // a re-snapshot under way: the screen after it

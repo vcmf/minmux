@@ -56,7 +56,7 @@ export type ClientMessage =
   | { t: "term"; pane: string; on: boolean } // follow (or stop) the pane's terminal
   | { t: "keys"; pane: string; data: string } // raw keys (devices allowed them)
   | { t: "dialog"; pane: string; waitId?: string } // the dialog as its screen shows it
-  | { t: "answer"; pane: string; waitId: string; n: number; label: string }
+  | { t: "answer"; pane: string; waitId: string; n: number; seen: string } // seen: the dialog shown
 
 export const SEEN_EVERY_MS = 60_000
 
@@ -113,6 +113,7 @@ export interface DialogOption {
 }
 export interface Dialog {
   question: string
+  body: string[] // what it asks about (the command, the file), as the box shows it
   options: DialogOption[]
 }
 
@@ -196,9 +197,9 @@ export function parseClientMessage(raw: unknown): ClientMessage | null {
         Number.isInteger(m.n) &&
         m.n >= 1 &&
         m.n <= 9 &&
-        typeof m.label === "string" &&
-        m.label.length <= 300
-        ? { t: "answer", pane: m.pane, waitId: m.waitId, n: m.n, label: m.label }
+        typeof m.seen === "string" &&
+        m.seen.length <= 8000
+        ? { t: "answer", pane: m.pane, waitId: m.waitId, n: m.n, seen: m.seen }
         : null
     case "send":
       return typeof m.pane === "string" &&

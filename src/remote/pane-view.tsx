@@ -179,6 +179,7 @@ export function PaneView({
           pane={pane}
           agentName={agentName}
           canAnswer={permission !== "view" && online}
+          keysAllowed={permission === "keys"}
           online={online}
           epoch={epoch}
           send={send}

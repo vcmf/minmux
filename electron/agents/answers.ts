@@ -14,6 +14,8 @@ const OPTION = /^\s*(?:[❯›>▶▸]\s*)?([1-9])\.\s+(.+?)\s*$/
 // A box's top or bottom edge.
 const EDGE = /^\s*[╭╰┌└─━]/
 const MAX_GAP = 3 // description lines allowed between two options
+const LABEL_MAX = 200 // a line's length kept (a wide pane's long label)
+const BODY_MAX = 12 // body lines kept
 // The box's side borders, when the dialog is drawn in one.
 const BORDER = /^\s*[│|]\s?|\s?[│|]\s*$/g
 
@@ -37,25 +39,40 @@ export function parseDialog(lines: string[]): Dialog | null {
     const line = clean[i]!
     const m = OPTION.exec(line)
     if (m) {
-      options.unshift({ n: Number(m[1]), label: m[2]! })
+      options.unshift({ n: Number(m[1]), label: m[2]!.slice(0, LABEL_MAX) })
       gap = 0
       if (m[1] === "1") break
     } else if (!line.trim() || EDGE.test(line) || ++gap > MAX_GAP) break
   }
   if (!options.length || options[0]!.n !== 1) return null
   if (options.some((o, k) => o.n !== k + 1)) return null
-  // The question: the nearest line above the options that asks something.
+  // The question: the nearest line above the options that asks something, inside the box.
   let question = ""
+  let q = i
   for (let k = i; k >= 0 && k >= i - 15; k--) {
     const t = clean[k]!.trim()
+    if (EDGE.test(clean[k]!)) break
     if (t.endsWith("?")) {
-      question = t
+      question = t.slice(0, LABEL_MAX)
+      q = k
       break
     }
   }
   if (!question) return null
-  return { question, options }
+  // What it asks about: the box's lines above the question (the command, the file), so a phone
+  // never approves something it wasn't shown.
+  const body: string[] = []
+  for (let k = q - 1; k >= 0 && body.length < BODY_MAX; k--) {
+    if (EDGE.test(clean[k]!)) break
+    const t = clean[k]!.trim()
+    if (t) body.unshift(t.slice(0, LABEL_MAX))
+  }
+  return { question, body, options }
 }
+
+/** What a device saw of a dialog, compared with the screen again before typing its answer. */
+export const dialogSignature = (d: Dialog): string =>
+  JSON.stringify([d.question, d.body, d.options.map((o) => [o.n, o.label])])
 
 // Claude's permission prompts take the option's number (Claude Code's own strings). Its question
 // dialogs don't end on a digit (a multi-select or multi-question ask only picks), and Codex's and
