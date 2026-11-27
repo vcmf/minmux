@@ -28,7 +28,7 @@ export type RpcCall =
 
 export type RpcResult =
   | { op: "auth"; result: AuthResult }
-  | { op: "approve"; result: { id: string; code: string } | null }
+  | { op: "approve"; result: { id: string } | { error: "limited" | "readonly" } }
   | { op: "pending"; result: PendingAnswer }
   | { op: "unlock"; result: UnlockResult }
 

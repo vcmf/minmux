@@ -40,7 +40,9 @@ export interface RemotePanes {
   stale: boolean
 }
 
-export type ClientMessage = { t: "hello"; v: number; client: "web" | "minmux" }
+export type ClientMessage = { t: "hello"; v: number; client: "web" | "minmux" } | { t: "seen" } // the page is in front of its user: counts as use (the 24 h lock)
+
+export const SEEN_EVERY_MS = 60_000
 
 export type HostMessage =
   | { t: "welcome"; v: number; machine: string; device: string; permission: Permission }
@@ -84,6 +86,8 @@ export function parseClientMessage(raw: unknown): ClientMessage | null {
     case "hello":
       if (typeof m.v !== "number" || (m.client !== "web" && m.client !== "minmux")) return null
       return { t: "hello", v: m.v, client: m.client }
+    case "seen":
+      return { t: "seen" }
     default:
       return null
   }

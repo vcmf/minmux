@@ -70,9 +70,17 @@ export function RemoteSettings() {
     useStore.getState().updateSettings({ ...settings, remote: { ...settings.remote, enabled } })
 
   const savePin = async () => {
-    const ok = await ipc.remoteSetPin(pin)
-    setPinNote(ok ? "PIN saved." : "Use 6 to 32 digits.")
-    if (ok) setPin("")
+    const r = await ipc.remoteSetPin(pin)
+    setPinNote(
+      r === "ok"
+        ? "PIN saved."
+        : r === "invalid"
+          ? "Use 6 to 32 digits."
+          : r === "readonly"
+            ? "A newer minmux saved the device list: the PIN can't be changed here."
+            : "The PIN couldn't be saved.",
+    )
+    if (r === "ok") setPin("")
   }
 
   const status = view?.status

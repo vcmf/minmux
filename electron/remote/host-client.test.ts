@@ -93,6 +93,22 @@ describe("RemoteHost", () => {
     expect(table.list()).toHaveLength(1)
   })
 
+  it("a failed answer still replies, with the safe no", async () => {
+    const { host, procs, table } = setup()
+    table.unlock = async () => {
+      throw new Error("scrypt")
+    }
+    host.apply(config)
+    procs[0]!.emit({ t: "rpc", id: 7, call: { op: "unlock", token: "t", nodeId: "n", pin: "1" } })
+    await flush()
+    await flush()
+    expect(procs[0]!.sent.find((m) => m.t === "rpc" && m.id === 7)).toEqual({
+      t: "rpc",
+      id: 7,
+      result: { op: "unlock", result: "unknown" },
+    })
+  })
+
   it("wanted follows connected clients, and sends the latest panes to a new first client", () => {
     const { host, procs } = setup()
     host.apply(config)

@@ -40,8 +40,9 @@ export function withCsp(html: string): string {
   return `${html.slice(0, end)}\n    ${meta}${html.slice(end)}`
 }
 
-/** The vite plugin: the built index.html gets its policy. remote.html (the phone's page) gets
- *  its own as a header from the remote-host worker, which knows the host it's served from. */
+// remote.html (the phone's page) gets its policy as a header from the remote-host worker, which
+// knows the host it's served from.
+/** The vite plugin: the built index.html gets its policy. */
 export const cspPlugin = (): Plugin => ({
   name: "minmux-csp",
   apply: "build",

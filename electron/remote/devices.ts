@@ -36,6 +36,8 @@ export type AuthResult =
   | { state: "locked"; device: DeviceView; pin: boolean }
   | { state: "none" }
 
+export type SetPinResult = "ok" | "invalid" | "readonly" | "error"
+
 export type UnlockResult = "ok" | "wrong" | "blocked" | "disabled" | "no-pin" | "unknown"
 
 interface Pending {
@@ -165,19 +167,20 @@ export class DeviceTable {
     return this.devices.map((d) => this.view(d))
   }
 
-  /** Starts an approval for a node; null when rate-limited (or one is already pending for it). */
+  /** Starts an approval for a node (or returns the one already pending for it). */
   createPending(
     nodeId: string,
     name: string,
-  ): { id: string; code: string; existing?: boolean } | null {
-    if (this.readOnly) return null
+  ): { id: string; code: string; existing?: boolean } | "limited" | "readonly" {
+    if (this.readOnly) return "readonly"
     const now = this.now()
     this.dropOldPending(now)
     // Already asking for this node (a second tab, a reload): the same prompt and code.
     for (const p of this.pending.values())
       if (p.nodeId === nodeId && !p.decision) return { id: p.id, code: p.code, existing: true }
     this.pendingLog = this.pendingLog.filter((e) => now - e.at < PENDING_WINDOW_MS)
-    if (this.pendingLog.filter((e) => e.nodeId === nodeId).length >= PENDING_PER_WINDOW) return null
+    if (this.pendingLog.filter((e) => e.nodeId === nodeId).length >= PENDING_PER_WINDOW)
+      return "limited"
     this.pendingLog.push({ nodeId, at: now })
     const id = this.random(16).toString("hex")
     const bytes = this.random(4)
@@ -299,14 +302,15 @@ export class DeviceTable {
   }
 
   /** Sets (or replaces) the PIN; also turns PIN unlocking back on. */
-  async setPin(pin: string): Promise<boolean> {
-    if (this.readOnly || !new RegExp(`^\\d{${PIN_MIN_DIGITS},32}$`).test(pin)) return false
+  async setPin(pin: string): Promise<SetPinResult> {
+    if (this.readOnly) return "readonly"
+    if (!new RegExp(`^\\d{${PIN_MIN_DIGITS},32}$`).test(pin)) return "invalid"
     const salt = this.random(16).toString("hex")
     this.pin = { salt, hash: await this.derive(pin, salt) }
     this.pinDisabled = false
     this.pinFailLog = []
     this.persist()
-    return true
+    return "ok"
   }
 
   revoke(id: string): boolean {

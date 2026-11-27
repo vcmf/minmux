@@ -6,6 +6,7 @@
 import {
   DEAD_AFTER_MS,
   PROTOCOL_VERSION,
+  SEEN_EVERY_MS,
   parseHostMessage,
   type HostMessage,
   type SessionState,
@@ -34,6 +35,8 @@ export interface LinkDeps {
   session: () => Promise<SessionState> // throws when the machine can't be reached
   onState: (s: LinkState) => void
   onMessage: (m: HostMessage) => void
+  /** Is the page in front of its user? While it is, the link says so (counts as use). */
+  visible?: () => boolean
   now?: () => number
   setTimer?: (fn: () => void, ms: number) => unknown
   clearTimer?: (t: unknown) => void
@@ -48,6 +51,8 @@ export class Link {
   private timer: unknown = null
   private watchdog: unknown = null
   private lastTick = 0
+  private lastSeen = 0
+  private checking = false
   private stopped = false
   private final = false // locked / no access / removed / version: no automatic retry
   private now: () => number
@@ -70,8 +75,9 @@ export class Link {
 
   /** The page came to the front, or the network came back: don't wait out the backoff. */
   wake(): void {
-    if (this.stopped || this.final) return
-    if (this.ws && this.now() - this.lastTick < DEAD_AFTER_MS) return
+    if (this.stopped || this.final || this.checking) return
+    if (this.ws && this.lastTick === 0) return // still connecting
+    if (this.ws && this.now() - this.lastTick < DEAD_AFTER_MS) return this.seen(true)
     this.drop()
     this.attempt = Math.max(1, this.attempt)
     void this.check()
@@ -91,11 +97,15 @@ export class Link {
   private async check(): Promise<void> {
     if (this.timer) this.clearTimer(this.timer)
     this.timer = null
+    if (this.checking) return
+    this.checking = true
     let s: SessionState
     try {
       s = await this.d.session()
     } catch {
       return this.retry(true)
+    } finally {
+      this.checking = false
     }
     if (this.stopped) return
     if (s.state === "locked")
@@ -146,6 +156,7 @@ export class Link {
     if (this.stopped || this.final) return
     this.attempt++
     this.d.onState({ state: "reconnecting", attempt: this.attempt, unreachable })
+    if (this.timer) this.clearTimer(this.timer)
     this.timer = this.setTimer(() => void this.check(), backoffMs(this.attempt))
   }
 
@@ -159,6 +170,7 @@ export class Link {
   private arm(): void {
     this.disarm()
     this.watchdog = this.setTimer(() => {
+      this.seen(false)
       if (this.now() - this.lastTick >= DEAD_AFTER_MS) {
         const ws = this.ws
         this.ws = null
@@ -166,6 +178,14 @@ export class Link {
         this.retry(false)
       } else this.arm()
     }, 5000)
+  }
+
+  /** Tells minmux the page is in use (at most once a minute, or now when it comes back). */
+  private seen(now: boolean): void {
+    if (!this.ws || this.lastTick === 0 || !(this.d.visible?.() ?? true)) return
+    if (!now && this.now() - this.lastSeen < SEEN_EVERY_MS) return
+    this.lastSeen = this.now()
+    this.ws.send(JSON.stringify({ t: "seen" }))
   }
 
   private disarm(): void {

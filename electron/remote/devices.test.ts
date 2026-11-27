@@ -27,8 +27,11 @@ function setup(raw: string | null = null) {
   }
 }
 
+type Pending = { id: string; code: string; existing?: boolean }
+const pend = (t: DeviceTable, node: string, name: string) => t.createPending(node, name) as Pending
+
 function approve(table: DeviceTable, nodeId = "n1", decision: "allow" | "view" = "allow") {
-  const p = table.createPending(nodeId, "iphone-15")!
+  const p = table.createPending(nodeId, "iphone-15") as { id: string; code: string }
   expect(table.decide(p.id, decision)).toBe(true)
   const s = table.pendingState(p.id, nodeId)
   if (s.state !== "approved") throw new Error(s.state)
@@ -38,7 +41,7 @@ function approve(table: DeviceTable, nodeId = "n1", decision: "allow" | "view" =
 describe("DeviceTable approval", () => {
   it("issues a token to the node and page that asked, once", () => {
     const { table } = setup()
-    const p = table.createPending("n1", "iphone-15")!
+    const p = pend(table, "n1", "iphone-15")
     expect(p.code).toMatch(/^[A-Z0-9]{4}$/)
     expect(table.pendingState(p.id, "n1")).toEqual({ state: "pending", code: p.code })
     table.decide(p.id, "allow")
@@ -56,7 +59,7 @@ describe("DeviceTable approval", () => {
     const { table } = setup()
     approve(table, "n1", "view")
     expect(table.list()[0]!.permission).toBe("view")
-    const p = table.createPending("n2", "pixel")!
+    const p = pend(table, "n2", "pixel")
     table.decide(p.id, "deny")
     expect(table.pendingState(p.id, "n2").state).toBe("denied")
     expect(table.list()).toHaveLength(1)
@@ -64,24 +67,24 @@ describe("DeviceTable approval", () => {
 
   it("rate-limits prompts per node", () => {
     const { table, advance } = setup()
-    const a = table.createPending("n1", "x")!
+    const a = pend(table, "n1", "x")
     expect(table.createPending("n1", "x")).toEqual({ ...a, existing: true }) // same prompt
     table.decide(a.id, "deny")
     table.pendingState(a.id, "n1")
-    expect(table.createPending("n1", "x")).not.toBeNull()
+    expect(typeof table.createPending("n1", "x")).toBe("object")
     advance(PENDING_MS)
-    expect(table.createPending("n1", "x")).not.toBeNull()
+    expect(typeof table.createPending("n1", "x")).toBe("object")
     advance(PENDING_MS)
-    expect(table.createPending("n1", "x")).toBeNull() // 3 in 10 minutes
-    expect(table.createPending("n2", "y")).not.toBeNull()
+    expect(table.createPending("n1", "x")).toBe("limited") // 3 in 10 minutes
+    expect(typeof table.createPending("n2", "y")).toBe("object")
   })
 
   it("expires an unanswered prompt, and drops a device whose page never collected it", () => {
     const { table, advance } = setup()
-    const p = table.createPending("n1", "x")!
+    const p = pend(table, "n1", "x")
     advance(PENDING_MS)
     expect(table.decide(p.id, "allow")).toBe(false)
-    const q = table.createPending("n1", "x")!
+    const q = pend(table, "n1", "x")
     table.decide(q.id, "allow")
     expect(table.list()).toHaveLength(1)
     advance(PENDING_MS)
@@ -115,8 +118,8 @@ describe("DeviceTable lock, PIN and expiry", () => {
 
   it("unlocks with the PIN", async () => {
     const { table, advance } = setup()
-    expect(await table.setPin("12345")).toBe(false) // too short
-    expect(await table.setPin("123456")).toBe(true)
+    expect(await table.setPin("12345")).toBe("invalid") // too short
+    expect(await table.setPin("123456")).toBe("ok")
     const token = approve(table)
     advance(LOCK_AFTER_MS)
     expect(table.auth(token, "n1")).toMatchObject({ state: "locked", pin: true })
@@ -188,8 +191,8 @@ describe("device file", () => {
     expect(parseDeviceFile(raw).newer).toBe(true)
     const { table, saved } = setup(raw)
     expect(table.newerFile).toBe(true)
-    expect(table.createPending("n1", "x")).toBeNull()
-    expect(await table.setPin("123456")).toBe(false)
+    expect(table.createPending("n1", "x")).toBe("readonly")
+    expect(await table.setPin("123456")).toBe("readonly")
     expect(saved).toHaveLength(0)
   })
 

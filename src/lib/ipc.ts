@@ -109,7 +109,7 @@ export interface Ipc {
   remoteRevoke: (id: string) => Promise<boolean>
   remoteRename: (id: string, name: string) => Promise<boolean>
   remotePermission: (id: string, permission: Permission) => Promise<boolean>
-  remoteSetPin: (pin: string) => Promise<boolean>
+  remoteSetPin: (pin: string) => Promise<"ok" | "invalid" | "readonly" | "error">
   remoteDisconnectAll: () => Promise<boolean>
   clipboardWrite: (text: string) => void
   clipboardRead: () => Promise<string>

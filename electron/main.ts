@@ -1590,6 +1590,25 @@ function registerIpc() {
     }
   })
 
+  // Remote control (electron/remote-control.ts; docs/design/REMOTE_CONTROL.md).
+  ipcMain.handle("remote:view", () => remoteControl?.view() ?? null)
+  ipcMain.on("remote:panes", (_e, panes: unknown) => remoteControl?.setPanes(panes))
+  ipcMain.handle("remote:wanted", () => remoteControl?.wanted() ?? false)
+  ipcMain.handle("remote:revoke", (_e, id: unknown) => remoteControl?.revoke(id) ?? false)
+  ipcMain.handle(
+    "remote:rename",
+    (_e, id: unknown, name: unknown) => remoteControl?.rename(id, name) ?? false,
+  )
+  ipcMain.handle(
+    "remote:permission",
+    (_e, id: unknown, p: unknown) => remoteControl?.setPermission(id, p) ?? false,
+  )
+  ipcMain.handle("remote:set-pin", (_e, pin: unknown) => remoteControl?.setPin(pin) ?? "error")
+  ipcMain.handle("remote:disconnect-all", () => {
+    remoteControl?.disconnectAll()
+    return true
+  })
+
   // Clipboard (copy/paste) — main owns it; renderer never imports Electron.
   ipcMain.on("clipboard:write", (_e, text: string) => clipboard.writeText(text))
   ipcMain.handle("clipboard:read", async () => clipboard.readText())

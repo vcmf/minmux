@@ -11,7 +11,8 @@ export interface SelfNode {
   userId: string
   nodeId: string
   dnsName: string // "has-macbook-pro.tail84fc6b.ts.net" (no trailing dot)
-  shortName: string // "has-macbook-pro"
+  shortName: string // "has-macbook-pro" (MagicDNS); "" without it
+  label: string // what to call it on screen: the short name, else Tailscale's host name
   ips: string[] // Tailscale addresses, IPv4 first
   tagged: boolean
   certDomains: string[]
@@ -101,7 +102,8 @@ export function parseStatus(raw: string): SelfResult {
       userId,
       nodeId: str(self.ID),
       dnsName,
-      shortName: firstLabel(dnsName) || str(self.HostName),
+      shortName: firstLabel(dnsName),
+      label: firstLabel(dnsName) || str(self.HostName) || "this computer",
       ips,
       tagged: strs(self.Tags).length > 0,
       certDomains: strs(o.CertDomains),
@@ -133,6 +135,13 @@ export function parseWhois(raw: string): PeerNode | null {
       "device",
     tagged: strs(node.Tags).length > 0,
   }
+}
+
+/** The address to open: the MagicDNS name when there is one, else the Tailscale IPv4. */
+export function openUrl(self: SelfNode, port: number): string {
+  if (self.shortName) return `http://${self.shortName}:${port}`
+  const ip = self.ips.find((a) => !a.includes(":")) ?? `[${self.ips[0]}]`
+  return `http://${ip}:${port}`
 }
 
 /** Remote control's identity rule: an untagged peer of this machine's own (untagged) user. */

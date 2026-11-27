@@ -39,20 +39,25 @@ import {
   parseStatus,
   parseWhois,
   peerAllowed,
+  openUrl,
   runCli,
   type PeerNode,
   type SelfNode,
 } from "./remote/tailscale"
 import { LOCK_AFTER_MS } from "./remote/devices"
+import { FAILED } from "./remote/host-client"
 
 // Cookies are scoped by host, not port: one name per port, so the installed app and a dev build
 // on the same machine keep their own tokens.
 const cookieName = () => `minmux_remote_${config?.port ?? 0}`
+const tokenSetCookie = (token: string) =>
+  `${cookieName()}=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${30 * 24 * 3600}`
 const RECHECK_MS = 30_000
 const WHOIS_TTL_MS = 60_000
 const PING_MS = TICK_MS
 const PONG_TIMEOUT_MS = 45_000
 const TOUCH_EVERY_MS = 60_000
+const RPC_TIMEOUT_MS = 10_000
 
 const post = (m: FromHost) => process.parentPort.postMessage(m)
 
@@ -71,7 +76,15 @@ const waiting = new Map<number, (r: unknown) => void>()
 function rpc<K extends RpcCall["op"]>(call: Extract<RpcCall, { op: K }>): Promise<Results[K]> {
   const id = nextRpc++
   return new Promise<Results[K]>((resolve) => {
-    waiting.set(id, resolve as (r: unknown) => void)
+    // Main always answers; if it somehow doesn't, the safe "no" after a while (never a hang).
+    const timer = setTimeout(() => {
+      waiting.delete(id)
+      resolve(FAILED[call.op].result as Results[K])
+    }, RPC_TIMEOUT_MS)
+    waiting.set(id, (r) => {
+      clearTimeout(timer)
+      resolve(r as Results[K])
+    })
     post({ t: "rpc", id, call })
   })
 }
@@ -225,7 +238,7 @@ async function onRequest(req: http.IncomingMessage, res: http.ServerResponse) {
   if (!peer) return send(res, 403, "This minmux only answers to its owner's devices.")
   const url = new URL(req.url ?? "/", "http://x")
   const p = url.pathname
-  const machine = self.shortName
+  const machine = self.label
 
   if (req.method === "GET" && p === "/api/session") {
     if (!sameOrigin(req.headers)) return send(res, 403, "cross-site")
@@ -234,26 +247,31 @@ async function onRequest(req: http.IncomingMessage, res: http.ServerResponse) {
       token: tokenCookie(req.headers, cookieName()),
       nodeId: peer.nodeId,
     })
-    if (a.state === "ok") post({ t: "touch", deviceId: a.device.id }) // the page was opened: use
+    const extra: Record<string, string> = {}
+    if (a.state === "ok") {
+      post({ t: "touch", deviceId: a.device.id }) // the page was opened: use
+      // The cookie lives as long as the device: renewed on each use, not 30 days from approval.
+      extra["Set-Cookie"] = tokenSetCookie(tokenCookie(req.headers, cookieName())!)
+    }
     const body: SessionState =
       a.state === "ok"
         ? { state: "ok", machine, device: a.device.name }
         : a.state === "locked"
           ? { state: "locked", machine, device: a.device.name, pin: a.pin }
           : { state: "none", machine }
-    return json(res, 200, body)
+    return json(res, 200, body, extra)
   }
   if (req.method === "POST" && p === "/api/approve") {
     if (!fromOwnPage(req.headers)) return send(res, 403, "cross-site")
     const r = await rpc({ op: "approve", nodeId: peer.nodeId, name: peer.name })
-    return json(res, 200, r ? { pending: r.id } : { pending: null })
+    return json(res, 200, "id" in r ? { pending: r.id } : { error: r.error })
   }
   const pend = /^\/api\/pending\/([0-9a-f]{32})$/.exec(p)
   if (req.method === "GET" && pend) {
     if (!sameOrigin(req.headers)) return send(res, 403, "cross-site")
     const r = await rpc({ op: "pending", id: pend[1]!, nodeId: peer.nodeId })
     if (r.state === "approved") {
-      const cookie = `${cookieName()}=${r.token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${30 * 24 * 3600}`
+      const cookie = tokenSetCookie(r.token)
       return json(res, 200, { state: "approved" } satisfies PendingState, { "Set-Cookie": cookie })
     }
     const body: PendingState =
@@ -311,6 +329,9 @@ function reportClients() {
 }
 
 async function onUpgrade(req: http.IncomingMessage, socket: net.Socket, head: Buffer) {
+  // Node drops its own error listener before 'upgrade': a reset during the awaits below
+  // (whois, auth) would otherwise be an unhandled error that kills this worker.
+  socket.on("error", () => socket.destroy())
   const refuse = (code: number) => {
     socket.end(`HTTP/1.1 ${code} ${http.STATUS_CODES[code]}\r\nConnection: close\r\n\r\n`)
   }
@@ -364,6 +385,7 @@ async function onMessage(c: Client, raw: string | null) {
   const m = parseClientMessage(raw)
   if (!m)
     return sendTo(c, { t: "error", code: "bad-message", message: "Unknown or malformed message" })
+  if (m.t === "seen") return // counted above (lastMsg, touch)
   if (m.t === "hello") {
     if (m.v !== PROTOCOL_VERSION) {
       sendTo(c, { t: "bye", reason: "version" })
@@ -380,7 +402,7 @@ async function onMessage(c: Client, raw: string | null) {
     sendTo(c, {
       t: "welcome",
       v: PROTOCOL_VERSION,
-      machine: self?.shortName ?? "",
+      machine: self?.label ?? "",
       device: a.device.name,
       permission: a.device.permission,
     })
@@ -447,11 +469,18 @@ async function doRefresh() {
   const key = `${self.ips.join(",")}:${port}`
   if (key === listeningKey) return
   closeServers()
-  try {
-    servers = await Promise.all(self.ips.map((ip) => listen(ip, port)))
-  } catch (e) {
+  // Each address on its own: one that can't be bound (IPv6 off) doesn't stop the others, and
+  // every server that did bind is kept or closed, never leaked.
+  const settled = await Promise.allSettled(self.ips.map((ip) => listen(ip, port)))
+  const bound = settled.flatMap((r) => (r.status === "fulfilled" ? [r.value] : []))
+  const errs = settled.flatMap((r) =>
+    r.status === "rejected" ? [(r.reason as NodeJS.ErrnoException).code ?? "error"] : [],
+  )
+  const inUse = errs.includes("EADDRINUSE")
+  servers = bound
+  if (inUse || bound.length === 0) {
     closeServers()
-    const code = (e as NodeJS.ErrnoException).code
+    const code = inUse ? "EADDRINUSE" : errs[0]
     // A worker being replaced may still hold the port for a moment: try again soon.
     if (code === "EADDRINUSE" && portRetries < 10) {
       portRetries++
@@ -466,8 +495,8 @@ async function doRefresh() {
     t: "status",
     status: {
       state: "listening",
-      url: `http://${self.shortName}:${port}`,
-      machine: self.shortName,
+      url: openUrl(self, port),
+      machine: self.label,
       addresses: self.ips,
     },
   })

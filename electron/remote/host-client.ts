@@ -37,6 +37,14 @@ export type RemoteState = { status: HostStatus | { state: "off" }; clients: Clie
 
 const RESTART_MS = 2000
 
+/** What a question gets when answering it failed: the safe "no". */
+export const FAILED: { [K in RpcCall["op"]]: Extract<RpcResult, { op: K }> } = {
+  auth: { op: "auth", result: { state: "none" } },
+  approve: { op: "approve", result: { error: "limited" } },
+  pending: { op: "pending", result: { state: "expired" } },
+  unlock: { op: "unlock", result: "unknown" },
+}
+
 export class RemoteHost {
   private proc: HostProc | null = null
   private config: HostConfig | null = null
@@ -142,9 +150,9 @@ export class RemoteHost {
         break
       case "rpc":
         // Only to the worker that asked: a replacement numbers its requests from 1 again.
-        void this.answer(m.call).then(
-          (result) => this.proc === proc && proc.postMessage({ t: "rpc", id: m.id, result }),
-        )
+        void this.answer(m.call)
+          .catch((): RpcResult => FAILED[m.call.op])
+          .then((result) => this.proc === proc && proc.postMessage({ t: "rpc", id: m.id, result }))
         break
     }
   }
@@ -156,7 +164,8 @@ export class RemoteHost {
         return { op: "auth", result: devices.auth(call.token, call.nodeId) }
       case "approve": {
         const p = devices.createPending(call.nodeId, call.name)
-        if (p && !p.existing) {
+        if (typeof p === "string") return { op: "approve", result: { error: p } }
+        if (!p.existing) {
           // Not awaited: the page polls while the dialog is up.
           void this.deps
             .ask(call.name, p.code)
@@ -164,7 +173,7 @@ export class RemoteHost {
             .catch(() => devices.decide(p.id, "deny"))
             .finally(() => this.deps.onChange())
         }
-        return { op: "approve", result: p && { id: p.id, code: p.code } }
+        return { op: "approve", result: { id: p.id } }
       }
       case "pending":
         return { op: "pending", result: devices.pendingState(call.id, call.nodeId) }

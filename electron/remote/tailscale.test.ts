@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { cliCandidates, findCli, parseStatus, parseWhois, peerAllowed } from "./tailscale"
+import { cliCandidates, findCli, openUrl, parseStatus, parseWhois, peerAllowed } from "./tailscale"
 
 const status = (over: Record<string, unknown> = {}, self: Record<string, unknown> = {}) =>
   JSON.stringify({
@@ -26,6 +26,7 @@ describe("parseStatus", () => {
         nodeId: "n-self",
         dnsName: "has-macbook-pro.tail84fc6b.ts.net",
         shortName: "has-macbook-pro",
+        label: "has-macbook-pro",
         ips: ["100.126.45.109", "fd7a:115c:a1e0::1"],
         tagged: false,
         certDomains: [],
@@ -44,6 +45,14 @@ describe("parseStatus", () => {
     })
     expect(parseStatus("nope")).toMatchObject({ ok: false, reason: "error" })
     expect(parseStatus(status({}, { TailscaleIPs: [] }))).toMatchObject({ ok: false })
+  })
+
+  it("opens by MagicDNS name, or by IP without MagicDNS (never by HostName)", () => {
+    const a = parseStatus(status())
+    expect(a.ok && openUrl(a.self, 7420)).toBe("http://has-macbook-pro:7420")
+    const b = parseStatus(status({}, { DNSName: "" }))
+    expect(b.ok && b.self.label).toBe("Ha’s MacBook Pro")
+    expect(b.ok && openUrl(b.self, 7420)).toBe("http://100.126.45.109:7420")
   })
 
   it("flags a tagged machine", () => {

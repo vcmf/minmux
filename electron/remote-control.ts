@@ -1,14 +1,14 @@
 // Remote control in main (docs/design/REMOTE_CONTROL.md): the device table, the remote-host
 // worker's lifecycle from settings, the approval dialog, and the renderer's IPC for Settings.
 
-import { dialog, ipcMain, utilityProcess, type BrowserWindow } from "electron"
+import { dialog, utilityProcess, type BrowserWindow } from "electron"
 import fs from "node:fs"
 import path from "node:path"
 import { mergeRemoteSettings } from "../src/settings/schema"
 import { isPermission, type RemotePanes } from "../src/lib/remote-protocol"
 import { AtomicFile } from "./atomic-file"
 import type { RemoteView } from "../src/lib/remote-view"
-import { DeviceTable } from "./remote/devices"
+import { DeviceTable, type SetPinResult } from "./remote/devices"
 import { RemoteHost, type Decision, type HostProc } from "./remote/host-client"
 
 export interface RemoteControlDeps {
@@ -125,25 +125,25 @@ export function setupRemoteControl(deps: RemoteControlDeps) {
     if (lastPanes) host.setPanes({ ...lastPanes, stale: true })
   }
 
-  ipcMain.handle("remote:view", () => view())
-  ipcMain.on("remote:panes", (_e, panes: RemotePanes) => {
-    if (!panes || !Array.isArray(panes.panes) || !Array.isArray(panes.tabs)) return
-    lastPanes = { tabs: panes.tabs, panes: panes.panes, stale: false }
+  /** The renderer's pane list (pushed only while a client is connected). */
+  const setPanes = (panes: unknown) => {
+    const p = panes as RemotePanes | null
+    if (!p || !Array.isArray(p.panes) || !Array.isArray(p.tabs)) return
+    lastPanes = { tabs: p.tabs, panes: p.panes, stale: false }
     host.setPanes(lastPanes)
-  })
-  ipcMain.handle("remote:wanted", () => host.wanted)
-  ipcMain.handle("remote:revoke", (_e, id: unknown) => {
+  }
+  const revoke = (id: unknown) => {
     if (typeof id !== "string" || !devices().revoke(id)) return false
     host.drop(id, "revoked")
     send("remote:changed")
     return true
-  })
-  ipcMain.handle("remote:rename", (_e, id: unknown, name: unknown) => {
+  }
+  const rename = (id: unknown, name: unknown) => {
     const ok = typeof id === "string" && typeof name === "string" && devices().rename(id, name)
     if (ok) send("remote:changed")
     return ok
-  })
-  ipcMain.handle("remote:permission", (_e, id: unknown, p: unknown) => {
+  }
+  const setPermission = (id: unknown, p: unknown) => {
     const ok = typeof id === "string" && isPermission(p) && devices().setPermission(id, p)
     // A new permission takes effect on the next connection: its pages reconnect at once.
     if (ok) {
@@ -151,20 +151,30 @@ export function setupRemoteControl(deps: RemoteControlDeps) {
       send("remote:changed")
     }
     return ok
-  })
-  ipcMain.handle("remote:set-pin", async (_e, pin: unknown) => {
-    const ok = typeof pin === "string" && (await devices().setPin(pin))
-    if (ok) send("remote:changed")
-    return ok
-  })
-  ipcMain.handle("remote:disconnect-all", () => {
-    host.drop(undefined, "disconnected")
-    return true
-  })
+  }
+  const setPin = async (pin: unknown): Promise<SetPinResult> => {
+    if (typeof pin !== "string") return "invalid"
+    try {
+      const r = await devices().setPin(pin)
+      if (r === "ok") send("remote:changed")
+      return r
+    } catch {
+      return "error"
+    }
+  }
 
   return {
     apply,
     windowClosed,
     dispose: () => host.dispose(),
+    // IPC (registered in main.ts with the other handlers)
+    view,
+    setPanes,
+    wanted: () => host.wanted,
+    revoke,
+    rename,
+    setPermission,
+    setPin,
+    disconnectAll: () => host.drop(undefined, "disconnected"),
   }
 }

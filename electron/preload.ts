@@ -163,7 +163,8 @@ const api = {
     ipcRenderer.invoke("remote:rename", id, name) as Promise<boolean>,
   remotePermission: (id: string, permission: Permission) =>
     ipcRenderer.invoke("remote:permission", id, permission) as Promise<boolean>,
-  remoteSetPin: (pin: string) => ipcRenderer.invoke("remote:set-pin", pin) as Promise<boolean>,
+  remoteSetPin: (pin: string) =>
+    ipcRenderer.invoke("remote:set-pin", pin) as Promise<"ok" | "invalid" | "readonly" | "error">,
   remoteDisconnectAll: () => ipcRenderer.invoke("remote:disconnect-all") as Promise<boolean>,
 
   clipboardWrite: (text: string) => ipcRenderer.send("clipboard:write", text),

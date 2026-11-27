@@ -145,6 +145,14 @@ describe("Link", () => {
     await tick(0)
   })
 
+  it("wake does nothing while the first check is still running", async () => {
+    const { link, sockets } = setup([ok])
+    link.start()
+    link.wake() // pageshow on first load
+    await flush()
+    expect(sockets).toHaveLength(1)
+  })
+
   it("backoff doubles up to 30 s", () => {
     expect([1, 2, 3, 4, 5, 6, 7].map(backoffMs)).toEqual([
       1000, 2000, 4000, 8000, 16000, 30000, 30000,

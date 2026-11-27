@@ -44,9 +44,9 @@ export function upgradeAllowed(h: Headers): boolean {
   return !!origin && origin.toLowerCase() === `http://${one(h, "host").toLowerCase()}`
 }
 
-/** A state-changing request from our own page: browsers always send Origin on a POST, and
- *  another site can't forge it. (Fetch Metadata headers would be nicer, but browsers send them
- *  to HTTPS pages only, and this page is plain HTTP over the tailnet.) */
+// Browsers always send Origin on a POST and no site can forge it. (Fetch Metadata would say more,
+// but browsers send it to HTTPS pages only; this page is plain HTTP over the tailnet.)
+/** A state-changing request from our own page. */
 export function fromOwnPage(h: Headers): boolean {
   return upgradeAllowed(h)
 }

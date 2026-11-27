@@ -18,8 +18,11 @@ function AskButton({ label }: { label: string }) {
   const ask = async () => {
     setBusy(true)
     try {
-      const r = await getJson<{ pending: string | null }>("/api/approve", { method: "POST" })
-      location.assign(`/?pending=${r.pending ?? "limited"}`)
+      const r = await getJson<{ pending?: string; error?: "limited" | "readonly" }>(
+        "/api/approve",
+        { method: "POST" },
+      )
+      location.assign(`/?pending=${r.pending ?? r.error ?? "limited"}`)
     } catch {
       setNote("Can't reach the computer.")
       setBusy(false)
@@ -44,11 +47,12 @@ export function RemoteApp() {
 
 /** Waiting for the desktop's approval, showing the code it shows. */
 function Approval({ id, onDone }: { id: string; onDone: () => void }) {
-  const [s, setS] = useState<PendingState | { state: "limited" } | null>(
-    id === "limited" ? { state: "limited" } : null,
+  const fixed = id === "limited" || id === "readonly" ? id : null
+  const [s, setS] = useState<PendingState | { state: "limited" | "readonly" } | null>(
+    fixed ? { state: fixed } : null,
   )
   useEffect(() => {
-    if (id === "limited") return
+    if (fixed) return
     let live = true
     const poll = async () => {
       try {
@@ -70,7 +74,7 @@ function Approval({ id, onDone }: { id: string; onDone: () => void }) {
     return () => {
       live = false
     }
-  }, [id, onDone])
+  }, [id, fixed, onDone])
 
   if (!s) return <Screen title="Asking for access…" />
   if (s.state === "pending")
@@ -82,6 +86,15 @@ function Approval({ id, onDone }: { id: string; onDone: () => void }) {
       </Screen>
     )
   const again = <AskButton label="Ask again" />
+  if (s.state === "readonly")
+    return (
+      <Screen title="Can't add devices">
+        <p>
+          The computer's device list was saved by a newer minmux. Update minmux there, then ask
+          again.
+        </p>
+      </Screen>
+    )
   if (s.state === "limited")
     return (
       <Screen title="Too many requests">
@@ -115,6 +128,7 @@ function Connected() {
       socket: () => new WebSocket(`ws://${location.host}/ws`) as unknown as SocketLike,
       session: () => getJson<SessionState>("/api/session"),
       onState: setLink,
+      visible: () => document.visibilityState === "visible",
       onMessage: (m) => {
         if (m.t === "panes") setPanes(m.panes)
       },

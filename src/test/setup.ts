@@ -78,7 +78,7 @@ const minmuxStub = {
   remoteRevoke: vi.fn(async () => true),
   remoteRename: vi.fn(async () => true),
   remotePermission: vi.fn(async () => true),
-  remoteSetPin: vi.fn(async () => true),
+  remoteSetPin: vi.fn(async () => "ok" as const),
   remoteDisconnectAll: vi.fn(async () => true),
   minimizeWindow: vi.fn(),
   setWindowBackground: vi.fn(),
