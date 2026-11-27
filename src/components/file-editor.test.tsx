@@ -268,6 +268,36 @@ describe("FileEditor", () => {
       await waitFor(() => expect(screen.queryByText("The file was deleted.")).toBeNull())
     })
 
+    it("a dismissed deleted bar stays dismissed on the next keystroke", async () => {
+      await open("one\n")
+      vi.mocked(ipc.readFile).mockResolvedValue({ kind: "error", message: "gone", gone: true })
+      await act(async () => {
+        files.refresh(entryId)
+        await new Promise((r) => setTimeout(r, 0))
+      })
+      await screen.findByText("The file was deleted.")
+      fireEvent.click(screen.getByTitle("Dismiss"))
+      type("x") // dirty flips: follow runs again on the same read
+      await new Promise((r) => setTimeout(r, 20))
+      expect(screen.queryByText("The file was deleted.")).toBeNull()
+    })
+
+    it("Reload theirs, with a newer read landing meanwhile: that one is followed after", async () => {
+      await open("one\n")
+      type("mine\n")
+      vi.mocked(ipc.writeFile).mockResolvedValueOnce({ kind: "changed" })
+      fireEvent.click(screen.getByText("Save"))
+      await screen.findByText(/changed on disk/)
+      let land!: (d: FileData) => void
+      vi.mocked(ipc.readFile).mockImplementationOnce(() => new Promise((r) => (land = r))) // the reload
+      fireEvent.click(screen.getByText("Reload theirs (drop mine)"))
+      await agentWrites("A2\n", "hA2") // the watcher's read starts later, lands first
+      expect(doc()).toBe("one\nmine\n") // not followed into the dirty text mid-reload
+      await act(async () => land(text("A1\n", "hA1")))
+      await waitFor(() => expect(doc()).toBe("A2\n")) // the reload went in, then the newer read
+      expect(edits.base(entryId)?.hash).toBe("hA2")
+    })
+
     it("grown too large to edit: it says the file changed", async () => {
       await open("one\n")
       vi.mocked(ipc.readFile).mockResolvedValue({ kind: "too-large", size: 3_000_000 })
@@ -283,6 +313,7 @@ describe("FileEditor", () => {
       await open("one\n")
       vi.mocked(ipc.readFile).mockResolvedValue(text("theirs\n", "hT"))
       await act(async () => void (await edits.reload(entryId)))
+      edits.endReload(entryId)
       // The editor shows what the reload read; the file store's older data (seq) can't win.
       act(() =>
         view().dispatch({ changes: { from: 0, to: view().state.doc.length, insert: "theirs\n" } }),

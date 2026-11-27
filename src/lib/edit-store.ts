@@ -35,6 +35,7 @@ interface Edit extends EditShown {
   base: EditBase
   state: unknown // the editor's own state (CodeMirror's EditorState)
   noticeSeq: number // the file store number the notice was raised at (a later read may clear it)
+  reloading: boolean // Reload is swapping the editor's text: nothing follows meanwhile
   scroll: unknown // where the editor was scrolled (CodeMirror's scroll snapshot), or null
 }
 
@@ -161,6 +162,7 @@ export class EditStore {
       state: null,
       scroll: null,
       noticeSeq: 0,
+      reloading: false,
       dirty: false,
       saving: false,
       notice: null,
@@ -237,9 +239,22 @@ export class EditStore {
     const e = this.edits.get(id)
     const kind = e?.notice?.kind
     if (!e || kind === notice.kind || kind === "error" || kind === "unknown") return
+    // Raised (and maybe dismissed) for this read already: only a newer one raises it again.
+    if (seq <= e.noticeSeq) return
     e.notice = notice
     e.noticeSeq = seq
     this.publish(id)
+  }
+
+  /** Reload is swapping the editor's text (between `reload` and `endReload`). */
+  isReloading(id: string): boolean {
+    return !!this.edits.get(id)?.reloading
+  }
+
+  /** The editor has its reloaded text in: following goes on. */
+  endReload(id: string): void {
+    const e = this.edits.get(id)
+    if (e) e.reloading = false
   }
 
   /** The file store number its notice was raised at. */
@@ -259,10 +274,12 @@ export class EditStore {
   async reload(id: string): Promise<EditBase | null> {
     const e = this.edits.get(id)
     if (!e) return null
-    const ticket = this.fileStore.ticket(id) // numbered as it starts: a later read beats it
+    const ticket = this.fileStore.ticket(id) // a read: numbered as it starts (a later one beats it)
+    e.reloading = true // the editor doesn't follow while it swaps its text (endReload)
     const r = await this.read(e.path, e.wsl).catch(() => null)
     if (this.edits.get(id) !== e) return null
     if (r?.kind !== "text" || !r.hash || r.editable === false) {
+      e.reloading = false
       e.notice = { kind: "error", message: "It can't be read as text now" }
       this.publish(id)
       return null
@@ -307,13 +324,14 @@ export class EditStore {
           base = null
         } else base = null // unreadable, or not text now (a binary, too large): refused below
       }
-      // Numbered as the write starts: a read that started later is newer than what it wrote.
-      ticket = this.fileStore.ticket(id)
       r =
         base === null && !create
           ? { kind: "error", message: "It can't be read as text now" }
           : await this.write(e.path, disk, base, e.wsl, create)
       if (r.kind === "unknown") r = await this.settle(e, disk)
+      // Numbered as the write ends (a read reads the disk at its start; a write changes it at
+      // its end): a read that started before now may hold the bytes from before the write.
+      ticket = this.fileStore.ticket(id)
     } catch (err) {
       r = { kind: "error", message: String(err) }
     }

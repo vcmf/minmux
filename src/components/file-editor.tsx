@@ -161,7 +161,8 @@ function follow(id: string): void {
   const base = edits.base(id)
   const now = edits.get(id)
   const path = edits.path(id)
-  if (!data || !base || !now || !path || now.saving) return // (a save's own write lands next)
+  // (A save in flight: its own write lands next. A reload: its text goes in first.)
+  if (!data || !base || !now || !path || now.saving || edits.isReloading(id)) return
   // Only a read newer than the base counts: an older one (landing late, or still in the file
   // store when the editor mounts again) would take the file back in time, or clear a bar a
   // save just put up.
@@ -356,6 +357,8 @@ export default function FileEditor({
     }))
     const now = current(entryId)
     if (now) refreshDirty(entryId, now, true)
+    edits.endReload(entryId)
+    follow(entryId) // a read that landed meanwhile, newer than the reload's
   }
   const leave = () => {
     const line = topLine()

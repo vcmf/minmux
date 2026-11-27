@@ -222,4 +222,15 @@ describe("EditStore", () => {
     await store.settledAll()
     expect(done).toBe(true)
   })
+
+  it("a notice dismissed comes back only for a newer read", () => {
+    const { store } = make(vi.fn())
+    store.start("e", "/a", undefined, "a", "h0")
+    store.note("e", { kind: "missing" }, 3)
+    store.dismiss("e")
+    store.note("e", { kind: "missing" }, 3)
+    expect(store.get("e")?.notice).toBeNull()
+    store.note("e", { kind: "missing" }, 4)
+    expect(store.get("e")?.notice).toEqual({ kind: "missing" })
+  })
 })

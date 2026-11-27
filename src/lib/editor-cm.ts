@@ -88,13 +88,13 @@ export function changesBetween(from: string, to: string): ChangeSpec[] {
   if (!midA && !midB) return []
   // A big middle (a rewrite): one change; a diff there would cost more than it keeps.
   if (midA.length + midB.length > DIFF_MAX) return [{ from: a, to: from.length - b, insert: midB }]
-  return diff(midA, midB, { scanLimit: 500, timeout: 20 }).map((c) => ({
+  return diff(midA, midB, { scanLimit: 500, timeout: 10 }).map((c) => ({
     from: a + c.fromA,
     to: a + c.toA,
     insert: midB.slice(c.fromB, c.toB),
   }))
 }
-const DIFF_MAX = 200_000 // characters of changed middle diffed edit by edit
+const DIFF_MAX = 50_000 // characters of changed middle diffed edit by edit
 
 /** The indent unit for a file's indentation (lib/editor-text detectIndent). */
 export function indentFor(indent: { tabs: boolean; width: number }): Extension {
