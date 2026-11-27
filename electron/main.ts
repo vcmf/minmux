@@ -574,8 +574,10 @@ function createWindow() {
       noLink: true,
     })
     if (choice !== 1) {
-      // The page stays: did-start-loading already dropped its watches (a reload); put them back.
+      // The page stays: did-start-loading already dropped its watches and its "can answer"
+      // (a reload); put them back.
       fsWorker.setWatched(lastWatchSet)
+      rendererAlive = true
       return
     }
     unsavedFiles = []
