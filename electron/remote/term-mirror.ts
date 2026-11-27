@@ -57,8 +57,10 @@ export class TermMirror {
     return "ok"
   }
 
+  /** A new size, after the output written before it (that was drawn at the old size). */
   resize(cols: number, rows: number): void {
-    if (cols > 1 && rows > 0) this.term.resize(cols, rows)
+    if (cols <= 1 || rows <= 0) return
+    this.writing = this.writing.then(() => this.term.resize(cols, rows))
   }
 
   /** The screen and recent scrollback as escape sequences, every write so far parsed. */

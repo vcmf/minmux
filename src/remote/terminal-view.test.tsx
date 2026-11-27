@@ -9,14 +9,14 @@ vi.mock("@xterm/xterm", () => ({
   Terminal: class {
     options: Record<string, unknown> = {}
     open() {}
-    reset() {
-      writes.length = 0
-    }
+    reset() {}
     resize(c: number, r: number) {
       sizes.push([c, r])
     }
-    write(d: string) {
-      writes.push(d)
+    write(d: string, cb?: () => void) {
+      if (d === "\x1bc") writes.length = 0
+      else if (d) writes.push(d)
+      cb?.()
     }
     dispose() {}
   },

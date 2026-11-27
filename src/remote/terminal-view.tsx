@@ -41,19 +41,24 @@ export function TerminalView({
     if (!mine) return
     const t = term.current
     if (!t) return void queue.current.push(m)
-    if (m.t === "tsnap" && m.pane === pane.id) {
+    // In step with the output already queued: xterm's reset() and resize() act at once, while
+    // writes are parsed later, so a fresh screen or a new size goes through the write queue.
+    if (m.t === "tsnap") {
       if (m.gone) return setState("gone")
       size.current = { cols: m.cols, rows: m.rows }
-      t.reset()
-      t.resize(m.cols, m.rows)
-      fit()
-      t.write(m.data)
+      t.write("\x1bc", () => {
+        t.resize(m.cols, m.rows)
+        fit()
+        t.write(m.data)
+      })
       setState("live")
-    } else if (m.t === "tout" && m.pane === pane.id) t.write(m.data)
-    else if (m.t === "tsize" && m.pane === pane.id) {
+    } else if (m.t === "tout") t.write(m.data)
+    else if (m.t === "tsize") {
       size.current = { cols: m.cols, rows: m.rows }
-      t.resize(m.cols, m.rows)
-      fit()
+      t.write("", () => {
+        t.resize(m.cols, m.rows)
+        fit()
+      })
     }
   }
 
@@ -76,7 +81,9 @@ export function TerminalView({
       },
       () => {
         queue.current = []
-        if (live) setState("failed")
+        if (!live) return
+        setState("failed")
+        send({ t: "term", pane: pane.id, on: false }) // nothing to show it on: stop the copy
       },
     )
     const onResize = () => fit()

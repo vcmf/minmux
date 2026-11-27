@@ -10,7 +10,8 @@ describe("TermMirror", () => {
     expect(m.write(1, 5, "again")).toBe("gap") // already taken
     expect(m.write(1, 99, "x")).toBe("gap") // a hole
     expect(m.write(2, 11, "x")).toBe("gap") // a reattach
-    m.resize(30, 6)
+    m.resize(30, 6) // after what was written before it
+    await m.serialize()
     expect([m.cols, m.rows]).toEqual([30, 6])
     m.dispose()
   })

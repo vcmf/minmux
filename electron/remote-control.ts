@@ -35,7 +35,7 @@ export interface RemoteControlDeps {
   wslPane?: (pane: string) => boolean
   // The terminal view: a pane's output so far (its tap starts), the tap stopped, all taps stopped.
   terminal?: {
-    snapshot: (pane: string) => TermSnapshot | null
+    snapshot: (pane: string) => TermSnapshot | null | "failed" // failed: not ready, ask again
     untap: (pane: string) => void
     untapAll: () => void
   }

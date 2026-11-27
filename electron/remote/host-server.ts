@@ -929,6 +929,10 @@ export function createHostServer(d: HostServerDeps) {
         const f = termFeeds.get(m.pane)
         if (!f?.mirror) break
         f.mirror.resize(m.cols, m.rows)
+        // What was queued came at the old size: it goes out before the new size.
+        if (f.timer) clearTimeout(f.timer)
+        f.timer = null
+        flushTerm(m.pane, f)
         for (const c of f.watchers)
           sendTo(c, { t: "tsize", pane: m.pane, cols: m.cols, rows: m.rows })
         break

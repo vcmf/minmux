@@ -68,7 +68,7 @@ export type HostMessage =
       reset?: boolean // replaces what the page has (a new watch, a new session in the pane)
       older?: boolean // items from a `more`: they go before the ones the page has
       more?: boolean // there are older items still
-      unavailable?: "no-agent" | "error" // nothing to show as chat (Terminal view, later)
+      unavailable?: "no-agent" | "error" // nothing to show as chat (its Terminal view still works)
     }
   | { t: "ack"; id: string; ok: boolean; reason?: SendRefusal }
   // The terminal view: a clean start (screen + recent scrollback), then output as it comes.

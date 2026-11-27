@@ -34,7 +34,7 @@ export interface RemoteHostDeps {
   /** Status or clients changed (for the renderer). */
   onChange: () => void
   /** The terminal view: a pane's output so far (the tap starts), raw keys, the tap stopped. */
-  snapshot?: (pane: string) => TermSnapshot | null
+  snapshot?: (pane: string) => TermSnapshot | null | "failed"
   keys?: (deviceId: string, pane: string, data: string) => Promise<boolean>
   untap?: (pane: string) => void
   workerGone?: () => void // the worker exited or was replaced: its taps are gone with it

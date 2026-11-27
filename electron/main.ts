@@ -313,13 +313,14 @@ function hookTrace(ev: AgentEvent): Record<string, string> {
 }
 
 // Send PTY output to the session's current renderer (skips a destroyed one).
-function emit(rec: PtySession, data: string): void {
+function emit(rec: PtySession, data: string, tap = true): void {
   // Quitting: the dying shells' last output (a bell, OSC 9) mustn't reach the hidden window.
   if (draining()) return
   if (!rec.sender.isDestroyed()) rec.sender.send(`pty:data:${rec.id}`, data)
   // A device watches this pane: the same batch, with its place in the output (a flush emits all
   // that's pending, so it ends at bytesIn). One check per batch otherwise.
-  if (rec.tapped) remoteControl?.tapOutput(rec.id, rec.epoch, rec.bytesIn - data.length, data)
+  if (tap && rec.tapped)
+    remoteControl?.tapOutput(rec.id, rec.epoch, rec.bytesIn - data.length, data)
 }
 
 function defaultShell(): string {
@@ -857,7 +858,7 @@ function reattach(rec: PtySession, sender: Electron.WebContents, opts: SpawnOpts
     // transient 0-size during layout — a later resize settles it
   }
   sendNonce(rec) // before the replay: its reports need it
-  emit(rec, rec.buffer.dump())
+  emit(rec, rec.buffer.dump(), false) // the renderer's replay: the tap's watchers start over (treset)
   diag("pty-reattach", { id: opts.id, pid: rec.proc.pid })
   return { reattached: true, integrated: rec.integrated, remoteNonce: rec.remoteNonce }
 }
@@ -1210,7 +1211,11 @@ function registerIpc() {
     if (pendingSpawns.resize(id, cols, rows)) return // applied when it starts
     try {
       sessions.get(id)?.proc.resize(cols, rows)
-      if (sessions.get(id)?.tapped) remoteControl?.tapResize(id, cols, rows)
+      const rec = sessions.get(id)
+      if (rec?.tapped) {
+        rec.coalescer?.flush() // output from before the resize reaches the mirror first
+        remoteControl?.tapResize(id, cols, rows)
+      }
     } catch {
       // ignore transient 0-size during layout
     }
@@ -1222,6 +1227,7 @@ function registerIpc() {
     untrackMeta(id, false) // the pane is gone — nothing left to accent
     sessionLedger().drop(id) // closed on purpose — don't resume its Claude session
     remoteControl?.paneGone(id)
+    if (sessions.get(id)?.tapped) remoteControl?.tapReset(id) // a watching device hears it's gone
     pendingSpawns.kill(id) // still preparing: it must not start at all
     const rec = sessions.get(id)
     if (!rec) return
@@ -2129,6 +2135,7 @@ app.whenReady().then(async () => {
     // exactly from here), and the tap turned on or off.
     terminal: {
       snapshot: (pane) => {
+        if (pendingSpawns.pending(pane)) return "failed" // still connecting: asked again soon
         const rec = sessions.get(pane)
         if (!rec) return null
         rec.coalescer?.flush()
