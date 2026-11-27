@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest"
+import { execFileSync } from "node:child_process"
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
@@ -96,6 +97,15 @@ describe("writeFileForTab", () => {
     ])
     expect([a.kind, b.kind].sort()).toEqual(["changed", "saved"]) // the second sees the first
     expect(["first text\n", "second\n"]).toContain(fs.readFileSync(p, "utf8"))
+  })
+
+  it.skipIf(process.platform === "win32")("a named pipe isn't opened for writing", async () => {
+    const fifo = path.join(dir, `pipe${n++}`)
+    execFileSync("mkfifo", [fifo])
+    expect(await writeFileForTab(fifo, "x", h(""))).toEqual({
+      kind: "error",
+      message: "Not a file",
+    })
   })
 
   it("a folder isn't written (it doesn't open for writing)", async () => {
@@ -238,6 +248,17 @@ describe("SaveLocks", () => {
     release()
     await Promise.all([a, b])
     expect(log).toEqual(["a", "b"])
+  })
+
+  it("a save after an unknown whose process is already gone runs as usual", async () => {
+    const locks = new SaveLocks()
+    const first = locks.run("/f", async (track) => {
+      track(Promise.resolve()) // e.g. a write that failed part way: the worker answered
+      return { kind: "unknown" }
+    })
+    const next = locks.run("/f", async () => saved)
+    expect(await first).toEqual({ kind: "unknown" })
+    expect(await next).toEqual(saved)
   })
 
   it("after a save that may still land, the file's saves fail at once until its process is gone", async () => {

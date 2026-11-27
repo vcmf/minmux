@@ -43,6 +43,7 @@ type Worker = {
   pending: Map<number, Pending>
   retired: boolean
   killed?: boolean
+  afterExit?: (() => void)[] // `ended` of requests failed before the process went (see end)
 }
 
 const fail = (code: string) => Object.assign(new Error(code), { code })
@@ -89,7 +90,7 @@ export class FsWorkerClient {
         req,
         resolve,
         reject: (e) => {
-          if (!this.holds(req)) ended() // never sent, or its worker is gone
+          if ((e as { code?: string }).code === "EBUSY") ended() // never sent: no worker for it
           reject(e)
         },
         at: 0,
@@ -97,13 +98,6 @@ export class FsWorkerClient {
       }),
     )
     return { result, ended: left }
-  }
-
-  /** Some worker still holds this request. */
-  private holds(req: FsCall): boolean {
-    for (const w of [this.live, ...this.retired])
-      if (w) for (const p of w.pending.values()) if (p.req === req) return true
-    return false
   }
 
   /** Hand a request to the live worker (starting one if needed). */
@@ -255,10 +249,9 @@ export class FsWorkerClient {
     w.proc.on("exit", () => {
       this.retired.delete(w) // a retired one finally exited: room for another
       if (this.live === w)
-        this.end(w, "EWORKER") // crashed: fail what it held
+        this.end(w, "EWORKER", true) // crashed: fail what it held
       else for (const p of w.pending.values()) if (!p.hung) p.reject(fail("EWORKER"))
-      for (const p of w.pending.values()) p.ended?.()
-      w.pending.clear()
+      this.gone(w)
     })
     return w
   }
@@ -325,25 +318,41 @@ export class FsWorkerClient {
     try {
       w.proc.kill()
     } catch {
-      this.retired.delete(w) // already gone
+      this.retired.delete(w) // already gone: no exit will come
+      this.gone(w)
     }
   }
 
-  /** Fail everything `w` holds with `code` and kill it. */
-  private end(w: Worker, code: string): void {
+  /** `w`'s process is gone: nothing it held can run any more. */
+  private gone(w: Worker): void {
+    for (const p of w.pending.values()) p.ended?.()
+    w.pending.clear()
+    for (const f of w.afterExit ?? []) f()
+    w.afterExit = []
+  }
+
+  /** Fail everything `w` holds with `code` and kill it (`exited`: it's already gone). */
+  private end(w: Worker, code: string, exited = false): void {
     if (this.live === w) {
       this.live = null
       this.lostWorker()
     }
     this.retired.delete(w)
     for (const p of w.pending.values()) if (!p.hung) p.reject(fail(code))
-    for (const p of w.pending.values()) p.ended?.()
+    // Failed now, but a write may still run until the process is really gone.
+    w.afterExit = [...(w.afterExit ?? []), ...[...w.pending.values()].flatMap((p) => p.ended ?? [])]
     w.pending.clear()
+    if (exited) return this.finishEnd(w, true)
     try {
       w.proc.kill()
     } catch {
-      // already gone
+      return this.finishEnd(w, true) // already gone
     }
+    this.finishEnd(w, false)
+  }
+
+  private finishEnd(w: Worker, exited: boolean): void {
+    if (exited) this.gone(w)
     this.clearIdle()
     this.armHungCheck()
   }

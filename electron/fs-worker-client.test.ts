@@ -91,6 +91,19 @@ describe("FsWorkerClient", () => {
     await t.ended // gone: it can't land any more
   })
 
+  it("track: a call failed by dispose ends only when its process exits", async () => {
+    const c = client()
+    const t = c.track({ op: "writefile", path: "/a", text: "x", base: "h" })
+    let ended = false
+    void t.ended.then(() => (ended = true))
+    c.dispose()
+    await expect(t.result).rejects.toMatchObject({ code: "EWORKER" })
+    await Promise.resolve()
+    expect(ended).toBe(false) // killed, maybe not gone yet
+    procs[0]!.exit()
+    await t.ended
+  })
+
   it("a hung request fails alone; reads stranded behind it move to a fresh worker", async () => {
     const c = client()
     const stuck = c.call({ op: "readdir", path: "/mnt/dead" })

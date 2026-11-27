@@ -28,6 +28,15 @@ export async function writeFileForTab(
     )
     if (link) return { kind: "error", message: "It's a link whose file is gone" }
   }
+  if (!create) {
+    // A pipe or a device isn't opened for writing at all (that alone can block, or act).
+    const kind = await fs.promises.stat(file).then(
+      (st) => (st.isFile() ? "file" : "other"),
+      (e: { code?: string }) => (e.code === "ENOENT" ? "missing" : "file"), // open says why
+    )
+    if (kind === "missing") return { kind: "missing" }
+    if (kind === "other") return { kind: "error", message: "Not a file" }
+  }
   let fh: fs.promises.FileHandle
   try {
     // `wx` fails if a file appeared meanwhile: then it's someone else's, not ours to replace.
@@ -56,11 +65,14 @@ export async function writeFileForTab(
           put += bytesWritten
         }
         await fh.truncate(bytes.length) // (an empty text: no write above, the truncate is it)
+        const ours = await fh.stat()
         // A network share may report a failed write only at close (NFS: EDQUOT, EIO), and set
-        // the time then: the stamp comes after it.
+        // the time then: the stamp comes after it, unless another file took the name meanwhile
+        // (an agent's rename into place): then ours, which won't match, so the tab re-reads.
         closed = true
         await fh.close()
-        const after = await fs.promises.stat(file)
+        const now = await fs.promises.stat(file).catch(() => null)
+        const after = now && now.ino === ours.ino && now.dev === ours.dev ? now : ours
         return {
           kind: "saved",
           stamp: {
@@ -115,7 +127,10 @@ export class KeyedQueue {
 
 const inodes = new KeyedQueue() // in the save worker: writes of one file, one at a time
 
-type Slot = { settled: Promise<void>; stuck: boolean; done: Promise<void> }
+// `stuck`: its write may still land, until `done` (its process gone) sets `landed`.
+type Slot = { settled: Promise<void>; stuck: boolean; done: Promise<void>; landed: boolean }
+
+const tick = () => new Promise<void>((r) => setTimeout(r, 0))
 
 const STUCK: SaveResult = {
   kind: "error",
@@ -139,20 +154,23 @@ export class SaveLocks {
       settled: new Promise((r) => (settle = r)),
       stuck: false,
       done: Promise.resolve(),
+      landed: false,
     }
     this.held.set(key, slot)
     try {
       if (prev) await prev.settled
-      if (prev?.stuck) {
+      // A process already gone (a failed write it answered, a crash) lets the path go now.
+      if (prev?.stuck && !prev.landed) await Promise.race([prev.done, tick()])
+      if (prev?.stuck && !prev.landed) {
         slot.stuck = true // the one before may still land: so may the path, for those after
-        slot.done = prev.done
+        slot.done = prev.done.then(() => void (slot.landed = true))
         return STUCK
       }
       const ended: Promise<void>[] = []
       const r = await save((e) => ended.push(e))
       if (r.kind === "unknown") {
         slot.stuck = true
-        slot.done = Promise.all(ended).then(() => {})
+        slot.done = Promise.all(ended).then(() => void (slot.landed = true))
       }
       return r
     } finally {

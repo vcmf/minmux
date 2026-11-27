@@ -1748,7 +1748,7 @@ function registerIpc() {
   )
 
   const saves = new SaveLocks()
-  // Save an edited file, in the fs worker: only over the bytes it was edited from (`base`, the
+  // Save an edited file, in the save worker: only over the bytes it was edited from (`base`, the
   // read's hash), in place, never re-sent (docs/design/FILE_EDITING.md, "Saving").
   ipcMain.handle(
     "fs:write-file",
@@ -1763,7 +1763,7 @@ function registerIpc() {
       if (!validSave(p, text, base, create, path.isAbsolute))
         return { kind: "error", message: "Bad save request" }
       // One save of a file at a time, never past one that may still land (SaveLocks).
-      return saves.run(p, (track) =>
+      return saves.run(`${wsl?.distro ?? ""}:${p}`, (track) =>
         saveAcross(wslTargets(p, wsl), (target) => {
           const call = saveWorker.track({
             op: "writefile",
