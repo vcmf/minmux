@@ -19,6 +19,14 @@ describe("DeviceFile", () => {
     if (process.platform !== "win32") expect(fs.statSync(f.file).mode & 0o777).toBe(0o600)
   })
 
+  it("close writes a body that was in flight", async () => {
+    const f = new DeviceFile(tmpFile())
+    f.write("only") // taken by the writer at once
+    f.close()
+    await f.idle()
+    expect(fs.readFileSync(f.file, "utf8")).toBe("only")
+  })
+
   it("close writes what's queued, and a write in flight never lands over it", async () => {
     const f = new DeviceFile(tmpFile())
     f.write("old")

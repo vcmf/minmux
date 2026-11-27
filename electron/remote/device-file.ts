@@ -6,6 +6,7 @@ import path from "node:path"
 
 export class DeviceFile {
   private latest: string | null = null // waiting to be written
+  private inflight: string | null = null // being written, not renamed into place yet
   private running = false
   private closed = false
 
@@ -30,7 +31,8 @@ export class DeviceFile {
   /** Quitting: writes what's still queued now, and stops the async writer. */
   close(): void {
     this.closed = true
-    const body = this.latest
+    // The newest contents: queued, else the one being written (its rename is skipped below).
+    const body = this.latest ?? this.inflight
     this.latest = null
     if (body === null) return
     try {
@@ -48,6 +50,7 @@ export class DeviceFile {
     while (this.latest !== null && !this.closed) {
       const body = this.latest
       this.latest = null
+      this.inflight = body
       const tmp = `${this.file}.${process.pid}.tmp`
       try {
         await fs.promises.mkdir(path.dirname(this.file), { recursive: true })
@@ -58,6 +61,7 @@ export class DeviceFile {
       } catch {
         // best-effort: the next change writes again
       }
+      this.inflight = null
     }
     this.running = false
   }
