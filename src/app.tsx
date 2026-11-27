@@ -705,6 +705,7 @@ function App() {
       }
       return edits.unsavedPaths()
     })
+    ipc.quitReady() // main may ask from now on
     return () => {
       off()
       offQuit()

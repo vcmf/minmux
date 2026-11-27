@@ -22,6 +22,7 @@ import {
 import { makeTab, withFocus } from "./lib/tab-focus"
 import { files, type FileView } from "./lib/file-store"
 import { edits } from "./lib/edit-store"
+import { shortNames } from "./lib/file-names"
 import {
   EMPTY_VIEW,
   isMarkdownPath,
@@ -526,14 +527,8 @@ function dropSessions(
 }
 
 /** The names of the files among `ids` with unsaved changes (lib/edit-store). */
-const unsavedNames = (ids: string[]) => [
-  ...new Set(
-    ids.flatMap((id) => {
-      const path = edits.isUnsaved(id) ? edits.path(id) : undefined
-      return path ? [path.split(/[\\/]/).pop() ?? path] : []
-    }),
-  ),
-]
+const unsavedNames = (ids: string[]) =>
+  shortNames(ids.flatMap((id) => (edits.isUnsaved(id) ? (edits.path(id) ?? []) : [])))
 
 /** Drop folder / file entries from the store maps (terminal ids are ignored). */
 function dropObjects(state: AppState, ids: string[]): Pick<AppState, "objects" | "folderViews"> {

@@ -123,6 +123,7 @@ import {
 } from "../src/lib/file-preview"
 import type { FileData, FileStamp, SaveResult } from "../src/lib/file-tab"
 import { SaveLocks, saveAcross, validSave } from "./write-file"
+import { shortNames } from "../src/lib/file-names"
 import { isBundle, osMayOpen, type Os } from "./open-policy"
 import { browserLaunch, type BrowserLaunch } from "./open-in-browser"
 import { isHtmlPath } from "../src/lib/file-actions"
@@ -284,12 +285,14 @@ let plainClose = false
 let unsavedFiles: string[] = []
 let unsavedChecked = false // this quit asked the renderer, and nothing unsaved stops it now
 let checkingUnsaved = false
-let rendererAlive = false // a page to ask (loaded, not crashed)
+// A page to ask: it says so once its quit-check listener is in (editor:quit-ready); a crash or a
+// closed window ends it. A load that starts but never replaces the page leaves it as it was.
+let rendererAlive = false
 let quitChecks = 0
 const quitCheckReplies = new Map<number, (paths: string[]) => void>()
 const QUIT_CHECK_MS = 6000 // the renderer's own saves get SAVE_WAIT_MS; a hung page, no more
-/** Ask the page what's unsaved, once its saves have landed; no answer (or no page ready to
- *  give one): the last list it pushed. Never "nothing unsaved" on a guess. */
+// No answer (or no page ready to give one): the last list it pushed, never "nothing unsaved".
+/** Ask the page what's unsaved, once its saves have landed. */
 function askUnsaved(win: BrowserWindow): Promise<string[]> {
   if (!rendererAlive || win.isDestroyed()) return Promise.resolve(unsavedFiles)
   const id = ++quitChecks
@@ -324,7 +327,7 @@ const quitAbandoned = () => {
 }
 /** "a.ts", "a.ts and b.ts", "a.ts, b.ts and 3 more": unsaved files, for a dialog. */
 const unsavedList = (files = unsavedFiles) => {
-  const names = files.map((p) => path.basename(p))
+  const names = shortNames(files)
   if (names.length <= 2) return names.join(" and ")
   return `${names.slice(0, 2).join(", ")} and ${names.length - 2} more`
 }
@@ -547,16 +550,10 @@ function createWindow() {
   })
   // A reloaded or crashed renderer re-sends its watch set when its folder tabs show again; its
   // unsaved files went with it.
-  win.webContents.on("did-start-loading", () => {
-    fsWorker.setWatched([])
-    rendererAlive = false // a page that can answer a quit's check comes with did-finish-load
-  })
-  // Its unsaved files go only once the new page is in: a reload starts loading before the old
-  // page's beforeunload runs, and that needs the list to ask.
-  win.webContents.on("did-finish-load", () => {
-    unsavedFiles = []
-    rendererAlive = true
-  })
+  win.webContents.on("did-start-loading", () => fsWorker.setWatched([]))
+  // Its unsaved files go only once a new page is in: a reload starts loading before the old
+  // page's beforeunload runs, and that needs the list to ask (and a refused load keeps the page).
+  win.webContents.on("did-finish-load", () => (unsavedFiles = []))
   win.webContents.on("render-process-gone", () => {
     fsWorker.setWatched([])
     unsavedFiles = []
@@ -582,14 +579,11 @@ function createWindow() {
       noLink: true,
     })
     if (choice !== 1) {
-      // The page stays: did-start-loading already dropped its watches and its "can answer"
-      // (a reload); put them back.
+      // The page stays: did-start-loading already dropped its watches (a reload); put them back.
       fsWorker.setWatched(lastWatchSet)
-      rendererAlive = true
       return
     }
-    unsavedFiles = []
-    e.preventDefault()
+    e.preventDefault() // (its list goes when a new page is in: did-finish-load)
   })
 
   // Tell the renderer when maximize state changes (custom controls swap icon).
@@ -1893,6 +1887,8 @@ function registerIpc() {
     },
   )
 
+  // The page can answer a quit's check from now on (its listener is in).
+  ipcMain.on("editor:quit-ready", () => (rendererAlive = true))
   // The page's answer to a quit's check: what's still unsaved once its saves landed.
   ipcMain.on("editor:quit-check-reply", (_e, id: unknown, paths: unknown) => {
     const reply = typeof id === "number" ? quitCheckReplies.get(id) : undefined
@@ -2426,7 +2422,7 @@ app.on("before-quit", (e) => {
           defaultId: 0,
           cancelId: 0,
           message: "Quit with unsaved changes?",
-          detail: `${unsavedList(files)} ${files.length === 1 ? "has" : "have"} unsaved changes: quitting drops them.`,
+          detail: `${unsavedList(files)} ${files.length === 1 ? "has" : "have"} unsaved changes (or a save still running): quitting may drop them.`,
           noLink: true,
         }
         let shown: Promise<Electron.MessageBoxReturnValue>

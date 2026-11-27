@@ -108,8 +108,8 @@ function loadLanguage(id: string, path: string, state: EditorState): void {
       .catch(() => {}) // a language that won't load: plain text
 }
 
-/** Save an edit: the cleanup on save first (one undoable change), then the write. Works on the
- *  editor on screen or, hidden, on its kept state (a close's Save). */
+// Works on the editor on screen or, hidden, on its kept state (a close's Save).
+/** Save an edit: the cleanup on save first (one undoable change), then the write. */
 async function saveEntry(
   id: string,
   opts?: { overwrite?: boolean; create?: boolean },

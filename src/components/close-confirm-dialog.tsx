@@ -32,6 +32,9 @@ export function CloseConfirmDialog() {
     refocus()
   }
   // The keyboard goes to whatever is in front once the save has closed it (or kept it open).
+  // The safe choice has the keyboard: Save for a file, Cancel when unsaved files would drop.
+  const safeRef = () =>
+    pending?.kind === "unsaved" ? cancelRef : saveRef.current ? saveRef : confirmRef
   const save = () =>
     void useStore
       .getState()
@@ -42,9 +45,7 @@ export function CloseConfirmDialog() {
 
   useEffect(() => {
     if (!pending) return
-    // The safe choice has the keyboard: Save for a file, Cancel when unsaved files would drop.
-    const safe = pending.kind === "unsaved" ? cancelRef : saveRef.current ? saveRef : confirmRef
-    safe.current?.focus()
+    safeRef().current?.focus()
     // Window-level, so the trap holds even if focus drifted off the buttons.
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
@@ -55,6 +56,8 @@ export function CloseConfirmDialog() {
         e.preventDefault()
         const order = [cancelRef, confirmRef, saveRef].filter((r) => r.current)
         const at = order.findIndex((r) => r.current === document.activeElement)
+        // Off the buttons: back to the safe one, never a step onto the destructive one.
+        if (at < 0) return safeRef().current?.focus()
         const step = e.shiftKey ? order.length - 1 : 1
         order[(at + step) % order.length]?.current?.focus()
       }

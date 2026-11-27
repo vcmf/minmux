@@ -164,6 +164,7 @@ const api = {
   readFilePreview: (path: string, wsl?: WslContext) =>
     ipcRenderer.invoke("fs:read-preview", path, wsl),
   setUnsaved: (paths: string[]) => ipcRenderer.send("editor:unsaved", paths),
+  quitReady: () => ipcRenderer.send("editor:quit-ready"),
   onQuitCheck: (answer: () => Promise<string[]>) => {
     const listener = (_e: unknown, id: number) =>
       // A failed answer sends nothing: main falls back to the last list (never "none unsaved").
