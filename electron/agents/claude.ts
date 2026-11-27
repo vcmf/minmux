@@ -30,12 +30,13 @@ const EVENTS = [
   "SubagentStop",
   "PreToolUse",
   "PostToolUse",
+  "PostToolUseFailure", // a call that failed: it's done (remote control's wait tracker)
   "CwdChanged",
   "FileChanged",
   "WorktreeCreate",
   "WorktreeRemove",
 ]
-const TOOL_EVENTS = new Set(["PreToolUse", "PostToolUse"])
+const TOOL_EVENTS = new Set(["PreToolUse", "PostToolUse", "PostToolUseFailure"])
 
 /** Claude Code hook-settings JSON that drops each event as a file into
  *  `$MINMUX_AGENT_EVENTS/claude/` via the inline `node -e` writer. Holds no path, so the same
@@ -99,6 +100,7 @@ export function normalizeHookEvent(raw: unknown, paneId?: string): AgentEvent | 
     toolKey: toolName && r.tool_input !== undefined ? toolCallKey(toolName, ti) : undefined,
     filePath,
     message: str(r.message) ?? str(r.last_assistant_message),
+    notificationType: str(r.notification_type),
     worktreePath: str(r.worktree_path),
     baseBranch: str(r.base_branch),
     transcriptPath: str(r.transcript_path),

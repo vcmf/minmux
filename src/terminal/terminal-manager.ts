@@ -1379,6 +1379,11 @@ export const TerminalManager = {
     return entries.has(id)
   },
 
+  /** Did the terminal's program turn on bracketed paste? (How a remote message is typed.) */
+  bracketedPaste(id: string): boolean | undefined {
+    return entries.get(id)?.term.modes.bracketedPasteMode
+  },
+
   /** Resume banner actions: (re)type the pane's resume command now (offer / retry) — only
    *  at a shell prompt; returns whether it typed. */
   resumeNow(id: string): boolean {

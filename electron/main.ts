@@ -354,6 +354,27 @@ const historyWorker = new SessionsWorkerClient(
     }) as unknown as SessionsProc,
 )
 const TOUCHED_MS = 5000 // the worker may be starting or mid-search
+// A pane's bracketed-paste mode, asked of the renderer's terminal when a remote message is typed
+// (its own state, not in the store). Undefined when there's no window or it doesn't answer soon.
+let pasteAsks = 0
+const pasteReplies = new Map<number, (v: boolean | undefined) => void>()
+function askPasteMode(pane: string): Promise<boolean | undefined> {
+  const w = mainWindow
+  if (!w || w.isDestroyed()) return Promise.resolve(undefined)
+  const id = ++pasteAsks
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      pasteReplies.delete(id)
+      resolve(undefined)
+    }, 300)
+    pasteReplies.set(id, (v) => {
+      clearTimeout(timer)
+      resolve(v)
+    })
+    w.webContents.send("remote:paste-mode?", id, pane)
+  })
+}
+
 // Remote control over Tailscale (docs/design/REMOTE_CONTROL.md): no worker until it's turned on.
 let remoteControl: ReturnType<typeof setupRemoteControl> | null = null
 /** The agents' commands: a process running one is an agent (one started outside the wrapper). */
@@ -608,6 +629,7 @@ async function startAgentObservability(): Promise<void> {
         "agents:events",
         events.filter((ev) => ev.event !== "SessionTitle"),
       )
+      remoteControl?.agentEvents(events) // remote chat view: leads + read the transcripts now
       // Session-level events locate where each pane's session keeps its name/colour → track
       // it for the pane accent (async + debounced; SessionEnd stops it).
       const plan = planMeta(events, (ev) => {
@@ -944,6 +966,7 @@ function startPty(sender: Electron.WebContents, opts: SpawnOpts, spec: StartSpec
       untrackMeta(opts.id) // shell (and any agent in it) gone — drop the accent
       agentProcs.forget(opts.id)
       sessionLedger().drop(opts.id) // …and nothing to resume there (no-op during a quit)
+      remoteControl?.paneGone(opts.id)
     }
     livePtys.delete(live)
     markExited()
@@ -1163,6 +1186,7 @@ function registerIpc() {
     // Still preparing: swallowed (see pending-spawns.ts), never replayed into the new ssh.
     if (typeof data !== "string" || pendingSpawns.pending(id)) return
     sessions.get(id)?.proc.write(data)
+    remoteControl?.localInput(id, data) // an answer key closes the pane's dialogs (O(1) if none)
   })
   ipcMain.on("pty:resize", (_e, id: string, cols: number, rows: number) => {
     if (pendingSpawns.resize(id, cols, rows)) return // applied when it starts
@@ -1178,6 +1202,7 @@ function registerIpc() {
   ipcMain.on("pty:kill", (_e, id: string) => {
     untrackMeta(id, false) // the pane is gone — nothing left to accent
     sessionLedger().drop(id) // closed on purpose — don't resume its Claude session
+    remoteControl?.paneGone(id)
     pendingSpawns.kill(id) // still preparing: it must not start at all
     const rec = sessions.get(id)
     if (!rec) return
@@ -1393,7 +1418,10 @@ function registerIpc() {
   })
   // The pane's shell prompt came back after a command → its foreground program (Claude or
   // not) has exited: nothing to resume there even if Claude died without a SessionEnd.
-  ipcMain.on("agents:shell-idle", (_e, paneId: string) => sessionLedger().shellIdle(paneId))
+  ipcMain.on("agents:shell-idle", (_e, paneId: string) => {
+    sessionLedger().shellIdle(paneId)
+    remoteControl?.shellIdle(paneId) // the agent is gone (even one that died without a word)
+  })
   // One shot per session: attempted (or dismissed) → forget it.
   ipcMain.on("agents:resume-consume", (_e, paneId: string, sessionId: string) =>
     sessionLedger().consume(paneId, sessionId),
@@ -1604,6 +1632,11 @@ function registerIpc() {
     (_e, id: unknown, p: unknown) => remoteControl?.setPermission(id, p) ?? false,
   )
   ipcMain.handle("remote:set-pin", (_e, pin: unknown) => remoteControl?.setPin(pin) ?? "error")
+  ipcMain.on("remote:paste-mode", (_e, id: unknown, value: unknown) => {
+    if (typeof id !== "number") return
+    pasteReplies.get(id)?.(typeof value === "boolean" ? value : undefined)
+    pasteReplies.delete(id)
+  })
   ipcMain.handle("remote:disconnect-all", () => {
     remoteControl?.disconnectAll()
     return true
@@ -2065,6 +2098,21 @@ app.whenReady().then(async () => {
     profile: PROFILE_CHOICE.profile,
     devUrl: DEV_RENDERER_URL,
     window: () => mainWindow,
+    leadOf: (pane) => {
+      const e = sessionLedger().get(pane)
+      // The previous run's entry (not resumed yet) isn't running here.
+      return e && !e.carried ? e : null
+    },
+    transcriptTargets,
+    wslPane: (pane) => !!sessions.get(pane)?.wslDistro,
+    pasteMode: askPasteMode,
+    // Same rules as the renderer's typing (pty:write): a pending ssh spawn swallows it.
+    writePty: (pane, data) => {
+      const rec = sessions.get(pane)
+      if (!rec || pendingSpawns.pending(pane)) return false
+      rec.proc.write(data)
+      return true
+    },
   })
   remoteControl.apply()
   diag("boot", { pid: process.pid, version: app.getVersion() })

@@ -41,6 +41,7 @@ import { resolveDefaultShell } from "./lib/shells"
 import { isMac } from "./lib/platform"
 import { buildRemotePanes } from "./lib/remote-panes"
 import { startRemotePush } from "./lib/remote-push"
+import { useRemoteTyped } from "./lib/remote-typed"
 import type { ShellOption } from "./types"
 import "@xterm/xterm/css/xterm.css"
 import "./App.css"
@@ -75,6 +76,21 @@ function App() {
   const sidebarCollapsed = useStore((s) => s.sidebarCollapsed)
   const activeCwd = useActiveWorkCwd() // Claude's folder while it runs (worktree), else the shell's
 
+  // Remote control: main asks a terminal's bracketed-paste mode before typing a message.
+  useEffect(
+    () =>
+      ipc.onRemotePasteQuery((id, pane) =>
+        ipc.remotePasteReply(id, TerminalManager.bracketedPaste(pane)),
+      ),
+    [],
+  )
+
+  // Remote control: show which device typed into a pane (sidebar chip).
+  useEffect(
+    () => ipc.onRemoteTyped((pane, device) => useRemoteTyped.getState().typed(pane, device)),
+    [],
+  )
+
   // Remote control: the pane list goes to main only while a remote client is connected.
   useEffect(
     () =>
@@ -87,6 +103,7 @@ function App() {
             agents: s.agents,
             home: s.home,
             started: (id) => TerminalManager.isStarted(id),
+            paste: (id) => TerminalManager.bracketedPaste(id),
           })
         },
         send: (p) => ipc.remotePanes(p),

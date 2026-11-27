@@ -234,7 +234,14 @@ For panes whose lead is an agent session. The worker reads the transcript itself
 (offset per file, bounded slices that yield, like `transcript-fold`), and turns it into items:
 
 - `user` (text you sent), `assistant` (text), `tool` (name, one-line summary, first 2 KB of the
-  result, collapsed), `status` (working / waiting / done).
+  result, collapsed), and `question`: an agent's multiple-choice ask (Claude's `AskUserQuestion`,
+  Codex's `request_user_input`, OpenCode's `question` tool) with every question, its options and
+  descriptions, whether several can be picked, and the answer once its result is in the
+  transcript. Answering it from the phone is step 4. Permission prompts aren't in transcripts:
+  they show as the pane's waiting state (from hooks) above the message box.
+- Items are upserted by id (a tool's result, a question's answer land on the earlier item).
+- When the pane's session ends, its conversation stays on screen until another session leads
+  the pane.
 - On `watch`: the last 50 items; scrolling up asks for older ones.
 - New lines are read on main's hook nudge plus a 1 s poll while watched. A reply shows once it's
   in the transcript, not letter by letter.
@@ -248,10 +255,48 @@ never throw out of the reader.
 A shell pane, an ssh pane, or an agent pane before its first hook opens in Terminal view (from
 step 3; in step 2 it shows a placeholder).
 
+## Sending only between turns (step 2)
+
+Decided 2026-11-27 with the user, after three review rounds kept finding ways a hook-based
+tracker could think no dialog was open while one was on screen: an agent pane takes a phone's
+message **only between turns**. `electron/remote/turns.ts` (pure, tested) marks a pane "between"
+only on positive evidence from its lead session: Stop, the idle reminder, a fresh SessionStart.
+Anything else from it (or its sub-agents) means a turn is on; no event since launch counts as on.
+A dialog can only be up during a turn, so a message's Enter can't answer one. Background and
+nested sessions in the same pane are left out. Mid-turn the phone lets you write and says the
+agent is working; Send waits for the turn to end. Shell panes aren't affected.
+
+Known limit: Claude fires no hook when someone interrupts it at the desktop (Esc, Ctrl+C mid-turn),
+so the phone shows "working" until its idle reminder, about a minute later. Taking Esc as a turn's
+end isn't safe (it also just closes a dialog while the turn goes on).
+
+The wait tracker below stays for what the phone shows (the "asking" banner and its prompt) and
+for step 4's answer cards; it no longer decides whether a message may be sent alone.
+
+## Wait tracker (step 2)
+
+Moved here from step 4 (2026-11-27, with the user): sending needs to know when an agent shows a
+dialog, or a message's Enter could answer it. `electron/remote/waits.ts`, pure, its own test
+matrix, apart from the renderer's reducer and its known flaw. Main feeds it every hook event
+(always, not only while a device is connected), the desktop's answer keys, and pane ends.
+
+- Opens on a permission prompt (Claude's Notification of kind `permission_prompt`, or an unknown
+  kind that isn't the idle reminder; Codex's and OpenCode's PermissionRequest) and on a question
+  tool starting (PreToolUse of AskUserQuestion, request_user_input, question), per agent (the
+  session or a sub-agent) and per tool call when known.
+- Closes when that agent moves on: the call finishes (PostToolUse), another call starts
+  (Codex sends nothing when answered), PermissionReplied, SubagentStop; for the pane on Stop,
+  UserPromptSubmit, SessionStart/End and the idle reminder; when someone at the desktop presses
+  an answer key (Enter, Esc, Ctrl+C, a digit 1-9: Esc denies a Claude prompt without any hook); when the
+  pane closes.
+- The pane list devices get carries `asking` (and the prompt's message) from it. The desktop's
+  "needs input" also covers the idle reminder, when a message is exactly what the agent wants, so
+  it no longer gates sending.
+
 ## Sending a message (step 2)
 
-- **Refused while the pane is waiting** (agent graph says waiting, or the screen shows a
-  dialog once the mirror exists). The phone shows "Claude is asking something: answer it on the
+- **Refused unless the agent is between turns** (above), and while the wait tracker shows a
+  dialog. The phone shows "Claude is asking something: answer it on the
   desktop" until step 4 brings answer buttons. Reason: the paste's Enter would confirm the
   highlighted option of a permission dialog, usually "Yes".
 - `paste` on (the foreground program enabled bracketed paste): `ESC[200~` + text + `ESC[201~`,
@@ -288,11 +333,8 @@ step 3; in step 2 it shows a placeholder).
 
 ## Answering (step 4)
 
-- **Wait tracker in main.** A pure module with its own test matrix (`lib/remote-waits` or
-  `electron/remote-waits`): per pane, the current wait `{ waitId, agent, question, toolKey? }`
-  from hook events, cleared by the agent's resolving events, by new output after the answer, and
-  by the screen no longer showing the dialog. Built separately from the renderer's reducer and its
-  known flaw (ARCHITECTURE §9a), sharing tests where they agree.
+- **Wait tracker in main**: built in step 2 (above). Step 4 gives each wait a `waitId` and adds
+  the screen as a further way to close one.
 - **Claude** needs the `PermissionRequest` hook added to its armed events (it has `Notification`
   only today, which carries a message and no choices). The hook keeps acking at once; it never
   decides.

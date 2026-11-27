@@ -5,6 +5,9 @@ import type { RemotePanes } from "./remote-protocol"
 import { samePanes } from "./remote-panes"
 
 export const PUSH_MS = 250
+// Also rebuilt this often while wanted: a program turning bracketed paste on or off isn't a store
+// change (it's the terminal's own state), and main types messages by it.
+export const REFRESH_MS = 1000
 
 export interface RemotePushDeps {
   build: () => RemotePanes
@@ -39,7 +42,12 @@ export function startRemotePush(d: RemotePushDeps): () => void {
     if (w) {
       last = null
       push()
-      unsub = d.subscribe(schedule)
+      const off = d.subscribe(schedule)
+      const refresh = setInterval(schedule, REFRESH_MS)
+      unsub = () => {
+        off()
+        clearInterval(refresh)
+      }
     } else {
       unsub?.()
       unsub = null

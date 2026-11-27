@@ -2543,6 +2543,12 @@ body.resizing-col {
 .settings-row select:focus {
   border-color: var(--accent);
 }
+.remote-typed {
+  margin-left: 6px;
+  font-size: 10.5px;
+  color: var(--accent);
+  white-space: nowrap;
+}
 .status-remote {
   background: none;
   border: none;

@@ -24,6 +24,7 @@ import {
   X,
 } from "@phosphor-icons/react"
 import { activeTheme, canOpenTerminalIn, useStore } from "../store"
+import { useRemoteTyped } from "../lib/remote-typed"
 import { sessionColor } from "../lib/session-color"
 import { agentPanes, paneAgents, type AgentKind } from "../lib/agent-graph"
 import { agentWorkDirs, agentWorkFlat, gitKey, inLabel, inLine, samePath } from "../lib/agent-dirs"
@@ -76,6 +77,7 @@ export function Sidebar() {
   const tabs = useStore((s) => s.tabs)
   const activeTabId = useStore((s) => (s.activeView ? null : s.activeTabId)) // none behind a view
   const sessions = useStore((s) => s.sessions)
+  const typedBy = useRemoteTyped((s) => s.by) // remote control: who just typed into a pane
   const objects = useStore((s) => s.objects)
   const shells = useStore((s) => s.shells)
   const defaultShellPref = useStore((s) => s.settings.defaultShell)
@@ -504,6 +506,11 @@ export function Sidebar() {
                               <span className="tree-primary">{displaySessionTitle(s, home)}</span>
                               <span className="pane-badge">{shellType(s.command)}</span>
                             </>
+                          )}
+                          {typedBy[id] && (
+                            <span className="remote-typed" title="Typed through remote control">
+                              from {typedBy[id]}
+                            </span>
                           )}
                         </span>
                         {s.status === "attention" && s.detail ? (

@@ -1,3 +1,4 @@
+// @vitest-environment node
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
@@ -115,6 +116,164 @@ describe("setupRemoteControl", () => {
     expect(reply.result.result.id).toMatch(/^[0-9a-f]{32}$/)
     expect(opts.detail).toMatch(/code [A-Z0-9]{4}/)
     expect((await rc.view()).devices[0]!.permission).toBe("send")
+    rc.dispose()
+  })
+
+  it("while someone's connected: leads and nudges for the chat, messages typed into panes", async () => {
+    settings = JSON.stringify({ remote: { enabled: true } })
+    const writes: [string, string][] = []
+    const rc = setupRemoteControl({
+      dir: "/app/out/main",
+      configDir: () => cfg,
+      readSettings: () => settings,
+      profile: "",
+      window: () => null,
+      leadOf: (pane) =>
+        pane === "p1" ? { agent: "claude", sessionId: "s1", transcriptPath: "/t.jsonl" } : null,
+      transcriptTargets: (p) => [p, `${p}.alt`],
+      writePty: (pane, data) => (writes.push([pane, data]), true),
+    })
+    rc.apply()
+    const p = forks[0]!
+    rc.setPanes({
+      tabs: [],
+      panes: [
+        {
+          id: "p1",
+          tab: "t",
+          title: "a",
+          kind: "agent",
+          status: "idle",
+          started: true,
+          paste: true,
+        },
+      ],
+    })
+    rc.agentEvents([{ paneId: "p1", event: "PostToolUse" }])
+    // Nobody connected: only the empty list a new worker starts with.
+    expect(p.sent.filter((m) => (m as { t: string }).t === "leads")).toEqual([
+      { t: "leads", leads: {} },
+    ])
+    p.emit({ t: "clients", clients: [{ deviceId: "d", name: "iphone" }] })
+    expect(p.sent).toContainEqual({
+      t: "leads",
+      leads: { p1: { agent: "claude", sessionId: "s1", files: ["/t.jsonl", "/t.jsonl.alt"] } },
+    })
+    rc.agentEvents([
+      { paneId: "p1", event: "PostToolUse" },
+      { paneId: "p1", event: "PostToolUse" },
+      { event: "Stop" },
+    ])
+    expect(p.sent).toContainEqual({ t: "nudge", panes: ["p1"] })
+
+    // Mid-turn the agent takes nothing; once its turn ends it does.
+    rc.agentEvents([{ paneId: "p1", event: "Stop" }])
+    // An unknown device can't type; an approved one can.
+    p.emit({
+      t: "rpc",
+      id: 8,
+      call: { op: "send", deviceId: "nope", pane: "p1", text: "go", id: "w" },
+    })
+    await vi.waitFor(() =>
+      expect(p.sent).toContainEqual({
+        t: "rpc",
+        id: 8,
+        result: { op: "send", result: { ok: false, reason: "not-allowed" } },
+      }),
+    )
+    p.emit({ t: "rpc", id: 7, call: { op: "approve", nodeId: "n1", name: "iphone" } })
+    await vi.waitFor(async () => expect((await rc.view()).devices).toHaveLength(1))
+    const deviceId = (await rc.view()).devices[0]!.id
+    p.emit({ t: "rpc", id: 9, call: { op: "send", deviceId, pane: "p1", text: "go", id: "x" } })
+    await vi.waitFor(() =>
+      expect(p.sent).toContainEqual({
+        t: "rpc",
+        id: 9,
+        result: { op: "send", result: { ok: true } },
+      }),
+    )
+    expect(writes).toEqual([
+      ["p1", "\x1b[200~go\x1b[201~"],
+      ["p1", "\r"],
+    ])
+    rc.dispose()
+  })
+
+  it("a permission prompt marks the pane asking for devices; the idle reminder doesn't", () => {
+    settings = JSON.stringify({ remote: { enabled: true } })
+    const rc = make()
+    rc.apply()
+    const p = forks[0]!
+    rc.setPanes({
+      tabs: [],
+      panes: [{ id: "p1", tab: "t", title: "a", kind: "agent", status: "idle", started: true }],
+    })
+    const lastPanes = () =>
+      (
+        p.sent.filter((m) => (m as { t: string }).t === "panes").at(-1) as {
+          panes: { panes: { asking?: boolean; detail?: string }[] }
+        }
+      ).panes.panes[0]!
+    rc.agentEvents([{ paneId: "p1", event: "Notification", notificationType: "idle_prompt" }])
+    expect(lastPanes().asking).toBeUndefined()
+    rc.agentEvents([
+      {
+        paneId: "p1",
+        event: "Notification",
+        notificationType: "permission_prompt",
+        message: "Claude needs your permission to use Bash",
+      },
+    ])
+    expect(lastPanes()).toMatchObject({
+      asking: true,
+      detail: "Claude needs your permission to use Bash",
+    })
+    rc.localInput("p1", "\x1b") // Esc at the desktop
+    expect(lastPanes().asking).toBeUndefined()
+    rc.agentEvents([{ paneId: "p1", event: "PermissionRequest", toolKey: "k" }])
+    rc.paneGone("p1")
+    expect(lastPanes().asking).toBeUndefined()
+    rc.dispose()
+  })
+
+  it("a background session in the pane says nothing about the lead's turn", () => {
+    settings = JSON.stringify({ remote: { enabled: true } })
+    const rc = setupRemoteControl({
+      dir: "/app/out/main",
+      configDir: () => cfg,
+      readSettings: () => settings,
+      profile: "",
+      window: () => null,
+      leadOf: () => ({ agent: "claude", sessionId: "lead" }),
+    })
+    rc.apply()
+    const p = forks[0]!
+    rc.setPanes({
+      tabs: [],
+      panes: [{ id: "p1", tab: "t", title: "a", kind: "agent", status: "idle", started: true }],
+    })
+    const last = () =>
+      (
+        p.sent.filter((m) => (m as { t: string }).t === "panes").at(-1) as {
+          panes: { panes: { working?: boolean }[] }
+        }
+      ).panes.panes[0]!
+    expect(last().working).toBe(true) // no Stop seen yet
+    rc.agentEvents([{ paneId: "p1", sessionId: "lead", event: "Stop" }])
+    expect(last().working).toBeUndefined()
+    rc.agentEvents([{ paneId: "p1", sessionId: "bg", event: "UserPromptSubmit" }])
+    rc.agentEvents([{ paneId: "p1", sessionId: "lead", event: "PreToolUse", nested: true }])
+    expect(last().working).toBeUndefined()
+    rc.agentEvents([{ paneId: "p1", sessionId: "lead", event: "UserPromptSubmit" }])
+    expect(last().working).toBe(true)
+    // The agent crashed: the shell's prompt came back. Its pane no longer counts as an agent's.
+    rc.shellIdle("p1")
+    expect(last().working).toBeUndefined()
+    // A new session there makes it an agent pane again (working until it says otherwise).
+    rc.agentEvents([{ paneId: "p1", sessionId: "lead", event: "SessionStart", source: "startup" }])
+    expect(last().working).toBeUndefined()
+    rc.agentEvents([{ paneId: "p1", sessionId: "lead", event: "UserPromptSubmit" }])
+    expect(last().working).toBe(true)
     rc.dispose()
   })
 })

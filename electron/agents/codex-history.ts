@@ -17,7 +17,7 @@ const ROLLOUT =
 
 // What Codex puts in the user's turn that the user didn't type: its environment, the repo's
 // AGENTS.md and instructions, an interrupted turn's marker, a tool's message.
-const INJECTED =
+export const INJECTED =
   /^(<environment_context|<user_instructions|<turn_aborted|<send_user_message|# AGENTS\.md instructions)/
 // Blocks inside a typed message that aren't its text (a pasted image's markers).
 const NOT_TEXT = /^<\/?image\b/
