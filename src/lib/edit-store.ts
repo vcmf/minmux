@@ -33,6 +33,7 @@ interface Edit extends EditShown {
   wsl?: WslContext
   base: EditBase
   state: unknown // the editor's own state (CodeMirror's EditorState)
+  scrollTop: number | null // where the editor was scrolled when it unmounted
 }
 
 type Write = (
@@ -88,6 +89,7 @@ export class EditStore {
       ...(wsl ? { wsl } : {}),
       base: { ...text, hash },
       state: null,
+      scrollTop: null,
       dirty: false,
       saving: false,
       notice: null,
@@ -116,6 +118,16 @@ export class EditStore {
   keep(id: string, state: unknown): void {
     const e = this.edits.get(id)
     if (e) e.state = state
+  }
+
+  /** Where its editor was scrolled (kept while it's unmounted). */
+  setScroll(id: string, top: number): void {
+    const e = this.edits.get(id)
+    if (e) e.scrollTop = top
+  }
+
+  scrollOf(id: string): number | null {
+    return this.edits.get(id)?.scrollTop ?? null
   }
 
   /** Its text differs from its base, or no longer does. */

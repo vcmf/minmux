@@ -26,6 +26,9 @@ import { edits, type EditShown } from "../lib/edit-store"
 import { detectIndent, keepsTrailingSpace, saveCleanup } from "../lib/editor-text"
 import { editorKeymap, highlighting, indentFor } from "../lib/editor-cm"
 import { shortCwd } from "../lib/session-label"
+import { files } from "../lib/file-store"
+import { goKeyOf, viewOf, type FileEntry } from "../lib/folder-entries"
+import { isFocusedEntry } from "./refocus-terminal"
 
 const indentSlot = new Compartment()
 const languageSlot = new Compartment()
@@ -72,6 +75,22 @@ function refreshDirty(id: string, state: EditorState, now = false): void {
   else dirtyTimers.set(id, setTimeout(compare, DIRTY_MS))
 }
 
+/** Settle a pending unsaved check now (before Done reads it). */
+function flushDirty(id: string): void {
+  const st = current(id)
+  if (dirtyTimers.has(id) && st) refreshDirty(id, st, true)
+}
+
+// An edit that ends any other way (its tab closed: store `dropObjects`) drops its caches too.
+edits.subscribe(() => {
+  for (const id of [...baseDocs.keys()]) if (!edits.get(id)) baseDocs.delete(id)
+  for (const [id, t] of [...dirtyTimers]) {
+    if (edits.get(id)) continue
+    clearTimeout(t)
+    dirtyTimers.delete(id)
+  }
+})
+
 /** Load the file's language (a chunk per language) unless its state already has it. */
 function loadLanguage(id: string, path: string, state: EditorState): void {
   const has = languageSlot.get(state)
@@ -79,9 +98,12 @@ function loadLanguage(id: string, path: string, state: EditorState): void {
   const name = path.split(/[\\/]/).pop() ?? path
   const lang = LanguageDescription.matchFilename(languages, name)
   if (lang)
-    void lang.load().then((support) => {
-      if (edits.get(id)) apply(id, () => ({ effects: languageSlot.reconfigure(support) }))
-    })
+    void lang
+      .load()
+      .then((support) => {
+        if (edits.get(id)) apply(id, () => ({ effects: languageSlot.reconfigure(support) }))
+      })
+      .catch(() => {}) // a language that won't load: plain text
 }
 
 /** Save the editor's text: the cleanup on save first (one undoable change), then the write. */
@@ -92,9 +114,12 @@ async function saveView(
   opts?: { overwrite?: boolean; create?: boolean },
 ): Promise<void> {
   if (edits.get(id)?.saving) return // one at a time: no cleanup for a save that won't happen
+  flushDirty(id)
   const st = view.state
   const keep = new Set(st.selection.ranges.map((r) => st.doc.lineAt(r.head).number - 1))
   const changes = saveCleanup(st.doc.toString(), keep, keepsTrailingSpace(path))
+  // ⌘S on a clean file writes nothing (a write would wake every watcher on it).
+  if (!opts && !changes.length && !edits.get(id)?.dirty) return
   if (changes.length) view.dispatch({ changes, userEvent: "input.cleanup" })
   const r = await edits.save(id, view.state.doc.toString(), opts)
   const now = current(id)
@@ -172,13 +197,17 @@ export default function FileEditor({
     mounted.set(entryId, view)
     edits.keep(entryId, view.state)
     loadLanguage(entryId, path, view.state) // (again after a remount that beat the first load)
-    const head = view.state.selection.main.head
-    view.dispatch({ effects: EditorView.scrollIntoView(head, { y: fresh ? "start" : "center" }) })
-    // The keyboard follows the store: a fresh Edit takes it; a remount only when it's the focus.
-    const s = useStore.getState()
-    const tab = s.tabs.find((t) => t.id === tabId)
-    if (fresh || (s.activeTabId === tabId && tab?.activeEntryId === entryId)) view.focus()
+    // Back where it was scrolled (a surface switch); a fresh one at its start line.
+    const kept = edits.scrollOf(entryId)
+    if (!fresh && kept !== null) view.scrollDOM.scrollTop = kept
+    else {
+      const head = view.state.selection.main.head
+      view.dispatch({ effects: EditorView.scrollIntoView(head, { y: fresh ? "start" : "center" }) })
+    }
+    // The keyboard follows the store, never "whatever just mounted" (the chunk loads late).
+    if (isFocusedEntry(tabId, entryId)) view.focus()
     return () => {
+      edits.setScroll(entryId, view.scrollDOM.scrollTop)
       if (mounted.get(entryId) === view) mounted.delete(entryId)
       viewRef.current = null
       view.destroy()
@@ -186,6 +215,32 @@ export default function FileEditor({
     // Built once per mount; the indent setting is applied below.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [entryId])
+
+  // A path click on the file while it's in Edit (`foo.ts:42`): the cursor goes to that line, and
+  // it counts as gone there (Done won't jump to it). Asking for its Diff leaves Edit when nothing
+  // is unsaved.
+  const file = useStore((s) => s.objects[entryId] as FileEntry | undefined)
+  const goKey = goKeyOf(file)
+  const line = file?.line
+  useEffect(() => {
+    if (files.wentOf(entryId) === goKey) return
+    files.setWent(entryId, goKey)
+    if (!line) return
+    apply(entryId, (st) => {
+      const at = st.doc.line(Math.min(Math.max(1, line), st.doc.lines)).from
+      return { selection: { anchor: at }, effects: EditorView.scrollIntoView(at, { y: "center" }) }
+    })
+  }, [entryId, goKey, line])
+  const asked = file ? viewOf(file) : "source"
+  const askedAtStart = useRef(asked)
+  useEffect(() => {
+    if (asked === askedAtStart.current) return
+    askedAtStart.current = asked
+    flushDirty(entryId)
+    const now = edits.get(entryId)
+    if (asked === "diff" && now && !now.dirty && !now.saving) leaveRef.current()
+  }, [asked, entryId])
+  const leaveRef = useRef(() => {})
 
   // The setting is the width for files that show none of their own.
   useEffect(() => {
@@ -207,7 +262,11 @@ export default function FileEditor({
   const reload = async () => {
     const base = await edits.reload(entryId)
     if (!base) return
-    apply(entryId, (st) => ({ changes: { from: 0, to: st.doc.length, insert: base.text } }))
+    const indent = indentFor(detectIndent(base.text, path, indentSetting))
+    apply(entryId, (st) => ({
+      changes: { from: 0, to: st.doc.length, insert: base.text },
+      effects: indentSlot.reconfigure(indent),
+    }))
     const now = current(entryId)
     if (now) refreshDirty(entryId, now, true)
   }
@@ -216,7 +275,12 @@ export default function FileEditor({
     stopEditing(entryId)
     onDone(line)
   }
-  const done = () => (shown.dirty ? setAsking(true) : leave())
+  leaveRef.current = leave
+  const done = () => {
+    flushDirty(entryId) // a same-length edit typed just now
+    if (edits.get(entryId)?.dirty) setAsking(true)
+    else leave()
+  }
   const saveAndLeave = async () => {
     const view = viewRef.current
     if (!view) return

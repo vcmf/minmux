@@ -47,7 +47,16 @@ export function editorKeymap(save: Command, isMac: boolean): KeyBinding[] {
     { key: "Tab", run: insertIndent, shift: indentLess },
     { key: "Enter", run: insertNewlineAndIndent },
     // Find in the file: ⌘F (CodeMirror's), and Linux / Windows' Ctrl+Shift+F, the app's find key.
-    ...(isMac ? [] : [{ key: "Ctrl-Shift-f", run: openSearchPanel, preventDefault: true }]),
+    ...(isMac
+      ? []
+      : [
+          {
+            key: "Ctrl-Shift-f",
+            run: openSearchPanel,
+            preventDefault: true,
+            scope: "editor search-panel",
+          },
+        ]),
     ...searchKeymap,
     ...historyKeymap,
     ...defaultKeymap.filter(kept),

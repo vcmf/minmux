@@ -8,6 +8,13 @@ export function focusEntry(id: string): void {
   else document.querySelector<HTMLElement>(`[data-entry="${id}"]`)?.focus()
 }
 
+/** Entry `id` of tab `tabId` is where the store says the keyboard is. */
+export function isFocusedEntry(tabId: string, id: string): boolean {
+  const s = useStore.getState()
+  if (s.activeView || s.activeTabId !== tabId) return false
+  return s.tabs.find((t) => t.id === tabId)?.activeEntryId === id
+}
+
 /** Give the keyboard to the active tab's focused entry, now. */
 export function focusActiveEntry(): void {
   const s = useStore.getState()

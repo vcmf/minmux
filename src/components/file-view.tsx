@@ -27,7 +27,7 @@ import { gitFileFor, hasDiffToggle } from "../lib/git-file"
 import { wantGit } from "../lib/folder-git-poll"
 import { repoKey, wantKey } from "../lib/folder-git"
 import { samePath } from "../lib/agent-dirs"
-import { isMarkdownPath, placeOf, viewOf, type FileEntry } from "../lib/folder-entries"
+import { goKeyOf, isMarkdownPath, placeOf, viewOf, type FileEntry } from "../lib/folder-entries"
 import { MARKDOWN_MAX } from "../lib/markdown-client"
 import { MarkdownView } from "./markdown-view"
 import { topBlock } from "../lib/markdown-scroll"
@@ -37,7 +37,7 @@ import { findPane } from "../lib/pane-tree"
 import { rowWindow } from "../lib/virtual-rows"
 import { shortCwd } from "../lib/session-label"
 import { restoreSelection, saveSelection, type SavedSelection } from "../lib/keep-selection"
-import { focusEntry } from "./refocus-terminal"
+import { focusEntry, isFocusedEntry } from "./refocus-terminal"
 
 const LINE_H = LINE_PX // every line of a file tab (App.css .file-view-line): the window needs it
 const RELOAD_MS = 200 // a live file (an agent writing it) re-reads at most this often
@@ -62,10 +62,13 @@ export function FileView({ entryId, tabId }: { entryId: string; tabId: string })
   const editing = useSyncExternalStore(subscribeEdits, () => !!edits.get(entryId))
   const path = useStore((s) => (s.objects[entryId] as FileEntry | undefined)?.path ?? "")
   if (!editing) return <FileViewer entryId={entryId} tabId={tabId} />
-  // Done: the viewer mounts afresh at the editor's top line, and takes the keyboard back.
+  // Done: the viewer mounts afresh at the editor's top line, and has the keyboard when it's the
+  // store's focus (a save before leaving can take a while: the user may be elsewhere by then).
   const done = (topLine: number) => {
     files.returnTo(entryId, topLine)
-    requestAnimationFrame(() => focusEntry(entryId))
+    requestAnimationFrame(() => {
+      if (isFocusedEntry(tabId, entryId)) focusEntry(entryId)
+    })
   }
   return (
     <div className="file-view">
@@ -232,7 +235,7 @@ function FileViewer({ entryId, tabId }: { entryId: string; tabId: string }) {
   // Opened at a line (a path click's `:12`): scrolled there once the text is in.
   // Asked again (the same link clicked after scrolling away): its `seq` changed, so it goes.
   const line = file?.line
-  const goKey = `${line}:${file?.anchor ?? ""}:${file?.seq ?? 0}`
+  const goKey = goKeyOf(file)
   useEffect(() => {
     const el = scrollRef.current
     if (!el || !line || view !== "source" || !lines.length || files.wentOf(entryId) === goKey)
