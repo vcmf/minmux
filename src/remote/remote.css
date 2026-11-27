@@ -431,6 +431,55 @@ button {
   color: var(--dim);
   border-top: 1px solid var(--border);
 }
+.view-toggle {
+  display: flex;
+  gap: 4px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--border);
+}
+.view-toggle button {
+  flex: 1;
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 6px 0;
+  color: var(--dim);
+  font-size: 12.5px;
+}
+.view-toggle button.on {
+  color: var(--text);
+  border-color: var(--accent);
+}
+.terminal-view {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.term-box {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 2px;
+  -webkit-overflow-scrolling: touch;
+}
+.keys-bar {
+  display: flex;
+  gap: 4px;
+  padding: 6px 8px;
+  overflow-x: auto;
+  border-top: 1px solid var(--border);
+  background: var(--panel);
+}
+.keys-bar button {
+  flex: none;
+  min-width: 44px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--elev);
+  font-size: 12.5px;
+}
 .composer {
   display: flex;
   gap: 8px;

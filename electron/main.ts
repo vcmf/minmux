@@ -180,6 +180,12 @@ interface PtySession {
   hello?: HelloWatch // an integrated ssh pane, until its bootstrap's hello is answered
   pendingNonce?: string // …the nonce it was offered…
   remoteNonce?: string // …and, once the host confirmed it (ok), what its shell's reports carry
+  // Remote control's terminal view (docs/design/REMOTE_CONTROL.md): every char of output counted
+  // (offsets), an epoch bumped when in-flight output is dropped (reattach), and whether a device
+  // watches it (then each batch sent to the renderer is copied to the remote-host worker).
+  bytesIn: number
+  epoch: number
+  tapped?: boolean
 }
 const sessions = new Map<string, PtySession>()
 // Every node-pty that hasn't reported its exit yet — including closed panes still winding
@@ -307,10 +313,14 @@ function hookTrace(ev: AgentEvent): Record<string, string> {
 }
 
 // Send PTY output to the session's current renderer (skips a destroyed one).
-function emit(rec: PtySession, data: string): void {
+function emit(rec: PtySession, data: string, tap = true): void {
   // Quitting: the dying shells' last output (a bell, OSC 9) mustn't reach the hidden window.
   if (draining()) return
   if (!rec.sender.isDestroyed()) rec.sender.send(`pty:data:${rec.id}`, data)
+  // A device watches this pane: the same batch, with its place in the output (a flush emits all
+  // that's pending, so it ends at bytesIn). One check per batch otherwise.
+  if (tap && rec.tapped)
+    remoteControl?.tapOutput(rec.id, rec.epoch, rec.bytesIn - data.length, data)
 }
 
 function defaultShell(): string {
@@ -840,13 +850,15 @@ function reattach(rec: PtySession, sender: Electron.WebContents, opts: SpawnOpts
   // resize to the new xterm, then replay history.
   rec.sender = sender
   rec.coalescer?.reset()
+  rec.epoch++ // the dropped in-flight bytes never reach the tap: its watchers start again
+  if (rec.tapped) remoteControl?.tapReset(rec.id)
   try {
     rec.proc.resize(opts.cols || 80, opts.rows || 24)
   } catch {
     // transient 0-size during layout — a later resize settles it
   }
   sendNonce(rec) // before the replay: its reports need it
-  emit(rec, rec.buffer.dump())
+  emit(rec, rec.buffer.dump(), false) // the renderer's replay: the tap's watchers start over (treset)
   diag("pty-reattach", { id: opts.id, pid: rec.proc.pid })
   return { reattached: true, integrated: rec.integrated, remoteNonce: rec.remoteNonce }
 }
@@ -908,6 +920,8 @@ function startPty(sender: Electron.WebContents, opts: SpawnOpts, spec: StartSpec
     id: opts.id,
     proc,
     buffer: new OutputBuffer(PTY_REPLAY_BYTES),
+    bytesIn: 0,
+    epoch: 0,
     sender,
     shell: spec.file,
     wslDistro: spec.wslDistro,
@@ -920,6 +934,8 @@ function startPty(sender: Electron.WebContents, opts: SpawnOpts, spec: StartSpec
   if (coalesce) {
     rec.coalescer = new OutputCoalescer(PTY_FLUSH_MS, PTY_MAX_FLUSH_BYTES, (d) => emit(rec, d))
   }
+  // A pane started again under its id (an ssh reconnect): a device watching it starts over.
+  remoteControl?.tapReset(opts.id)
   proc.onData((data) => {
     if (sessions.get(opts.id) !== rec) return // closed (or replaced): nobody shows it
     // An integrated ssh pane's bootstrap says hello once, right after login: answer it with
@@ -933,6 +949,7 @@ function startPty(sender: Electron.WebContents, opts: SpawnOpts, spec: StartSpec
         sendNonce(rec)
       }
     }
+    rec.bytesIn += data.length // the tap's offsets (one add per chunk)
     rec.buffer.push(data) // keep for replay on reattach
     if (rec.coalescer) rec.coalescer.push(data)
     else emit(rec, data) // A/B baseline: one IPC message per node-pty chunk
@@ -953,6 +970,7 @@ function startPty(sender: Electron.WebContents, opts: SpawnOpts, spec: StartSpec
       })
     ) {
       ssh().markPlain(spec.remote.hostId)
+      rec.bytesIn += INTEGRATION_FAILED_NOTE.length
       rec.buffer.push(INTEGRATION_FAILED_NOTE)
       emit(rec, INTEGRATION_FAILED_NOTE)
     }
@@ -967,6 +985,7 @@ function startPty(sender: Electron.WebContents, opts: SpawnOpts, spec: StartSpec
       agentProcs.forget(opts.id)
       sessionLedger().drop(opts.id) // …and nothing to resume there (no-op during a quit)
       remoteControl?.paneGone(opts.id)
+      remoteControl?.tapReset(opts.id) // a device watching its terminal hears it's gone
     }
     livePtys.delete(live)
     markExited()
@@ -1192,6 +1211,11 @@ function registerIpc() {
     if (pendingSpawns.resize(id, cols, rows)) return // applied when it starts
     try {
       sessions.get(id)?.proc.resize(cols, rows)
+      const rec = sessions.get(id)
+      if (rec?.tapped) {
+        rec.coalescer?.flush() // output from before the resize reaches the mirror first
+        remoteControl?.tapResize(id, cols, rows)
+      }
     } catch {
       // ignore transient 0-size during layout
     }
@@ -1203,6 +1227,7 @@ function registerIpc() {
     untrackMeta(id, false) // the pane is gone — nothing left to accent
     sessionLedger().drop(id) // closed on purpose — don't resume its Claude session
     remoteControl?.paneGone(id)
+    if (sessions.get(id)?.tapped) remoteControl?.tapReset(id) // a watching device hears it's gone
     pendingSpawns.kill(id) // still preparing: it must not start at all
     const rec = sessions.get(id)
     if (!rec) return
@@ -2106,6 +2131,32 @@ app.whenReady().then(async () => {
     transcriptTargets,
     wslPane: (pane) => !!sessions.get(pane)?.wslDistro,
     pasteMode: askPasteMode,
+    // The terminal view: a pane's output so far (coalescer flushed first, so the tap carries on
+    // exactly from here), and the tap turned on or off.
+    terminal: {
+      snapshot: (pane) => {
+        if (pendingSpawns.pending(pane)) return "failed" // still connecting: asked again soon
+        const rec = sessions.get(pane)
+        if (!rec) return null
+        rec.coalescer?.flush()
+        rec.tapped = true
+        return {
+          epoch: rec.epoch,
+          offset: rec.bytesIn,
+          cols: rec.proc.cols,
+          rows: rec.proc.rows,
+          text: rec.buffer.dump(),
+        }
+      },
+      untap: (pane) => {
+        const rec = sessions.get(pane)
+        if (rec) rec.tapped = false
+      },
+      // The worker went away (restarted, turned off): nothing it tapped is watched any more.
+      untapAll: () => {
+        for (const rec of sessions.values()) rec.tapped = false
+      },
+    },
     // Same rules as the renderer's typing (pty:write): a pending ssh spawn swallows it.
     writePty: (pane, data) => {
       const rec = sessions.get(pane)

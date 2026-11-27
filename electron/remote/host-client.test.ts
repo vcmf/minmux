@@ -39,6 +39,7 @@ describe("RemoteHost", () => {
     const procs: FakeProc[] = []
     const table = new DeviceTable(null, { save: () => {}, derive: async (p, s) => `${s}${p}` })
     const changes = vi.fn()
+    const gone = vi.fn()
     const host = new RemoteHost({
       fork: () => {
         const p = new FakeProc()
@@ -48,8 +49,9 @@ describe("RemoteHost", () => {
       devices: async () => table,
       ask: async () => answer,
       onChange: changes,
+      workerGone: gone,
     })
-    return { host, procs, table, changes }
+    return { host, procs, table, changes, gone }
   }
 
   it("no worker until turned on; off kills it", () => {
@@ -68,10 +70,11 @@ describe("RemoteHost", () => {
     expect(host.state.status).toEqual({ state: "off" })
   })
 
-  it("restarts a crashed worker while on", () => {
-    const { host, procs } = setup()
+  it("restarts a crashed worker while on (its taps are gone with it)", () => {
+    const { host, procs, gone } = setup()
     host.apply(config)
     procs[0]!.exit()
+    expect(gone).toHaveBeenCalledTimes(1)
     expect(host.state.status).toMatchObject({ state: "error" })
     vi.advanceTimersByTime(2000)
     expect(procs).toHaveLength(2)

@@ -1,6 +1,7 @@
 // @vitest-environment node
 // End to end in one process: main's RemoteHost + DeviceTable talking to the real server, on
 // loopback, with a fake `tailscale` CLI.
+import crypto from "node:crypto"
 import fs from "node:fs"
 import http from "node:http"
 import net from "node:net"
@@ -89,6 +90,9 @@ describe("remote host server", () => {
   let cli: ReturnType<typeof fakeCli>
   let stops: (() => void)[]
   let sent: { deviceId: string; pane: string; text: string; id: string }[]
+  let snaps: string[] // panes main was asked a snapshot of
+  let untapped: string[]
+  let keys: string[]
 
   beforeEach(async () => {
     port = await freePort()
@@ -102,6 +106,9 @@ describe("remote host server", () => {
     cli = fakeCli()
     stops = []
     sent = []
+    snaps = []
+    untapped = []
+    keys = []
     host = new RemoteHost({
       fork: () => {
         const handlers: { message: ((m: FromHost) => void)[]; exit: (() => void)[] } = {
@@ -115,7 +122,14 @@ describe("remote host server", () => {
           },
           findCli: () => "tailscale",
           run: (c, a) => cli(c, a),
-          timing: { ping: 40, recheck: 60, touch: 80, chatPoll: 50, feedIdle: 50 },
+          timing: {
+            ping: 40,
+            recheck: 60,
+            touch: 80,
+            chatPoll: 50,
+            feedIdle: 50,
+            termBehind: 64_000,
+          },
         })
         stops.push(server.stop)
         const proc: HostProc = {
@@ -129,6 +143,15 @@ describe("remote host server", () => {
       devices: async () => table,
       ask: async () => answer,
       onChange: () => {},
+      snapshot: (pane) => {
+        snaps.push(pane)
+        if (pane === "gone") return null
+        if (pane === "busy" && snaps.filter((p) => p === "busy").length === 1)
+          throw new Error("main busy") // the first answer fails: retried, not "gone"
+        return { epoch: 1, offset: 5, cols: 40, rows: 5, text: "hello" }
+      },
+      untap: (pane) => void untapped.push(pane),
+      keys: async (_d, pane, data) => (keys.push(`${pane}:${JSON.stringify(data)}`), true),
       send: async (deviceId, pane, text, id) => {
         sent.push({ deviceId, pane, text, id })
         return { ok: true }
@@ -584,6 +607,109 @@ describe("remote host server", () => {
         (m) => m.t === "chat" && m.reset && (m.items as { id: string }[])[0]?.id === "inWorktree",
       ),
     )
+  })
+
+  it("terminal: snapshot, live output, gaps, resize, raw keys, the tap stopped", async () => {
+    host.setPanes({
+      tabs: [{ id: "t", title: "t" }],
+      panes: [{ id: "p1", tab: "t", title: "a", kind: "shell", status: "idle", started: true }],
+      stale: false,
+    })
+    const cookie = await approve()
+    table.setPermission(table.list()[0]!.id, "keys")
+    const s = await hello(cookie)
+    s.ws.send(JSON.stringify({ t: "term", pane: "p1", on: true }))
+    await until(() => s.got.some((m) => m.t === "tsnap"))
+    expect(s.got.find((m) => m.t === "tsnap")).toMatchObject({ cols: 40, rows: 5 })
+    expect(
+      String((s.got.find((m) => m.t === "tsnap") as unknown as { data: string }).data),
+    ).toContain("hello")
+    expect(snaps).toEqual(["p1"])
+
+    host.tap({ t: "tout", pane: "p1", epoch: 1, offset: 5, data: " world" })
+    await until(() => s.got.some((m) => m.t === "tout" && m.data === " world"))
+    host.tap({ t: "tout", pane: "p1", epoch: 1, offset: 999, data: "lost" }) // a gap
+    await until(() => snaps.length === 2)
+    await until(() => s.got.filter((m) => m.t === "tsnap").length === 2)
+    host.tap({ t: "treset", pane: "p1" })
+    await until(() => snaps.length === 3)
+    host.tap({ t: "tsize", pane: "p1", cols: 60, rows: 8 })
+    await until(() => s.got.some((m) => m.t === "tsize" && m.cols === 60))
+
+    s.ws.send(JSON.stringify({ t: "keys", pane: "p1", data: "\u0003" }))
+    await until(() => keys.length === 1)
+    expect(keys[0]).toBe('p1:"\\u0003"')
+
+    s.ws.send(JSON.stringify({ t: "term", pane: "p1", on: false }))
+    await until(() => untapped.includes("p1"))
+  })
+
+  it("terminal: a device that falls behind is skipped, then sent a fresh screen", async () => {
+    host.setPanes({
+      tabs: [{ id: "t", title: "t" }],
+      panes: [{ id: "p1", tab: "t", title: "a", kind: "shell", status: "idle", started: true }],
+      stale: false,
+    })
+    const s = await hello(await approve())
+    s.ws.send(JSON.stringify({ t: "term", pane: "p1", on: true }))
+    await until(() => s.got.some((m) => m.t === "tsnap"))
+    // The phone stops reading: the server's socket buffer fills up.
+    const sock = (s.ws as unknown as { _socket: { pause(): void; resume(): void } })._socket
+    sock.pause()
+    let offset = 5
+    // Random text: the socket compresses, and a run of one letter would shrink to nothing.
+    const big = crypto.randomBytes(150_000).toString("base64")
+    for (let i = 0; i < 40; i++) {
+      host.tap({ t: "tout", pane: "p1", epoch: 1, offset, data: big })
+      offset += big.length
+      await new Promise((r) => setTimeout(r, 70))
+    }
+    const before = s.got.filter((m) => m.t === "tsnap").length
+    sock.resume()
+    await until(() => s.got.filter((m) => m.t === "tsnap").length > before, 15_000)
+  }, 40_000)
+
+  it("terminal: a new size after what was queued at the old one", async () => {
+    host.setPanes({
+      tabs: [{ id: "t", title: "t" }],
+      panes: [{ id: "p1", tab: "t", title: "a", kind: "shell", status: "idle", started: true }],
+      stale: false,
+    })
+    const s = await hello(await approve())
+    s.ws.send(JSON.stringify({ t: "term", pane: "p1", on: true }))
+    await until(() => s.got.some((m) => m.t === "tsnap"))
+    host.tap({ t: "tout", pane: "p1", epoch: 1, offset: 5, data: "old-size" })
+    host.tap({ t: "tsize", pane: "p1", cols: 90, rows: 20 })
+    await until(() => s.got.some((m) => m.t === "tsize"))
+    const order = s.got.filter((m) => m.t === "tout" || m.t === "tsize").map((m) => m.t)
+    expect(order).toEqual(["tout", "tsize"])
+  })
+
+  it("terminal: a snapshot that failed is retried, not reported gone", async () => {
+    host.setPanes({
+      tabs: [{ id: "t", title: "t" }],
+      panes: [{ id: "busy", tab: "t", title: "a", kind: "shell", status: "idle", started: true }],
+      stale: false,
+    })
+    const s = await hello(await approve())
+    s.ws.send(JSON.stringify({ t: "term", pane: "busy", on: true }))
+    await until(() => s.got.some((m) => m.t === "tsnap"), 4000)
+    expect(s.got.some((m) => m.t === "tsnap" && m.gone)).toBe(false)
+    expect(snaps.filter((p) => p === "busy")).toHaveLength(2)
+  })
+
+  it("terminal: a pane gone on the computer; keys refused without the permission", async () => {
+    host.setPanes({
+      tabs: [{ id: "t", title: "t" }],
+      panes: [{ id: "gone", tab: "t", title: "a", kind: "shell", status: "idle", started: true }],
+      stale: false,
+    })
+    const s = await hello(await approve())
+    s.ws.send(JSON.stringify({ t: "term", pane: "gone", on: true }))
+    await until(() => s.got.some((m) => m.t === "tsnap" && m.gone))
+    s.ws.send(JSON.stringify({ t: "keys", pane: "gone", data: "x" }))
+    await new Promise((r) => setTimeout(r, 100))
+    expect(keys).toEqual([]) // "send" devices can't type raw keys
   })
 
   it("send: relayed to main and acked; view-only devices refused here", async () => {

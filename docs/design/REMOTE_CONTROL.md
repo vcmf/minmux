@@ -331,6 +331,25 @@ matrix, apart from the renderer's reducer and its known flaw. Main feeds it ever
   Until step 3, unstarted panes are listed greyed out ("not started on the desktop") and can't be
   opened.
 
+**As built (2026-11-27):**
+
+- A snapshot needs no start offset in `OutputBuffer`: main flushes the coalescer first, so the
+  buffer's contents end exactly at `bytesIn`, and the tap carries on from there (a flush emits all
+  that's pending, so each batch ends at `bytesIn` too).
+- The page never sees raw history: the worker's headless xterm serializes the screen and the last
+  500 lines (`@xterm/addon-serialize`).
+- The phone's xterm has no input of its own (it never answers terminal queries back into the
+  PTY); raw keys go through the keys bar, for devices with the `keys` permission, and count as
+  desktop keys for the wait tracker. xterm loads as its own chunk, only when a terminal opens.
+- A shell pane opens in Terminal view, an agent pane in Chat; a toggle switches.
+- **Starting a tab the desktop never opened moved out of this step**: those panes stay greyed out
+  on the phone ("not started on the desktop"). It needs a terminal-manager path that starts into
+  the parking lot without a layout, a change on the desktop's own terminal life cycle worth its
+  own PR.
+- Measured (built app, a phone watching a pane flooding `seq` output, keystroke echo in another
+  pane, three interleaved rounds each, two runs): p50 17 ms both ways, p95 24-26 ms watched vs
+  23-24 ms unwatched; main's CPU about 6% either way.
+
 ## Answering (step 4)
 
 - **Wait tracker in main**: built in step 2 (above). Step 4 gives each wait a `waitId` and adds
