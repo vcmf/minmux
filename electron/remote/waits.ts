@@ -36,7 +36,7 @@ type Ev = Pick<
 
 /** Keys someone at the desktop answers a dialog with. Arrows and typing don't. */
 export const isAnswerKey = (data: string): boolean =>
-  data === "\r" || data === "\x1b" || data === "\x03" || /^[0-9yYnN]$/.test(data)
+  data === "\r" || data === "\x1b" || data === "\x03" || /^[1-9]$/.test(data)
 
 export class WaitTracker {
   private panes = new Map<string, Wait[]>()
@@ -131,10 +131,10 @@ export class WaitTracker {
     return s
   }
 
-  /** Someone at the desktop typed into the pane. Ctrl+C interrupts: every dialog goes. Esc
-   *  dismisses the one in front (the oldest), question or prompt. Enter, a digit, y/n answer the
-   *  oldest permission prompt; in a question they only pick (a multi-question or multi-select
-   *  ask stays up until its tool returns). Returns whether anything closed. */
+  // Ctrl+C interrupts: every dialog goes. Esc dismisses the one in front (the oldest). Enter or a
+  // digit answers the oldest permission prompt; in a question they only pick (a multi-question or
+  // multi-select ask stays up until its tool returns).
+  /** Someone at the desktop typed into the pane; true when a dialog closed. */
   localInput(pane: string, data: string): boolean {
     const list = this.panes.get(pane)
     if (!list || !isAnswerKey(data)) return false

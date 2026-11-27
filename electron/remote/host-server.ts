@@ -764,6 +764,9 @@ export function createHostServer(d: HostServerDeps) {
         break
       case "panes":
         panes = m.panes
+        // Closed panes' last leads go (an ended session stays openable only while its pane is).
+        for (const pane of [...lastLead.keys()])
+          if (!panes.panes.some((p) => p.id === pane)) lastLead.delete(pane)
         for (const c of clients) if (c.hello) sendTo(c, { t: "panes", panes })
         break
       case "leads":

@@ -142,4 +142,22 @@ describe("typing a phone's message", () => {
     expect(await a).toEqual({ ok: true })
     expect(await b).toEqual({ ok: false, reason: "error" })
   })
+
+  it("an agent mid-turn takes nothing; a turn starting between paste and Enter holds it", async () => {
+    expect(refusal(pane(), false, false)).toBe("working")
+    expect(refusal(pane({ kind: "shell" }), false, false)).toBeNull()
+    let between = true
+    const writes: string[] = []
+    const s = new Sender({
+      pane: () => pane({ paste: true }),
+      write: (_id, d) => (writes.push(d), true),
+      between: () => between,
+      delay: async () => {
+        between = false // someone at the desktop submitted a prompt meanwhile
+      },
+    })
+    expect(await s.send("d", "p", "x", "1")).toEqual({ ok: false, reason: "held" })
+    expect(await s.send("d", "p", "y", "2")).toEqual({ ok: false, reason: "working" })
+    expect(writes).toHaveLength(1)
+  })
 })

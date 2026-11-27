@@ -1,8 +1,8 @@
 // Agents' multiple-choice asks → the chat view's neutral ChatQuestion.
 import type { ChatQuestion } from "../../src/lib/remote-chat"
 
-/** A multiple-choice ask's questions, from the shape Claude, Codex and OpenCode share (each names
- *  multi-select its own way: multiSelect, multi_select, multiple). */
+// Each agent names multi-select its own way: multiSelect, multi_select, multiple.
+/** A multiple-choice ask's questions, from the shape Claude, Codex and OpenCode share. */
 export function questionsOf(input: unknown): ChatQuestion[] | null {
   const qs = (input as { questions?: unknown } | null)?.questions
   if (!Array.isArray(qs) || qs.length === 0) return null

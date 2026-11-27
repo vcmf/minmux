@@ -62,6 +62,7 @@ export function claudeLine(o: Record<string, unknown>, log: ChatLog, lineNo: num
   }
   if (!Array.isArray(content)) return
   content.forEach((b: Record<string, unknown>, i) => {
+    if (!b || typeof b !== "object") return // a malformed block: skip it, keep the others
     const id = `${base}:${i}`
     if (type === "user") {
       if (b.type === "text" && !NOT_TYPED.test(str(b.text)) && str(b.text).trim())

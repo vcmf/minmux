@@ -108,6 +108,27 @@ describe("RemoteApp", () => {
     expect(screen.getByText("zsh")).toBeInTheDocument()
   })
 
+  it("an unanswered message is sent again after a reconnect, even from the pane list", async () => {
+    const ws = await connect()
+    fireEvent.click(screen.getByText("zsh"))
+    fireEvent.change(screen.getByLabelText("Message"), { target: { value: "ls" } })
+    fireEvent.click(screen.getByText("Send"))
+    const first = ws.sent.map((d) => JSON.parse(d)).find((m) => m.t === "send")
+    expect(first).toMatchObject({ pane: "b", text: "ls" })
+    fireEvent.click(screen.getByText("‹ Panes"))
+    act(() => ws.onclose?.())
+    await waitFor(() => expect(FakeWs.all).toHaveLength(2), { timeout: 3000 })
+    const ws2 = FakeWs.all[1]!
+    await waitFor(() => expect(ws2.sent[0]).toContain('"hello"'))
+    ws2.recv({ t: "welcome", v: 1, machine: "mac", device: "iphone", permission: "send" })
+    await waitFor(() =>
+      expect(ws2.sent.map((d) => JSON.parse(d)).find((m) => m.t === "send")).toMatchObject({
+        id: first.id,
+        text: "ls",
+      }),
+    )
+  })
+
   it("says when the desktop window is closed, and when the link drops", async () => {
     const ws = await connect()
     ws.recv({ t: "panes", panes: { ...panes, stale: true } })

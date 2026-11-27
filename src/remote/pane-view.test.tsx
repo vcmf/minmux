@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest"
 import { act, fireEvent, render, screen } from "@testing-library/react"
 import { PaneView, type PaneViewProps } from "./pane-view"
+import { useOutbox } from "./outbox"
 import type { HostMessage, RemotePane } from "../lib/remote-protocol"
 
 const pane = (over: Partial<RemotePane> = {}): RemotePane => ({
@@ -14,21 +15,33 @@ const pane = (over: Partial<RemotePane> = {}): RemotePane => ({
   ...over,
 })
 
-function setup(over: Partial<PaneViewProps> = {}) {
+function Harness(props: Omit<PaneViewProps, "outbox">) {
+  const outbox = useOutbox(props.send, props.subscribe, props.online, props.epoch)
+  return <PaneView {...props} outbox={outbox} />
+}
+
+function setup(over: Partial<Omit<PaneViewProps, "outbox">> = {}) {
   const sent: Record<string, unknown>[] = []
-  let push: (m: HostMessage) => void = () => {}
-  const props: PaneViewProps = {
+  const listeners = new Set<(m: HostMessage) => void>()
+  const props: Omit<PaneViewProps, "outbox"> = {
     pane: pane(),
     permission: "send",
     online: true,
     epoch: 1,
     send: (m) => (sent.push(m as Record<string, unknown>), true),
-    subscribe: (fn) => ((push = fn), () => {}),
+    subscribe: (fn) => (listeners.add(fn), () => void listeners.delete(fn)),
     onBack: vi.fn(),
     ...over,
   }
-  const r = render(<PaneView {...props} />)
-  return { sent, push: (m: HostMessage) => act(() => push(m)), props, r }
+  const r = render(<Harness {...props} />)
+  return {
+    sent,
+    push: (m: HostMessage) => act(() => listeners.forEach((f) => f(m))),
+    props,
+    r,
+    rerender: (p: Partial<Omit<PaneViewProps, "outbox">>) =>
+      r.rerender(<Harness {...props} {...p} />),
+  }
 }
 
 describe("PaneView", () => {
@@ -108,6 +121,13 @@ describe("PaneView", () => {
     expect(screen.getByText(/conversation can't be shown here/)).toBeInTheDocument()
   })
 
+  it("mid-turn: write now, send once the agent finishes", () => {
+    setup({ pane: pane({ working: true }) })
+    expect(screen.getByText(/is working\. You can write now/)).toBeInTheDocument()
+    fireEvent.change(screen.getByLabelText("Message"), { target: { value: "next" } })
+    expect(screen.getByText("Send")).toBeDisabled()
+  })
+
   it("view-only and unavailable panes", () => {
     const { push } = setup({ permission: "view", pane: pane({ kind: "shell", agent: undefined }) })
     expect(screen.getByLabelText("Message")).toBeDisabled()
@@ -119,11 +139,11 @@ describe("PaneView", () => {
   })
 
   it("after a reconnect, re-watches and resends what wasn't answered", () => {
-    const { sent, r, props } = setup()
+    const { sent, rerender, props } = setup()
     fireEvent.change(screen.getByLabelText("Message"), { target: { value: "hello" } })
     fireEvent.click(screen.getByText("Send"))
     const id = sent[sent.length - 1]!.id
-    r.rerender(<PaneView {...props} epoch={2} />)
+    rerender({ epoch: 2 })
     expect(sent.filter((m) => m.t === "watch")).toHaveLength(2)
     expect(sent.filter((m) => m.t === "send" && m.id === id)).toHaveLength(2)
     fireEvent.click(screen.getByText("‹ Panes"))

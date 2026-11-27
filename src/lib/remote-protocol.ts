@@ -30,6 +30,7 @@ export interface RemotePane {
   started: boolean // false: a restored pane in a tab the desktop hasn't shown yet
   paste?: boolean // its program turned on bracketed paste (how a message is typed into it)
   asking?: boolean // its agent shows a dialog now (main's wait tracker; not the idle reminder)
+  working?: boolean // its agent is mid-turn (or main hasn't seen it stop): no message until then
 }
 
 export interface RemoteTab {
@@ -76,6 +77,7 @@ export type HostMessage =
 export type SendRefusal =
   | "not-allowed" // view-only device
   | "waiting" // the agent is asking something: answer on the desktop
+  | "working" // the agent is mid-turn: it takes a message once it stops
   | "held" // pasted, but the agent started asking before Enter: not submitted
   | "no-pane"
   | "not-started"
@@ -125,7 +127,10 @@ export function parseClientMessage(raw: unknown): ClientMessage | null {
     case "unwatch":
       return typeof m.pane === "string" && m.pane.length <= 200 ? { t: m.t, pane: m.pane } : null
     case "more":
-      return typeof m.pane === "string" && typeof m.before === "string"
+      return typeof m.pane === "string" &&
+        m.pane.length <= 200 &&
+        typeof m.before === "string" &&
+        m.before.length <= 200
         ? {
             t: "more",
             pane: m.pane,
@@ -135,6 +140,7 @@ export function parseClientMessage(raw: unknown): ClientMessage | null {
         : null
     case "send":
       return typeof m.pane === "string" &&
+        m.pane.length <= 200 &&
         typeof m.text === "string" &&
         m.text.length <= SEND_MAX &&
         typeof m.id === "string" &&

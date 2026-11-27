@@ -255,6 +255,20 @@ never throw out of the reader.
 A shell pane, an ssh pane, or an agent pane before its first hook opens in Terminal view (from
 step 3; in step 2 it shows a placeholder).
 
+## Sending only between turns (step 2)
+
+Decided 2026-11-27 with the user, after three review rounds kept finding ways a hook-based
+tracker could think no dialog was open while one was on screen: an agent pane takes a phone's
+message **only between turns**. `electron/remote/turns.ts` (pure, tested) marks a pane "between"
+only on positive evidence from its lead session: Stop, the idle reminder, a fresh SessionStart.
+Anything else from it (or its sub-agents) means a turn is on; no event since launch counts as on.
+A dialog can only be up during a turn, so a message's Enter can't answer one. Background and
+nested sessions in the same pane are left out. Mid-turn the phone lets you write and says the
+agent is working; Send waits for the turn to end. Shell panes aren't affected.
+
+The wait tracker below stays for what the phone shows (the "asking" banner and its prompt) and
+for step 4's answer cards; it no longer decides whether a message may be sent alone.
+
 ## Wait tracker (step 2)
 
 Moved here from step 4 (2026-11-27, with the user): sending needs to know when an agent shows a
@@ -277,8 +291,8 @@ matrix, apart from the renderer's reducer and its known flaw. Main feeds it ever
 
 ## Sending a message (step 2)
 
-- **Refused while the agent shows a dialog** (the wait tracker; the screen check joins in
-  step 4). The phone shows "Claude is asking something: answer it on the
+- **Refused unless the agent is between turns** (above), and while the wait tracker shows a
+  dialog. The phone shows "Claude is asking something: answer it on the
   desktop" until step 4 brings answer buttons. Reason: the paste's Enter would confirm the
   highlighted option of a permission dialog, usually "Yes".
 - `paste` on (the foreground program enabled bracketed paste): `ESC[200~` + text + `ESC[201~`,

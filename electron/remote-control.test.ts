@@ -1,3 +1,4 @@
+// @vitest-environment node
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
@@ -165,6 +166,8 @@ describe("setupRemoteControl", () => {
     ])
     expect(p.sent).toContainEqual({ t: "nudge", panes: ["p1"] })
 
+    // Mid-turn the agent takes nothing; once its turn ends it does.
+    rc.agentEvents([{ paneId: "p1", event: "Stop" }])
     // An unknown device can't type; an approved one can.
     p.emit({
       t: "rpc",
@@ -230,6 +233,39 @@ describe("setupRemoteControl", () => {
     rc.agentEvents([{ paneId: "p1", event: "PermissionRequest", toolKey: "k" }])
     rc.paneGone("p1")
     expect(lastPanes().asking).toBeUndefined()
+    rc.dispose()
+  })
+
+  it("a background session in the pane says nothing about the lead's turn", () => {
+    settings = JSON.stringify({ remote: { enabled: true } })
+    const rc = setupRemoteControl({
+      dir: "/app/out/main",
+      configDir: () => cfg,
+      readSettings: () => settings,
+      profile: "",
+      window: () => null,
+      leadOf: () => ({ agent: "claude", sessionId: "lead" }),
+    })
+    rc.apply()
+    const p = forks[0]!
+    rc.setPanes({
+      tabs: [],
+      panes: [{ id: "p1", tab: "t", title: "a", kind: "agent", status: "idle", started: true }],
+    })
+    const last = () =>
+      (
+        p.sent.filter((m) => (m as { t: string }).t === "panes").at(-1) as {
+          panes: { panes: { working?: boolean }[] }
+        }
+      ).panes.panes[0]!
+    expect(last().working).toBe(true) // no Stop seen yet
+    rc.agentEvents([{ paneId: "p1", sessionId: "lead", event: "Stop" }])
+    expect(last().working).toBeUndefined()
+    rc.agentEvents([{ paneId: "p1", sessionId: "bg", event: "UserPromptSubmit" }])
+    rc.agentEvents([{ paneId: "p1", sessionId: "lead", event: "PreToolUse", nested: true }])
+    expect(last().working).toBeUndefined()
+    rc.agentEvents([{ paneId: "p1", sessionId: "lead", event: "UserPromptSubmit" }])
+    expect(last().working).toBe(true)
     rc.dispose()
   })
 })

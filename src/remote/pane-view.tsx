@@ -1,15 +1,8 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react"
 import type { ChatItem, ChatQuestion } from "../lib/remote-chat"
 import type { HostMessage, Permission, RemotePane } from "../lib/remote-protocol"
-import {
-  acked,
-  applyChat,
-  emptyChat,
-  refusalText,
-  resendable,
-  type ChatState,
-  type Outgoing,
-} from "./chat-state"
+import { applyChat, emptyChat, refusalText, type ChatState } from "./chat-state"
+import type { Outbox } from "./outbox"
 
 export interface PaneViewProps {
   pane: RemotePane
@@ -18,11 +11,11 @@ export interface PaneViewProps {
   epoch: number // bumps on every welcome: re-watch, resend
   send: (m: unknown) => boolean
   subscribe: (fn: (m: HostMessage) => void) => () => void
+  outbox: Outbox
   onBack: () => void
 }
 
 const AGENT: Record<string, string> = { claude: "Claude", codex: "Codex", opencode: "OpenCode" }
-const newId = () => Math.random().toString(36).slice(2, 12) + Date.now().toString(36)
 
 /** One pane on the phone: its agent conversation (chat view) and a message box. */
 export function PaneView({
@@ -32,13 +25,12 @@ export function PaneView({
   epoch,
   send,
   subscribe,
+  outbox,
   onBack,
 }: PaneViewProps) {
   const [chat, setChat] = useState<ChatState>(emptyChat)
-  const [out, setOut] = useState<Outgoing[]>([])
+  const out = outbox.out
   const [draft, setDraft] = useState("")
-  const outRef = useRef(out)
-  outRef.current = out
   const list = useRef<HTMLDivElement>(null)
   const stick = useRef(true) // follow new items while the reader is at the bottom
 
@@ -46,18 +38,14 @@ export function PaneView({
     () =>
       subscribe((m) => {
         if (m.t === "chat" && m.pane === pane.id) setChat((s) => applyChat(s, m))
-        if (m.t === "ack") setOut((o) => acked(o, m))
       }),
     [subscribe, pane.id],
   )
 
-  // Each (re)connect: watch again, and send again what got no answer (same id: typed once).
+  // Each (re)connect: watch again (the outbox resends what got no answer).
   useEffect(() => {
     if (!online) return
     send({ t: "watch", pane: pane.id })
-    const { again, next } = resendable(outRef.current, Date.now())
-    setOut(next)
-    for (const o of again) send({ t: "send", pane: o.pane, text: o.text, id: o.id })
     return () => void send({ t: "unwatch", pane: pane.id })
   }, [online, epoch, pane.id, send])
 
@@ -68,18 +56,16 @@ export function PaneView({
 
   const agentName = AGENT[pane.agent ?? ""] ?? "The agent"
   const asking = !!pane.asking
-  const canSend = permission !== "view" && online && pane.started && !asking
+  const working = pane.kind === "agent" && !!pane.working && !asking
+  const canSend = permission !== "view" && online && pane.started && !asking && !working
 
   const submit = (e: React.FormEvent) => {
     e.preventDefault()
     const text = draft.trim()
     if (!text || !canSend) return
-    const o: Outgoing = { id: newId(), pane: pane.id, text, at: Date.now(), state: "sending" }
-    setOut((x) => [...x.slice(-20), o])
+    outbox.enqueue(pane.id, text)
     setDraft("")
     stick.current = true
-    if (!send({ t: "send", pane: pane.id, text, id: o.id }))
-      setOut((x) => acked(x, { t: "ack", id: o.id, ok: false, reason: "error" }))
   }
 
   const older = () => {
@@ -148,7 +134,7 @@ export function PaneView({
                   <button
                     className="retry"
                     onClick={() => {
-                      setOut((x) => x.filter((y) => y.id !== o.id))
+                      outbox.discard(o.id)
                       setDraft(o.text)
                     }}
                   >
@@ -164,6 +150,11 @@ export function PaneView({
         <div className="asking">
           <b>{agentName} is asking something.</b> {pane.detail ? `${pane.detail}. ` : ""}Answer it
           on the computer for now; answering from here comes in a later update.
+        </div>
+      )}
+      {working && (
+        <div className="working-note">
+          {agentName} is working. You can write now and send once it finishes its turn.
         </div>
       )}
       <form className="composer" onSubmit={submit}>

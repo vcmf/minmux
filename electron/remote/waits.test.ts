@@ -125,7 +125,7 @@ describe("wait tracker: Codex and OpenCode", () => {
 
 describe("wait tracker: the desktop and the pane", () => {
   it("an answer key typed at the desktop closes (Esc denies a Claude prompt without a hook)", () => {
-    for (const key of ["\x1b", "\r", "1", "y", "n", "\x03"]) {
+    for (const key of ["\x1b", "\r", "1", "\x03"]) {
       const w = t()
       run(w, { event: "Notification", notificationType: "permission_prompt" })
       w.localInput(P, key)
@@ -137,6 +137,8 @@ describe("wait tracker: the desktop and the pane", () => {
     w.localInput(P, "hello")
     expect(w.asking(P)).toBe(true)
     expect(isAnswerKey("\x1b[A")).toBe(false)
+    expect(isAnswerKey("y")).toBe(false) // a prompt that ignores it stays up
+    expect(isAnswerKey("0")).toBe(false)
   })
 
   it("the pane closing drops everything; other panes are separate", () => {

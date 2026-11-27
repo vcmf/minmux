@@ -413,6 +413,12 @@ button {
   background: var(--elev);
   border-top: 1px solid var(--border);
 }
+.working-note {
+  padding: 8px 16px;
+  font-size: 12px;
+  color: var(--dim);
+  border-top: 1px solid var(--border);
+}
 .composer {
   display: flex;
   gap: 8px;

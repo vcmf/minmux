@@ -8,6 +8,7 @@ import type {
   SessionState,
 } from "../lib/remote-protocol"
 import { PaneView } from "./pane-view"
+import { useOutbox } from "./outbox"
 import { Link, type LinkState, type SocketLike } from "./connection"
 
 async function getJson<T>(url: string, init?: RequestInit): Promise<T> {
@@ -171,6 +172,9 @@ function Connected() {
     }
   }, [])
 
+  // Unsent messages live here, above any pane screen (acks and resends survive going back).
+  const outbox = useOutbox(send, subscribe, link.state === "open", epoch)
+
   switch (link.state) {
     case "no-access":
       return (
@@ -236,6 +240,7 @@ function Connected() {
               epoch={epoch}
               send={send}
               subscribe={subscribe}
+              outbox={outbox}
               onBack={back}
             />
           )}

@@ -8,8 +8,9 @@ import { isPermission, type RemotePanes } from "../src/lib/remote-protocol"
 import { DeviceFile } from "./remote/device-file"
 import type { RemoteView } from "../src/lib/remote-view"
 import type { AgentKind } from "../src/lib/agent-graph"
-import type { ChatLead } from "./agents/chat"
+import { chatLeadFor, type ChatLead } from "./agents/chat"
 import { Sender } from "./remote/typing"
+import { TurnTracker } from "./remote/turns"
 import { WaitTracker } from "./remote/waits"
 import { DeviceTable, PENDING_MS, type SetPinResult } from "./remote/devices"
 import { RemoteHost, type Decision, type HostProc } from "./remote/host-client"
@@ -165,6 +166,7 @@ export function setupRemoteControl(deps: RemoteControlDeps) {
     pane: (id) => lastPanes?.panes.find((p) => p.id === id),
     write: (pane, data) => deps.writePty?.(pane, data) ?? false,
     asking: (pane) => waits.asking(pane),
+    between: (pane) => turns.turn(pane) === "between",
     // Main decides, not the worker: the device must still exist, be unlocked and able to send.
     allowed: async (deviceId) => {
       const p = (await devices()).permissionOf(deviceId)
@@ -175,6 +177,8 @@ export function setupRemoteControl(deps: RemoteControlDeps) {
   // Which panes' agents show a dialog right now, from hook events as they land (fresher than the
   // renderer's throttled pane list): a message's Enter must never answer one.
   const waits = new WaitTracker()
+  // Whether each pane's agent is between turns: the rule for sending (turns.ts).
+  const turns = new TurnTracker()
   let askingNow = "" // what devices were last told: each asking pane and its prompt
   /** The pane list as devices see it: each pane's asking state is main's. */
   const annotated = (p: RemotePanes): RemotePanes => ({
@@ -183,14 +187,17 @@ export function setupRemoteControl(deps: RemoteControlDeps) {
       const w = waits.waits(x.id)[0]
       const { asking: _old, ...rest } = x
       void _old
-      return w ? { ...rest, asking: true, ...(w.message ? { detail: w.message } : {}) } : rest
+      const working = x.kind === "agent" && turns.turn(x.id) !== "between"
+      const out = working ? { ...rest, working: true } : rest
+      return w ? { ...out, asking: true, ...(w.message ? { detail: w.message } : {}) } : out
     }),
   })
   const askingKey = (p: RemotePanes) =>
     p.panes
       .flatMap((x) => {
         const w = waits.waits(x.id)[0]
-        return w ? [`${x.id}\u0000${w.message ?? ""}`] : []
+        const working = x.kind === "agent" && turns.turn(x.id) !== "between"
+        return w || working ? [`${x.id}\u0000${w?.message ?? ""}\u0000${working}`] : []
       })
       .join("\u0001")
   /** The one way the list reaches devices: remembers what they were told. */
@@ -211,13 +218,13 @@ export function setupRemoteControl(deps: RemoteControlDeps) {
     const leads: Record<string, ChatLead> = {}
     for (const p of lastPanes.panes) {
       const l = deps.leadOf(p.id)
-      if (!l) continue
-      // OpenCode's database is inside the distro for a WSL pane: no chat view there (yet).
-      if (l.agent === "opencode" && deps.wslPane?.(p.id)) continue
-      const files = l.transcriptPath
-        ? (deps.transcriptTargets?.(l.transcriptPath, p.id) ?? [l.transcriptPath])
-        : []
-      leads[p.id] = { agent: l.agent ?? "claude", sessionId: l.sessionId, files }
+      const lead = l
+        ? chatLeadFor(l, {
+            wsl: deps.wslPane?.(p.id) ?? false,
+            targets: (t) => deps.transcriptTargets?.(t, p.id) ?? [t],
+          })
+        : null
+      if (lead) leads[p.id] = lead
     }
     const key = JSON.stringify(leads)
     if (key === lastLeads) return
@@ -226,8 +233,21 @@ export function setupRemoteControl(deps: RemoteControlDeps) {
   }
 
   /** A batch of agent hook events: leads may have moved; the panes' transcripts grew. */
-  const agentEvents = (events: Parameters<WaitTracker["apply"]>[0][]) => {
-    for (const ev of events) waits.apply(ev) // always: a dialog may be up before anyone connects
+  const isLeadEvent = (ev: { paneId?: string; sessionId?: string; nested?: boolean }) => {
+    if (!ev.paneId || ev.nested) return false
+    const lead = deps.leadOf?.(ev.paneId)
+    return !lead || !ev.sessionId || lead.sessionId === ev.sessionId
+  }
+  const agentEvents = (
+    events: (Parameters<WaitTracker["apply"]>[0] & { sessionId?: string; nested?: boolean })[],
+  ) => {
+    // Always (a turn or a dialog may begin before anyone connects), and only the pane's lead
+    // session: a background or nested session in the same pane says nothing about the lead's TUI.
+    for (const ev of events) {
+      if (!isLeadEvent(ev)) continue
+      waits.apply(ev)
+      turns.apply(ev)
+    }
     askingChanged()
     if (!host.wanted) return
     pushLeads()
@@ -276,6 +296,7 @@ export function setupRemoteControl(deps: RemoteControlDeps) {
     /** A pane's process ended or it closed. */
     paneGone: (pane: string) => {
       waits.drop(pane)
+      turns.drop(pane)
       askingChanged()
     },
     dispose: () => {

@@ -18,10 +18,11 @@ const TAIL = 300 // parts read per refresh (the latest ones)
 const RECENT_SQL = `
   select id, time_updated as t from part where session_id = ?
   order by time_created desc, id desc limit ${TAIL}`
+// All the changed parts' data in one query (ids as a JSON array).
 const DATA_SQL = `
   select p.id, p.data, json_extract(m.data, '$.role') as role from part p
   join message m on m.id = p.message_id
-  where p.id = ?`
+  where p.id in (select value from json_each(?))`
 
 type Row = { id: string; data: string; role: string | null }
 
@@ -87,16 +88,18 @@ export class OpenCodeChat implements ChatReader {
     const recent = (
       db.prepare(RECENT_SQL).all(this.sessionId) as { id: string; t: number }[]
     ).reverse()
-    const data = db.prepare(DATA_SQL)
-    const keep = new Map<string, number>()
-    for (const { id, t } of recent) {
-      keep.set(id, t)
-      if (this.seen.get(id) === t) continue
-      const row = data.get(id) as Row | undefined
+    const keep = new Map(recent.map(({ id, t }) => [id, t]))
+    const changed = recent.filter(({ id, t }) => this.seen.get(id) !== t).map(({ id }) => id)
+    this.seen = keep // only the parts still among the newest
+    if (!changed.length) return
+    const rows = new Map(
+      (db.prepare(DATA_SQL).all(JSON.stringify(changed)) as Row[]).map((r) => [r.id, r]),
+    )
+    for (const id of changed) {
+      const row = rows.get(id)
       const item = row ? opencodeItem(row) : null
       if (item) this.log.upsert(item)
     }
-    this.seen = keep // only the parts still among the newest
   }
 
   close(): void {}
