@@ -33,6 +33,7 @@ export type FileData =
       stamp?: FileStamp
       hash?: string
       editable?: boolean
+      gone?: boolean // an error read: no file there (not "it couldn't be read")
     })
   | { kind: "same" }
 

@@ -90,3 +90,6 @@ export function toggleExpanded(view: FolderView, dir: string, open: boolean): Fo
     expanded: open ? [...view.expanded, dir] : view.expanded.filter((d) => d !== dir),
   }
 }
+
+/** What a path click asked a file entry to go to (`line:anchor:seq`): a new one goes there once. */
+export const goKeyOf = (f: FileEntry | undefined) => `${f?.line}:${f?.anchor ?? ""}:${f?.seq ?? 0}`

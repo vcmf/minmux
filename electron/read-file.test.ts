@@ -57,6 +57,7 @@ describe("readFileForTab", () => {
     expect(await readFileForTab(path.join(dir, "nope"))).toEqual({
       kind: "error",
       message: "This file is gone",
+      gone: true,
     })
   })
 

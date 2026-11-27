@@ -1,5 +1,9 @@
 import {
+  Component,
+  lazy,
+  type ReactNode,
   memo,
+  Suspense,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -7,17 +11,25 @@ import {
   useState,
   useSyncExternalStore,
 } from "react"
-import { ArrowSquareOut, Browser, FolderOpen, FolderSimple } from "@phosphor-icons/react"
+import {
+  ArrowSquareOut,
+  Browser,
+  FolderOpen,
+  FolderSimple,
+  PencilSimple,
+} from "@phosphor-icons/react"
 import { useStore } from "../store"
 import { ipc } from "../lib/ipc"
 import { watches } from "../lib/fs-reads"
 import { formatSize, HIGHLIGHT_MAX } from "../lib/file-preview"
-import { files, type FileShown } from "../lib/file-store"
+import { files, LINE_PX, type FileShown } from "../lib/file-store"
+import { edits } from "../lib/edit-store"
+import { FILE_READ_CAP } from "../lib/file-tab"
 import { gitFileFor, hasDiffToggle } from "../lib/git-file"
 import { wantGit } from "../lib/folder-git-poll"
 import { repoKey, wantKey } from "../lib/folder-git"
 import { samePath } from "../lib/agent-dirs"
-import { isMarkdownPath, placeOf, viewOf, type FileEntry } from "../lib/folder-entries"
+import { goKeyOf, isMarkdownPath, placeOf, viewOf, type FileEntry } from "../lib/folder-entries"
 import { MARKDOWN_MAX } from "../lib/markdown-client"
 import { MarkdownView } from "./markdown-view"
 import { topBlock } from "../lib/markdown-scroll"
@@ -27,8 +39,9 @@ import { findPane } from "../lib/pane-tree"
 import { rowWindow } from "../lib/virtual-rows"
 import { shortCwd } from "../lib/session-label"
 import { restoreSelection, saveSelection, type SavedSelection } from "../lib/keep-selection"
+import { focusEntry, isFocusedEntry } from "./refocus-terminal"
 
-const LINE_H = 18 // every line of a file tab (App.css .file-view-line): the window needs it
+const LINE_H = LINE_PX // every line of a file tab (App.css .file-view-line): the window needs it
 const RELOAD_MS = 200 // a live file (an agent writing it) re-reads at most this often
 const BIG_RELOAD_MS = 2000 // …and one past the highlight cap (a growing log) this often
 const WSL_POLL_MS = 3000 // a WSL file's stamp, checked this often while it shows
@@ -42,11 +55,52 @@ const EMPTY: FileShown = {
   diff: null,
 }
 const subscribeFiles = (fn: () => void) => files.subscribe(fn) // stable: no re-subscribe
+const subscribeEdits = (fn: () => void) => edits.subscribe(fn)
+// CodeMirror and the editor load the first time a file enters Edit (their own chunk).
+const FileEditor = lazy(() => import("./file-editor"))
+
+/** A file entry in its pane: the file's view, or its editor while it's in Edit. */
+export function FileView({ entryId, tabId }: { entryId: string; tabId: string }) {
+  const editing = useSyncExternalStore(subscribeEdits, () => !!edits.get(entryId))
+  const path = useStore((s) => (s.objects[entryId] as FileEntry | undefined)?.path ?? "")
+  if (!editing) return <FileViewer entryId={entryId} tabId={tabId} />
+  // Done: the viewer mounts afresh at the editor's top line, and has the keyboard when it's the
+  // store's focus (a save before leaving can take a while: the user may be elsewhere by then).
+  const done = (topLine: number) => {
+    files.returnTo(entryId, topLine)
+    requestAnimationFrame(() => {
+      if (isFocusedEntry(tabId, entryId)) focusEntry(entryId)
+    })
+  }
+  return (
+    <div className="file-view">
+      <EditorBoundary>
+        <Suspense fallback={<div className="file-view-note">Loading the editor…</div>}>
+          <FileEditor entryId={entryId} tabId={tabId} path={path} onDone={done} />
+        </Suspense>
+      </EditorBoundary>
+    </div>
+  )
+}
+
+// A chunk that won't load (the app updated under a running window) or an editor that throws
+// stays in this pane: the rest of the window keeps working, and the edit keeps its text.
+/** The editor, or a note in its place if it fails. */
+class EditorBoundary extends Component<{ children: ReactNode }, { failed: boolean }> {
+  state = { failed: false }
+  static getDerivedStateFromError() {
+    return { failed: true }
+  }
+  render() {
+    if (!this.state.failed) return this.props.children
+    return <div className="file-view-note">Couldn&apos;t load the editor: reload the window.</div>
+  }
+}
 
 // Read through the fs worker; highlighted in a worker (lib/highlight-client); only the lines in
 // view are rendered; its folder is watched while it shows, so an agent's edits appear.
-/** A file entry's view in its pane: the file, highlighted, with line numbers. */
-export function FileView({ entryId, tabId }: { entryId: string; tabId: string }) {
+/** A file entry's view: the file, highlighted, with line numbers. */
+function FileViewer({ entryId, tabId }: { entryId: string; tabId: string }) {
   const file = useStore((s) => s.objects[entryId]) as FileEntry | undefined
   const home = useStore((s) => s.home)
   const platform = useStore((s) => s.platform)
@@ -199,7 +253,7 @@ export function FileView({ entryId, tabId }: { entryId: string; tabId: string })
   // Opened at a line (a path click's `:12`): scrolled there once the text is in.
   // Asked again (the same link clicked after scrolling away): its `seq` changed, so it goes.
   const line = file?.line
-  const goKey = `${line}:${file?.anchor ?? ""}:${file?.seq ?? 0}`
+  const goKey = goKeyOf(file)
   useEffect(() => {
     const el = scrollRef.current
     if (!el || !line || view !== "source" || !lines.length || files.wentOf(entryId) === goKey)
@@ -208,8 +262,14 @@ export function FileView({ entryId, tabId }: { entryId: string; tabId: string })
     el.scrollTop = Math.max(0, (line - 1) * LINE_H - el.clientHeight / 3)
   }, [line, goKey, lines.length, entryId, view])
 
-  // Switching between Preview and Source keeps the same lines in view.
+  // Switching between Preview and Source keeps the same lines in view (and leaving Edit: the
+  // editor's top line, taken once when this mounts).
   const startLine = useRef<number | null>(null) // for the Preview, from the Source's top line
+  const back = useRef<number | null | undefined>(undefined)
+  if (back.current === undefined) {
+    back.current = files.takeReturn(entryId)
+    startLine.current = back.current
+  }
   // Handed to the Preview once (its first placement): a remount later uses its saved scroll.
   useLayoutEffect(() => {
     if (showPreview) startLine.current = null
@@ -247,6 +307,24 @@ export function FileView({ entryId, tabId }: { entryId: string; tabId: string })
     const pane = tab && findPane(tab.root, entryId)
     if (pane) s.openFolder(dir, { tabId, paneId: pane.id, wsl })
   }
+  // Edit: text that's valid UTF-8 (a save writes back the same bytes) and within the read cap.
+  const canEdit =
+    data?.kind === "text" && data.editable !== false && !!data.hash && data.size <= FILE_READ_CAP
+  const startEdit = () => {
+    if (data?.kind !== "text" || !data.hash) return
+    const el = scrollRef.current
+    let at = line ?? 1
+    if (el && view === "source") at = Math.floor(el.scrollTop / LINE_H) + 1
+    const body = el?.firstElementChild as HTMLElement | null
+    if (el && body && view === "preview") at = topBlock(el, body).line
+    if (el && view === "diff" && diff) {
+      // The diff row at the top: its line in the file (a deleted row: the next one with one).
+      const rows = diff.lines.slice(Math.floor(el.scrollTop / LINE_H))
+      at = rows.find((r) => r.newNo)?.newNo ?? at
+    }
+    useStore.getState().keepEntry(entryId) // a peek being edited is a kept tab: never replaced
+    edits.start(entryId, path, wsl, data.text, data.hash, at, asked)
+  }
   const canReveal = !wsl && isAbsoluteHostPath(path, platform)
   // A WSL file too: main opens it through the distro's share.
   const canBrowse = isHtmlPath(path) && (!!wsl || isAbsoluteHostPath(path, platform))
@@ -276,6 +354,11 @@ export function FileView({ entryId, tabId }: { entryId: string; tabId: string })
                 </button>
               ))}
             </span>
+          )}
+          {canEdit && (
+            <button className="iconbtn" style={btn} title="Edit" onClick={startEdit}>
+              <PencilSimple size={13} />
+            </button>
           )}
           <button className="iconbtn" style={btn} title="Open its folder" onClick={openFolder}>
             <FolderSimple size={13} />
