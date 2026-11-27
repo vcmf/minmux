@@ -118,9 +118,13 @@ The renderer's CSP already allows what CodeMirror does at runtime: `style-src 's
   in the middle of a write can leave the file mixed; editors that write in place accept the same.
 - **A write is never re-sent.** The fs worker client re-sends a retired worker's stranded reads to a
   fresh worker, which is right for a read and wrong for a write: a hung save could land twice, or
-  after a newer one. A write that hangs or loses its worker answers `unknown`; the editor re-reads
-  the file and compares it with the text it tried to save. The WSL share loop tries the next share
-  form only on "not found", never after a hang.
+  after a newer one. A stranded or hung write fails like any request and its worker goes as usual;
+  the answer is `unknown`, and the editor re-reads the file and compares it with the text it tried
+  to save, keeping that text either way. A save still running after `HUNG_MS` (30 s, for at most
+  2 MB) is treated as hung. A failure after the first byte is written, or at close (where NFS
+  reports late errors), is `unknown` too. The WSL share loop tries the next share form only when a
+  form has no file or won't open.
+- Saves of one file run one at a time, queued in main.
 - Main checks the request: an absolute path, an existing regular file (a symlink to one is written
   through), text within `FILE_READ_CAP`. Creating files is out of scope. The renderer can already
   spawn a shell, so this adds little exposure, but a write path should still refuse odd input.
