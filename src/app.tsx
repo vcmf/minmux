@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect } from "react"
 import { nextGitPollDelay } from "./lib/git-poll"
 import { ipc } from "./lib/ipc"
-import { edits } from "./lib/edit-store"
+import { installUnsavedGuard } from "./lib/unsaved-guard"
 import { TopBar } from "./components/top-bar"
 import { Sidebar } from "./components/sidebar"
 import { StatusBar } from "./components/status-bar"
@@ -674,54 +674,9 @@ function App() {
     }
   }, [])
 
-  // Files with unsaved changes (lib/edit-store): main hears which (it asks before a quit drops
-  // them), and the page holds its unload (a reload, ⌘W, the window closing) so main can ask then.
-  useEffect(() => {
-    let last = ""
-    const report = () => {
-      const paths = edits.unsavedPaths()
-      const key = paths.join("\0")
-      if (key === last) return // only when the set changes, never per keystroke
-      last = key
-      ipc.setUnsaved(paths)
-    }
-    const off = edits.subscribe(report)
-    const onUnload = (e: BeforeUnloadEvent) => {
-      edits.flushAll() // a same-length edit typed just now counts
-      if (!edits.unsaved().length) return
-      e.preventDefault()
-      e.returnValue = "" // Electron: main's will-prevent-unload decides
-    }
-    window.addEventListener("beforeunload", onUnload)
-    // A file from the OS dropped where nothing takes it would navigate the page to it (refused
-    // by main, but only after asking about unsaved files): nothing happens instead.
-    const fromOs = (e: DragEvent) => !!e.dataTransfer?.types.includes("Files")
-    const noNavigate = (e: DragEvent) => {
-      if (fromOs(e) && !e.defaultPrevented) e.preventDefault()
-    }
-    window.addEventListener("dragover", noNavigate)
-    window.addEventListener("drop", noNavigate)
-    // A quit asks once: settle what's pending (a just-typed edit, saves landing), then answer.
-    // Saves get QUIT_SETTLE_MS to land; one still running then counts as unsaved (main asks).
-    const offQuit = ipc.onQuitCheck(async () => {
-      try {
-        edits.flushAll()
-        await Promise.race([edits.settledAll(), new Promise((r) => setTimeout(r, QUIT_SETTLE_MS))])
-        edits.flushAll()
-      } catch {
-        // settling failed: what's known to be unsaved is still the answer
-      }
-      return edits.unsavedPaths()
-    })
-    ipc.quitReady() // main may ask from now on
-    return () => {
-      off()
-      offQuit()
-      window.removeEventListener("dragover", noNavigate)
-      window.removeEventListener("drop", noNavigate)
-      window.removeEventListener("beforeunload", onUnload)
-    }
-  }, [])
+  // Files with unsaved changes: main hears of them, the page holds its unload, a quit asks
+  // (lib/unsaved-guard).
+  useEffect(() => installUnsavedGuard(), [])
 
   // Global shortcuts: ⌘K/Ctrl-K = command palette; ⌘F (mac) / Ctrl+Shift+F = find;
   // ⌘T (mac) / Ctrl+Shift+T = new terminal in the focused pane. Plain Ctrl+F / Ctrl+T
@@ -812,7 +767,5 @@ function App() {
     </div>
   )
 }
-
-const QUIT_SETTLE_MS = 4000 // a quit waits this long for saves before asking (main allows 6 s)
 
 export default App
