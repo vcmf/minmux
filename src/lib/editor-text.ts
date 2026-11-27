@@ -11,7 +11,7 @@ export interface EditorText {
   mixed: boolean // more than one ending in it: written back with `eol` throughout
 }
 
-const BOM = "﻿"
+const BOM = "\uFEFF"
 
 /** The disk text, split into the editor's text and the way it was written. */
 export function fromDisk(raw: string): EditorText {
@@ -71,7 +71,7 @@ export function saveCleanup(
   // The last line kept: the last with text in it, or a kept (cursor) line after it.
   let last = -1
   for (let i = lines.length - 1; i >= 0; i--) {
-    if ((lines[i] ?? "").trim() !== "" || keep.has(i)) {
+    if (!/^[ \t]*$/.test(lines[i] ?? "") || keep.has(i)) {
       last = i
       break
     }
@@ -145,7 +145,7 @@ export function detectIndent(text: string, path: string, fallback: number): Inde
   let width = fallback
   let most = 0
   for (const [step, count] of steps) {
-    if (step > 8) continue
+    if (step !== 2 && step !== 4 && step !== 8) continue // 3 or 7: aligned, not a block
     if (count > most || (count === most && step < width)) {
       most = count
       width = step

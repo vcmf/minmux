@@ -3,7 +3,7 @@ import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import { hashBytes, readFileForTab } from "./read-file"
-import { saveAcross, validSave, writeFileForTab } from "./write-file"
+import { KeyedQueue, saveAcross, validSave, writeFileForTab } from "./write-file"
 import { FILE_READ_CAP, type SaveResult } from "../src/lib/file-tab"
 
 let dir = ""
@@ -38,6 +38,12 @@ describe("writeFileForTab", () => {
     const p = put("theirs\n")
     expect(await writeFileForTab(p, "mine\n", h("base\n"))).toEqual({ kind: "changed" })
     expect(fs.readFileSync(p, "utf8")).toBe("theirs\n")
+  })
+
+  it("a file that grew past its base (an agent appending) is changed, not cut", async () => {
+    const p = put("base\nappended\n")
+    expect(await writeFileForTab(p, "mine\n", h("base\n"))).toEqual({ kind: "changed" })
+    expect(fs.readFileSync(p, "utf8")).toBe("base\nappended\n")
   })
 
   it("keeps the inode, mode and a symlink", async () => {
@@ -85,7 +91,7 @@ describe("writeFileForTab", () => {
 
   it("UTF-8 out, BOM and CRLF as given", async () => {
     const p = put("x")
-    await writeFileForTab(p, "﻿é\r\n", h("x"))
+    await writeFileForTab(p, "\uFEFFé\r\n", h("x"))
     expect(fs.readFileSync(p)).toEqual(Buffer.from([0xef, 0xbb, 0xbf, 0xc3, 0xa9, 0x0d, 0x0a]))
   })
 })
@@ -121,7 +127,7 @@ describe("saveAcross", () => {
   })
 
   it("a hang or a lost worker is unknown, and nothing more is tried", async () => {
-    for (const code of ["EHUNG", "EWORKER"]) {
+    for (const code of ["EHUNG", "EWORKER", "EUNSURE"]) {
       const seen: string[] = []
       const r = await saveAcross(["a", "b"], async (t) => {
         seen.push(t)
@@ -154,5 +160,28 @@ describe("validSave", () => {
     expect(validSave("/a", "x", 5, undefined, abs)).toBe(false)
     expect(validSave("/a", "x", null, undefined, abs)).toBe(false) // no base, not a create
     expect(validSave("/a", "x", "h", "yes", abs)).toBe(false)
+  })
+})
+
+describe("KeyedQueue", () => {
+  it("runs one task per key at a time, in order; other keys don't wait", async () => {
+    const q = new KeyedQueue()
+    const log: string[] = []
+    let release!: () => void
+    const first = q.run("a", () =>
+      new Promise<void>((r) => (release = r)).then(() => log.push("a1")),
+    )
+    const second = q.run("a", async () => void log.push("a2"))
+    await q.run("b", async () => void log.push("b"))
+    expect(log).toEqual(["b"])
+    release()
+    await Promise.all([first, second])
+    expect(log).toEqual(["b", "a1", "a2"])
+  })
+
+  it("a failed task frees its key", async () => {
+    const q = new KeyedQueue()
+    await expect(q.run("a", async () => Promise.reject(new Error("x")))).rejects.toThrow("x")
+    await expect(q.run("a", async () => 1)).resolves.toBe(1)
   })
 })

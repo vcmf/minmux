@@ -26,19 +26,21 @@ export async function writeFileForTab(
     return { kind: "error", message: String(e), unopened: true } // another share form may open
   }
   let wrote = false // from the first write on, a failure may have left the file half written
+  let closed = false
   try {
     const st = await fh.stat()
     if (!st.isFile()) return { kind: "error", message: "Not a file" }
     if (!create) {
       if (base === null || st.size > FILE_READ_CAP) return { kind: "changed" }
-      const now = Buffer.alloc(st.size)
+      // One byte past the size: a file that grew since the stat (an agent appending) is changed.
+      const now = Buffer.alloc(st.size + 1)
       let got = 0
       while (got < now.length) {
         const { bytesRead } = await fh.read(now, got, now.length - got, got)
         if (!bytesRead) break // shrank since the stat: hashed as it is now
         got += bytesRead
       }
-      if (hashBytes(now.subarray(0, got)) !== base) return { kind: "changed" }
+      if (got > st.size || hashBytes(now.subarray(0, got)) !== base) return { kind: "changed" }
     }
     // Write first, then cut to length: the file never reads empty in between.
     let put = 0
@@ -49,6 +51,9 @@ export async function writeFileForTab(
     }
     await fh.truncate(bytes.length) // (an empty text: no write above, the truncate is the write)
     const after = await fh.stat()
+    // A network share may report a failed write only at close (NFS: EDQUOT, EIO).
+    closed = true
+    await fh.close()
     return {
       kind: "saved",
       stamp: { size: after.size, mtimeMs: after.mtimeMs, ctimeMs: after.ctimeMs, ino: after.ino },
@@ -57,7 +62,23 @@ export async function writeFileForTab(
   } catch (e) {
     return wrote ? { kind: "unknown" } : { kind: "error", message: String(e) }
   } finally {
-    await fh.close().catch(() => {})
+    if (!closed) await fh.close().catch(() => {})
+  }
+}
+
+/** Runs one task per key at a time, in order (saves of one file); a failed task frees its key. */
+export class KeyedQueue {
+  private tails = new Map<string, Promise<unknown>>()
+
+  run<T>(key: string, task: () => Promise<T>): Promise<T> {
+    const prev = this.tails.get(key) ?? Promise.resolve()
+    const next = prev.then(task, task)
+    const tail = next.catch(() => {})
+    this.tails.set(key, tail)
+    void tail.then(() => {
+      if (this.tails.get(key) === tail) this.tails.delete(key)
+    })
+    return next
   }
 }
 

@@ -122,7 +122,7 @@ import {
   type PreviewData,
 } from "../src/lib/file-preview"
 import type { FileData, FileStamp, SaveResult } from "../src/lib/file-tab"
-import { saveAcross, validSave } from "./write-file"
+import { KeyedQueue, saveAcross, validSave } from "./write-file"
 import { isBundle, osMayOpen, type Os } from "./open-policy"
 import { browserLaunch, type BrowserLaunch } from "./open-in-browser"
 import { isHtmlPath } from "../src/lib/file-actions"
@@ -1738,6 +1738,7 @@ function registerIpc() {
     },
   )
 
+  const saves = new KeyedQueue()
   // Save an edited file, in the fs worker: only over the bytes it was edited from (`base`, the
   // read's hash), in place, never re-sent (docs/design/FILE_EDITING.md, "Saving").
   ipcMain.handle(
@@ -1752,16 +1753,20 @@ function registerIpc() {
     ): Promise<SaveResult> => {
       if (!validSave(p, text, base, create, path.isAbsolute))
         return { kind: "error", message: "Bad save request" }
-      return saveAcross(
-        wslTargets(p, wsl),
-        (target) =>
-          fsWorker.call({
-            op: "writefile",
-            path: target,
-            text: text as string,
-            base: base as string | null,
-            create: create === true,
-          }) as Promise<SaveResult>,
+      // One save of a file at a time (two ⌘S in a row): a hung one fails after HUNG_MS, so the
+      // next isn't held for good.
+      return saves.run(p, () =>
+        saveAcross(
+          wslTargets(p, wsl),
+          (target) =>
+            fsWorker.call({
+              op: "writefile",
+              path: target,
+              text: text as string,
+              base: base as string | null,
+              create: create === true,
+            }) as Promise<SaveResult>,
+        ),
       )
     },
   )

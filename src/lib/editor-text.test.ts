@@ -96,6 +96,11 @@ describe("saveCleanup", () => {
     expect(clean("\n \n\n")).toBe("")
   })
 
+  it("a line holding only a form feed or NBSP isn't blank", () => {
+    expect(clean("code\n\f\n\n")).toBe("code\n\f\n")
+    expect(clean("code\n\u00a0\n")).toBe("code\n\u00a0\n")
+  })
+
   it("a clean file needs no change", () => {
     expect(saveCleanup("a\n  b\n", new Set())).toEqual([])
   })
@@ -130,6 +135,11 @@ describe("detectIndent", () => {
   it("a doc comment's one-space star isn't a step", () => {
     const ts = "/**\n * a\n */\nf() {\n  x\n}\n"
     expect(detectIndent(ts, "/x.ts", 4).width).toBe(2)
+  })
+
+  it("aligned continuation lines don't make an odd width", () => {
+    const sql = "SELECT a,\n       b,\n       c\nFROM t\nSELECT d,\n       e\n"
+    expect(detectIndent(sql, "/q.sql", 2).width).toBe(2)
   })
 
   it("Makefiles and Go always use tabs", () => {
