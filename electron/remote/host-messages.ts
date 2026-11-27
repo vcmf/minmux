@@ -44,4 +44,8 @@ export type ToHost =
   | { t: "config"; config: HostConfig }
   | { t: "panes"; panes: RemotePanes }
   | { t: "rpc"; id: number; result: RpcResult }
-  | { t: "drop"; deviceId?: string; reason: "revoked" | "off" | "quitting" | "locked" } // close sockets
+  | {
+      t: "drop"
+      deviceId?: string
+      reason: "revoked" | "off" | "quitting" | "locked" | "disconnected"
+    } // close sockets

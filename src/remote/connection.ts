@@ -19,6 +19,7 @@ export type LinkState =
   | { state: "no-access"; machine: string }
   | { state: "removed" } // revoked while connected
   | { state: "version" } // this page and minmux disagree: reload
+  | { state: "disconnected"; machine: string } // "Disconnect all" on the computer
 
 export interface SocketLike {
   send(data: string): void
@@ -43,6 +44,7 @@ export const backoffMs = (attempt: number) => Math.min(30_000, 1000 * 2 ** Math.
 export class Link {
   private ws: SocketLike | null = null
   private attempt = 0
+  private machine = ""
   private timer: unknown = null
   private watchdog: unknown = null
   private lastTick = 0
@@ -115,6 +117,7 @@ export class Link {
       switch (m.t) {
         case "welcome":
           this.attempt = 0
+          this.machine = m.machine
           this.d.onState({ state: "open", machine: m.machine, device: m.device })
           this.arm()
           break
@@ -125,6 +128,8 @@ export class Link {
         case "bye":
           if (m.reason === "revoked") return this.finish({ state: "removed" })
           if (m.reason === "version") return this.finish({ state: "version" })
+          if (m.reason === "disconnected")
+            return this.finish({ state: "disconnected", machine: this.machine })
           break // off / quitting: the close that follows reconnects
       }
       this.d.onMessage(m)

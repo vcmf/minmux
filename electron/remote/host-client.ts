@@ -71,7 +71,10 @@ export class RemoteHost {
   }
 
   /** Closes a device's sockets (revoked) or everyone's (no id). */
-  drop(deviceId: string | undefined, reason: "revoked" | "off" | "quitting" | "locked"): void {
+  drop(
+    deviceId: string | undefined,
+    reason: "revoked" | "off" | "quitting" | "locked" | "disconnected",
+  ): void {
     this.proc?.postMessage({ t: "drop", deviceId, reason })
   }
 
@@ -84,7 +87,7 @@ export class RemoteHost {
     const proc = this.deps.fork()
     this.proc = proc
     this.status = { state: "starting" }
-    proc.on("message", (m) => this.proc === proc && this.onMessage(m))
+    proc.on("message", (m) => this.proc === proc && this.onMessage(proc, m))
     proc.on("exit", () => {
       if (this.proc !== proc) return
       this.proc = null
@@ -120,7 +123,7 @@ export class RemoteHost {
     this.deps.onChange()
   }
 
-  private onMessage(m: FromHost): void {
+  private onMessage(proc: HostProc, m: FromHost): void {
     switch (m.t) {
       case "status":
         this.status = m.status
@@ -138,8 +141,9 @@ export class RemoteHost {
         this.deps.devices().touch(m.deviceId)
         break
       case "rpc":
-        void this.answer(m.call).then((result) =>
-          this.proc?.postMessage({ t: "rpc", id: m.id, result }),
+        // Only to the worker that asked: a replacement numbers its requests from 1 again.
+        void this.answer(m.call).then(
+          (result) => this.proc === proc && proc.postMessage({ t: "rpc", id: m.id, result }),
         )
         break
     }
@@ -152,7 +156,7 @@ export class RemoteHost {
         return { op: "auth", result: devices.auth(call.token, call.nodeId) }
       case "approve": {
         const p = devices.createPending(call.nodeId, call.name)
-        if (p) {
+        if (p && !p.existing) {
           // Not awaited: the page polls while the dialog is up.
           void this.deps
             .ask(call.name, p.code)
@@ -160,7 +164,7 @@ export class RemoteHost {
             .catch(() => devices.decide(p.id, "deny"))
             .finally(() => this.deps.onChange())
         }
-        return { op: "approve", result: p }
+        return { op: "approve", result: p && { id: p.id, code: p.code } }
       }
       case "pending":
         return { op: "pending", result: devices.pendingState(call.id, call.nodeId) }

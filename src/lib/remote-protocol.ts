@@ -51,7 +51,8 @@ export type HostMessage =
   | { t: "bye"; reason: ByeReason }
 
 export type LockReason = "idle" | "pin-attempts" | "expired"
-export type ByeReason = "revoked" | "off" | "quitting" | "version" | "locked"
+// disconnected: "Disconnect all" on the desktop (the page doesn't reconnect by itself).
+export type ByeReason = "revoked" | "off" | "quitting" | "version" | "locked" | "disconnected"
 
 /** What GET /api/session tells the page before it opens a socket. */
 export type SessionState =

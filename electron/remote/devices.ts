@@ -166,11 +166,16 @@ export class DeviceTable {
   }
 
   /** Starts an approval for a node; null when rate-limited (or one is already pending for it). */
-  createPending(nodeId: string, name: string): { id: string; code: string } | null {
+  createPending(
+    nodeId: string,
+    name: string,
+  ): { id: string; code: string; existing?: boolean } | null {
     if (this.readOnly) return null
     const now = this.now()
     this.dropOldPending(now)
-    for (const p of this.pending.values()) if (p.nodeId === nodeId && !p.decision) return null
+    // Already asking for this node (a second tab, a reload): the same prompt and code.
+    for (const p of this.pending.values())
+      if (p.nodeId === nodeId && !p.decision) return { id: p.id, code: p.code, existing: true }
     this.pendingLog = this.pendingLog.filter((e) => now - e.at < PENDING_WINDOW_MS)
     if (this.pendingLog.filter((e) => e.nodeId === nodeId).length >= PENDING_PER_WINDOW) return null
     this.pendingLog.push({ nodeId, at: now })

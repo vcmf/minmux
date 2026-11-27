@@ -118,6 +118,15 @@ describe("Link", () => {
     await b.tick(60_000)
     expect(b.sockets).toHaveLength(1) // no retry
 
+    const d = setup([ok])
+    d.link.start()
+    await flush()
+    d.sockets[0]!.recv({ t: "welcome", v: 1, machine: "mac", device: "iphone", permission: "send" })
+    d.sockets[0]!.recv({ t: "bye", reason: "disconnected" })
+    expect(d.last()).toEqual({ state: "disconnected", machine: "mac" })
+    await d.tick(60_000)
+    expect(d.sockets).toHaveLength(1) // "Disconnect all" sticks
+
     const c = setup([ok])
     c.link.start()
     await flush()

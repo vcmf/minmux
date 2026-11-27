@@ -150,6 +150,15 @@ function Connected() {
           <AskButton label="Ask for access again" />
         </Screen>
       )
+    case "disconnected":
+      return (
+        <Screen title="Disconnected">
+          <p>{link.machine || "The computer"} ended this connection.</p>
+          <button className="button" onClick={() => linkRef.current?.start()}>
+            Connect again
+          </button>
+        </Screen>
+      )
     case "version":
       return (
         <Screen title="minmux was updated">

@@ -45,7 +45,9 @@ import {
 } from "./remote/tailscale"
 import { LOCK_AFTER_MS } from "./remote/devices"
 
-const COOKIE = "minmux_remote"
+// Cookies are scoped by host, not port: one name per port, so the installed app and a dev build
+// on the same machine keep their own tokens.
+const cookieName = () => `minmux_remote_${config?.port ?? 0}`
 const RECHECK_MS = 30_000
 const WHOIS_TTL_MS = 60_000
 const PING_MS = TICK_MS
@@ -182,7 +184,10 @@ function serveStatic(req: http.IncomingMessage, res: http.ServerResponse, urlPat
 
 /** Dev builds: the web app comes from the Vite dev server (the phone can't reach localhost). */
 function proxyDev(req: http.IncomingMessage, res: http.ServerResponse, devUrl: string) {
-  const target = new URL(req.url === "/" ? "/remote.html" : req.url!, devUrl)
+  const raw = req.url ?? "/"
+  if (!raw.startsWith("/")) return send(res, 400, "bad request") // only origin-form paths
+  const u = new URL(raw, "http://x")
+  const target = new URL((u.pathname === "/" ? "/remote.html" : u.pathname) + u.search, devUrl)
   const up = http.request(
     target,
     { method: "GET", headers: { accept: req.headers.accept ?? "*/*" } },
@@ -226,9 +231,10 @@ async function onRequest(req: http.IncomingMessage, res: http.ServerResponse) {
     if (!sameOrigin(req.headers)) return send(res, 403, "cross-site")
     const a = await rpc({
       op: "auth",
-      token: tokenCookie(req.headers, COOKIE),
+      token: tokenCookie(req.headers, cookieName()),
       nodeId: peer.nodeId,
     })
+    if (a.state === "ok") post({ t: "touch", deviceId: a.device.id }) // the page was opened: use
     const body: SessionState =
       a.state === "ok"
         ? { state: "ok", machine, device: a.device.name }
@@ -247,7 +253,7 @@ async function onRequest(req: http.IncomingMessage, res: http.ServerResponse) {
     if (!sameOrigin(req.headers)) return send(res, 403, "cross-site")
     const r = await rpc({ op: "pending", id: pend[1]!, nodeId: peer.nodeId })
     if (r.state === "approved") {
-      const cookie = `${COOKIE}=${r.token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${30 * 24 * 3600}`
+      const cookie = `${cookieName()}=${r.token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${30 * 24 * 3600}`
       return json(res, 200, { state: "approved" } satisfies PendingState, { "Set-Cookie": cookie })
     }
     const body: PendingState =
@@ -266,7 +272,7 @@ async function onRequest(req: http.IncomingMessage, res: http.ServerResponse) {
     if (!/^\d{1,32}$/.test(pin)) return json(res, 400, { result: "wrong" })
     const result = await rpc({
       op: "unlock",
-      token: tokenCookie(req.headers, COOKIE),
+      token: tokenCookie(req.headers, cookieName()),
       nodeId: peer.nodeId,
       pin,
     })
@@ -312,7 +318,7 @@ async function onUpgrade(req: http.IncomingMessage, socket: net.Socket, head: Bu
   if (new URL(req.url ?? "/", "http://x").pathname !== "/ws") return refuse(404)
   const peer = await peerOf(socket)
   if (!peer) return refuse(403)
-  const token = tokenCookie(req.headers, COOKIE)
+  const token = tokenCookie(req.headers, cookieName())
   const a = await rpc({ op: "auth", token, nodeId: peer.nodeId })
   if (a.state !== "ok") return refuse(401)
   wss.handleUpgrade(req, socket, head, (ws) => {
@@ -324,7 +330,7 @@ async function onUpgrade(req: http.IncomingMessage, socket: net.Socket, head: Bu
       nodeId: peer.nodeId,
       token: token!,
       lastMsg: now,
-      lastTouch: now,
+      lastTouch: 0, // the first message (hello) counts as use
       lastPong: now,
       hello: false,
     }
@@ -383,16 +389,29 @@ async function onMessage(c: Client, raw: string | null) {
   }
 }
 
+let recheckAt = 0
 setInterval(() => {
   const now = Date.now()
+  // A device that got locked, expired or removed while connected is dropped (once a minute).
+  const recheck = now - recheckAt >= TOUCH_EVERY_MS
+  if (recheck) recheckAt = now
   for (const c of clients) {
     if (now - c.lastPong > PONG_TIMEOUT_MS) c.ws.terminate()
     else {
       c.ws.ping()
       if (c.hello) sendTo(c, { t: "tick" })
+      if (recheck && c.hello) void stillAllowed(c)
     }
   }
 }, PING_MS).unref()
+
+async function stillAllowed(c: Client) {
+  const a = await rpc({ op: "auth", token: c.token, nodeId: c.nodeId })
+  if (a.state === "ok" || c.ws.readyState !== c.ws.OPEN) return
+  if (a.state === "locked") sendTo(c, { t: "locked", reason: "idle" })
+  else sendTo(c, { t: "bye", reason: "revoked" })
+  c.ws.close(4001, a.state)
+}
 
 // ── Listening ─────────────────────────────────────────────────────────────────────────────────
 function closeServers() {
@@ -401,7 +420,15 @@ function closeServers() {
   listeningKey = ""
 }
 
-async function refresh() {
+// One refresh at a time: an overlapping one could bind the port twice.
+let refreshing: Promise<void> | null = null
+let portRetries = 0
+function refresh(): Promise<void> {
+  refreshing ??= doRefresh().finally(() => (refreshing = null))
+  return refreshing
+}
+
+async function doRefresh() {
   if (!config) return
   cli ??= findCli(cliCandidates(process.platform, process.env.PATH ?? "", process.env))
   if (!cli) return fail("missing")
@@ -425,8 +452,15 @@ async function refresh() {
   } catch (e) {
     closeServers()
     const code = (e as NodeJS.ErrnoException).code
+    // A worker being replaced may still hold the port for a moment: try again soon.
+    if (code === "EADDRINUSE" && portRetries < 10) {
+      portRetries++
+      setTimeout(() => void refresh(), 500)
+      return
+    }
     return fail(code === "EADDRINUSE" ? "port" : "error", code)
   }
+  portRetries = 0
   listeningKey = key
   post({
     t: "status",

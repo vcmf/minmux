@@ -158,7 +158,7 @@ export function setupRemoteControl(deps: RemoteControlDeps) {
     return ok
   })
   ipcMain.handle("remote:disconnect-all", () => {
-    host.drop(undefined, "off")
+    host.drop(undefined, "disconnected")
     return true
   })
 

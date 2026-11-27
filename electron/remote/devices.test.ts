@@ -65,7 +65,7 @@ describe("DeviceTable approval", () => {
   it("rate-limits prompts per node", () => {
     const { table, advance } = setup()
     const a = table.createPending("n1", "x")!
-    expect(table.createPending("n1", "x")).toBeNull() // one pending at a time
+    expect(table.createPending("n1", "x")).toEqual({ ...a, existing: true }) // same prompt
     table.decide(a.id, "deny")
     table.pendingState(a.id, "n1")
     expect(table.createPending("n1", "x")).not.toBeNull()
