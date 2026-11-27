@@ -51,6 +51,12 @@ export class EditStore {
   private edits = new Map<string, Edit>()
   private snapshots = new Map<string, EditShown>()
   private listeners = new Set<() => void>()
+  // The editor's own save (cleanup + write), registered by its chunk: a close can save an edit
+  // whose editor is hidden. Until it loads nothing is being edited, so nothing needs it.
+  private saver: ((id: string) => Promise<SaveResult["kind"] | "busy">) | null = null
+  // …and its pending unsaved checks (a same-length edit is compared after a pause): settled
+  // before anything asks whether a file is unsaved (a close, a reload).
+  private flusher: (() => void) | null = null
 
   constructor(
     private readonly write: Write = (p, t, b, w, c) => ipc.writeFile(p, t, b, w, c),
@@ -66,6 +72,65 @@ export class EditStore {
   /** What entry `id`'s editor shows (the same object until it changes); none: not editing. */
   get(id: string): EditShown | undefined {
     return this.snapshots.get(id)
+  }
+
+  /** The editor's save, for saving an edit from outside it (a close's Save). */
+  setSaver(fn: (id: string) => Promise<SaveResult["kind"] | "busy">): void {
+    this.saver = fn
+  }
+
+  setFlusher(fn: () => void): void {
+    this.flusher = fn
+  }
+
+  /** Settle every pending unsaved check now (before a close or an unload asks). */
+  flushAll(): void {
+    this.flusher?.()
+  }
+
+  // The editor's saves in flight, whole (the write and the unsaved check after it): a close's
+  // Save and a quit wait for these, then read what's unsaved.
+  private running = new Map<string, Promise<unknown>>()
+
+  /** The editor is saving `id`: `p` settles once the save and its unsaved check are done. */
+  track(id: string, p: Promise<unknown>): void {
+    this.running.set(id, p)
+    const done = () => {
+      if (this.running.get(id) === p) this.running.delete(id)
+    }
+    p.then(done, done)
+  }
+
+  /** Resolves once entry `id`'s save in flight (if any) is done, unsaved check included. */
+  async settled(id: string): Promise<void> {
+    await this.running.get(id)?.catch(() => {})
+  }
+
+  /** Resolves once every save in flight is done. */
+  async settledAll(): Promise<void> {
+    await Promise.all([...this.running.values()].map((p) => p.catch(() => {})))
+  }
+
+  /** Save an edit the way its editor does; how it went ("saved" lets a close go on). */
+  async saveEntry(id: string): Promise<SaveResult["kind"] | "busy"> {
+    if (!this.edits.has(id) || !this.saver) return "error"
+    return this.saver(id)
+  }
+
+  /** The file an edit is of. */
+  path(id: string): string | undefined {
+    return this.edits.get(id)?.path
+  }
+
+  /** Whether entry `id` has unsaved changes (or a save in flight). */
+  isUnsaved(id: string): boolean {
+    const e = this.edits.get(id)
+    return !!e && (e.dirty || e.saving)
+  }
+
+  /** The paths of the files with unsaved changes (or a save in flight). */
+  unsavedPaths(): string[] {
+    return [...new Set(this.unsaved().flatMap((id) => this.edits.get(id)?.path ?? []))]
   }
 
   /** Entries with unsaved changes (or a save in flight). */

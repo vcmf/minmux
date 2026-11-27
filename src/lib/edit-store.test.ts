@@ -186,4 +186,40 @@ describe("EditStore", () => {
     expect(store.state("x")).toBeNull()
     expect(store.scrollOf("x")).toBeNull()
   })
+
+  it("saveEntry goes through the editor's saver; none (or not editing): an error", async () => {
+    const { store } = make(vi.fn())
+    store.start("e", "/w/a.ts", undefined, "a", "h0")
+    expect(await store.saveEntry("e")).toBe("error") // the editor's chunk isn't loaded
+    store.setSaver(async () => "saved")
+    expect(await store.saveEntry("e")).toBe("saved")
+    expect(await store.saveEntry("x")).toBe("error")
+  })
+
+  it("lists the unsaved files' paths", () => {
+    const { store } = make(vi.fn())
+    store.start("e", "/w/a.ts", undefined, "a", "h0")
+    store.start("f", "/w/b.ts", undefined, "b", "h1")
+    store.setDirty("f", true)
+    expect(store.unsavedPaths()).toEqual(["/w/b.ts"])
+    store.start("g", "/w/b.ts", undefined, "b", "h1") // the same file in a second pane
+    store.setDirty("g", true)
+    expect(store.unsavedPaths()).toEqual(["/w/b.ts"]) // once
+    expect(store.isUnsaved("e")).toBe(false)
+    expect(store.path("e")).toBe("/w/a.ts")
+  })
+
+  it("settled waits for a tracked save, whole", async () => {
+    const { store } = make(vi.fn())
+    let finish!: () => void
+    store.track("e", new Promise<void>((r) => (finish = r)))
+    let done = false
+    void store.settledAll().then(() => (done = true))
+    await Promise.resolve()
+    expect(done).toBe(false)
+    finish()
+    await store.settled("e")
+    await store.settledAll()
+    expect(done).toBe(true)
+  })
 })

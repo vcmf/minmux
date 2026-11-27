@@ -10,6 +10,7 @@ import {
   type StateEffect,
   type TransactionSpec,
 } from "@codemirror/state"
+import type { SaveResult } from "../lib/file-tab"
 import {
   EditorView,
   drawSelection,
@@ -107,25 +108,37 @@ function loadLanguage(id: string, path: string, state: EditorState): void {
       .catch(() => {}) // a language that won't load: plain text
 }
 
-/** Save the editor's text: the cleanup on save first (one undoable change), then the write. */
-async function saveView(
+// Works on the editor on screen or, hidden, on its kept state (a close's Save).
+/** Save an edit: the cleanup on save first (one undoable change), then the write. */
+async function saveEntry(
   id: string,
-  path: string,
-  view: EditorView,
   opts?: { overwrite?: boolean; create?: boolean },
-): Promise<void> {
-  if (edits.get(id)?.saving) return // one at a time: no cleanup for a save that won't happen
+): Promise<SaveResult["kind"] | "busy"> {
+  const path = edits.path(id)
+  const st = current(id)
+  if (!path || !st) return "error"
+  if (edits.get(id)?.saving) return "busy" // one at a time: no cleanup for a save that won't happen
   flushDirty(id)
-  const st = view.state
   const keep = new Set(st.selection.ranges.map((r) => st.doc.lineAt(r.head).number - 1))
   const changes = saveCleanup(st.doc.toString(), keep, keepsTrailingSpace(path))
   // ⌘S on a clean file writes nothing (a write would wake every watcher on it).
-  if (!opts && !changes.length && !edits.get(id)?.dirty) return
-  if (changes.length) view.dispatch({ changes, userEvent: "input.cleanup" })
-  const r = await edits.save(id, view.state.doc.toString(), opts)
+  if (!opts && !changes.length && !edits.get(id)?.dirty) return "saved"
+  if (changes.length) apply(id, () => ({ changes, userEvent: "input.cleanup" }))
+  const r = await edits.save(id, current(id)!.doc.toString(), opts)
   const now = current(id)
   if (r === "saved" && now) refreshDirty(id, now, true) // typed on during the save, or not
+  return r
 }
+// Tracked whole (write + unsaved check): a close's Save and a quit wait for it.
+const trackedSave = (id: string, opts?: { overwrite?: boolean; create?: boolean }) => {
+  // One already running stays the one tracked (this call would only answer "busy").
+  if (edits.get(id)?.saving) return Promise.resolve("busy" as const)
+  const p = saveEntry(id, opts)
+  edits.track(id, p)
+  return p
+}
+edits.setSaver((id) => trackedSave(id))
+edits.setFlusher(() => [...dirtyTimers.keys()].forEach(flushDirty))
 
 /** Stop editing `id`: its state and the editor's own caches go. */
 function stopEditing(id: string): void {
@@ -164,7 +177,7 @@ export default function FileEditor({
     let state = edits.state(entryId) as EditorState | null
     const fresh = !state
     if (!state) {
-      const save = (v: EditorView) => (void saveView(entryId, path, v), true)
+      const save = () => (void trackedSave(entryId), true)
       const extensions: Extension[] = [
         lineNumbers(),
         highlightActiveLineGutter(),
@@ -264,8 +277,7 @@ export default function FileEditor({
     return view.state.doc.lineAt(view.lineBlockAtHeight(view.scrollDOM.scrollTop).from).number
   }
   const save = (opts?: { overwrite?: boolean; create?: boolean }) => {
-    const view = viewRef.current
-    if (view) void saveView(entryId, path, view, opts)
+    void trackedSave(entryId, opts)
   }
   const reload = async () => {
     const base = await edits.reload(entryId)
@@ -290,9 +302,7 @@ export default function FileEditor({
     else leave()
   }
   const saveAndLeave = async () => {
-    const view = viewRef.current
-    if (!view) return
-    await saveView(entryId, path, view)
+    await trackedSave(entryId)
     setAsking(false)
     const now = edits.get(entryId)
     if (now && !now.dirty && !now.notice) leave()

@@ -22,6 +22,7 @@ import {
 import { makeTab, withFocus } from "./lib/tab-focus"
 import { files, type FileView } from "./lib/file-store"
 import { edits } from "./lib/edit-store"
+import { shortNames } from "./lib/file-names"
 import {
   EMPTY_VIEW,
   isMarkdownPath,
@@ -67,6 +68,7 @@ import {
   type CloseConfirm,
   type TerminalState,
   confirmStillValid,
+  unsavedCloseConfirm,
 } from "./lib/close-confirm"
 import { tabTitle, displaySessionTitle } from "./lib/session-label"
 import type { AgentEvent, AgentGraph } from "./lib/agent-graph"
@@ -336,6 +338,7 @@ export interface AppState {
   requestCloseTab: (tabId: string) => void // confirms first: >1 terminals, or its one is running
   requestCloseTerminal: (tabId: string, sessionId: string) => void // confirms first if running
   confirmClose: () => void // the dialog's Close
+  saveAndClose: () => Promise<void> // a file's close dialog: Save, then close (stays open if it fails)
   cancelClose: () => void
   setDragging: (dragging: { tabId: string; sessionId: string } | null) => void
   setAgentMeta: (sessionId: string, meta: SessionMeta | null) => void
@@ -522,6 +525,10 @@ function dropSessions(
     integrationHint,
   }
 }
+
+/** The names of the files among `ids` with unsaved changes (lib/edit-store). */
+const unsavedNames = (ids: string[]) =>
+  shortNames(ids.flatMap((id) => (edits.isUnsaved(id) ? (edits.path(id) ?? []) : [])))
 
 /** Drop folder / file entries from the store maps (terminal ids are ignored). */
 function dropObjects(state: AppState, ids: string[]): Pick<AppState, "objects" | "folderViews"> {
@@ -1293,10 +1300,18 @@ export const useStore = create<AppState>()(
       ),
 
     requestClosePane: (tabId, paneId) => {
+      edits.flushAll() // a same-length edit typed just now counts
       const tab = get().tabs.find((t) => t.id === tabId)
       const pane = tab && findPaneById(tab.root, paneId)
       if (!pane) return
       const ids = paneSessionIds(pane)
+      // Its only entry an unsaved file: that file's own question (Save / Don't save / Cancel).
+      const only = pane.entryIds.length === 1 ? pane.entryIds[0]! : ""
+      if (only && !isTerminalEntry(only) && edits.isUnsaved(only))
+        return get().requestCloseEntry(tabId, only)
+      // Files with unsaved changes ask first, whatever else is in the pane.
+      const unsaved = unsavedCloseConfirm(tabId, unsavedNames(pane.entryIds), ids.length, paneId)
+      if (unsaved) return set({ closeConfirm: unsaved })
       if (ids.length > 1) {
         set({ closeConfirm: { kind: "pane", tabId, paneId, count: ids.length } })
       } else if (ids[0] && pane.entryIds.length === 1) {
@@ -1317,10 +1332,23 @@ export const useStore = create<AppState>()(
     },
 
     requestCloseTab: (tabId) => {
+      edits.flushAll()
       const s = get()
       const tab = s.tabs.find((t) => t.id === tabId)
       if (!tab) return
+      // A session that is one unsaved file: that file's own question (with Save).
+      if (tab.root.type === "leaf") {
+        const [only, ...more] = tab.root.entryIds
+        if (only && !more.length && !isTerminalEntry(only) && edits.isUnsaved(only))
+          return get().requestCloseEntry(tabId, only)
+      }
       const title = tabTitle(tab, s.sessions, s.home)
+      const unsaved = unsavedCloseConfirm(
+        tabId,
+        unsavedNames(allEntryIds(tab.root)),
+        allSessionIds(tab.root).length,
+      )
+      if (unsaved) return set({ closeConfirm: unsaved })
       const ask = tabCloseConfirm(tabId, title, terminalStates(s, allSessionIds(tab.root)))
       if (ask) set({ closeConfirm: ask })
       else s.closeTab(tabId)
@@ -1342,13 +1370,49 @@ export const useStore = create<AppState>()(
       if (!c) return
       if (c.kind === "pane") get().closePane(c.tabId, c.paneId)
       else if (c.kind === "tab") get().closeTab(c.tabId)
+      else if (c.kind === "file")
+        get().closeSurface(c.tabId, c.entryId) // its edit goes with it
+      else if (c.kind === "unsaved")
+        if (c.paneId) get().closePane(c.tabId, c.paneId)
+        else get().closeTab(c.tabId)
       else if (c.paneId) get().closePane(c.tabId, c.paneId)
       else get().closeSurface(c.tabId, c.sessionId)
     },
 
     requestCloseEntry: (tabId, entryId) => {
-      if (isTerminalEntry(entryId)) get().requestCloseTerminal(tabId, entryId)
-      else get().closeSurface(tabId, entryId) // a folder / file: nothing runs, nothing to ask
+      if (isTerminalEntry(entryId)) return get().requestCloseTerminal(tabId, entryId)
+      edits.flushAll()
+      // A file with unsaved changes: save them, drop them, or keep it open.
+      const path = edits.isUnsaved(entryId) ? edits.path(entryId) : undefined
+      if (path) {
+        const title = path.split(/[\\/]/).pop() ?? path
+        return set({ closeConfirm: { kind: "file", tabId, entryId, title } })
+      }
+      get().closeSurface(tabId, entryId) // a folder / a saved file: nothing to ask
+    },
+
+    saveAndClose: async () => {
+      const c = get().closeConfirm
+      if (c?.kind !== "file") return
+      set({ closeConfirm: null })
+      const r = await edits.saveEntry(c.entryId)
+      // A save already running (⌘S, then ×) decides instead; text typed during the save is
+      // still unsaved after it: either way, what's unsaved once it's all settled decides.
+      if (r === "busy") await edits.settled(c.entryId)
+      edits.flushAll()
+      // Where the file is now (it may have moved, or closed some other way meanwhile).
+      const tabId = get().tabs.find((t) => findPane(t.root, c.entryId))?.id
+      if (!tabId) return
+      if ((r === "saved" || r === "busy") && !edits.isUnsaved(c.entryId))
+        return get().closeSurface(tabId, c.entryId)
+      // The user moved on meanwhile (another dialog is up): leave them there; the file's bar
+      // or its dot says what happened.
+      if (get().closeConfirm) return
+      // Saved, but typed on meanwhile: ask again about what's new.
+      if (r === "saved") return set({ closeConfirm: { ...c, tabId } })
+      // It stays open, in front, showing why (its editor's bar).
+      get().setActiveTab(tabId)
+      get().setActivePane(tabId, c.entryId)
     },
 
     cancelClose: () => set({ closeConfirm: null }),

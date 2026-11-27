@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect } from "react"
 import { nextGitPollDelay } from "./lib/git-poll"
 import { ipc } from "./lib/ipc"
+import { installUnsavedGuard } from "./lib/unsaved-guard"
 import { TopBar } from "./components/top-bar"
 import { Sidebar } from "./components/sidebar"
 import { StatusBar } from "./components/status-bar"
@@ -672,6 +673,10 @@ function App() {
       window.removeEventListener("drop", end)
     }
   }, [])
+
+  // Files with unsaved changes: main hears of them, the page holds its unload, a quit asks
+  // (lib/unsaved-guard).
+  useEffect(() => installUnsavedGuard(), [])
 
   // Global shortcuts: ⌘K/Ctrl-K = command palette; ⌘F (mac) / Ctrl+Shift+F = find;
   // ⌘T (mac) / Ctrl+Shift+T = new terminal in the focused pane. Plain Ctrl+F / Ctrl+T

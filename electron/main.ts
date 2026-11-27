@@ -123,6 +123,7 @@ import {
 } from "../src/lib/file-preview"
 import type { FileData, FileStamp, SaveResult } from "../src/lib/file-tab"
 import { SaveLocks, saveAcross, validSave } from "./write-file"
+import { shortNames } from "../src/lib/file-names"
 import { isBundle, osMayOpen, type Os } from "./open-policy"
 import { browserLaunch, type BrowserLaunch } from "./open-in-browser"
 import { isHtmlPath } from "../src/lib/file-actions"
@@ -278,6 +279,63 @@ let quitThrough = false
 let quitAsking = false // the quit dialog is up: another close / ⌘Q mustn't stack a second
 /** The next window close is the menu's ⌘W (a plain close), not the red button — see createWindow. */
 let plainClose = false
+// Unsaved files live in the renderer. A quit asks it, once, at the moment it decides
+// (editor:quit-check): the renderer settles its pending checks and saves, then answers what's
+// still unsaved. `unsavedFiles` (pushed as it changes) only names files in the unload dialog.
+let unsavedFiles: string[] = []
+let unsavedChecked = false // this quit asked the renderer, and nothing unsaved stops it now
+let checkingUnsaved = false
+// A page to ask: it says so once its quit-check listener is in (editor:quit-ready); a crash or a
+// closed window ends it. A load that starts but never replaces the page leaves it as it was.
+let rendererAlive = false
+let quitChecks = 0
+const quitCheckReplies = new Map<number, (paths: string[]) => void>()
+const QUIT_CHECK_MS = 6000 // the renderer's own saves get SAVE_WAIT_MS; a hung page, no more
+// No answer (or no page ready to give one): the last list it pushed, never "nothing unsaved".
+/** Ask the page what's unsaved, once its saves have landed. */
+function askUnsaved(win: BrowserWindow): Promise<string[]> {
+  if (!rendererAlive || win.isDestroyed()) return Promise.resolve(unsavedFiles)
+  const id = ++quitChecks
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      quitCheckReplies.delete(id)
+      resolve(unsavedFiles) // a page that doesn't answer: never "nothing unsaved" on a guess
+    }, QUIT_CHECK_MS)
+    quitCheckReplies.set(id, (paths) => {
+      clearTimeout(timer)
+      quitCheckReplies.delete(id)
+      resolve(paths)
+    })
+    try {
+      win.webContents.send("editor:quit-check", id)
+    } catch {
+      clearTimeout(timer)
+      quitCheckReplies.delete(id)
+      resolve(unsavedFiles)
+    }
+  })
+}
+/** The page went (crash, window closed): pending quit checks get the last pushed list now. */
+const answerPendingChecks = () => {
+  for (const reply of [...quitCheckReplies.values()]) reply(unsavedFiles)
+}
+let lastWatchSet: string[] = [] // what the page asked to watch (put back after a cancelled reload)
+let saveSeq = 0
+const savesRunning = new Set<number>() // saves being written, by id
+const savesGivenUp = new Set<number>() // ones a quit stopped waiting for (hung): not waited again
+let waitingSaves = false
+const SAVE_WAIT_MS = 5000
+/** A quit that won't happen after all: the next one asks and waits afresh. */
+const quitAbandoned = () => {
+  unsavedChecked = false
+  savesGivenUp.clear()
+}
+/** "a.ts", "a.ts and b.ts", "a.ts, b.ts and 3 more": unsaved files, for a dialog. */
+const unsavedList = (files = unsavedFiles) => {
+  const names = shortNames(files)
+  if (names.length <= 2) return names.join(" and ")
+  return `${names.slice(0, 2).join(", ")} and ${names.length - 2} more`
+}
 // Remote spawns in flight (the ssh probe is async): a second pty:spawn for the same id waits,
 // and resizes / input / a close that arrive meanwhile are held for it (pending-spawns.ts).
 const pendingSpawns = new PendingSpawns<Electron.WebContents>()
@@ -484,14 +542,59 @@ function createWindow() {
     e.preventDefault()
     setImmediate(() => app.quit()) // after this close returns: the quit closes it again
   })
-  win.on("session-end", () => sessionLedger().freeze(60_000)) // Windows logout/shutdown — see onPower
+  win.on("session-end", () => {
+    sessionLedger().freeze(60_000) // Windows logout/shutdown — see onPower
+    osEnding = true // …and it isn't held for unsaved files either (the design: they're lost)
+    quitThrough = true
+  })
   win.on("closed", () => {
     mainWindow = null
     fsWorker.setWatched([])
+    rendererAlive = false
+    answerPendingChecks() // with the list it last pushed
+    unsavedFiles = [] // its files went with it
   })
-  // A reloaded or crashed renderer re-sends its watch set when its folder tabs show again.
+  // A reloaded or crashed renderer re-sends its watch set when its folder tabs show again; its
+  // unsaved files went with it.
   win.webContents.on("did-start-loading", () => fsWorker.setWatched([]))
-  win.webContents.on("render-process-gone", () => fsWorker.setWatched([]))
+  // A new page committed: it can answer a quit once it says so (a refused load keeps the old).
+  win.webContents.on("did-navigate", () => (rendererAlive = false))
+  // Its unsaved files go only once a new page is in: a reload starts loading before the old
+  // page's beforeunload runs, and that needs the list to ask (and a refused load keeps the page).
+  win.webContents.on("did-finish-load", () => (unsavedFiles = []))
+  win.webContents.on("render-process-gone", () => {
+    fsWorker.setWatched([])
+    rendererAlive = false
+    answerPendingChecks()
+    unsavedFiles = []
+  })
+  // The page holds its unload while files are unsaved (a reload, ⌘W, the window closing): ask.
+  // Without this handler Electron would cancel the unload silently. preventDefault = let it go.
+  win.webContents.on("will-prevent-unload", (e) => {
+    // The page holds its unload only with unsaved files: ask even if their list hasn't come yet
+    // (a same-length edit settled in its beforeunload).
+    // A quit already settled it, or the OS is ending the session as we speak (an osEnding left
+    // from a cancelled logout alone doesn't count).
+    if (unsavedChecked || (osEnding && quitThrough)) return e.preventDefault()
+    try {
+      const choice = dialog.showMessageBoxSync(win, {
+        type: "warning",
+        buttons: ["Cancel", "Discard changes"],
+        defaultId: 0,
+        cancelId: 0,
+        message: "Discard unsaved changes?",
+        detail: unsavedFiles.length
+          ? `${unsavedList()} ${unsavedFiles.length === 1 ? "has" : "have"} unsaved changes.`
+          : "A file has unsaved changes.",
+        noLink: true,
+      })
+      if (choice === 1) return e.preventDefault() // (its list goes with a new page: did-finish-load)
+      // The page stays: did-start-loading already dropped its watches (a reload); put them back.
+      fsWorker.setWatched(lastWatchSet)
+    } catch {
+      // No dialog (the window going): the page, and its text, stay.
+    }
+  })
 
   // Tell the renderer when maximize state changes (custom controls swap icon).
   // (A window closing out of full screen can report after it's destroyed.)
@@ -1614,7 +1717,8 @@ function registerIpc() {
     )
     // Not on Windows: a watched folder's open handle blocks renaming / deleting it and its
     // parents there (focus and Refresh still read).
-    fsWorker.setWatched(process.platform === "win32" ? [] : list.slice(0, WATCH_CAP))
+    lastWatchSet = process.platform === "win32" ? [] : list.slice(0, WATCH_CAP)
+    fsWorker.setWatched(lastWatchSet)
   })
   ipcMain.handle("fs:watching", () => fsWorker.watchingNow())
 
@@ -1772,21 +1876,47 @@ function registerIpc() {
         return { kind: "error", message: "Can't reach the WSL distro" }
       // One save of a file at a time, never past one that may still land (SaveLocks).
       const distro = wsl ? (wsl.distro ?? defaultWslDistro() ?? "") : ""
-      return saves.run(`${distro}:${p}`, (track) =>
-        saveAcross(targets, (target) => {
-          const call = saveWorker.track({
-            op: "writefile",
-            path: target,
-            text: text as string,
-            base: base as string | null,
-            create: create === true,
-          })
-          track(call.ended)
-          return call.result as Promise<SaveResult>
-        }),
-      )
+      // A quit waits for the saves in flight (before-quit: waitSaves).
+      const saveId = ++saveSeq
+      savesRunning.add(saveId)
+      const done = () => {
+        savesRunning.delete(saveId)
+        savesGivenUp.delete(saveId)
+      }
+      return saves
+        .run(`${distro}:${p}`, (track) =>
+          saveAcross(targets, (target) => {
+            const call = saveWorker.track({
+              op: "writefile",
+              path: target,
+              text: text as string,
+              base: base as string | null,
+              create: create === true,
+            })
+            track(call.ended)
+            return call.result as Promise<SaveResult>
+          }),
+        )
+        .finally(done)
     },
   )
+
+  // The page can answer a quit's check from now on (its listener is in).
+  ipcMain.on("editor:quit-ready", () => (rendererAlive = true))
+  // The page's answer to a quit's check: what's still unsaved once its saves landed.
+  ipcMain.on("editor:quit-check-reply", (_e, id: unknown, paths: unknown) => {
+    const reply = typeof id === "number" ? quitCheckReplies.get(id) : undefined
+    // A reply that isn't a list is no answer: the pushed list stands.
+    reply?.(
+      Array.isArray(paths) ? paths.filter((p): p is string => typeof p === "string") : unsavedFiles,
+    )
+  })
+  // The renderer's files with unsaved changes (their paths), sent when the set changes.
+  ipcMain.on("editor:unsaved", (_e, paths: unknown) => {
+    unsavedFiles = Array.isArray(paths)
+      ? paths.filter((p): p is string => typeof p === "string").slice(0, 200)
+      : []
+  })
 
   // Native folder picker for the Files-panel root; returns null if cancelled.
   ipcMain.handle("dialog:pick-directory", async (_e, defaultPath?: string, wsl?: WslContext) => {
@@ -2250,6 +2380,11 @@ app.on("before-quit", (e) => {
   const step = quitStep({
     phase: quitPhase,
     confirmed: quitConfirmed,
+    unsavedChecked,
+    checkingUnsaved,
+    canAskUnsaved: !!mainWindow && !mainWindow.isDestroyed(),
+    savesInFlight: [...savesRunning].filter((id) => !savesGivenUp.has(id)).length,
+    waitingSaves,
     // Spawns still preparing (an ssh probe) are about to be sessions: count them too.
     needsConfirm: quitNeedsConfirm({
       live: sessions.size + pendingSpawns.live,
@@ -2277,6 +2412,69 @@ app.on("before-quit", (e) => {
   }
   e.preventDefault()
   if (step === "hold") return
+  if (step === "checkUnsaved" && mainWindow) {
+    const win = mainWindow
+    checkingUnsaved = true
+    void askUnsaved(win)
+      .catch(() => unsavedFiles)
+      .then((files) => {
+        checkingUnsaved = false
+        if (!files.length) {
+          unsavedChecked = true
+          return app.quit()
+        }
+        // The window may have gone while it answered (⌘W): an app-modal dialog then.
+        const target = !win.isDestroyed()
+          ? win
+          : mainWindow && !mainWindow.isDestroyed()
+            ? mainWindow
+            : null
+        quitAsking = true
+        const ask: Electron.MessageBoxOptions = {
+          type: "warning",
+          buttons: ["Cancel", "Discard and quit"],
+          defaultId: 0,
+          cancelId: 0,
+          message: "Quit with unsaved changes?",
+          detail: `${unsavedList(files)} ${files.length === 1 ? "has" : "have"} unsaved changes (or a save still running): quitting may drop them.`,
+          noLink: true,
+        }
+        let shown: Promise<Electron.MessageBoxReturnValue>
+        try {
+          shown = target ? dialog.showMessageBox(target, ask) : dialog.showMessageBox(ask)
+        } catch {
+          quitAsking = false
+          return quitAbandoned()
+        }
+        void shown
+          .then(({ response }) => {
+            quitAsking = false
+            if (response !== 1) return quitAbandoned()
+            unsavedChecked = true
+            app.quit()
+          })
+          .catch(() => {
+            quitAsking = false
+            quitAbandoned()
+          })
+      })
+    return
+  }
+  if (step === "waitSaves") {
+    // A save stopped mid-write leaves its file half written: let the ones in flight land.
+    waitingSaves = true
+    const until = Date.now() + SAVE_WAIT_MS
+    const check = () => {
+      const waiting = [...savesRunning].filter((id) => !savesGivenUp.has(id))
+      if (waiting.length && Date.now() < until) return void setTimeout(check, 50)
+      waitingSaves = false
+      // Past the wait (a hung save): quit anyway, but only those are given up on.
+      for (const id of waiting) savesGivenUp.add(id)
+      app.quit()
+    }
+    check()
+    return
+  }
   if (step === "drain") {
     // Hold the quit until every PTY has exited (≤ ~2 s; ≤ ~4 s if the agents' ps stalls).
     quitPhase = "draining"
@@ -2306,10 +2504,13 @@ app.on("before-quit", (e) => {
   void (mainWindow ? dialog.showMessageBox(mainWindow, ask) : dialog.showMessageBox(ask))
     .then(({ response, checkboxChecked }) => {
       quitAsking = false
-      if (response !== 1) return // Cancel
+      if (response !== 1) return quitAbandoned() // Cancel
       if (checkboxChecked) disableConfirmQuit()
       quitConfirmed = true
       app.quit()
     })
-    .catch(() => (quitAsking = false)) // no dialog: ask again next time
+    .catch(() => {
+      quitAsking = false // no dialog: ask again next time
+      quitAbandoned()
+    })
 })
