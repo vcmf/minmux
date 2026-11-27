@@ -141,4 +141,49 @@ describe("EditStore", () => {
     expect(store.get("e")).toBeUndefined()
     expect(fileStore.pin).toHaveBeenLastCalledWith("e", false)
   })
+
+  it("a reload that can't read text says so and keeps the base", async () => {
+    const read = vi.fn(async (): Promise<FileData> => ({ kind: "binary", size: 3 }))
+    const { store } = make(vi.fn(), read)
+    store.start("e", "/a", undefined, "a", "h0")
+    expect(await store.reload("e")).toBeNull()
+    expect(store.get("e")?.notice).toMatchObject({ kind: "error" })
+    store.dismiss("e")
+    expect(store.get("e")?.notice).toBeNull()
+    expect(store.base("e")?.hash).toBe("h0")
+  })
+
+  it("an edit closed while saving keeps nothing", async () => {
+    let finish!: (r: SaveResult) => void
+    const { store, fileStore } = make(vi.fn(() => new Promise<SaveResult>((r) => (finish = r))))
+    store.start("e", "/a", undefined, "a", "h0")
+    const p = store.save("e", "b")
+    store.stop("e")
+    finish({ kind: "saved", stamp, hash: "h1" })
+    expect(await p).toBe("saved")
+    expect(fileStore.saved).not.toHaveBeenCalled()
+    expect(await store.save("e", "c")).toBe("error") // not editing any more
+  })
+
+  it("a write that throws is an error notice", async () => {
+    const { store } = make(vi.fn(async () => Promise.reject(new Error("ipc gone"))))
+    store.start("e", "/a", undefined, "a", "h0")
+    expect(await store.save("e", "b")).toBe("error")
+    expect(store.get("e")?.notice).toMatchObject({ kind: "error" })
+  })
+
+  it("keeps the editor's state, scroll and the view it last saw", () => {
+    const { store } = make(vi.fn())
+    store.start("e", "/a", undefined, "a", "h0", 1, "preview")
+    const snap = { s: 1 }
+    store.keep("e", snap)
+    store.setScroll("e", "scroll")
+    expect(store.state("e")).toBe(snap)
+    expect(store.scrollOf("e")).toBe("scroll")
+    expect(store.asked("e")).toBe("preview")
+    store.setAsked("e", "diff")
+    expect(store.asked("e")).toBe("diff")
+    expect(store.state("x")).toBeNull()
+    expect(store.scrollOf("x")).toBeNull()
+  })
 })
