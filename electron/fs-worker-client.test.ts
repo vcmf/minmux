@@ -123,6 +123,15 @@ describe("FsWorkerClient", () => {
     expect(procs).toHaveLength(5) // each save still got a worker
   })
 
+  it("a worker that won't start fails the call as never sent (and it has ended)", async () => {
+    const c = new FsWorkerClient(() => {
+      throw new Error("fork failed")
+    })
+    const t = c.track({ op: "writefile", path: "/a", text: "x", base: "h" })
+    await expect(t.result).rejects.toMatchObject({ code: "EBUSY" })
+    await t.ended
+  })
+
   it("a hung request fails alone; reads stranded behind it move to a fresh worker", async () => {
     const c = client()
     const stuck = c.call({ op: "readdir", path: "/mnt/dead" })

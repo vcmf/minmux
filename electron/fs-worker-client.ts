@@ -2,8 +2,8 @@
 // A request unanswered for HUNG_MS is stuck on a dead mount: that request alone fails, the
 // worker is retired (no new requests; its other reads may still finish) and a fresh one takes
 // new requests. A retired worker is killed once nothing it holds can still finish. A process
-// blocked in a dead mount may not die even when killed, so at most MAX_RETIRED of them may be
-// waiting to exit; past that, requests fail fast instead of spawning more. A worker idle for
+// blocked in a dead mount may not die even when killed, so at most `maxRetired` of them (per
+// client: MAX_RETIRED, none for saves) may be waiting to exit; past that, requests fail fast. A worker idle for
 // IDLE_MS is shut down (unless it holds watchers). The files browser's folder reads and
 // watches never touch a possibly-dead path in main.
 //
@@ -104,7 +104,7 @@ export class FsWorkerClient {
   /** Hand a request to the live worker (starting one if needed). */
   private send(p: Pending): void {
     const w = this.ensure()
-    if (!w) return p.reject(fail("EBUSY")) // too many stuck workers: don't add another
+    if (!w) return p.reject(fail("EBUSY")) // too many stuck workers, or none would start
     const id = this.nextId++
     p.at = Date.now()
     w.pending.set(id, p)
@@ -225,7 +225,13 @@ export class FsWorkerClient {
   private ensure(): Worker | null {
     if (this.live) return this.live
     if (this.retired.size >= this.maxRetired) return null
-    const w: Worker = { proc: this.spawn(), pending: new Map(), retired: false }
+    let proc: WorkerProc
+    try {
+      proc = this.spawn()
+    } catch {
+      return null // couldn't start one: the request fails as never sent
+    }
+    const w: Worker = { proc, pending: new Map(), retired: false }
     this.spawnedAt = Date.now()
     this.live = w
     w.proc.on("message", (msg) => {

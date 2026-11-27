@@ -53,15 +53,24 @@ export async function writeFileForTab(
   } catch (e) {
     const code = (e as { code?: string }).code
     if (code === "ENOENT") return { kind: "missing" }
-    if (code === "EEXIST") return { kind: "changed" }
+    if (code === "EEXIST") {
+      // Something took the name: a file is a change; anything else can't be saved over.
+      const isFile = await fs.promises.stat(file).then(
+        (st) => st.isFile(),
+        () => true,
+      )
+      return isFile ? { kind: "changed" } : { kind: "error", message: "Not a file" }
+    }
     return { kind: "error", message: String(e), unopened: true } // another share form may open
   }
   let closed = false
   try {
-    const st = await fh.stat()
+    const st = await fh.stat({ bigint: true })
     if (!st.isFile()) return { kind: "error", message: "Not a file" }
-    // One file at a time, however it's named (a symlink, another case on APFS).
-    return await inodes.run(`${st.dev}:${st.ino}`, async (): Promise<SaveResult> => {
+    // One file at a time, however it's named (a symlink, another case on APFS); a share that
+    // reports no inode (0) keys by path.
+    const key = st.ino ? `${st.dev}:${st.ino}` : `path:${file}`
+    return await inodes.run(key, async (): Promise<SaveResult> => {
       let wrote = false // from the first write on, a failure may have left the file half written
       try {
         if (!create && !(await sameBytes(fh, base))) return { kind: "changed" }

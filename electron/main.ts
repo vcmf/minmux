@@ -1766,10 +1766,14 @@ function registerIpc() {
     ): Promise<SaveResult> => {
       if (!validSave(p, text, base, create, path.isAbsolute))
         return { kind: "error", message: "Bad save request" }
+      const targets = wslTargets(p, wsl)
+      // A WSL path with no share to reach it would be this machine's own path: never write there.
+      if (wsl && targets.length === 1 && targets[0] === p && process.platform === "win32")
+        return { kind: "error", message: "Can't reach the WSL distro" }
       // One save of a file at a time, never past one that may still land (SaveLocks).
       const distro = wsl ? (wsl.distro ?? defaultWslDistro() ?? "") : ""
       return saves.run(`${distro}:${p}`, (track) =>
-        saveAcross(wslTargets(p, wsl), (target) => {
+        saveAcross(targets, (target) => {
           const call = saveWorker.track({
             op: "writefile",
             path: target,
