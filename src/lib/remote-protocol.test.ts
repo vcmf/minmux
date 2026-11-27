@@ -18,6 +18,21 @@ describe("parseClientMessage", () => {
     expect(parseClientMessage(`{"t":"seen","x":"${"a".repeat(70_000)}"}`)).toBeNull()
   })
 
+  it("dialog and answer requests keep what names the dialog", () => {
+    expect(parseClientMessage('{"t":"dialog","pane":"p","waitId":"w3"}')).toEqual({
+      t: "dialog",
+      pane: "p",
+      waitId: "w3",
+    })
+    expect(parseClientMessage('{"t":"dialog","pane":"p"}')).toEqual({ t: "dialog", pane: "p" })
+    expect(
+      parseClientMessage('{"t":"answer","pane":"p","waitId":"w3","n":2,"seen":"sig"}'),
+    ).toEqual({ t: "answer", pane: "p", waitId: "w3", n: 2, seen: "sig" })
+    expect(
+      parseClientMessage('{"t":"answer","pane":"p","waitId":"w3","n":0,"seen":"x"}'),
+    ).toBeNull()
+  })
+
   it("parseHostMessage checks the tag", () => {
     expect(parseHostMessage('{"t":"tick"}')).toEqual({ t: "tick" })
     expect(parseHostMessage('{"x":1}')).toBeNull()

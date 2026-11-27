@@ -1,7 +1,7 @@
 // Messages between main and the remote-host worker (docs/design/REMOTE_CONTROL.md). The worker
 // asks; main decides (devices, tokens, PIN) and answers by request id.
 
-import type { RemotePanes, SendRefusal } from "../../src/lib/remote-protocol"
+import type { AnswerRefusal, RemotePanes, SendRefusal } from "../../src/lib/remote-protocol"
 import type { ChatLead } from "../agents/chat-lead"
 import type { TermSnapshot } from "./term-mirror"
 import type { ClientInfo, HostStatus } from "../../src/lib/remote-view"
@@ -30,6 +30,16 @@ export type RpcCall =
   | { op: "send"; deviceId: string; pane: string; text: string; id: string }
   | { op: "snapshot"; pane: string } // starts the pane's tap
   | { op: "keys"; deviceId: string; pane: string; data: string }
+  | { op: "answerable"; pane: string } // does this pane's agent take answers by number
+  | {
+      op: "answer"
+      deviceId: string
+      pane: string
+      waitId: string
+      n: number
+      seen: string // the dialog the device was shown (dialogSignature)
+      deadline: number // ms epoch: past it, main types nothing (the worker gave up waiting)
+    }
 
 export type RpcResult =
   | { op: "auth"; result: AuthResult }
@@ -39,6 +49,8 @@ export type RpcResult =
   | { op: "send"; result: { ok: boolean; reason?: SendRefusal } }
   | { op: "snapshot"; result: TermSnapshot | null | "failed" } // null: no such pane
   | { op: "keys"; result: boolean }
+  | { op: "answerable"; result: boolean }
+  | { op: "answer"; result: { ok: boolean; reason?: AnswerRefusal } }
 
 /** Worker → main. */
 export type FromHost =

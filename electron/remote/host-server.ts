@@ -14,6 +14,7 @@ import {
   TICK_MS,
   parseClientMessage,
   type HostMessage,
+  type AnswerRefusal,
   type Permission,
   type PendingState,
   type RemotePanes,
@@ -43,6 +44,7 @@ import { LOCK_AFTER_MS } from "./devices"
 import { chatReaderFor, type ChatLead } from "../agents/chat"
 import type { ChatReader } from "../agents/chat-log"
 import { TermMirror } from "./term-mirror"
+import { parseDialog } from "../agents/answers"
 import type { ChatItem } from "../../src/lib/remote-chat"
 import { FAILED } from "./host-client"
 
@@ -85,6 +87,9 @@ export function createHostServer(d: HostServerDeps) {
   const CHAT_POLL_MS = d.timing?.chatPoll ?? 1000
   const FEED_IDLE_MS = d.timing?.feedIdle ?? 30_000
   const TERM_FLUSH_MS = 60 // a device's terminal output, batched
+  const DIALOG_RETRIES = 2 // a hook can come before its dialog is drawn
+  const DIALOG_RETRY_MS = 400
+  const ANSWER_DEADLINE_MS = 8_000 // under the RPC timeout: main never types after we gave up
   const TERM_BEHIND = d.timing?.termBehind ?? 256 * 1024 // unsent bytes past which a device is skipped
 
   let config: HostConfig | null = null
@@ -353,6 +358,7 @@ export function createHostServer(d: HostServerDeps) {
     permission: Permission
     watching: Set<string> // panes whose chat feed it follows
     terms: Set<string> // panes whose terminal it follows
+    looking: Set<string> // panes with a dialog look in flight
   }
   const clients = new Set<Client>()
   const wss = new WebSocketServer({
@@ -402,6 +408,7 @@ export function createHostServer(d: HostServerDeps) {
         permission: a.device.permission,
         watching: new Set(),
         terms: new Set(),
+        looking: new Set(),
       }
       clients.add(c)
       ws.on("pong", () => (c.lastPong = Date.now()))
@@ -441,6 +448,52 @@ export function createHostServer(d: HostServerDeps) {
     if (m.t === "unwatch") return unwatch(c, m.pane)
     if (m.t === "more") return more(c, m.pane, m.before, m.seq)
     if (m.t === "term") return void (m.on ? termOn(c, m.pane) : termOff(c, m.pane))
+    if (m.t === "dialog") {
+      if (!panes.panes.some((p) => p.id === m.pane))
+        return sendTo(c, {
+          t: "dialog",
+          pane: m.pane,
+          waitId: m.waitId,
+          dialog: null,
+          answerable: false,
+        })
+      // One look per pane at a time per client: the reply in flight answers a repeat.
+      if (c.looking.has(m.pane)) return
+      c.looking.add(m.pane)
+      try {
+        // The hook can come before the agent draws its dialog: look again a few times.
+        const parse = (l: string[] | null | undefined) => (l ? parseDialog(l) : null)
+        let dialog = parse(await screenOf(m.pane))
+        for (let k = 0; k < DIALOG_RETRIES && dialog?.kind !== "permission"; k++) {
+          await new Promise((r) => setTimeout(r, DIALOG_RETRY_MS))
+          dialog = parse(await screenOf(m.pane))
+        }
+        // Buttons only for a permission prompt shown whole (main checks it again on an answer).
+        const answerable =
+          dialog?.kind === "permission" && (await rpc({ op: "answerable", pane: m.pane }))
+        return sendTo(c, { t: "dialog", pane: m.pane, waitId: m.waitId, dialog, answerable })
+      } finally {
+        c.looking.delete(m.pane)
+      }
+    }
+    if (m.t === "answer") {
+      const ack = (ok: boolean, reason?: AnswerRefusal) =>
+        sendTo(c, { t: "answered", pane: m.pane, waitId: m.waitId, ok, reason })
+      if (c.permission === "view") return ack(false, "not-allowed")
+      if (!panes.panes.some((p) => p.id === m.pane)) return ack(false, "stale")
+      // Main checks the screen itself (the desktop's terminal) and decides.
+      const deadline = Date.now() + ANSWER_DEADLINE_MS
+      const r = await rpc({
+        op: "answer",
+        deviceId: c.deviceId,
+        pane: m.pane,
+        waitId: m.waitId,
+        n: m.n,
+        seen: m.seen,
+        deadline,
+      })
+      return ack(r.ok, r.reason)
+    }
     if (m.t === "keys") {
       if (c.permission !== "keys") return
       await rpc({ op: "keys", deviceId: c.deviceId, pane: m.pane, data: m.data })
@@ -713,6 +766,30 @@ export function createHostServer(d: HostServerDeps) {
     f.watchers.add(c)
     if (f.mirror) await sendScreen(c, pane, f)
     else await resnap(pane, f)
+  }
+
+  // From its mirror if someone watches its terminal, else a snapshot for this look only (the tap
+  // stops again right after).
+  /** The pane's screen lines. */
+  async function screenOf(pane: string): Promise<string[] | null> {
+    const f = termFeeds.get(pane)
+    if (f?.snapping) await f.snapping // a re-snapshot under way: the screen after it
+    const held = f?.mirror
+    if (held) {
+      const lines = await held.lines()
+      // Still that feed's mirror (not disposed by someone leaving meanwhile): its lines stand.
+      if (termFeeds.get(pane) === f && f.mirror === held) return lines
+    }
+    const snap = await rpc({ op: "snapshot", pane })
+    // Asked or not, main may have started the tap: stop it unless someone watches now.
+    if (!termFeeds.has(pane)) post({ t: "untap", pane })
+    if (!snap || snap === "failed") return null
+    const m = new TermMirror(snap)
+    try {
+      return await m.lines()
+    } finally {
+      m.dispose()
+    }
   }
 
   function termOff(c: Client, pane: string) {

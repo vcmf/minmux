@@ -27,6 +27,7 @@ vi.mock("electron", () => ({
 }))
 
 const { autoPort, setupRemoteControl } = await import("./remote-control")
+const { dialogSignature, parseDialog } = await import("./agents/answers")
 
 describe("autoPort", () => {
   it("gives the app, a dev build and other profiles their own ports", () => {
@@ -339,6 +340,142 @@ describe("setupRemoteControl", () => {
     settings = JSON.stringify({ remote: { enabled: false } })
     rc.apply() // the worker stops: its taps go with it
     expect(untapped).toBe(1)
+    rc.dispose()
+  })
+
+  it("answers: only the open dialog, only an option still on screen, only agents that take numbers", async () => {
+    settings = JSON.stringify({ remote: { enabled: true } })
+    let onScreen: string[] = []
+    let windowOpen = true
+    let started = true
+    let duringRead = async () => {}
+    const writes: [string, string][] = []
+    const rc = setupRemoteControl({
+      dir: "/app/out/main",
+      configDir: () => cfg,
+      readSettings: () => settings,
+      profile: "",
+      window: () => null,
+      leadOf: () => ({ agent: "claude", sessionId: "s" }),
+      writePty: (pane, data) => (writes.push([pane, data]), true),
+      screen: async () => {
+        await duringRead()
+        return windowOpen ? (started ? onScreen : null) : undefined
+      },
+    })
+    rc.apply()
+    const p = forks[0]!
+    rc.setPanes({
+      tabs: [],
+      panes: [{ id: "p1", tab: "t", title: "a", kind: "agent", status: "waiting", started: true }],
+    })
+    p.emit({ t: "rpc", id: 1, call: { op: "approve", nodeId: "n1", name: "iphone" } })
+    await vi.waitFor(async () => expect((await rc.view()).devices).toHaveLength(1))
+    const deviceId = (await rc.view()).devices[0]!.id
+    rc.agentEvents([{ paneId: "p1", event: "Notification", notificationType: "permission_prompt" }])
+    const waitId = (
+      p.sent.filter((m) => (m as { t: string }).t === "panes").at(-1) as {
+        panes: { panes: { waitId?: string }[] }
+      }
+    ).panes.panes[0]!.waitId!
+    expect(waitId).toBeTruthy()
+    const screen = ["────────", "Do you want to proceed?", "❯ 1. Yes", "  2. No"]
+    onScreen = screen
+    let rid = 10
+    const sig = (lines: string[]) => dialogSignature(parseDialog(lines)!)
+    const answer = async (o: {
+      waitId?: string
+      n?: number
+      seen?: string
+      lines?: string[]
+      deadline?: number
+    }) => {
+      onScreen = o.lines ?? screen
+      const id = ++rid
+      p.emit({
+        t: "rpc",
+        id,
+        call: {
+          op: "answer",
+          deviceId,
+          pane: "p1",
+          waitId: o.waitId ?? waitId,
+          n: o.n ?? 1,
+          seen: o.seen ?? sig(screen),
+          deadline: o.deadline ?? Date.now() + 5000,
+        },
+      })
+      return vi.waitFor(() => {
+        const r = p.sent.find((m) => (m as { id?: number }).id === id) as {
+          result: { result: { ok: boolean; reason?: string } }
+        }
+        expect(r).toBeTruthy()
+        return r.result.result
+      })
+    }
+    p.emit({ t: "rpc", id: 5, call: { op: "answerable", pane: "p1" } })
+    await vi.waitFor(() =>
+      expect(p.sent.find((m) => (m as { id?: number }).id === 5)).toMatchObject({
+        result: { result: true },
+      }),
+    )
+    expect(await answer({ waitId: "w999" })).toEqual({ ok: false, reason: "stale" })
+    // The device was shown another dialog (another command under the same question).
+    expect(
+      await answer({
+        seen: sig(["────────", "Do you want to proceed?", "❯ 1. Yes", "  2. Maybe"]),
+      }),
+    ).toEqual({
+      ok: false,
+      reason: "changed",
+    })
+    expect(await answer({ lines: ["$ "] })).toEqual({ ok: false, reason: "changed" })
+    // A question dialog on screen (not a go-ahead prompt): no digit, whatever the tracker says.
+    const question = ["Which target?", "› 1. Staging", "  2. Production"]
+    expect(await answer({ lines: question, seen: sig(question) })).toEqual({
+      ok: false,
+      reason: "changed",
+    })
+    windowOpen = false
+    expect(await answer({})).toEqual({ ok: false, reason: "no-window" })
+    windowOpen = true
+    // The window has no terminal for it (a background tab not started since a reload).
+    started = false
+    expect(await answer({})).toEqual({ ok: false, reason: "unsupported" })
+    started = true
+    // The desktop answers while main reads the screen, and the agent asks again: not that one.
+    duringRead = async () => {
+      duringRead = async () => {}
+      rc.localInput("p1", "1")
+      rc.agentEvents([
+        { paneId: "p1", event: "Notification", notificationType: "permission_prompt" },
+      ])
+    }
+    expect(await answer({})).toEqual({ ok: false, reason: "stale" })
+    expect(writes).toEqual([])
+    const waitId2 = (
+      p.sent.filter((m) => (m as { t: string }).t === "panes").at(-1) as {
+        panes: { panes: { waitId?: string }[] }
+      }
+    ).panes.panes[0]!.waitId!
+    expect(waitId2).not.toBe(waitId)
+    expect(await answer({ waitId: waitId2, deadline: Date.now() - 1 })).toEqual({
+      ok: false,
+      reason: "error",
+    })
+    expect(writes).toEqual([])
+    expect(await answer({ waitId: waitId2 })).toEqual({ ok: true })
+    expect(writes).toEqual([["p1", "1"]])
+    expect(await answer({ waitId: waitId2 })).toEqual({ ok: false, reason: "stale" }) // answered
+    // A Codex dialog: its keys aren't verified, so nothing is typed.
+    rc.agentEvents([{ paneId: "p1", event: "PermissionRequest", agent: "codex", toolKey: "k" }])
+    const codexWait = (
+      p.sent.filter((m) => (m as { t: string }).t === "panes").at(-1) as {
+        panes: { panes: { waitId?: string }[] }
+      }
+    ).panes.panes[0]!.waitId!
+    expect(await answer({ waitId: codexWait })).toEqual({ ok: false, reason: "unsupported" })
+    expect(writes).toHaveLength(1)
     rc.dispose()
   })
 })

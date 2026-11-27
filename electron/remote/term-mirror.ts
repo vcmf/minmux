@@ -65,17 +65,41 @@ export class TermMirror {
 
   /** The screen and recent scrollback as escape sequences, every write so far parsed. */
   async serialize(): Promise<string> {
-    // Batches can arrive while we wait: wait again until none is pending, then serialize at
-    // once, so the screen holds everything fed so far (callers drop what they queued meanwhile).
-    let w: Promise<void>
-    do {
-      w = this.writing
-      await w
-    } while (w !== this.writing)
+    await this.settled()
+    if (this.disposed) return ""
     return this.serializer.serialize({ scrollback: SNAPSHOT_LINES })
   }
 
+  // Batches can arrive while we wait: wait again until none is pending, so what follows sees
+  // everything fed so far (callers drop what they queued meanwhile). A disposed terminal never
+  // calls back, so its disposal ends the wait instead.
+  private async settled(): Promise<void> {
+    let w: Promise<void>
+    do {
+      w = this.writing
+      await Promise.race([w, this.gone])
+    } while (w !== this.writing && !this.disposed)
+  }
+
+  /** The screen's lines as text, once every write so far is parsed (the dialog check). */
+  async lines(): Promise<string[]> {
+    await this.settled()
+    if (this.disposed) return []
+    // The live screen (baseY), not wherever it's scrolled to.
+    const b = this.term.buffer.active
+    const out: string[] = []
+    for (let i = 0; i < this.term.rows; i++)
+      out.push(b.getLine(b.baseY + i)?.translateToString(true) ?? "")
+    return out
+  }
+
+  private disposed = false
+  private endWait!: () => void
+  private gone = new Promise<void>((r) => (this.endWait = r))
+
   dispose(): void {
+    this.disposed = true
+    this.endWait()
     this.term.dispose()
   }
 

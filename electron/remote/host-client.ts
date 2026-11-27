@@ -2,7 +2,7 @@
 // it when off, and answers its questions from the device table (main holds the authority).
 // Off means no worker and no remote code on any path.
 
-import type { RemotePanes, SendRefusal } from "../../src/lib/remote-protocol"
+import type { AnswerRefusal, RemotePanes, SendRefusal } from "../../src/lib/remote-protocol"
 import type { ChatLead } from "../agents/chat-lead"
 import type { TermSnapshot } from "./term-mirror"
 import type { DeviceTable } from "./devices"
@@ -37,6 +37,10 @@ export interface RemoteHostDeps {
   snapshot?: (pane: string) => TermSnapshot | null | "failed"
   keys?: (deviceId: string, pane: string, data: string) => Promise<boolean>
   untap?: (pane: string) => void
+  answerable?: (pane: string) => boolean
+  answer?: (
+    call: Extract<RpcCall, { op: "answer" }>,
+  ) => Promise<{ ok: boolean; reason?: AnswerRefusal }>
   workerGone?: () => void // the worker exited or was replaced: its taps are gone with it
   /** A device's message for a pane (main checks and types it). */
   send?: (
@@ -60,6 +64,8 @@ export const FAILED: { [K in RpcCall["op"]]: Extract<RpcResult, { op: K }> } = {
   send: { op: "send", result: { ok: false, reason: "error" } },
   snapshot: { op: "snapshot", result: "failed" },
   keys: { op: "keys", result: false },
+  answerable: { op: "answerable", result: false },
+  answer: { op: "answer", result: { ok: false, reason: "error" } },
 }
 
 export class RemoteHost {
@@ -225,6 +231,13 @@ export class RemoteHost {
       }
       case "snapshot":
         return { op: "snapshot", result: this.deps.snapshot?.(call.pane) ?? null }
+      case "answerable":
+        return { op: "answerable", result: this.deps.answerable?.(call.pane) ?? false }
+      case "answer":
+        return {
+          op: "answer",
+          result: (await this.deps.answer?.(call)) ?? { ok: false, reason: "error" },
+        }
       case "keys":
         return {
           op: "keys",

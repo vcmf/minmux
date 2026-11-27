@@ -30,6 +30,7 @@ export interface RemotePane {
   started: boolean // false: a restored pane in a tab the desktop hasn't shown yet
   paste?: boolean // its program turned on bracketed paste (how a message is typed into it)
   asking?: boolean // its agent shows a dialog now (main's wait tracker; not the idle reminder)
+  waitId?: string // …which one (a device names it when answering)
   working?: boolean // its agent is mid-turn (or main hasn't seen it stop): no message until then
 }
 
@@ -54,6 +55,8 @@ export type ClientMessage =
   | { t: "send"; pane: string; text: string; id: string } // a message for the pane's agent or shell
   | { t: "term"; pane: string; on: boolean } // follow (or stop) the pane's terminal
   | { t: "keys"; pane: string; data: string } // raw keys (devices allowed them)
+  | { t: "dialog"; pane: string; waitId?: string } // the dialog as its screen shows it
+  | { t: "answer"; pane: string; waitId: string; n: number; seen: string } // seen: the dialog shown
 
 export const SEEN_EVERY_MS = 60_000
 
@@ -75,6 +78,9 @@ export type HostMessage =
   | { t: "tsnap"; pane: string; cols: number; rows: number; data: string; gone?: boolean }
   | { t: "tout"; pane: string; data: string }
   | { t: "tsize"; pane: string; cols: number; rows: number }
+  // The pane's dialog as its screen shows it (null: none there); answerable: buttons may type.
+  | { t: "dialog"; pane: string; waitId?: string; dialog: Dialog | null; answerable: boolean }
+  | { t: "answered"; pane: string; waitId: string; ok: boolean; reason?: AnswerRefusal }
   | { t: "locked"; reason: LockReason }
   | { t: "error"; code: string; message: string }
   | { t: "bye"; reason: ByeReason }
@@ -92,6 +98,31 @@ export type SendRefusal =
   | "error"
 
 export const SEND_MAX = 16 * 1024
+export const SEEN_MAX = 64 * 1024 // a dialog signature: 12 body lines + 9 labels of 300, escaped
+
+/** What a device saw of a dialog; main compares it with the screen before typing an answer. */
+export const dialogSignature = (d: Dialog): string =>
+  JSON.stringify([d.kind, d.question, d.body, d.options.map((o) => [o.n, o.label])])
+
+/** Why an answer wasn't typed. */
+export type AnswerRefusal =
+  | "not-allowed" // view-only device
+  | "stale" // that dialog isn't the open one any more
+  | "changed" // the screen no longer shows that option
+  | "unsupported" // this agent's dialogs are answered in the Terminal view
+  | "no-window" // the desktop window is closed: main can't see the screen to check
+  | "error"
+
+export interface DialogOption {
+  n: number
+  label: string
+}
+export interface Dialog {
+  kind: "permission" | "question" // a go-ahead prompt, or a question with choices
+  question: string
+  body: string[] // what it asks about (the command, the file), as the box shows it
+  options: DialogOption[]
+}
 
 export type LockReason = "idle" | "pin-attempts" | "expired"
 // disconnected: "Disconnect all" on the desktop (the page doesn't reconnect by itself).
@@ -155,6 +186,27 @@ export function parseClientMessage(raw: unknown): ClientMessage | null {
         m.data.length > 0 &&
         m.data.length <= 1024
         ? { t: "keys", pane: m.pane, data: m.data }
+        : null
+    case "dialog":
+      return typeof m.pane === "string" && m.pane.length <= 200
+        ? {
+            t: "dialog",
+            pane: m.pane,
+            ...(typeof m.waitId === "string" && m.waitId.length <= 40 ? { waitId: m.waitId } : {}),
+          }
+        : null
+    case "answer":
+      return typeof m.pane === "string" &&
+        m.pane.length <= 200 &&
+        typeof m.waitId === "string" &&
+        m.waitId.length <= 40 &&
+        typeof m.n === "number" &&
+        Number.isInteger(m.n) &&
+        m.n >= 1 &&
+        m.n <= 9 &&
+        typeof m.seen === "string" &&
+        m.seen.length <= SEEN_MAX
+        ? { t: "answer", pane: m.pane, waitId: m.waitId, n: m.n, seen: m.seen }
         : null
     case "send":
       return typeof m.pane === "string" &&
