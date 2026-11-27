@@ -45,6 +45,8 @@ export interface HostServerDeps {
   post: (m: FromHost) => void
   findCli?: () => string | null
   run?: (cli: string, args: string[], timeoutMs?: number) => Promise<string>
+  /** Shorter intervals for tests. */
+  timing?: { ping?: number; recheck?: number; touch?: number }
 }
 
 const defaultFindCli = () =>
@@ -58,11 +60,11 @@ export function createHostServer(d: HostServerDeps) {
   const cookieName = () => `minmux_remote_${config?.port ?? 0}`
   const tokenSetCookie = (token: string) =>
     `${cookieName()}=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${30 * 24 * 3600}`
-  const RECHECK_MS = 30_000
+  const RECHECK_MS = d.timing?.recheck ?? 30_000
   const WHOIS_TTL_MS = 60_000
-  const PING_MS = TICK_MS
+  const PING_MS = d.timing?.ping ?? TICK_MS
   const PONG_TIMEOUT_MS = 45_000
-  const TOUCH_EVERY_MS = 60_000
+  const TOUCH_EVERY_MS = d.timing?.touch ?? 60_000
   const RPC_TIMEOUT_MS = 10_000
 
   let config: HostConfig | null = null

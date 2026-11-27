@@ -112,6 +112,7 @@ describe("remote host server", () => {
           },
           findCli: () => "tailscale",
           run: (c, a) => cli(c, a),
+          timing: { ping: 40, recheck: 60, touch: 80 },
         })
         stops.push(server.stop)
         const proc: HostProc = {
@@ -256,6 +257,153 @@ describe("remote host server", () => {
     expect(
       JSON.parse((await request(port, "/api/session", { headers: { Cookie: cookie } })).body).state,
     ).toBe("ok")
+  })
+
+  async function socket(
+    cookie: string | null,
+    o: { host?: string; origin?: string; path?: string } = {},
+  ) {
+    const got: { t: string; [k: string]: unknown }[] = []
+    const ws = new WebSocket(`ws://127.0.0.1:${port}${o.path ?? "/ws"}`, {
+      headers: {
+        Host: o.host ?? `mac:${port}`,
+        Origin: o.origin ?? `http://mac:${port}`,
+        ...(cookie ? { Cookie: cookie } : {}),
+      },
+    })
+    ws.on("message", (d) => got.push(JSON.parse(d.toString())))
+    const status = await new Promise<number | "open">((res) => {
+      ws.on("unexpected-response", (_q, r) => res(r.statusCode!))
+      ws.on("open", () => res("open"))
+    })
+    return { ws, got, status }
+  }
+
+  async function hello(cookie: string) {
+    const s = await socket(cookie)
+    s.ws.send(JSON.stringify({ t: "hello", v: 1, client: "web" }))
+    await until(() => s.got.some((m) => m.t === "welcome"))
+    return s
+  }
+
+  it("refuses sockets without a device, on another path or host", async () => {
+    expect((await socket(null)).status).toBe(401)
+    const cookie = await approve()
+    expect((await socket(cookie, { path: "/other" })).status).toBe(404)
+    expect((await socket(cookie, { host: "evil:1" })).status).toBe(403)
+  })
+
+  it("ticks, and drops a device removed or locked while connected", async () => {
+    const cookie = await approve()
+    const s = await hello(cookie)
+    await until(() => s.got.some((m) => m.t === "tick"))
+    s.ws.send(JSON.stringify({ t: "seen" }))
+    table.revoke(table.list()[0]!.id) // no drop from main: the recheck notices
+    await until(() => s.got.some((m) => m.t === "bye" && m.reason === "revoked"))
+
+    const cookie2 = await approve()
+    const s2 = await hello(cookie2)
+    ;(table as unknown as { devices: { lastSeen: number }[] }).devices[0]!.lastSeen -= 25 * 3600_000
+    await until(() => s2.got.some((m) => m.t === "locked"))
+  })
+
+  it("a wrong protocol version gets bye version", async () => {
+    const cookie = await approve()
+    const s = await socket(cookie)
+    s.ws.send(JSON.stringify({ t: "hello", v: 99, client: "web" }))
+    await until(() => s.got.some((m) => m.t === "bye" && m.reason === "version"))
+  })
+
+  it("drop: locked and disconnected", async () => {
+    const cookie = await approve()
+    const a = await hello(cookie)
+    host.drop(undefined, "locked")
+    await until(() => a.got.some((m) => m.t === "locked"))
+    const b = await hello(cookie)
+    host.drop(undefined, "disconnected")
+    await until(() => b.got.some((m) => m.t === "bye" && m.reason === "disconnected"))
+  })
+
+  it("unlock needs our Origin", async () => {
+    const r = await request(port, "/api/unlock", { method: "POST", body: '{"pin":"1"}' })
+    expect(r.status).toBe(403)
+    expect((await request(port, "/api/pending/zz")).status).toBe(404)
+    expect((await request(port, "/hello", { method: "DELETE" })).status).toBe(405)
+  })
+
+  it("keeps listening through a failed status check; an account change drops clients", async () => {
+    const cookie = await approve()
+    const s = await hello(cookie)
+    const good = cli
+    cli = async () => {
+      throw new Error("slow")
+    }
+    await new Promise((r) => setTimeout(r, 150))
+    expect(host.state.status.state).toBe("listening")
+    expect(s.ws.readyState).toBe(WebSocket.OPEN)
+    cli = async (c, a) =>
+      a[0] === "status"
+        ? JSON.stringify({
+            BackendState: "Running",
+            Self: {
+              ID: "other",
+              UserID: "99",
+              DNSName: "mac.tail.ts.net.",
+              TailscaleIPs: ["127.0.0.1"],
+            },
+          })
+        : good(c, a)
+    await until(() => s.ws.readyState === WebSocket.CLOSED, 3000)
+  })
+
+  it.each([
+    [{ BackendState: "NeedsLogin" }, "signed-out"],
+    [
+      {
+        BackendState: "Running",
+        Self: {
+          ID: "s",
+          UserID: ME,
+          DNSName: "mac.t.",
+          TailscaleIPs: ["127.0.0.1"],
+          Tags: ["tag:x"],
+        },
+      },
+      "tagged",
+    ],
+  ])("reports %j as %s", async (status, reason) => {
+    host.dispose()
+    stops.forEach((s) => s())
+    const posts: FromHost[] = []
+    const s = createHostServer({
+      post: (m) => posts.push(m),
+      findCli: () => "tailscale",
+      run: async () => JSON.stringify(status),
+    })
+    s.handle({ t: "config", config: { port, staticDir: dir } })
+    await until(() => posts.some((m) => m.t === "status" && m.status.state === "error"))
+    expect(posts.at(-1)).toMatchObject({ status: { state: "error", reason } })
+    s.stop()
+  })
+
+  it("dev builds proxy the page to the dev server, query kept", async () => {
+    const seen: string[] = []
+    const dev = http.createServer((req, res) => {
+      seen.push(req.url!)
+      res.writeHead(200, { "Content-Type": "text/html" })
+      res.end("dev page")
+    })
+    const devPort = await new Promise<number>((r) =>
+      dev.listen(0, "127.0.0.1", () => r((dev.address() as net.AddressInfo).port)),
+    )
+    host.apply({ port, staticDir: dir, devUrl: `http://127.0.0.1:${devPort}` })
+    await until(() => host.state.status.state === "listening")
+    const page = await request(port, "/?pending=abc")
+    expect(page.body).toBe("dev page")
+    expect(seen).toContain("/remote.html?pending=abc")
+    dev.close()
+    await new Promise((r) => setTimeout(r, 50))
+    expect((await request(port, "/src/x.ts")).status).toBe(502)
   })
 
   it("reports a missing CLI", async () => {
