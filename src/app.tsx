@@ -693,8 +693,16 @@ function App() {
       e.returnValue = "" // Electron: main's will-prevent-unload decides
     }
     window.addEventListener("beforeunload", onUnload)
+    // A quit asks once: settle what's pending (a just-typed edit, saves landing), then answer.
+    const offQuit = ipc.onQuitCheck(async () => {
+      edits.flushAll()
+      await edits.settledAll()
+      edits.flushAll()
+      return edits.unsavedPaths()
+    })
     return () => {
       off()
+      offQuit()
       window.removeEventListener("beforeunload", onUnload)
     }
   }, [])

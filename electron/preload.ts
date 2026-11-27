@@ -164,6 +164,15 @@ const api = {
   readFilePreview: (path: string, wsl?: WslContext) =>
     ipcRenderer.invoke("fs:read-preview", path, wsl),
   setUnsaved: (paths: string[]) => ipcRenderer.send("editor:unsaved", paths),
+  onQuitCheck: (answer: () => Promise<string[]>) => {
+    const listener = (_e: unknown, id: number) =>
+      void answer().then(
+        (paths) => ipcRenderer.send("editor:quit-check-reply", id, paths),
+        () => ipcRenderer.send("editor:quit-check-reply", id, []),
+      )
+    ipcRenderer.on("editor:quit-check", listener)
+    return () => ipcRenderer.removeListener("editor:quit-check", listener)
+  },
   fetchImage: (url: string) => ipcRenderer.invoke("image:fetch", url),
   pickDirectory: (defaultPath?: string, wsl?: WslContext) =>
     ipcRenderer.invoke("dialog:pick-directory", defaultPath, wsl),

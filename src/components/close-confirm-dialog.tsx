@@ -36,7 +36,9 @@ export function CloseConfirmDialog() {
 
   useEffect(() => {
     if (!pending) return
-    ;(saveRef.current ?? confirmRef.current)?.focus()
+    // The safe choice has the keyboard: Save for a file, Cancel when unsaved files would drop.
+    const safe = pending.kind === "unsaved" ? cancelRef : saveRef.current ? saveRef : confirmRef
+    safe.current?.focus()
     // Window-level, so the trap holds even if focus drifted off the buttons.
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") {

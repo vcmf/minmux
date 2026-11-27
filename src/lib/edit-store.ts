@@ -88,16 +88,27 @@ export class EditStore {
     this.flusher?.()
   }
 
-  /** Resolves once entry `id` has no save in flight (or isn't being edited). */
-  idle(id: string): Promise<void> {
-    if (!this.edits.get(id)?.saving) return Promise.resolve()
-    return new Promise((resolve) => {
-      const off = this.subscribe(() => {
-        if (this.edits.get(id)?.saving) return
-        off()
-        resolve()
-      })
-    })
+  // The editor's saves in flight, whole (the write and the unsaved check after it): a close's
+  // Save and a quit wait for these, then read what's unsaved.
+  private running = new Map<string, Promise<unknown>>()
+
+  /** The editor is saving `id`: `p` settles once the save and its unsaved check are done. */
+  track(id: string, p: Promise<unknown>): void {
+    this.running.set(id, p)
+    const done = () => {
+      if (this.running.get(id) === p) this.running.delete(id)
+    }
+    p.then(done, done)
+  }
+
+  /** Resolves once entry `id`'s save in flight (if any) is done, unsaved check included. */
+  async settled(id: string): Promise<void> {
+    await this.running.get(id)?.catch(() => {})
+  }
+
+  /** Resolves once every save in flight is done. */
+  async settledAll(): Promise<void> {
+    await Promise.all([...this.running.values()].map((p) => p.catch(() => {})))
   }
 
   /** Save an edit the way its editor does; how it went ("saved" lets a close go on). */

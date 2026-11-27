@@ -50,6 +50,7 @@ const minmuxStub = {
   readFilePreview: vi.fn(async () => ({ kind: "text", text: "", truncated: false, size: 0 })),
   readFile: vi.fn(async () => ({ kind: "text", text: "", truncated: false, size: 0 })),
   setUnsaved: vi.fn(),
+  onQuitCheck: vi.fn(unsub),
   writeFile: vi.fn(async () => ({ kind: "saved", stamp: { size: 0, mtimeMs: 0 }, hash: "" })),
   fetchImage: vi.fn(async () => ({ ok: false, error: "offline" })),
   pickDirectory: vi.fn(async () => null),

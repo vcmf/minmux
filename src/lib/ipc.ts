@@ -128,6 +128,8 @@ export interface Ipc {
   ) => Promise<SaveResult>
   // The files with unsaved changes (their paths): main asks before a quit or a reload drops them.
   setUnsaved: (paths: string[]) => void
+  // A quit asks, once, what's unsaved: `answer` settles pending checks and saves first.
+  onQuitCheck: (answer: () => Promise<string[]>) => () => void
   // A remote image for a markdown view, fetched by main (the page's policy refuses remote ones).
   fetchImage: (url: string) => Promise<{ ok: true; dataUrl: string } | { ok: false; error: string }>
   // Native folder picker (Files root); `wsl` opens it at the distro's UNC share and returns

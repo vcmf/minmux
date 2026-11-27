@@ -129,7 +129,13 @@ async function saveEntry(
   if (r === "saved" && now) refreshDirty(id, now, true) // typed on during the save, or not
   return r
 }
-edits.setSaver((id) => saveEntry(id))
+// Tracked whole (write + unsaved check): a close's Save and a quit wait for it.
+const trackedSave = (id: string, opts?: { overwrite?: boolean; create?: boolean }) => {
+  const p = saveEntry(id, opts)
+  edits.track(id, p)
+  return p
+}
+edits.setSaver((id) => trackedSave(id))
 edits.setFlusher(() => [...dirtyTimers.keys()].forEach(flushDirty))
 
 /** Stop editing `id`: its state and the editor's own caches go. */
@@ -169,7 +175,7 @@ export default function FileEditor({
     let state = edits.state(entryId) as EditorState | null
     const fresh = !state
     if (!state) {
-      const save = () => (void saveEntry(entryId), true)
+      const save = () => (void trackedSave(entryId), true)
       const extensions: Extension[] = [
         lineNumbers(),
         highlightActiveLineGutter(),
@@ -269,7 +275,7 @@ export default function FileEditor({
     return view.state.doc.lineAt(view.lineBlockAtHeight(view.scrollDOM.scrollTop).from).number
   }
   const save = (opts?: { overwrite?: boolean; create?: boolean }) => {
-    void saveEntry(entryId, opts)
+    void trackedSave(entryId, opts)
   }
   const reload = async () => {
     const base = await edits.reload(entryId)
@@ -294,7 +300,7 @@ export default function FileEditor({
     else leave()
   }
   const saveAndLeave = async () => {
-    await saveEntry(entryId)
+    await trackedSave(entryId)
     setAsking(false)
     const now = edits.get(entryId)
     if (now && !now.dirty && !now.notice) leave()

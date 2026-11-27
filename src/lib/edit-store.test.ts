@@ -205,4 +205,18 @@ describe("EditStore", () => {
     expect(store.isUnsaved("e")).toBe(false)
     expect(store.path("e")).toBe("/w/a.ts")
   })
+
+  it("settled waits for a tracked save, whole", async () => {
+    const { store } = make(vi.fn())
+    let finish!: () => void
+    store.track("e", new Promise<void>((r) => (finish = r)))
+    let done = false
+    void store.settledAll().then(() => (done = true))
+    await Promise.resolve()
+    expect(done).toBe(false)
+    finish()
+    await store.settled("e")
+    await store.settledAll()
+    expect(done).toBe(true)
+  })
 })

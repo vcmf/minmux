@@ -12,19 +12,20 @@ const base: QuitState = {
 const step = (o: Partial<QuitState>) => quitStep({ ...base, ...o })
 
 describe("quitStep", () => {
-  it("unsaved files ask first, whatever the confirm setting and with no terminal left", () => {
-    expect(step({ unsaved: 1, livePtys: 0 })).toBe("askUnsaved")
-    expect(step({ unsaved: 2, needsConfirm: true })).toBe("askUnsaved") // before the live confirm
-    expect(step({ unsaved: 1, asking: true })).toBe("hold")
-    expect(step({ unsaved: 1, unsavedDiscarded: true, livePtys: 0 })).toBe("proceed")
+  it("asks the page what's unsaved first, whatever the confirm setting, before the drain", () => {
+    expect(step({ canAskUnsaved: true, livePtys: 0 })).toBe("checkUnsaved")
+    expect(step({ canAskUnsaved: true, needsConfirm: true })).toBe("checkUnsaved")
+    expect(step({ canAskUnsaved: true, checkingUnsaved: true })).toBe("hold")
+    expect(step({ canAskUnsaved: true, asking: true })).toBe("hold")
+    expect(step({ canAskUnsaved: true, unsavedChecked: true, livePtys: 0 })).toBe("proceed")
+    expect(step({ canAskUnsaved: false, livePtys: 0 })).toBe("proceed") // no page to ask
   })
-  it("waits for saves in flight (once), before the drain hides the window", () => {
-    expect(step({ savesInFlight: 1 })).toBe("waitSaves")
+  it("then waits for writes in flight (once)", () => {
+    expect(step({ unsavedChecked: true, savesInFlight: 1 })).toBe("waitSaves")
     expect(step({ savesInFlight: 1, waitingSaves: true })).toBe("hold")
-    expect(step({ unsaved: 1, savesInFlight: 1 })).toBe("waitSaves") // before asking: it may save
   })
   it("an OS logout is never held for unsaved files or saves", () => {
-    expect(step({ osEnding: true, unsaved: 1, savesInFlight: 1 })).toBe("killNow")
+    expect(step({ osEnding: true, canAskUnsaved: true, savesInFlight: 1 })).toBe("killNow")
   })
 
   it("live PTYs → drain first; nothing alive → quit right away", () => {

@@ -1307,6 +1307,10 @@ export const useStore = create<AppState>()(
       const pane = tab && findPaneById(tab.root, paneId)
       if (!pane) return
       const ids = paneSessionIds(pane)
+      // Its only entry an unsaved file: that file's own question (Save / Don't save / Cancel).
+      const only = pane.entryIds.length === 1 ? pane.entryIds[0]! : ""
+      if (only && !isTerminalEntry(only) && edits.isUnsaved(only))
+        return get().requestCloseEntry(tabId, only)
       // Files with unsaved changes ask first, whatever else is in the pane.
       const unsaved = unsavedCloseConfirm(tabId, unsavedNames(pane.entryIds), ids.length, paneId)
       if (unsaved) return set({ closeConfirm: unsaved })
@@ -1387,13 +1391,17 @@ export const useStore = create<AppState>()(
       const c = get().closeConfirm
       if (c?.kind !== "file") return
       set({ closeConfirm: null })
-      let r = await edits.saveEntry(c.entryId)
-      if (r === "busy") {
-        // A save already running (⌘S, then ×): its outcome decides.
-        await edits.idle(c.entryId)
-        r = edits.isUnsaved(c.entryId) ? "error" : "saved"
+      const r = await edits.saveEntry(c.entryId)
+      // A save already running (⌘S, then ×) decides instead; text typed during the save is
+      // still unsaved after it: either way, what's unsaved once it's all settled decides.
+      if (r === "busy") await edits.settled(c.entryId)
+      edits.flushAll()
+      if ((r === "saved" || r === "busy") && !edits.isUnsaved(c.entryId))
+        return get().closeSurface(c.tabId, c.entryId)
+      if (r === "saved" && get().objects[c.entryId]) {
+        // Saved, but typed on meanwhile: ask again about what's new.
+        return set({ closeConfirm: c })
       }
-      if (r === "saved") return get().closeSurface(c.tabId, c.entryId)
       // It stays open, in front, showing why (its editor's bar).
       get().setActiveTab(c.tabId)
       get().setActivePane(c.tabId, c.entryId)

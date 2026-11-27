@@ -5,7 +5,6 @@ import { UnsavedMark } from "./unsaved-mark"
 import { useStore } from "../store"
 import { edits } from "../lib/edit-store"
 import { resetStore, testShell } from "../test/helpers"
-import { ipc } from "../lib/ipc"
 
 vi.mock("../terminal/terminal-manager", () => ({
   TerminalManager: { focus: vi.fn(), dispose: vi.fn() },
@@ -25,19 +24,29 @@ function setup(dirty = true) {
   st().openFile("/w/a.ts")
   const id = tab().activeEntryId
   edits.start(id, "/w/a.ts", undefined, "x\n", "h0")
+  started.push(id)
   if (dirty) edits.setDirty(id, true)
   return id
 }
 
-let saver = vi.fn(async (): Promise<"saved" | "error"> => "saved")
+// The editor's saver clears the unsaved mark when its save lands: so does this one.
+const savesClean = async (id: string): Promise<"saved" | "error"> => {
+  edits.setDirty(id, false)
+  return "saved"
+}
+let saver = vi.fn(savesClean)
+const started: string[] = []
 beforeEach(() => {
   resetStore()
   useStore.setState({ closeConfirm: null })
-  saver = vi.fn(async (): Promise<"saved" | "error"> => "saved")
+  saver = vi.fn(savesClean)
   edits.setSaver(saver)
 })
 afterEach(() => {
-  for (const id of edits.unsaved()) edits.stop(id)
+  for (const id of [...edits.unsaved(), ...started.splice(0)]) edits.stop(id)
+  // The app's saver and flusher are the editor's: leave no stubs for other tests.
+  edits.setSaver(async () => "error")
+  edits.setFlusher(() => {})
 })
 
 describe("closing a file with unsaved changes", () => {
@@ -97,22 +106,26 @@ describe("close checks settle a just-typed edit", () => {
     edits.setFlusher(() => {})
   })
 
-  it("Save while a save is already running: its outcome decides", async () => {
+  it("Save while a save is already running: what's unsaved after it decides", async () => {
     const id = setup()
-    let finish!: (r: {
-      kind: "saved"
-      stamp: { size: number; mtimeMs: number }
-      hash: string
-    }) => void
-    vi.mocked(ipc.writeFile).mockImplementationOnce(() => new Promise((r) => (finish = r)))
-    void edits.save(id, "y\n") // ⌘S, still writing
+    let finish!: () => void
+    edits.track(id, new Promise<void>((r) => (finish = r))) // ⌘S, still writing
     saver.mockResolvedValue("busy" as never)
     st().requestCloseEntry(tab().id, id)
     const closing = st().saveAndClose()
-    edits.setDirty(id, false)
-    finish({ kind: "saved", stamp: { size: 2, mtimeMs: 2 }, hash: "h1" })
+    edits.setDirty(id, false) // that save landed
+    finish()
     await act(() => closing)
     expect(st().objects[id]).toBeUndefined()
+  })
+
+  it("text typed while Save-and-close saves: it asks again", async () => {
+    const id = setup()
+    saver.mockImplementation(async () => "saved") // the save went, but the file is still dirty
+    st().requestCloseEntry(tab().id, id)
+    await act(() => st().saveAndClose())
+    expect(st().objects[id]).toBeDefined()
+    expect(st().closeConfirm).toMatchObject({ kind: "file", entryId: id })
   })
 })
 
@@ -126,6 +139,20 @@ describe("closing a pane or session holding unsaved files", () => {
     fireEvent.click(screen.getByText("Discard and close"))
     expect(st().tabs).toHaveLength(0)
     expect(edits.get(id)).toBeUndefined()
+  })
+
+  it("a pane holding only the file: its own question, with Save", () => {
+    const id = setup()
+    st().closeSurface(tab().id, pane().entryIds[0]!) // the terminal goes: the file is alone
+    st().requestClosePane(tab().id, pane().id)
+    expect(st().closeConfirm).toMatchObject({ kind: "file", entryId: id })
+  })
+
+  it("the pane's dialog has Cancel focused (dropping text takes a choice)", () => {
+    setup()
+    st().requestClosePane(tab().id, pane().id)
+    render(<CloseConfirmDialog />)
+    expect(document.activeElement?.textContent).toBe("Cancel")
   })
 
   it("the session asks too", () => {
