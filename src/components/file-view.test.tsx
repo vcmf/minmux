@@ -521,3 +521,52 @@ describe("FileView: markdown places", () => {
     expect(ipc.fetchImage).toHaveBeenCalledWith("https://img.test/a.png")
   })
 })
+
+describe("FileView: Edit", () => {
+  const read = (text: string, extra: object = {}) =>
+    vi.mocked(ipc.readFile).mockResolvedValue({
+      kind: "text",
+      text,
+      truncated: false,
+      size: text.length,
+      stamp: { size: text.length, mtimeMs: 1 },
+      hash: "h0",
+      editable: true,
+      ...extra,
+    })
+  // jsdom has no layout: CodeMirror measures text ranges, which it lacks.
+  const proto = Range.prototype as unknown as Record<string, unknown>
+  proto.getClientRects ??= () => []
+  proto.getBoundingClientRect ??= () => new DOMRect()
+  afterEach(async () => {
+    const { edits } = await import("../lib/edit-store")
+    for (const id of edits.unsaved()) edits.stop(id)
+  })
+
+  it("Edit opens the editor on the file (a peek becomes kept); Done goes back", async () => {
+    read("const a = 1\n")
+    st().newTab(testShell)
+    st().openFile("/w/e.ts", { peek: true })
+    const tab = st().tabs[0]!
+    const entryId = tab.activeEntryId
+    render(<FileView entryId={entryId} tabId={tab.id} />)
+    fireEvent.click(await screen.findByTitle("Edit"))
+    expect((st().objects[entryId] as { peek?: boolean }).peek).toBeUndefined()
+    await screen.findByText("Done", {}, { timeout: 5000 })
+    await waitFor(() =>
+      expect(document.querySelector(".cm-content")?.textContent).toContain("const a"),
+    )
+    expect(document.querySelector(".cm-content")?.getAttribute("data-entry")).toBe(entryId)
+    fireEvent.click(screen.getByText("Done"))
+    await waitFor(() => expect(screen.queryByText("Done")).toBeNull())
+    expect(screen.getByTitle("Edit")).toBeTruthy()
+  })
+
+  it("no Edit for text that isn't valid UTF-8", async () => {
+    read("caf�\n", { editable: false })
+    const { tabId, entryId } = open("/w/latin1.txt")
+    const { container } = render(<FileView entryId={entryId} tabId={tabId} />)
+    await waitFor(() => expect(container.querySelector(".file-view-line")).not.toBeNull())
+    expect(screen.queryByTitle("Edit")).toBeNull()
+  })
+})

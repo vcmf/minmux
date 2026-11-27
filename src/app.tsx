@@ -678,6 +678,8 @@ function App() {
   // are left for the shell (readline forward-char / transpose-chars).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      // A key the file editor used (its find, its keymap) isn't the app's too.
+      if (e.defaultPrevented && (e.target as HTMLElement | null)?.closest?.(".cm-editor")) return
       const k = e.key.toLowerCase()
       // The close confirm is modal: no palette / find / new terminal behind it.
       if (useStore.getState().closeConfirm) return

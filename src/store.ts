@@ -21,6 +21,7 @@ import {
 } from "./lib/pane-tree"
 import { makeTab, withFocus } from "./lib/tab-focus"
 import { files, type FileView } from "./lib/file-store"
+import { edits } from "./lib/edit-store"
 import {
   EMPTY_VIEW,
   isMarkdownPath,
@@ -526,7 +527,10 @@ function dropSessions(
 function dropObjects(state: AppState, ids: string[]): Pick<AppState, "objects" | "folderViews"> {
   const gone = ids.filter((id) => id in state.objects || id in state.folderViews)
   if (!gone.length) return { objects: state.objects, folderViews: state.folderViews }
-  gone.forEach((id) => files.forget(id)) // a file tab's read and lines go with it
+  gone.forEach((id) => {
+    files.forget(id) // a file tab's read and lines go with it
+    edits.stop(id) // …and its edit (closing asks first while it has unsaved text)
+  })
   const objects = { ...state.objects }
   const folderViews = { ...state.folderViews }
   for (const id of gone) {

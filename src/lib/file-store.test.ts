@@ -92,6 +92,35 @@ describe("FileStore", () => {
     expect(s.get("e4")!.data).toBeNull()
   })
 
+  it("never evicts a file being edited, on screen or not", () => {
+    const { read } = reads()
+    const s = new FileStore(read, hl, 1)
+    s.show("a", "/a")
+    s.pin("a", true)
+    s.hide("a")
+    s.show("b", "/b")
+    s.hide("b")
+    s.show("c", "/c") // over the cap: b goes, a (edited) stays
+    expect(s.get("a")).toBeDefined()
+    expect(s.get("b")).toBeUndefined()
+    s.pin("a", false)
+    s.hide("c")
+    s.show("d", "/d")
+    expect(s.get("a")).toBeUndefined() // unpinned: evictable again
+  })
+
+  it("a save is its latest read: the next re-read asks with its stamp", async () => {
+    const { read, pending } = reads()
+    const s = new FileStore(read, hl)
+    s.show("e", "/e")
+    pending.shift()!.resolve(text("old"))
+    await tick()
+    s.saved("e", "new\n", { size: 4, mtimeMs: 9 }, "h1")
+    expect(s.get("e")!.data).toMatchObject({ text: "new\n", hash: "h1", editable: true })
+    s.refresh("e")
+    expect(pending[0]!.since).toEqual({ size: 4, mtimeMs: 9 })
+  })
+
   it("never evicts a file still on screen", () => {
     const { read } = reads()
     const s = new FileStore(read, hl, 1)

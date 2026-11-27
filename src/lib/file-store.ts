@@ -61,6 +61,7 @@ export class FileStore {
   private snapshots = new Map<string, FileShown>()
   private listeners = new Set<() => void>()
   private showing = new Set<string>() // on screen: never evicted
+  private pinned = new Set<string>() // being edited: never evicted (lib/edit-store)
 
   constructor(
     private readonly read: Read = (p, w, s) => ipc.readFile(p, w, s),
@@ -113,7 +114,7 @@ export class FileStore {
     // Past the cap, the least recent hidden ones go (a visible one never: it'd go blank).
     for (const old of [...this.files.keys()]) {
       if (this.files.size <= this.cap) break
-      if (!this.showing.has(old)) this.forget(old)
+      if (!this.showing.has(old) && !this.pinned.has(old)) this.forget(old)
     }
     this.publish(id)
     this.refresh(id)
@@ -234,12 +235,29 @@ export class FileStore {
     if (e) e.went = went
   }
 
+  /** It's being edited (or not any more): kept however many files are open. */
+  pin(id: string, on: boolean): void {
+    if (on) this.pinned.add(id)
+    else this.pinned.delete(id)
+  }
+
+  /** It was just saved as `text`: that's its latest read, so the next one is `same`. */
+  saved(id: string, text: string, stamp: FileStamp, hash: string): void {
+    const e = this.files.get(id)
+    if (!e) return
+    e.stamp = stamp
+    e.data = { kind: "text", text, truncated: false, size: stamp.size, stamp, hash, editable: true }
+    if (text !== e.highlighted) void this.highlightNow(id, e, text)
+    this.publish(id)
+  }
+
   /** Its entry closed (or another took its place): its text and lines go now. */
   forget(id: string): void {
     clearTimeout(this.files.get(id)?.diffTimer)
     this.files.delete(id)
     this.snapshots.delete(id)
     this.showing.delete(id)
+    this.pinned.delete(id)
   }
 
   private async readNow(id: string, e: Entry): Promise<void> {

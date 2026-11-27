@@ -1,5 +1,7 @@
 import {
+  lazy,
   memo,
+  Suspense,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -7,12 +9,20 @@ import {
   useState,
   useSyncExternalStore,
 } from "react"
-import { ArrowSquareOut, Browser, FolderOpen, FolderSimple } from "@phosphor-icons/react"
+import {
+  ArrowSquareOut,
+  Browser,
+  FolderOpen,
+  FolderSimple,
+  PencilSimple,
+} from "@phosphor-icons/react"
 import { useStore } from "../store"
 import { ipc } from "../lib/ipc"
 import { watches } from "../lib/fs-reads"
 import { formatSize, HIGHLIGHT_MAX } from "../lib/file-preview"
 import { files, type FileShown } from "../lib/file-store"
+import { edits } from "../lib/edit-store"
+import { FILE_READ_CAP } from "../lib/file-tab"
 import { gitFileFor, hasDiffToggle } from "../lib/git-file"
 import { wantGit } from "../lib/folder-git-poll"
 import { repoKey, wantKey } from "../lib/folder-git"
@@ -42,6 +52,9 @@ const EMPTY: FileShown = {
   diff: null,
 }
 const subscribeFiles = (fn: () => void) => files.subscribe(fn) // stable: no re-subscribe
+const subscribeEdits = (fn: () => void) => edits.subscribe(fn)
+// CodeMirror and the editor load the first time a file enters Edit (their own chunk).
+const FileEditor = lazy(() => import("./file-editor"))
 
 // Read through the fs worker; highlighted in a worker (lib/highlight-client); only the lines in
 // view are rendered; its folder is watched while it shows, so an agent's edits appear.
@@ -56,6 +69,7 @@ export function FileView({ entryId, tabId }: { entryId: string; tabId: string })
   const shown = useSyncExternalStore(subscribeFiles, () => files.get(entryId) ?? EMPTY)
   const data = shown.data
   const diff = shown.diff
+  const editing = useSyncExternalStore(subscribeEdits, () => !!edits.get(entryId))
   useEffect(() => {
     if (!path) return
     files.show(entryId, path, wsl)
@@ -247,11 +261,44 @@ export function FileView({ entryId, tabId }: { entryId: string; tabId: string })
     const pane = tab && findPane(tab.root, entryId)
     if (pane) s.openFolder(dir, { tabId, paneId: pane.id, wsl })
   }
+  // Edit: text that's valid UTF-8 (a save writes back the same bytes) and within the read cap.
+  const canEdit =
+    data?.kind === "text" && data.editable !== false && !!data.hash && data.size <= FILE_READ_CAP
+  const startEdit = () => {
+    if (data?.kind !== "text" || !data.hash) return
+    const el = scrollRef.current
+    let at = line ?? 1
+    if (el && view === "source") at = Math.floor(el.scrollTop / LINE_H) + 1
+    const body = el?.firstElementChild as HTMLElement | null
+    if (el && body && view === "preview") at = topBlock(el, body).line
+    editLine.current = at
+    useStore.getState().keepEntry(entryId) // a peek being edited is a kept tab: never replaced
+    edits.start(entryId, path, wsl, data.text, data.hash)
+  }
+  const editLine = useRef(1)
+  // Done: back to the view it came from, at the editor's top line.
+  const doneEditing = (topLine: number) => {
+    files.setScroll(entryId, (topLine - 1) * LINE_H, "source")
+    restored.current = null
+  }
   const canReveal = !wsl && isAbsoluteHostPath(path, platform)
   // A WSL file too: main opens it through the distro's share.
   const canBrowse = isHtmlPath(path) && (!!wsl || isAbsoluteHostPath(path, platform))
 
   if (!file) return null
+  if (editing)
+    return (
+      <div className="file-view">
+        <Suspense fallback={<div className="file-view-note">Loading the editor…</div>}>
+          <FileEditor
+            entryId={entryId}
+            path={path}
+            startLine={editLine.current}
+            onDone={doneEditing}
+          />
+        </Suspense>
+      </div>
+    )
   return (
     // Keyboard focus goes to what scrolls (arrows, PageDown, Space): the lines when it's text.
     <div
@@ -276,6 +323,11 @@ export function FileView({ entryId, tabId }: { entryId: string; tabId: string })
                 </button>
               ))}
             </span>
+          )}
+          {canEdit && (
+            <button className="iconbtn" style={btn} title="Edit" onClick={startEdit}>
+              <PencilSimple size={13} />
+            </button>
           )}
           <button className="iconbtn" style={btn} title="Open its folder" onClick={openFolder}>
             <FolderSimple size={13} />
