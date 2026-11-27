@@ -137,7 +137,10 @@ describe("remote host server", () => {
       onChange: () => {},
       snapshot: (pane) => {
         snaps.push(pane)
-        return pane === "gone" ? null : { epoch: 1, offset: 5, cols: 40, rows: 5, text: "hello" }
+        if (pane === "gone") return null
+        if (pane === "busy" && snaps.filter((p) => p === "busy").length === 1)
+          throw new Error("main busy") // the first answer fails: retried, not "gone"
+        return { epoch: 1, offset: 5, cols: 40, rows: 5, text: "hello" }
       },
       untap: (pane) => void untapped.push(pane),
       keys: async (_d, pane, data) => (keys.push(`${pane}:${JSON.stringify(data)}`), true),
@@ -610,7 +613,9 @@ describe("remote host server", () => {
     s.ws.send(JSON.stringify({ t: "term", pane: "p1", on: true }))
     await until(() => s.got.some((m) => m.t === "tsnap"))
     expect(s.got.find((m) => m.t === "tsnap")).toMatchObject({ cols: 40, rows: 5 })
-    expect(String((s.got.find((m) => m.t === "tsnap") as { data: string }).data)).toContain("hello")
+    expect(
+      String((s.got.find((m) => m.t === "tsnap") as unknown as { data: string }).data),
+    ).toContain("hello")
     expect(snaps).toEqual(["p1"])
 
     host.tap({ t: "tout", pane: "p1", epoch: 1, offset: 5, data: " world" })
@@ -629,6 +634,19 @@ describe("remote host server", () => {
 
     s.ws.send(JSON.stringify({ t: "term", pane: "p1", on: false }))
     await until(() => untapped.includes("p1"))
+  })
+
+  it("terminal: a snapshot that failed is retried, not reported gone", async () => {
+    host.setPanes({
+      tabs: [{ id: "t", title: "t" }],
+      panes: [{ id: "busy", tab: "t", title: "a", kind: "shell", status: "idle", started: true }],
+      stale: false,
+    })
+    const s = await hello(await approve())
+    s.ws.send(JSON.stringify({ t: "term", pane: "busy", on: true }))
+    await until(() => s.got.some((m) => m.t === "tsnap"), 4000)
+    expect(s.got.some((m) => m.t === "tsnap" && m.gone)).toBe(false)
+    expect(snaps.filter((p) => p === "busy")).toHaveLength(2)
   })
 
   it("terminal: a pane gone on the computer; keys refused without the permission", async () => {

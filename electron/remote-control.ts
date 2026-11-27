@@ -33,10 +33,11 @@ export interface RemoteControlDeps {
   pasteMode?: (pane: string) => Promise<boolean | undefined>
   /** A WSL pane (its agents' files live inside the distro). */
   wslPane?: (pane: string) => boolean
-  /** The terminal view: a pane's output so far (its tap starts), and the tap stopped. */
+  // The terminal view: a pane's output so far (its tap starts), the tap stopped, all taps stopped.
   terminal?: {
     snapshot: (pane: string) => TermSnapshot | null
     untap: (pane: string) => void
+    untapAll: () => void
   }
   /** Writes to a pane's PTY as typing would; false when there's no live one. */
   writePty?: (pane: string, data: string) => boolean
@@ -118,6 +119,7 @@ export function setupRemoteControl(deps: RemoteControlDeps) {
     },
     snapshot: (pane) => deps.terminal?.snapshot(pane) ?? null,
     untap: (pane) => deps.terminal?.untap(pane),
+    workerGone: () => deps.terminal?.untapAll(),
     // Raw keys from a device allowed them (Terminal view's keys bar): typed as they come, like the
     // desktop's own keys, so an answer key also closes the pane's dialog.
     keys: async (deviceId, pane, data) => {

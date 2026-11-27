@@ -37,7 +37,7 @@ export type RpcResult =
   | { op: "pending"; result: PendingAnswer }
   | { op: "unlock"; result: UnlockResult }
   | { op: "send"; result: { ok: boolean; reason?: SendRefusal } }
-  | { op: "snapshot"; result: TermSnapshot | null }
+  | { op: "snapshot"; result: TermSnapshot | null | "failed" } // null: no such pane
   | { op: "keys"; result: boolean }
 
 /** Worker → main. */

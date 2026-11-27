@@ -61,9 +61,15 @@ export class TermMirror {
     if (cols > 1 && rows > 0) this.term.resize(cols, rows)
   }
 
-  /** The screen and recent scrollback as escape sequences, once every write so far is parsed. */
+  /** The screen and recent scrollback as escape sequences, every write so far parsed. */
   async serialize(): Promise<string> {
-    await this.writing
+    // Batches can arrive while we wait: wait again until none is pending, then serialize at
+    // once, so the screen holds everything fed so far (callers drop what they queued meanwhile).
+    let w: Promise<void>
+    do {
+      w = this.writing
+      await w
+    } while (w !== this.writing)
     return this.serializer.serialize({ scrollback: SNAPSHOT_LINES })
   }
 

@@ -933,6 +933,8 @@ function startPty(sender: Electron.WebContents, opts: SpawnOpts, spec: StartSpec
   if (coalesce) {
     rec.coalescer = new OutputCoalescer(PTY_FLUSH_MS, PTY_MAX_FLUSH_BYTES, (d) => emit(rec, d))
   }
+  // A pane started again under its id (an ssh reconnect): a device watching it starts over.
+  remoteControl?.tapReset(opts.id)
   proc.onData((data) => {
     if (sessions.get(opts.id) !== rec) return // closed (or replaced): nobody shows it
     // An integrated ssh pane's bootstrap says hello once, right after login: answer it with
@@ -982,6 +984,7 @@ function startPty(sender: Electron.WebContents, opts: SpawnOpts, spec: StartSpec
       agentProcs.forget(opts.id)
       sessionLedger().drop(opts.id) // …and nothing to resume there (no-op during a quit)
       remoteControl?.paneGone(opts.id)
+      remoteControl?.tapReset(opts.id) // a device watching its terminal hears it's gone
     }
     livePtys.delete(live)
     markExited()
@@ -2141,6 +2144,10 @@ app.whenReady().then(async () => {
       untap: (pane) => {
         const rec = sessions.get(pane)
         if (rec) rec.tapped = false
+      },
+      // The worker went away (restarted, turned off): nothing it tapped is watched any more.
+      untapAll: () => {
+        for (const rec of sessions.values()) rec.tapped = false
       },
     },
     // Same rules as the renderer's typing (pty:write): a pending ssh spawn swallows it.

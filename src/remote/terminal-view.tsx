@@ -12,8 +12,9 @@ export interface TerminalViewProps {
   subscribe: (fn: (m: HostMessage) => void) => () => void
 }
 
-/** A pane's terminal on the phone: what the computer shows, at its width, read-only (input goes
- *  through the message box or the keys bar, so the page never answers terminal queries). */
+// Read-only: input goes through the message box or the keys bar, so the page never answers
+// terminal queries back into the PTY.
+/** A pane's terminal on the phone: what the computer shows, at its width. */
 export function TerminalView({
   pane,
   permission,
@@ -26,7 +27,7 @@ export function TerminalView({
   const term = useRef<Terminal | null>(null)
   const size = useRef({ cols: 80, rows: 24 })
   const queue = useRef<HostMessage[]>([]) // messages that came before xterm loaded
-  const [state, setState] = useState<"loading" | "live" | "gone">("loading")
+  const [state, setState] = useState<"loading" | "live" | "gone" | "failed">("loading")
 
   const fit = () => {
     const t = term.current
@@ -36,6 +37,8 @@ export function TerminalView({
   }
 
   const apply = (m: HostMessage) => {
+    const mine = (m.t === "tsnap" || m.t === "tout" || m.t === "tsize") && m.pane === pane.id
+    if (!mine) return
     const t = term.current
     if (!t) return void queue.current.push(m)
     if (m.t === "tsnap" && m.pane === pane.id) {
@@ -71,6 +74,10 @@ export function TerminalView({
         term.current = t
         for (const m of queue.current.splice(0)) apply(m)
       },
+      () => {
+        queue.current = []
+        if (live) setState("failed")
+      },
     )
     const onResize = () => fit()
     window.addEventListener("resize", onResize)
@@ -96,6 +103,11 @@ export function TerminalView({
     <div className="terminal-view">
       {state === "loading" && <p className="dim pad">Loading the terminal…</p>}
       {state === "gone" && <p className="warn pad">This terminal is gone on the computer.</p>}
+      {state === "failed" && (
+        <p className="warn pad">
+          The terminal couldn&apos;t load. Check the connection and open it again.
+        </p>
+      )}
       <div className="term-box" ref={box} />
       {permission === "keys" && (
         <div className="keys-bar">

@@ -287,7 +287,7 @@ describe("setupRemoteControl", () => {
       profile: "",
       window: () => null,
       writePty: (pane, data) => (writes.push([pane, data]), true),
-      terminal: { snapshot: () => null, untap: () => {} },
+      terminal: { snapshot: () => null, untap: () => {}, untapAll: () => {} },
     })
     rc.apply()
     const p = forks[0]!

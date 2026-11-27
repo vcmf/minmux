@@ -683,6 +683,11 @@ export function createHostServer(d: HostServerDeps) {
     f.snapping ??= (async () => {
       const snap = await rpc({ op: "snapshot", pane })
       if (termFeeds.get(pane) !== f) return
+      // Main didn't answer (busy): the pane may be fine. Try again, keeping what's shown.
+      if (snap === "failed") {
+        setTimeout(() => termFeeds.get(pane) === f && f.watchers.size && void resnap(pane, f), 1000)
+        return
+      }
       f.mirror?.dispose()
       f.mirror = snap ? new TermMirror(snap) : null
       f.pending.clear()

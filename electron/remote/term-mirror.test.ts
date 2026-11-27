@@ -22,4 +22,12 @@ describe("TermMirror", () => {
     expect(s).toContain("cleared")
     expect(s).not.toContain("\x1b[2J")
   })
+
+  it("serialize includes batches that arrive while it waits", async () => {
+    const m = new TermMirror({ epoch: 1, offset: 0, cols: 40, rows: 3, text: "" })
+    m.write(1, 0, "a".repeat(5000))
+    const screen = m.serialize()
+    m.write(1, 5000, "LATE")
+    expect(await screen).toContain("LATE")
+  })
 })

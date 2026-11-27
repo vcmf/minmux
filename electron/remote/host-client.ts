@@ -37,6 +37,7 @@ export interface RemoteHostDeps {
   snapshot?: (pane: string) => TermSnapshot | null
   keys?: (deviceId: string, pane: string, data: string) => Promise<boolean>
   untap?: (pane: string) => void
+  workerGone?: () => void // the worker exited or was replaced: its taps are gone with it
   /** A device's message for a pane (main checks and types it). */
   send?: (
     deviceId: string,
@@ -57,7 +58,7 @@ export const FAILED: { [K in RpcCall["op"]]: Extract<RpcResult, { op: K }> } = {
   pending: { op: "pending", result: { state: "expired" } },
   unlock: { op: "unlock", result: "unknown" },
   send: { op: "send", result: { ok: false, reason: "error" } },
-  snapshot: { op: "snapshot", result: null },
+  snapshot: { op: "snapshot", result: "failed" },
   keys: { op: "keys", result: false },
 }
 
@@ -132,6 +133,7 @@ export class RemoteHost {
     proc.on("message", (m) => this.proc === proc && this.onMessage(proc, m))
     proc.on("exit", () => {
       if (this.proc !== proc) return
+      this.deps.workerGone?.()
       this.proc = null
       this.clients = []
       this.status = { state: "error", reason: "error", detail: "the remote worker stopped" }
@@ -158,6 +160,7 @@ export class RemoteHost {
       return
     }
     this.proc = null
+    this.deps.workerGone?.()
     proc.postMessage({ t: "drop", reason })
     // Let the goodbyes go out, then end it.
     setTimeout(() => proc.kill(), 200)
