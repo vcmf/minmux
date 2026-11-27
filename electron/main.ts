@@ -121,7 +121,8 @@ import {
   PREVIEW_MAX_SIZE,
   type PreviewData,
 } from "../src/lib/file-preview"
-import type { FileData, FileStamp } from "../src/lib/file-tab"
+import type { FileData, FileStamp, SaveResult } from "../src/lib/file-tab"
+import { saveAcross, validSave } from "./write-file"
 import { isBundle, osMayOpen, type Os } from "./open-policy"
 import { browserLaunch, type BrowserLaunch } from "./open-in-browser"
 import { isHtmlPath } from "../src/lib/file-actions"
@@ -1734,6 +1735,34 @@ function registerIpc() {
         }
       }
       return last
+    },
+  )
+
+  // Save an edited file, in the fs worker: only over the bytes it was edited from (`base`, the
+  // read's hash), in place, never re-sent (docs/design/FILE_EDITING.md, "Saving").
+  ipcMain.handle(
+    "fs:write-file",
+    async (
+      _e,
+      p: unknown,
+      text: unknown,
+      base: unknown,
+      wsl?: WslContext,
+      create?: unknown,
+    ): Promise<SaveResult> => {
+      if (!validSave(p, text, base, create, path.isAbsolute))
+        return { kind: "error", message: "Bad save request" }
+      return saveAcross(
+        wslTargets(p, wsl),
+        (target) =>
+          fsWorker.call({
+            op: "writefile",
+            path: target,
+            text: text as string,
+            base: base as string | null,
+            create: create === true,
+          }) as Promise<SaveResult>,
+      )
     },
   )
 

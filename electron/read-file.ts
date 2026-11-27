@@ -1,5 +1,6 @@
 // Read a file for its tab (src/lib/file-tab): text up to FILE_READ_CAP (binary sniffed), or an
 // image as a data URL. Runs in the fs worker, so a slow or dead mount never stalls main.
+import { createHash } from "node:crypto"
 import fs from "node:fs"
 import {
   FILE_READ_CAP,
@@ -9,6 +10,14 @@ import {
   type FileData,
   type FileStamp,
 } from "../src/lib/file-tab"
+
+/** A file's bytes as an editor's base: a save writes only over the bytes it was edited from. */
+export const hashBytes = (b: Uint8Array): string => createHash("sha256").update(b).digest("hex")
+
+/** Decoded losslessly: invalid UTF-8 decodes to U+FFFD, so only text holding one needs the
+ *  full check (a real U+FFFD in the file encodes back to the same bytes). */
+export const losslessUtf8 = (text: string, bytes: Uint8Array): boolean =>
+  !text.includes("\uFFFD") || Buffer.from(text, "utf8").equals(bytes)
 
 /** Read `file` (not when it still matches `since`); any failure is an error (never throws). */
 export async function readFileForTab(
@@ -46,7 +55,9 @@ export async function readFileForTab(
     if (chunk.includes(0)) return { kind: "binary", size, stamp }
     // A last character cut short (being written) shows as �, never silently dropped.
     const text = chunk.toString("utf8")
-    return { kind: "text", text, truncated: false, size, stamp }
+    const hash = hashBytes(chunk)
+    const editable = losslessUtf8(text, chunk)
+    return { kind: "text", text, truncated: false, size, stamp, hash, editable }
   } catch (e) {
     const code = (e as { code?: string }).code
     return { kind: "error", message: code === "ENOENT" ? "This file is gone" : String(e) }

@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest"
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
-import { readFileForTab } from "./read-file"
+import { hashBytes, readFileForTab } from "./read-file"
 
 let dir = ""
 beforeAll(() => {
@@ -23,6 +23,16 @@ describe("readFileForTab", () => {
       truncated: false,
       size: 12,
     })
+  })
+
+  it("text carries its bytes' hash and is editable when it's valid UTF-8", async () => {
+    const r = await readFileForTab(put("u.ts", "é \uFFFD ok\n"))
+    expect(r).toMatchObject({ editable: true, hash: hashBytes(Buffer.from("é \uFFFD ok\n")) })
+  })
+
+  it("invalid UTF-8 (Latin-1) isn't editable: saving would write replacement characters", async () => {
+    const r = await readFileForTab(put("l.txt", Buffer.from([0x63, 0x61, 0x66, 0xe9, 0x0a])))
+    expect(r).toMatchObject({ kind: "text", editable: false })
   })
 
   it("text past the cap goes to the editor (too large), not cut off", async () => {

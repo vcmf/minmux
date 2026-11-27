@@ -34,6 +34,7 @@ type Pending = {
   reject: (e: Error) => void
   at: number
   hung?: boolean // failed as hung; its late reply is ignored
+  finishing?: boolean // a write failed as stranded: its worker lives until it ends (no half writes)
 }
 
 /** One worker process and the requests it holds. */
@@ -235,7 +236,7 @@ export class FsWorkerClient {
 
   /** A retired worker holding nothing that can still finish. */
   private canKill(w: Worker): boolean {
-    return w.retired && !w.killed && [...w.pending.values()].every((p) => p.hung)
+    return w.retired && !w.killed && [...w.pending.values()].every((p) => p.hung && !p.finishing)
   }
 
   /** After a reply: kill a retired worker with nothing left that can finish; idle-arm. */
@@ -268,7 +269,7 @@ export class FsWorkerClient {
 
   /** Stop sending to `w`; the next call starts a fresh worker. Its other reads may be queued
    *  behind the hung ones on its threads: re-send them to the fresh worker (a read is
-   *  idempotent; the old worker's late reply is ignored). */
+   *  idempotent; the old worker's late reply is ignored). A write is not re-sent. */
   private retire(w: Worker): void {
     w.retired = true
     this.retired.add(w)
@@ -278,6 +279,15 @@ export class FsWorkerClient {
     }
     for (const [id, p] of [...w.pending]) {
       if (p.hung) continue
+      // A write may still land on the old worker: sending it again could write twice, or
+      // after a newer save. Its outcome is unknown (the caller re-reads to find out); it stays
+      // pending there, its reply ignored, so the worker isn't killed under it.
+      if (p.req.op === "writefile") {
+        p.reject(fail("EUNSURE"))
+        p.hung = true
+        p.finishing = true
+        continue
+      }
       w.pending.delete(id)
       // A stranded watch / unwatch isn't re-sent: the fresh worker starts with no watchers
       // and the watch set is re-added to it (lostWorker).

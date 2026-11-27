@@ -25,10 +25,26 @@ export function sameStamp(a: FileStamp, b: FileStamp, now: number): boolean {
   return !coarse || now - b.mtimeMs > COARSE_MS
 }
 
-/** What reading a file for its tab gives; `same` when it matches the stamp it was asked with. */
+/** What reading a file for its tab gives; `same` when it matches the stamp it was asked with.
+ *  A text read also carries its bytes' `hash` (an editor's base) and whether it's `editable`
+ *  (valid UTF-8: the text encodes back to the same bytes). */
 export type FileData =
-  | ((PreviewData | { kind: "image"; dataUrl: string; size: number }) & { stamp?: FileStamp })
+  | ((PreviewData | { kind: "image"; dataUrl: string; size: number }) & {
+      stamp?: FileStamp
+      hash?: string
+      editable?: boolean
+    })
   | { kind: "same" }
+
+/** What saving an edited file gives (docs/design/FILE_EDITING.md, "Saving"). `changed`: its bytes
+ *  aren't the editor's base any more; `unknown`: the write hung or lost its worker, so it may or
+ *  may not have landed (re-read to know); `missing`: no file there (nothing written). */
+export type SaveResult =
+  | { kind: "saved"; stamp: FileStamp; hash: string }
+  | { kind: "changed" }
+  | { kind: "missing" }
+  | { kind: "unknown" }
+  | { kind: "error"; message: string }
 
 const IMAGES: Record<string, string> = {
   png: "image/png",

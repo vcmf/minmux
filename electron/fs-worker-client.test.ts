@@ -62,6 +62,29 @@ describe("FsWorkerClient", () => {
     await expect(a).rejects.toMatchObject({ code: "ENOENT" })
   })
 
+  it("a write stranded behind a hung read isn't re-sent, and its worker lives until it ends", async () => {
+    const c = client()
+    const stuck = c.call({ op: "readdir", path: "/mnt/dead" })
+    vi.advanceTimersByTime(800)
+    const save = c.call({ op: "writefile", path: "/a.ts", text: "x", base: "h" })
+    vi.advanceTimersByTime(500)
+    await expect(stuck).rejects.toMatchObject({ code: "EHUNG" })
+    await expect(save).rejects.toMatchObject({ code: "EUNSURE" })
+    expect(procs).toHaveLength(1) // never sent again: no fresh worker needed for it
+    expect(procs[0]!.killed).toBe(false) // the write may still be landing
+    const w = procs[0]!.sent[1]!
+    procs[0]!.reply({ id: w.id, ok: true, value: { kind: "missing" } })
+    expect(procs[0]!.killed).toBe(true) // it ended: now the old worker goes
+  })
+
+  it("a write that hangs itself fails as hung, and its worker can go", async () => {
+    const c = client()
+    const save = c.call({ op: "writefile", path: "/mnt/dead/a", text: "x", base: "h" })
+    vi.advanceTimersByTime(1300)
+    await expect(save).rejects.toMatchObject({ code: "EHUNG" })
+    expect(procs[0]!.killed).toBe(true)
+  })
+
   it("a hung request fails alone; reads stranded behind it move to a fresh worker", async () => {
     const c = client()
     const stuck = c.call({ op: "readdir", path: "/mnt/dead" })
