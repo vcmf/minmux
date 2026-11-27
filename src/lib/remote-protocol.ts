@@ -181,7 +181,11 @@ export function parseClientMessage(raw: unknown): ClientMessage | null {
         : null
     case "dialog":
       return typeof m.pane === "string" && m.pane.length <= 200
-        ? { t: "dialog", pane: m.pane }
+        ? {
+            t: "dialog",
+            pane: m.pane,
+            ...(typeof m.waitId === "string" && m.waitId.length <= 40 ? { waitId: m.waitId } : {}),
+          }
         : null
     case "answer":
       return typeof m.pane === "string" &&

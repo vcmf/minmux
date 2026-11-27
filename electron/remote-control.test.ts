@@ -342,7 +342,7 @@ describe("setupRemoteControl", () => {
     rc.dispose()
   })
 
-it("answers: only the open dialog, only an option still on screen, only agents that take numbers", async () => {
+  it("answers: only the open dialog, only an option still on screen, only agents that take numbers", async () => {
     settings = JSON.stringify({ remote: { enabled: true } })
     const writes: [string, string][] = []
     const rc = setupRemoteControl({
