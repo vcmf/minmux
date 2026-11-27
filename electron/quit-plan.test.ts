@@ -21,7 +21,7 @@ describe("quitStep", () => {
   it("waits for saves in flight (once), before the drain hides the window", () => {
     expect(step({ savesInFlight: 1 })).toBe("waitSaves")
     expect(step({ savesInFlight: 1, waitingSaves: true })).toBe("hold")
-    expect(step({ unsaved: 1, unsavedDiscarded: true, savesInFlight: 1 })).toBe("waitSaves")
+    expect(step({ unsaved: 1, savesInFlight: 1 })).toBe("waitSaves") // before asking: it may save
   })
   it("an OS logout is never held for unsaved files or saves", () => {
     expect(step({ osEnding: true, unsaved: 1, savesInFlight: 1 })).toBe("killNow")

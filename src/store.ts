@@ -1302,6 +1302,7 @@ export const useStore = create<AppState>()(
       ),
 
     requestClosePane: (tabId, paneId) => {
+      edits.flushAll() // a same-length edit typed just now counts
       const tab = get().tabs.find((t) => t.id === tabId)
       const pane = tab && findPaneById(tab.root, paneId)
       if (!pane) return
@@ -1329,6 +1330,7 @@ export const useStore = create<AppState>()(
     },
 
     requestCloseTab: (tabId) => {
+      edits.flushAll()
       const s = get()
       const tab = s.tabs.find((t) => t.id === tabId)
       if (!tab) return
@@ -1371,6 +1373,7 @@ export const useStore = create<AppState>()(
 
     requestCloseEntry: (tabId, entryId) => {
       if (isTerminalEntry(entryId)) return get().requestCloseTerminal(tabId, entryId)
+      edits.flushAll()
       // A file with unsaved changes: save them, drop them, or keep it open.
       const path = edits.isUnsaved(entryId) ? edits.path(entryId) : undefined
       if (path) {
@@ -1384,9 +1387,16 @@ export const useStore = create<AppState>()(
       const c = get().closeConfirm
       if (c?.kind !== "file") return
       set({ closeConfirm: null })
-      const r = await edits.saveEntry(c.entryId)
-      if (r === "saved") get().closeSurface(c.tabId, c.entryId)
-      else get().setActivePane(c.tabId, c.entryId) // stays open, showing why (its editor's bar)
+      let r = await edits.saveEntry(c.entryId)
+      if (r === "busy") {
+        // A save already running (⌘S, then ×): its outcome decides.
+        await edits.idle(c.entryId)
+        r = edits.isUnsaved(c.entryId) ? "error" : "saved"
+      }
+      if (r === "saved") return get().closeSurface(c.tabId, c.entryId)
+      // It stays open, in front, showing why (its editor's bar).
+      get().setActiveTab(c.tabId)
+      get().setActivePane(c.tabId, c.entryId)
     },
 
     cancelClose: () => set({ closeConfirm: null }),

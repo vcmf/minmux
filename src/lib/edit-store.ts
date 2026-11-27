@@ -54,6 +54,9 @@ export class EditStore {
   // The editor's own save (cleanup + write), registered by its chunk: a close can save an edit
   // whose editor is hidden. Until it loads nothing is being edited, so nothing needs it.
   private saver: ((id: string) => Promise<SaveResult["kind"] | "busy">) | null = null
+  // …and its pending unsaved checks (a same-length edit is compared after a pause): settled
+  // before anything asks whether a file is unsaved (a close, a reload).
+  private flusher: (() => void) | null = null
 
   constructor(
     private readonly write: Write = (p, t, b, w, c) => ipc.writeFile(p, t, b, w, c),
@@ -74,6 +77,27 @@ export class EditStore {
   /** The editor's save, for saving an edit from outside it (a close's Save). */
   setSaver(fn: (id: string) => Promise<SaveResult["kind"] | "busy">): void {
     this.saver = fn
+  }
+
+  setFlusher(fn: () => void): void {
+    this.flusher = fn
+  }
+
+  /** Settle every pending unsaved check now (before a close or an unload asks). */
+  flushAll(): void {
+    this.flusher?.()
+  }
+
+  /** Resolves once entry `id` has no save in flight (or isn't being edited). */
+  idle(id: string): Promise<void> {
+    if (!this.edits.get(id)?.saving) return Promise.resolve()
+    return new Promise((resolve) => {
+      const off = this.subscribe(() => {
+        if (this.edits.get(id)?.saving) return
+        off()
+        resolve()
+      })
+    })
   }
 
   /** Save an edit the way its editor does; how it went ("saved" lets a close go on). */

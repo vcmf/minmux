@@ -5,6 +5,7 @@ import { UnsavedMark } from "./unsaved-mark"
 import { useStore } from "../store"
 import { edits } from "../lib/edit-store"
 import { resetStore, testShell } from "../test/helpers"
+import { ipc } from "../lib/ipc"
 
 vi.mock("../terminal/terminal-manager", () => ({
   TerminalManager: { focus: vi.fn(), dispose: vi.fn() },
@@ -83,6 +84,34 @@ describe("closing a file with unsaved changes", () => {
     const id = setup(false)
     st().requestCloseEntry(tab().id, id)
     expect(st().closeConfirm).toBeNull()
+    expect(st().objects[id]).toBeUndefined()
+  })
+})
+
+describe("close checks settle a just-typed edit", () => {
+  it("a same-length edit still pending counts (the editor's flush runs first)", () => {
+    const id = setup(false)
+    edits.setFlusher(() => edits.setDirty(id, true)) // what the editor's pending check finds
+    st().requestCloseEntry(tab().id, id)
+    expect(st().closeConfirm).toMatchObject({ kind: "file", entryId: id })
+    edits.setFlusher(() => {})
+  })
+
+  it("Save while a save is already running: its outcome decides", async () => {
+    const id = setup()
+    let finish!: (r: {
+      kind: "saved"
+      stamp: { size: number; mtimeMs: number }
+      hash: string
+    }) => void
+    vi.mocked(ipc.writeFile).mockImplementationOnce(() => new Promise((r) => (finish = r)))
+    void edits.save(id, "y\n") // ⌘S, still writing
+    saver.mockResolvedValue("busy" as never)
+    st().requestCloseEntry(tab().id, id)
+    const closing = st().saveAndClose()
+    edits.setDirty(id, false)
+    finish({ kind: "saved", stamp: { size: 2, mtimeMs: 2 }, hash: "h1" })
+    await act(() => closing)
     expect(st().objects[id]).toBeUndefined()
   })
 })

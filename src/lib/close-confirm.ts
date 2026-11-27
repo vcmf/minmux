@@ -119,9 +119,11 @@ export function closeConfirmText(c: CloseConfirm): { title: string; body: string
             : `Close ${c.files.length} files with unsaved changes?`,
         body:
           `${listed(c.files)} ${c.files.length === 1 ? "has" : "have"} unsaved changes: closing drops them.` +
-          (c.terminals
-            ? ` ${plural(c.terminals, "terminal")} close too, and whatever runs in them stops.`
-            : ""),
+          (c.terminals === 1
+            ? " Its terminal closes too, and whatever runs in it stops."
+            : c.terminals
+              ? ` ${c.terminals} terminals close too, and whatever runs in them stops.`
+              : ""),
         action: "Discard and close",
       }
     case "pane":

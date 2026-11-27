@@ -687,6 +687,7 @@ function App() {
     }
     const off = edits.subscribe(report)
     const onUnload = (e: BeforeUnloadEvent) => {
+      edits.flushAll() // a same-length edit typed just now counts
       if (!edits.unsaved().length) return
       e.preventDefault()
       e.returnValue = "" // Electron: main's will-prevent-unload decides

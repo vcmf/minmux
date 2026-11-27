@@ -26,10 +26,11 @@ export type QuitStep =
 export function quitStep(s: QuitState): QuitStep {
   if (s.phase === "drained") return "proceed" // second pass, after the drain
   if (s.phase === "draining") return "hold" // no dialog, no second drain
-  // An OS logout can't be held: unsaved text is lost there (the design says so).
+  // An OS logout can't be held: unsaved text is lost there (the design says so). Saves being
+  // written land first (they make their files saved), then what's still unsaved is asked about.
+  if (!s.osEnding && (s.savesInFlight ?? 0) > 0) return s.waitingSaves ? "hold" : "waitSaves"
   if (!s.osEnding && (s.unsaved ?? 0) > 0 && !s.unsavedDiscarded)
     return s.asking ? "hold" : "askUnsaved"
-  if (!s.osEnding && (s.savesInFlight ?? 0) > 0) return s.waitingSaves ? "hold" : "waitSaves"
   if (s.needsConfirm && !s.confirmed) return s.asking ? "hold" : "confirm"
   if (s.livePtys === 0) return "proceed"
   // Holding the quit here would make macOS report "minmux cancelled restart/logout".

@@ -130,6 +130,7 @@ async function saveEntry(
   return r
 }
 edits.setSaver((id) => saveEntry(id))
+edits.setFlusher(() => [...dirtyTimers.keys()].forEach(flushDirty))
 
 /** Stop editing `id`: its state and the editor's own caches go. */
 function stopEditing(id: string): void {

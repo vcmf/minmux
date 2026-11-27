@@ -284,7 +284,13 @@ let unsavedFiles: string[] = []
 let unsavedDiscarded = false
 let savesInFlight = 0
 let waitingSaves = false
+let savesGaveUp = false // a quit waited SAVE_WAIT_MS and went on: no second wait in it
 const SAVE_WAIT_MS = 5000
+/** A quit that won't happen after all: the next one asks and waits afresh. */
+const quitAbandoned = () => {
+  unsavedDiscarded = false
+  savesGaveUp = false
+}
 /** "a.ts", "a.ts and b.ts", "a.ts, b.ts and 3 more": the unsaved files, for a dialog. */
 const unsavedList = () => {
   const names = unsavedFiles.map((p) => path.basename(p))
@@ -501,13 +507,14 @@ function createWindow() {
   win.on("closed", () => {
     mainWindow = null
     fsWorker.setWatched([])
+    unsavedFiles = [] // its files went with it
   })
   // A reloaded or crashed renderer re-sends its watch set when its folder tabs show again; its
   // unsaved files went with it.
-  win.webContents.on("did-start-loading", () => {
-    fsWorker.setWatched([])
-    unsavedFiles = []
-  })
+  win.webContents.on("did-start-loading", () => fsWorker.setWatched([]))
+  // Its unsaved files go only once the new page is in: a reload starts loading before the old
+  // page's beforeunload runs, and that needs the list to ask.
+  win.webContents.on("did-finish-load", () => (unsavedFiles = []))
   win.webContents.on("render-process-gone", () => {
     fsWorker.setWatched([])
     unsavedFiles = []
@@ -515,14 +522,18 @@ function createWindow() {
   // The page holds its unload while files are unsaved (a reload, ⌘W, the window closing): ask.
   // Without this handler Electron would cancel the unload silently. preventDefault = let it go.
   win.webContents.on("will-prevent-unload", (e) => {
-    if (unsavedDiscarded || osEnding || !unsavedFiles.length) return e.preventDefault()
+    // The page holds its unload only with unsaved files: ask even if their list hasn't come yet
+    // (a same-length edit settled in its beforeunload).
+    if (unsavedDiscarded || osEnding) return e.preventDefault()
     const choice = dialog.showMessageBoxSync(win, {
       type: "warning",
       buttons: ["Cancel", "Discard changes"],
       defaultId: 0,
       cancelId: 0,
       message: "Discard unsaved changes?",
-      detail: `${unsavedList()} ${unsavedFiles.length === 1 ? "has" : "have"} unsaved changes.`,
+      detail: unsavedFiles.length
+        ? `${unsavedList()} ${unsavedFiles.length === 1 ? "has" : "have"} unsaved changes.`
+        : "A file has unsaved changes.",
       noLink: true,
     })
     if (choice !== 1) return
@@ -2302,7 +2313,7 @@ app.on("before-quit", (e) => {
     // Spawns still preparing (an ssh probe) are about to be sessions: count them too.
     unsaved: unsavedFiles.length,
     unsavedDiscarded,
-    savesInFlight,
+    savesInFlight: savesGaveUp ? 0 : savesInFlight,
     waitingSaves,
     needsConfirm: quitNeedsConfirm({
       live: sessions.size + pendingSpawns.live,
@@ -2358,7 +2369,7 @@ app.on("before-quit", (e) => {
     const check = () => {
       if (savesInFlight > 0 && Date.now() < until) return void setTimeout(check, 50)
       waitingSaves = false
-      savesInFlight = 0 // past the wait: quit anyway (a hung save on a dead mount)
+      if (savesInFlight > 0) savesGaveUp = true // past the wait (a hung save): quit anyway
       app.quit()
     }
     check()
@@ -2393,13 +2404,13 @@ app.on("before-quit", (e) => {
   void (mainWindow ? dialog.showMessageBox(mainWindow, ask) : dialog.showMessageBox(ask))
     .then(({ response, checkboxChecked }) => {
       quitAsking = false
-      if (response !== 1) {
-        unsavedDiscarded = false // a later quit asks about unsaved files again
-        return // Cancel
-      }
+      if (response !== 1) return quitAbandoned() // Cancel
       if (checkboxChecked) disableConfirmQuit()
       quitConfirmed = true
       app.quit()
     })
-    .catch(() => (quitAsking = false)) // no dialog: ask again next time
+    .catch(() => {
+      quitAsking = false // no dialog: ask again next time
+      quitAbandoned()
+    })
 })
