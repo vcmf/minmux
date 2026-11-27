@@ -696,9 +696,13 @@ function App() {
     // A quit asks once: settle what's pending (a just-typed edit, saves landing), then answer.
     // Saves get QUIT_SETTLE_MS to land; one still running then counts as unsaved (main asks).
     const offQuit = ipc.onQuitCheck(async () => {
-      edits.flushAll()
-      await Promise.race([edits.settledAll(), new Promise((r) => setTimeout(r, QUIT_SETTLE_MS))])
-      edits.flushAll()
+      try {
+        edits.flushAll()
+        await Promise.race([edits.settledAll(), new Promise((r) => setTimeout(r, QUIT_SETTLE_MS))])
+        edits.flushAll()
+      } catch {
+        // settling failed: what's known to be unsaved is still the answer
+      }
       return edits.unsavedPaths()
     })
     return () => {

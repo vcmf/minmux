@@ -288,8 +288,10 @@ let rendererAlive = false // a page to ask (loaded, not crashed)
 let quitChecks = 0
 const quitCheckReplies = new Map<number, (paths: string[]) => void>()
 const QUIT_CHECK_MS = 6000 // the renderer's own saves get SAVE_WAIT_MS; a hung page, no more
-/** Ask the page what's unsaved, once its saves have landed; no answer: the last list it pushed. */
+/** Ask the page what's unsaved, once its saves have landed; no answer (or no page ready to
+ *  give one): the last list it pushed. Never "nothing unsaved" on a guess. */
 function askUnsaved(win: BrowserWindow): Promise<string[]> {
+  if (!rendererAlive || win.isDestroyed()) return Promise.resolve(unsavedFiles)
   const id = ++quitChecks
   return new Promise((resolve) => {
     const timer = setTimeout(() => {
@@ -301,7 +303,13 @@ function askUnsaved(win: BrowserWindow): Promise<string[]> {
       quitCheckReplies.delete(id)
       resolve(paths)
     })
-    win.webContents.send("editor:quit-check", id)
+    try {
+      win.webContents.send("editor:quit-check", id)
+    } catch {
+      clearTimeout(timer)
+      quitCheckReplies.delete(id)
+      resolve(unsavedFiles)
+    }
   })
 }
 let lastWatchSet: string[] = [] // what the page asked to watch (put back after a cancelled reload)
@@ -1888,7 +1896,10 @@ function registerIpc() {
   // The page's answer to a quit's check: what's still unsaved once its saves landed.
   ipcMain.on("editor:quit-check-reply", (_e, id: unknown, paths: unknown) => {
     const reply = typeof id === "number" ? quitCheckReplies.get(id) : undefined
-    reply?.(Array.isArray(paths) ? paths.filter((p): p is string => typeof p === "string") : [])
+    // A reply that isn't a list is no answer: the pushed list stands.
+    reply?.(
+      Array.isArray(paths) ? paths.filter((p): p is string => typeof p === "string") : unsavedFiles,
+    )
   })
   // The renderer's files with unsaved changes (their paths), sent when the set changes.
   ipcMain.on("editor:unsaved", (_e, paths: unknown) => {
@@ -2359,12 +2370,12 @@ app.on("before-quit", (e) => {
   const step = quitStep({
     phase: quitPhase,
     confirmed: quitConfirmed,
-    // Spawns still preparing (an ssh probe) are about to be sessions: count them too.
     unsavedChecked,
     checkingUnsaved,
-    canAskUnsaved: !!mainWindow && !mainWindow.isDestroyed() && rendererAlive,
+    canAskUnsaved: !!mainWindow && !mainWindow.isDestroyed(),
     savesInFlight: savesGaveUp ? 0 : savesInFlight,
     waitingSaves,
+    // Spawns still preparing (an ssh probe) are about to be sessions: count them too.
     needsConfirm: quitNeedsConfirm({
       live: sessions.size + pendingSpawns.live,
       enabled: confirmQuitEnabled(),
@@ -2394,47 +2405,49 @@ app.on("before-quit", (e) => {
   if (step === "checkUnsaved" && mainWindow) {
     const win = mainWindow
     checkingUnsaved = true
-    void askUnsaved(win).then((files) => {
-      checkingUnsaved = false
-      if (!files.length) {
-        unsavedChecked = true
-        return app.quit()
-      }
-      // The window may have gone while it answered (⌘W): an app-modal dialog then.
-      const target = !win.isDestroyed()
-        ? win
-        : mainWindow && !mainWindow.isDestroyed()
-          ? mainWindow
-          : null
-      quitAsking = true
-      const ask: Electron.MessageBoxOptions = {
-        type: "warning",
-        buttons: ["Cancel", "Discard and quit"],
-        defaultId: 0,
-        cancelId: 0,
-        message: "Quit with unsaved changes?",
-        detail: `${unsavedList(files)} ${files.length === 1 ? "has" : "have"} unsaved changes: quitting drops them.`,
-        noLink: true,
-      }
-      let shown: Promise<Electron.MessageBoxReturnValue>
-      try {
-        shown = target ? dialog.showMessageBox(target, ask) : dialog.showMessageBox(ask)
-      } catch {
-        quitAsking = false
-        return quitAbandoned()
-      }
-      void shown
-        .then(({ response }) => {
-          quitAsking = false
-          if (response !== 1) return quitAbandoned()
+    void askUnsaved(win)
+      .catch(() => unsavedFiles)
+      .then((files) => {
+        checkingUnsaved = false
+        if (!files.length) {
           unsavedChecked = true
-          app.quit()
-        })
-        .catch(() => {
+          return app.quit()
+        }
+        // The window may have gone while it answered (⌘W): an app-modal dialog then.
+        const target = !win.isDestroyed()
+          ? win
+          : mainWindow && !mainWindow.isDestroyed()
+            ? mainWindow
+            : null
+        quitAsking = true
+        const ask: Electron.MessageBoxOptions = {
+          type: "warning",
+          buttons: ["Cancel", "Discard and quit"],
+          defaultId: 0,
+          cancelId: 0,
+          message: "Quit with unsaved changes?",
+          detail: `${unsavedList(files)} ${files.length === 1 ? "has" : "have"} unsaved changes: quitting drops them.`,
+          noLink: true,
+        }
+        let shown: Promise<Electron.MessageBoxReturnValue>
+        try {
+          shown = target ? dialog.showMessageBox(target, ask) : dialog.showMessageBox(ask)
+        } catch {
           quitAsking = false
-          quitAbandoned()
-        })
-    })
+          return quitAbandoned()
+        }
+        void shown
+          .then(({ response }) => {
+            quitAsking = false
+            if (response !== 1) return quitAbandoned()
+            unsavedChecked = true
+            app.quit()
+          })
+          .catch(() => {
+            quitAsking = false
+            quitAbandoned()
+          })
+      })
     return
   }
   if (step === "waitSaves") {

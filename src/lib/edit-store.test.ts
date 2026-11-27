@@ -202,6 +202,9 @@ describe("EditStore", () => {
     store.start("f", "/w/b.ts", undefined, "b", "h1")
     store.setDirty("f", true)
     expect(store.unsavedPaths()).toEqual(["/w/b.ts"])
+    store.start("g", "/w/b.ts", undefined, "b", "h1") // the same file in a second pane
+    store.setDirty("g", true)
+    expect(store.unsavedPaths()).toEqual(["/w/b.ts"]) // once
     expect(store.isUnsaved("e")).toBe(false)
     expect(store.path("e")).toBe("/w/a.ts")
   })

@@ -166,9 +166,10 @@ const api = {
   setUnsaved: (paths: string[]) => ipcRenderer.send("editor:unsaved", paths),
   onQuitCheck: (answer: () => Promise<string[]>) => {
     const listener = (_e: unknown, id: number) =>
+      // A failed answer sends nothing: main falls back to the last list (never "none unsaved").
       void answer().then(
         (paths) => ipcRenderer.send("editor:quit-check-reply", id, paths),
-        () => ipcRenderer.send("editor:quit-check-reply", id, []),
+        () => {},
       )
     ipcRenderer.on("editor:quit-check", listener)
     return () => ipcRenderer.removeListener("editor:quit-check", listener)

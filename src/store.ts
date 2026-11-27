@@ -526,11 +526,14 @@ function dropSessions(
 }
 
 /** The names of the files among `ids` with unsaved changes (lib/edit-store). */
-const unsavedNames = (ids: string[]) =>
-  ids.flatMap((id) => {
-    const path = edits.isUnsaved(id) ? edits.path(id) : undefined
-    return path ? [path.split(/[\\/]/).pop() ?? path] : []
-  })
+const unsavedNames = (ids: string[]) => [
+  ...new Set(
+    ids.flatMap((id) => {
+      const path = edits.isUnsaved(id) ? edits.path(id) : undefined
+      return path ? [path.split(/[\\/]/).pop() ?? path] : []
+    }),
+  ),
+]
 
 /** Drop folder / file entries from the store maps (terminal ids are ignored). */
 function dropObjects(state: AppState, ids: string[]): Pick<AppState, "objects" | "folderViews"> {
@@ -1338,6 +1341,12 @@ export const useStore = create<AppState>()(
       const s = get()
       const tab = s.tabs.find((t) => t.id === tabId)
       if (!tab) return
+      // A session that is one unsaved file: that file's own question (with Save).
+      if (tab.root.type === "leaf") {
+        const [only, ...more] = tab.root.entryIds
+        if (only && !more.length && !isTerminalEntry(only) && edits.isUnsaved(only))
+          return get().requestCloseEntry(tabId, only)
+      }
       const title = tabTitle(tab, s.sessions, s.home)
       const unsaved = unsavedCloseConfirm(
         tabId,
@@ -1396,15 +1405,19 @@ export const useStore = create<AppState>()(
       // still unsaved after it: either way, what's unsaved once it's all settled decides.
       if (r === "busy") await edits.settled(c.entryId)
       edits.flushAll()
+      // Where the file is now (it may have moved, or closed some other way meanwhile).
+      const tabId = get().tabs.find((t) => findPane(t.root, c.entryId))?.id
+      if (!tabId) return
       if ((r === "saved" || r === "busy") && !edits.isUnsaved(c.entryId))
-        return get().closeSurface(c.tabId, c.entryId)
-      if (r === "saved" && get().objects[c.entryId]) {
-        // Saved, but typed on meanwhile: ask again about what's new.
-        return set({ closeConfirm: c })
-      }
+        return get().closeSurface(tabId, c.entryId)
+      // The user moved on meanwhile (another dialog is up): leave them there; the file's bar
+      // or its dot says what happened.
+      if (get().closeConfirm) return
+      // Saved, but typed on meanwhile: ask again about what's new.
+      if (r === "saved") return set({ closeConfirm: { ...c, tabId } })
       // It stays open, in front, showing why (its editor's bar).
-      get().setActiveTab(c.tabId)
-      get().setActivePane(c.tabId, c.entryId)
+      get().setActiveTab(tabId)
+      get().setActivePane(tabId, c.entryId)
     },
 
     cancelClose: () => set({ closeConfirm: null }),

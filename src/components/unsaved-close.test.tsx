@@ -155,6 +155,13 @@ describe("closing a pane or session holding unsaved files", () => {
     expect(document.activeElement?.textContent).toBe("Cancel")
   })
 
+  it("a session that is one unsaved file: that file's question", () => {
+    const id = setup()
+    st().closeSurface(tab().id, pane().entryIds[0]!) // the terminal goes
+    st().requestCloseTab(tab().id)
+    expect(st().closeConfirm).toMatchObject({ kind: "file", entryId: id })
+  })
+
   it("the session asks too", () => {
     setup()
     st().requestCloseTab(tab().id)

@@ -130,7 +130,7 @@ export class EditStore {
 
   /** The paths of the files with unsaved changes (or a save in flight). */
   unsavedPaths(): string[] {
-    return this.unsaved().flatMap((id) => this.edits.get(id)?.path ?? [])
+    return [...new Set(this.unsaved().flatMap((id) => this.edits.get(id)?.path ?? []))]
   }
 
   /** Entries with unsaved changes (or a save in flight). */
