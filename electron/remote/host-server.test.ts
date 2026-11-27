@@ -1,3 +1,4 @@
+// @vitest-environment node
 // End to end in one process: main's RemoteHost + DeviceTable talking to the real server, on
 // loopback, with a fake `tailscale` CLI.
 import fs from "node:fs"
@@ -87,6 +88,7 @@ describe("remote host server", () => {
   let answer: Decision
   let cli: ReturnType<typeof fakeCli>
   let stops: (() => void)[]
+  let sent: { deviceId: string; pane: string; text: string; id: string }[]
 
   beforeEach(async () => {
     port = await freePort()
@@ -99,6 +101,7 @@ describe("remote host server", () => {
     answer = "allow"
     cli = fakeCli()
     stops = []
+    sent = []
     host = new RemoteHost({
       fork: () => {
         const handlers: { message: ((m: FromHost) => void)[]; exit: (() => void)[] } = {
@@ -112,7 +115,7 @@ describe("remote host server", () => {
           },
           findCli: () => "tailscale",
           run: (c, a) => cli(c, a),
-          timing: { ping: 40, recheck: 60, touch: 80 },
+          timing: { ping: 40, recheck: 60, touch: 80, chatPoll: 50 },
         })
         stops.push(server.stop)
         const proc: HostProc = {
@@ -126,6 +129,10 @@ describe("remote host server", () => {
       devices: async () => table,
       ask: async () => answer,
       onChange: () => {},
+      send: async (deviceId, pane, text, id) => {
+        sent.push({ deviceId, pane, text, id })
+        return { ok: true }
+      },
     })
     host.apply({ port, staticDir: dir })
     await until(() => host.state.status.state === "listening")
@@ -404,6 +411,67 @@ describe("remote host server", () => {
     dev.close()
     await new Promise((r) => setTimeout(r, 50))
     expect((await request(port, "/src/x.ts")).status).toBe(502)
+  })
+
+  it("chat: watch a pane's conversation, live updates, older items, no agent", async () => {
+    const f = path.join(dir, "t.jsonl")
+    const line = (i: number) =>
+      JSON.stringify({ type: "user", uuid: `u${i}`, message: { content: `message ${i}` } }) + "\n"
+    fs.writeFileSync(f, Array.from({ length: 60 }, (_, i) => line(i)).join(""))
+    host.setPanes({
+      tabs: [{ id: "t", title: "t" }],
+      panes: [
+        { id: "p1", tab: "t", title: "a", kind: "agent", status: "idle", started: true },
+        { id: "p2", tab: "t", title: "b", kind: "shell", status: "idle", started: true },
+      ],
+      stale: false,
+    })
+    host.setLeads({ p1: { agent: "claude", sessionId: "s1", files: [f] } })
+    const s = await hello(await approve())
+    s.ws.send(JSON.stringify({ t: "watch", pane: "p1" }))
+    await until(() => s.got.some((m) => m.t === "chat" && m.reset))
+    const first = s.got.find((m) => m.t === "chat" && m.reset) as unknown as {
+      items: { id: string }[]
+      more: boolean
+    }
+    expect(first.items).toHaveLength(50)
+    expect(first.more).toBe(true)
+
+    s.ws.send(JSON.stringify({ t: "more", pane: "p1", before: first.items[0]!.id }))
+    await until(() => s.got.some((m) => m.t === "chat" && m.older))
+    expect((s.got.find((m) => m.older) as unknown as { items: unknown[] }).items).toHaveLength(10)
+
+    fs.appendFileSync(f, line(60))
+    host.nudge(["p1"])
+    await until(() =>
+      s.got.some(
+        (m) =>
+          m.t === "chat" && !m.reset && !m.older && (m.items as { id: string }[])[0]?.id === "u60",
+      ),
+    )
+
+    s.ws.send(JSON.stringify({ t: "watch", pane: "p2" }))
+    await until(() =>
+      s.got.some((m) => m.t === "chat" && m.pane === "p2" && m.unavailable === "no-agent"),
+    )
+    s.ws.send(JSON.stringify({ t: "unwatch", pane: "p1" }))
+    s.ws.send(JSON.stringify({ t: "watch", pane: "nope" })) // not listed: ignored
+  })
+
+  it("send: relayed to main and acked; view-only devices refused here", async () => {
+    const cookie = await approve()
+    const s = await hello(cookie)
+    s.ws.send(JSON.stringify({ t: "send", pane: "p1", text: "hi", id: "m1" }))
+    await until(() => s.got.some((m) => m.t === "ack"))
+    expect(s.got.find((m) => m.t === "ack")).toEqual({ t: "ack", id: "m1", ok: true })
+    expect(sent).toEqual([{ deviceId: table.list()[0]!.id, pane: "p1", text: "hi", id: "m1" }])
+
+    table.setPermission(table.list()[0]!.id, "view")
+    const v = await hello(cookie)
+    v.ws.send(JSON.stringify({ t: "send", pane: "p1", text: "hi", id: "m2" }))
+    await until(() => v.got.some((m) => m.t === "ack"))
+    expect(v.got.find((m) => m.t === "ack")).toMatchObject({ ok: false, reason: "not-allowed" })
+    expect(sent).toHaveLength(1)
   })
 
   it("reports a missing CLI", async () => {

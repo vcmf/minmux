@@ -1,0 +1,74 @@
+import { describe, expect, it } from "vitest"
+import type { RemotePane } from "../../src/lib/remote-protocol"
+import { cleanText, firstWrite, refusal, Sender } from "./typing"
+
+const pane = (over: Partial<RemotePane> = {}): RemotePane => ({
+  id: "p",
+  tab: "t",
+  title: "x",
+  kind: "agent",
+  status: "idle",
+  started: true,
+  ...over,
+})
+
+function setup(p: RemotePane | undefined, after?: Partial<RemotePane>) {
+  const writes: string[] = []
+  let current = p
+  const s = new Sender({
+    pane: () => current,
+    write: (_id, data) => (writes.push(data), true),
+    delay: async () => {
+      if (after) current = { ...current!, ...after }
+    },
+  })
+  return { s, writes }
+}
+
+describe("typing a phone's message", () => {
+  it("cleans control characters, keeps newlines and tabs", () => {
+    expect(cleanText("a\x1b[2Jb\r\nc\td\x03")).toBe("a[2Jb\nc\td")
+  })
+
+  it("pastes for an agent, then Enter on its own", async () => {
+    const { s, writes } = setup(pane({ paste: true }))
+    expect(await s.send("d", "p", "fix the test\nplease", "1")).toEqual({ ok: true })
+    expect(writes).toEqual(["\x1b[200~fix the test\nplease\x1b[201~", "\r"])
+  })
+
+  it("types plainly into a shell without bracketed paste", async () => {
+    const { s, writes } = setup(pane({ kind: "shell", paste: false }))
+    await s.send("d", "p", "ls", "1")
+    expect(writes).toEqual(["ls", "\r"])
+    expect(firstWrite("x", true)).toBe("\x1b[200~x\x1b[201~")
+  })
+
+  it("refuses while the agent is asking; holds Enter if it started asking meanwhile", async () => {
+    expect(await setup(pane({ status: "waiting" })).s.send("d", "p", "x", "1")).toEqual({
+      ok: false,
+      reason: "waiting",
+    })
+    const held = setup(pane({ paste: true }), { status: "waiting" })
+    expect(await held.s.send("d", "p", "x", "1")).toEqual({ ok: false, reason: "held" })
+    expect(held.writes).toEqual(["\x1b[200~x\x1b[201~"]) // no Enter
+  })
+
+  it("other refusals", async () => {
+    expect(refusal(undefined)).toBe("no-pane")
+    expect(refusal(pane({ started: false }))).toBe("not-started")
+    expect(refusal(pane({ kind: "shell", status: "waiting" }))).toBeNull()
+    expect(await setup(pane()).s.send("d", "p", "  \x1b ", "1")).toEqual({
+      ok: false,
+      reason: "empty",
+    })
+  })
+
+  it("a retried id is typed once", async () => {
+    const { s, writes } = setup(pane({ paste: true }))
+    await s.send("d", "p", "x", "same")
+    await s.send("d", "p", "x", "same")
+    expect(writes).toHaveLength(2)
+    await s.send("other-device", "p", "x", "same")
+    expect(writes).toHaveLength(4)
+  })
+})

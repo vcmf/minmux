@@ -21,6 +21,7 @@ export interface RemotePanesInput {
   agents: AgentGraph
   home: string
   started: (id: string) => boolean
+  paste?: (id: string) => boolean | undefined
 }
 
 export function buildRemotePanes(i: RemotePanesInput): RemotePanes {
@@ -47,6 +48,8 @@ export function buildRemotePanes(i: RemotePanesInput): RemotePanes {
         started: i.started(id),
       }
       if (lead) pane.agent = lead.agent
+      const paste = i.paste?.(id)
+      if (paste !== undefined) pane.paste = paste
       const detail = status === "waiting" ? (s.detail ?? lead?.lastMessage) : undefined
       if (detail) pane.detail = detail.slice(0, 200)
       const cwd = s.remote ? s.remoteCwd : s.cwd

@@ -1,7 +1,8 @@
 // Messages between main and the remote-host worker (docs/design/REMOTE_CONTROL.md). The worker
 // asks; main decides (devices, tokens, PIN) and answers by request id.
 
-import type { RemotePanes } from "../../src/lib/remote-protocol"
+import type { RemotePanes, SendRefusal } from "../../src/lib/remote-protocol"
+import type { ChatLead } from "../agents/chat"
 import type { ClientInfo, HostStatus } from "../../src/lib/remote-view"
 import type { AuthResult, UnlockResult } from "./devices"
 
@@ -25,12 +26,14 @@ export type RpcCall =
   | { op: "approve"; nodeId: string; name: string }
   | { op: "pending"; id: string; nodeId: string }
   | { op: "unlock"; token: string | null; nodeId: string; pin: string }
+  | { op: "send"; deviceId: string; pane: string; text: string; id: string }
 
 export type RpcResult =
   | { op: "auth"; result: AuthResult }
   | { op: "approve"; result: { id: string } | { error: "limited" | "readonly" } }
   | { op: "pending"; result: PendingAnswer }
   | { op: "unlock"; result: UnlockResult }
+  | { op: "send"; result: { ok: boolean; reason?: SendRefusal } }
 
 /** Worker → main. */
 export type FromHost =
@@ -43,6 +46,8 @@ export type FromHost =
 export type ToHost =
   | { t: "config"; config: HostConfig }
   | { t: "panes"; panes: RemotePanes }
+  | { t: "leads"; leads: Record<string, ChatLead> } // each pane's lead agent session
+  | { t: "nudge"; panes: string[] } // these panes' agents did something: read their transcripts
   | { t: "rpc"; id: number; result: RpcResult }
   | {
       t: "drop"

@@ -117,4 +117,66 @@ describe("setupRemoteControl", () => {
     expect((await rc.view()).devices[0]!.permission).toBe("send")
     rc.dispose()
   })
+
+  it("while someone's connected: leads and nudges for the chat, messages typed into panes", async () => {
+    settings = JSON.stringify({ remote: { enabled: true } })
+    const writes: [string, string][] = []
+    const rc = setupRemoteControl({
+      dir: "/app/out/main",
+      configDir: () => cfg,
+      readSettings: () => settings,
+      profile: "",
+      window: () => null,
+      leadOf: (pane) =>
+        pane === "p1" ? { agent: "claude", sessionId: "s1", transcriptPath: "/t.jsonl" } : null,
+      transcriptTargets: (p) => [p, `${p}.alt`],
+      writePty: (pane, data) => (writes.push([pane, data]), true),
+    })
+    rc.apply()
+    const p = forks[0]!
+    rc.setPanes({
+      tabs: [],
+      panes: [
+        {
+          id: "p1",
+          tab: "t",
+          title: "a",
+          kind: "agent",
+          status: "idle",
+          started: true,
+          paste: true,
+        },
+      ],
+    })
+    rc.agentEvents([{ paneId: "p1" }])
+    // Nobody connected: only the empty list a new worker starts with.
+    expect(p.sent.filter((m) => (m as { t: string }).t === "leads")).toEqual([
+      { t: "leads", leads: {} },
+    ])
+    p.emit({ t: "clients", clients: [{ deviceId: "d", name: "iphone" }] })
+    expect(p.sent).toContainEqual({
+      t: "leads",
+      leads: { p1: { agent: "claude", sessionId: "s1", files: ["/t.jsonl", "/t.jsonl.alt"] } },
+    })
+    rc.agentEvents([{ paneId: "p1" }, { paneId: "p1" }, {}])
+    expect(p.sent).toContainEqual({ t: "nudge", panes: ["p1"] })
+
+    p.emit({
+      t: "rpc",
+      id: 9,
+      call: { op: "send", deviceId: "d", pane: "p1", text: "go", id: "x" },
+    })
+    await vi.waitFor(() =>
+      expect(p.sent).toContainEqual({
+        t: "rpc",
+        id: 9,
+        result: { op: "send", result: { ok: true } },
+      }),
+    )
+    expect(writes).toEqual([
+      ["p1", "\x1b[200~go\x1b[201~"],
+      ["p1", "\r"],
+    ])
+    rc.dispose()
+  })
 })

@@ -608,6 +608,7 @@ async function startAgentObservability(): Promise<void> {
         "agents:events",
         events.filter((ev) => ev.event !== "SessionTitle"),
       )
+      remoteControl?.agentEvents(events) // remote chat view: leads + read the transcripts now
       // Session-level events locate where each pane's session keeps its name/colour → track
       // it for the pane accent (async + debounced; SessionEnd stops it).
       const plan = planMeta(events, (ev) => {
@@ -2065,6 +2066,19 @@ app.whenReady().then(async () => {
     profile: PROFILE_CHOICE.profile,
     devUrl: DEV_RENDERER_URL,
     window: () => mainWindow,
+    leadOf: (pane) => {
+      const e = sessionLedger().get(pane)
+      // The previous run's entry (not resumed yet) isn't running here.
+      return e && !e.carried ? e : null
+    },
+    transcriptTargets,
+    // Same rules as the renderer's typing (pty:write): a pending ssh spawn swallows it.
+    writePty: (pane, data) => {
+      const rec = sessions.get(pane)
+      if (!rec || pendingSpawns.pending(pane)) return false
+      rec.proc.write(data)
+      return true
+    },
   })
   remoteControl.apply()
   diag("boot", { pid: process.pid, version: app.getVersion() })

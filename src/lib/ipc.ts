@@ -106,6 +106,7 @@ export interface Ipc {
   remoteWanted: () => Promise<boolean> // a remote client is connected: push the pane list
   onRemoteWanted: (cb: (wanted: boolean) => void) => () => void
   remotePanes: (panes: RemotePanes) => void
+  onRemoteTyped: (cb: (pane: string, device: string) => void) => () => void // a device typed here
   remoteRevoke: (id: string) => Promise<boolean>
   remoteRename: (id: string, name: string) => Promise<boolean>
   remotePermission: (id: string, permission: Permission) => Promise<boolean>

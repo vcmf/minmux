@@ -102,7 +102,7 @@ describe("RemoteApp", () => {
     fireEvent.click(screen.getByRole("checkbox"))
     expect(screen.getByText("Needs input")).toBeInTheDocument()
     fireEvent.click(screen.getAllByText("agent-fleet")[0]!)
-    expect(screen.getByText(/next update/)).toBeInTheDocument()
+    expect(screen.getByText(/Claude is asking something/)).toBeInTheDocument()
     fireEvent.click(screen.getByText("‹ Panes"))
     expect(screen.getByText("zsh")).toBeInTheDocument()
   })

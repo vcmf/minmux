@@ -2,6 +2,8 @@
 // worker and the phone's web app. Client messages are untrusted: parseClientMessage checks
 // every field and drops anything else.
 
+import type { ChatItem } from "./remote-chat"
+
 export const PROTOCOL_VERSION = 1
 export const TICK_MS = 15_000
 export const DEAD_AFTER_MS = 35_000
@@ -26,6 +28,7 @@ export interface RemotePane {
   detail?: string // why it needs input, when known
   cwd?: string
   started: boolean // false: a restored pane in a tab the desktop hasn't shown yet
+  paste?: boolean // its program turned on bracketed paste (how a message is typed into it)
 }
 
 export interface RemoteTab {
@@ -40,7 +43,13 @@ export interface RemotePanes {
   stale: boolean
 }
 
-export type ClientMessage = { t: "hello"; v: number; client: "web" | "minmux" } | { t: "seen" } // the page is in front of its user: counts as use (the 24 h lock)
+export type ClientMessage =
+  | { t: "hello"; v: number; client: "web" | "minmux" }
+  | { t: "seen" } // the page is in front of its user: counts as use (the 24 h lock)
+  | { t: "watch"; pane: string } // start the chat feed for a pane
+  | { t: "unwatch"; pane: string }
+  | { t: "more"; pane: string; before: string } // older chat items, before this item id
+  | { t: "send"; pane: string; text: string; id: string } // a message for the pane's agent or shell
 
 export const SEEN_EVERY_MS = 60_000
 
@@ -48,9 +57,31 @@ export type HostMessage =
   | { t: "welcome"; v: number; machine: string; device: string; permission: Permission }
   | { t: "panes"; panes: RemotePanes }
   | { t: "tick" } // every 15 s: the page's sign the connection is alive (it can't see pings)
+  | {
+      t: "chat"
+      pane: string
+      items: ChatItem[]
+      reset?: boolean // replaces what the page has (a new watch, a new session in the pane)
+      older?: boolean // items from a `more`: they go before the ones the page has
+      more?: boolean // there are older items still
+      unavailable?: "no-agent" | "error" // nothing to show as chat (Terminal view, later)
+    }
+  | { t: "ack"; id: string; ok: boolean; reason?: SendRefusal }
   | { t: "locked"; reason: LockReason }
   | { t: "error"; code: string; message: string }
   | { t: "bye"; reason: ByeReason }
+
+/** Why a message wasn't sent. */
+export type SendRefusal =
+  | "not-allowed" // view-only device
+  | "waiting" // the agent is asking something: answer on the desktop
+  | "held" // pasted, but the agent started asking before Enter: not submitted
+  | "no-pane"
+  | "not-started"
+  | "empty"
+  | "error"
+
+export const SEND_MAX = 16 * 1024
 
 export type LockReason = "idle" | "pin-attempts" | "expired"
 // disconnected: "Disconnect all" on the desktop (the page doesn't reconnect by itself).
@@ -88,6 +119,21 @@ export function parseClientMessage(raw: unknown): ClientMessage | null {
       return { t: "hello", v: m.v, client: m.client }
     case "seen":
       return { t: "seen" }
+    case "watch":
+    case "unwatch":
+      return typeof m.pane === "string" && m.pane.length <= 200 ? { t: m.t, pane: m.pane } : null
+    case "more":
+      return typeof m.pane === "string" && typeof m.before === "string"
+        ? { t: "more", pane: m.pane, before: m.before }
+        : null
+    case "send":
+      return typeof m.pane === "string" &&
+        typeof m.text === "string" &&
+        m.text.length <= SEND_MAX &&
+        typeof m.id === "string" &&
+        /^[\w-]{1,64}$/.test(m.id)
+        ? { t: "send", pane: m.pane, text: m.text, id: m.id }
+        : null
     default:
       return null
   }

@@ -234,7 +234,14 @@ For panes whose lead is an agent session. The worker reads the transcript itself
 (offset per file, bounded slices that yield, like `transcript-fold`), and turns it into items:
 
 - `user` (text you sent), `assistant` (text), `tool` (name, one-line summary, first 2 KB of the
-  result, collapsed), `status` (working / waiting / done).
+  result, collapsed), and `question`: an agent's multiple-choice ask (Claude's `AskUserQuestion`,
+  Codex's `request_user_input`, OpenCode's `question` tool) with every question, its options and
+  descriptions, whether several can be picked, and the answer once its result is in the
+  transcript. Answering it from the phone is step 4. Permission prompts aren't in transcripts:
+  they show as the pane's waiting state (from hooks) above the message box.
+- Items are upserted by id (a tool's result, a question's answer land on the earlier item).
+- When the pane's session ends, its conversation stays on screen until another session leads
+  the pane.
 - On `watch`: the last 50 items; scrolling up asks for older ones.
 - New lines are read on main's hook nudge plus a 1 s poll while watched. A reply shows once it's
   in the transcript, not letter by letter.

@@ -7,6 +7,9 @@ import { mergeRemoteSettings } from "../src/settings/schema"
 import { isPermission, type RemotePanes } from "../src/lib/remote-protocol"
 import { DeviceFile } from "./remote/device-file"
 import type { RemoteView } from "../src/lib/remote-view"
+import type { AgentKind } from "../src/lib/agent-graph"
+import type { ChatLead } from "./agents/chat"
+import { Sender } from "./remote/typing"
 import { DeviceTable, PENDING_MS, type SetPinResult } from "./remote/devices"
 import { RemoteHost, type Decision, type HostProc } from "./remote/host-client"
 
@@ -17,6 +20,14 @@ export interface RemoteControlDeps {
   profile: string // "" for the installed app
   devUrl?: string
   window: () => BrowserWindow | null
+  /** The pane's lead agent session (the resume ledger), when one runs there now. */
+  leadOf?: (
+    pane: string,
+  ) => { agent?: AgentKind; sessionId: string; transcriptPath?: string } | null
+  /** Host paths for a transcript a hook reported (a WSL pane's through its distro). */
+  transcriptTargets?: (p: string, pane: string) => string[]
+  /** Writes to a pane's PTY as typing would; false when there's no live one. */
+  writePty?: (pane: string, data: string) => boolean
 }
 
 /** 7420 for the installed app, 7421 for a dev build, and one of 7430–7489 per other profile. */
@@ -88,7 +99,16 @@ export function setupRemoteControl(deps: RemoteControlDeps) {
       if (host.wanted !== lastWanted) {
         lastWanted = host.wanted
         send("remote:wanted", lastWanted)
+        if (lastWanted) pushLeads()
       }
+    },
+    send: async (deviceId, pane, text, id) => {
+      const r = await sender.send(deviceId, pane, text, id)
+      if (r.ok) {
+        const name = (await devices()).list().find((d) => d.id === deviceId)?.name ?? "a device"
+        send("remote:typed", pane, name) // the desktop shows who typed
+      }
+      return r
     },
   })
 
@@ -132,6 +152,39 @@ export function setupRemoteControl(deps: RemoteControlDeps) {
     if (!p || !Array.isArray(p.panes) || !Array.isArray(p.tabs)) return
     lastPanes = { tabs: p.tabs, panes: p.panes, stale: false }
     host.setPanes(lastPanes)
+    pushLeads()
+  }
+
+  // Messages from devices, typed into panes (checked against the latest pane list).
+  const sender = new Sender({
+    pane: (id) => lastPanes?.panes.find((p) => p.id === id),
+    write: (pane, data) => deps.writePty?.(pane, data) ?? false,
+  })
+
+  // Each listed pane's lead agent session, for the chat view (sent only while someone's connected).
+  let lastLeads = ""
+  const pushLeads = () => {
+    if (!host.wanted || !lastPanes || !deps.leadOf) return
+    const leads: Record<string, ChatLead> = {}
+    for (const p of lastPanes.panes) {
+      const l = deps.leadOf(p.id)
+      if (!l) continue
+      const files = l.transcriptPath
+        ? (deps.transcriptTargets?.(l.transcriptPath, p.id) ?? [l.transcriptPath])
+        : []
+      leads[p.id] = { agent: l.agent ?? "claude", sessionId: l.sessionId, files }
+    }
+    const key = JSON.stringify(leads)
+    if (key === lastLeads) return
+    lastLeads = key
+    host.setLeads(leads)
+  }
+
+  /** A batch of agent hook events: leads may have moved; the panes' transcripts grew. */
+  const agentEvents = (events: { paneId?: string }[]) => {
+    if (!host.wanted) return
+    pushLeads()
+    host.nudge([...new Set(events.flatMap((e) => (e.paneId ? [e.paneId] : [])))])
   }
   const revoke = async (id: unknown) => {
     if (typeof id !== "string" || !(await devices()).revoke(id)) return false
@@ -168,6 +221,7 @@ export function setupRemoteControl(deps: RemoteControlDeps) {
   return {
     apply,
     windowClosed,
+    agentEvents,
     dispose: () => {
       host.dispose()
       store.close() // quitting: a change still queued is written now, not lost

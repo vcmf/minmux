@@ -14,6 +14,7 @@ import {
   TICK_MS,
   parseClientMessage,
   type HostMessage,
+  type Permission,
   type PendingState,
   type RemotePanes,
   type SessionState,
@@ -39,6 +40,9 @@ import {
   type SelfNode,
 } from "./tailscale"
 import { LOCK_AFTER_MS } from "./devices"
+import { chatReaderFor, type ChatLead } from "../agents/chat"
+import type { ChatReader } from "../agents/chat-log"
+import type { ChatItem } from "../../src/lib/remote-chat"
 import { FAILED } from "./host-client"
 
 export interface HostServerDeps {
@@ -46,7 +50,7 @@ export interface HostServerDeps {
   findCli?: () => string | null
   run?: (cli: string, args: string[], timeoutMs?: number) => Promise<string>
   /** Shorter intervals for tests. */
-  timing?: { ping?: number; recheck?: number; touch?: number }
+  timing?: { ping?: number; recheck?: number; touch?: number; chatPoll?: number }
 }
 
 const defaultFindCli = () =>
@@ -66,6 +70,9 @@ export function createHostServer(d: HostServerDeps) {
   const PONG_TIMEOUT_MS = 45_000
   const TOUCH_EVERY_MS = d.timing?.touch ?? 60_000
   const RPC_TIMEOUT_MS = 10_000
+  const CHAT_TAIL = 50 // items sent on a watch, and per `more`
+  const CHAT_POLL_MS = d.timing?.chatPoll ?? 1000
+  const FEED_IDLE_MS = 30_000
 
   let config: HostConfig | null = null
   let cli: string | null = null
@@ -327,6 +334,8 @@ export function createHostServer(d: HostServerDeps) {
     lastTouch: number
     lastPong: number
     hello: boolean
+    permission: Permission
+    watching: Set<string> // panes whose chat feed it follows
   }
   const clients = new Set<Client>()
   const wss = new WebSocketServer({
@@ -373,12 +382,15 @@ export function createHostServer(d: HostServerDeps) {
         lastTouch: 0, // the first message (hello) counts as use
         lastPong: now,
         hello: false,
+        permission: a.device.permission,
+        watching: new Set(),
       }
       clients.add(c)
       ws.on("pong", () => (c.lastPong = Date.now()))
       ws.on("message", (data, isBinary) => void onMessage(c, isBinary ? null : data.toString()))
       ws.on("close", () => {
         clients.delete(c)
+        for (const pane of c.watching) unwatch(c, pane)
         reportClients()
       })
       ws.on("error", () => ws.terminate())
@@ -405,6 +417,22 @@ export function createHostServer(d: HostServerDeps) {
     if (!m)
       return sendTo(c, { t: "error", code: "bad-message", message: "Unknown or malformed message" })
     if (m.t === "seen") return // counted above (lastMsg, touch)
+    if (m.t !== "hello" && !c.hello) return
+    if (m.t === "watch") return void watch(c, m.pane)
+    if (m.t === "unwatch") return unwatch(c, m.pane)
+    if (m.t === "more") return more(c, m.pane, m.before)
+    if (m.t === "send") {
+      if (c.permission === "view")
+        return sendTo(c, { t: "ack", id: m.id, ok: false, reason: "not-allowed" })
+      const r = await rpc({
+        op: "send",
+        deviceId: c.deviceId,
+        pane: m.pane,
+        text: m.text,
+        id: m.id,
+      })
+      return sendTo(c, { t: "ack", id: m.id, ...r })
+    }
     if (m.t === "hello") {
       if (m.v !== PROTOCOL_VERSION) {
         sendTo(c, { t: "bye", reason: "version" })
@@ -418,6 +446,7 @@ export function createHostServer(d: HostServerDeps) {
         return
       }
       c.hello = true
+      c.permission = a.device.permission
       sendTo(c, {
         t: "welcome",
         v: PROTOCOL_VERSION,
@@ -428,6 +457,127 @@ export function createHostServer(d: HostServerDeps) {
       sendTo(c, { t: "panes", panes })
       reportClients()
     }
+  }
+
+  // ── Chat feeds (docs/design/REMOTE_CONTROL.md, "Chat view") ───────────────────────────────
+  // One reader per watched pane's lead session, polled while watched and read at once on main's
+  // nudge (a hook event from that pane). Closed a while after the last watcher leaves.
+  interface Feed {
+    key: string // agent:sessionId the reader belongs to
+    reader: ChatReader
+    watchers: Set<Client>
+    poll: ReturnType<typeof setInterval> | null
+    idle: ReturnType<typeof setTimeout> | null
+    failed: boolean
+  }
+  let leads: Record<string, ChatLead> = {}
+  const feeds = new Map<string, Feed>()
+  const leadKey = (l: ChatLead) => `${l.agent}:${l.sessionId}`
+
+  function closeFeed(pane: string) {
+    const f = feeds.get(pane)
+    if (!f) return
+    if (f.poll) clearInterval(f.poll)
+    if (f.idle) clearTimeout(f.idle)
+    f.reader.close()
+    feeds.delete(pane)
+  }
+
+  /** The pane's feed for its current lead (a new session gets a new reader), or null. */
+  function feedFor(pane: string): Feed | null {
+    const lead = leads[pane]
+    const have = feeds.get(pane)
+    // Same session, or the session ended (no lead now): its conversation stays on screen.
+    if (have && (!lead || have.key === leadKey(lead))) return have
+    const watchers = have?.watchers ?? new Set<Client>()
+    closeFeed(pane)
+    const reader = lead ? chatReaderFor(lead) : null
+    if (!lead || !reader) return null
+    const f: Feed = { key: leadKey(lead), reader, watchers, poll: null, idle: null, failed: false }
+    feeds.set(pane, f)
+    return f
+  }
+
+  /** The newest TAIL items, as a fresh start for a page. */
+  const tailOf = (pane: string, f: Feed): HostMessage => {
+    const items = f.reader.log.items
+    return {
+      t: "chat",
+      pane,
+      items: items.slice(-CHAT_TAIL),
+      reset: true,
+      more: items.length > CHAT_TAIL,
+    }
+  }
+
+  async function readFeed(pane: string, f: Feed, skip?: Client): Promise<void> {
+    if (f.failed) return
+    let changed: ChatItem[]
+    try {
+      changed = await f.reader.read()
+    } catch {
+      f.failed = true
+      for (const w of f.watchers)
+        sendTo(w, { t: "chat", pane, items: [], reset: true, unavailable: "error" })
+      return
+    }
+    if (feeds.get(pane) !== f || changed.length === 0) return
+    for (const w of f.watchers) if (w !== skip) sendTo(w, { t: "chat", pane, items: changed })
+  }
+
+  async function watch(c: Client, pane: string) {
+    if (!panes.panes.some((p) => p.id === pane)) return
+    c.watching.add(pane)
+    const f = feedFor(pane)
+    if (!f) return sendTo(c, { t: "chat", pane, items: [], reset: true, unavailable: "no-agent" })
+    if (f.idle) clearTimeout(f.idle)
+    f.idle = null
+    f.watchers.add(c)
+    f.poll ??= setInterval(() => void readFeed(pane, f), CHAT_POLL_MS)
+    await readFeed(pane, f, c)
+    if (f.failed)
+      return sendTo(c, { t: "chat", pane, items: [], reset: true, unavailable: "error" })
+    if (c.watching.has(pane)) sendTo(c, tailOf(pane, f))
+  }
+
+  function unwatch(c: Client, pane: string) {
+    c.watching.delete(pane)
+    const f = feeds.get(pane)
+    if (!f) return
+    f.watchers.delete(c)
+    if (f.watchers.size) return
+    if (f.poll) clearInterval(f.poll)
+    f.poll = null
+    f.idle ??= setTimeout(() => closeFeed(pane), FEED_IDLE_MS)
+  }
+
+  function more(c: Client, pane: string, before: string) {
+    const f = feeds.get(pane)
+    if (!f || !c.watching.has(pane)) return
+    const items = f.reader.log.items
+    const at = items.findIndex((it) => it.id === before)
+    if (at <= 0) return sendTo(c, { t: "chat", pane, items: [], older: true, more: false })
+    const from = Math.max(0, at - CHAT_TAIL)
+    sendTo(c, { t: "chat", pane, items: items.slice(from, at), older: true, more: from > 0 })
+  }
+
+  /** Main's new leads: a pane whose session changed starts over for its watchers. */
+  function setLeads(next: Record<string, ChatLead>) {
+    leads = next
+    for (const pane of new Set([...feeds.keys(), ...watchedPanes()])) {
+      const f = feeds.get(pane)
+      const lead = leads[pane]
+      // Unchanged, or ended (kept on screen); a pane without a feed gets one if a lead appeared.
+      if (f && (!lead || f.key === leadKey(lead))) continue
+      if (!f && !lead) continue
+      const watchers = [...clients].filter((c) => c.watching.has(pane))
+      closeFeed(pane)
+      for (const c of watchers) void watch(c, pane)
+    }
+  }
+
+  function* watchedPanes() {
+    for (const c of clients) yield* c.watching
   }
 
   let recheckAt = 0
@@ -575,6 +725,15 @@ export function createHostServer(d: HostServerDeps) {
         panes = m.panes
         for (const c of clients) if (c.hello) sendTo(c, { t: "panes", panes })
         break
+      case "leads":
+        setLeads(m.leads)
+        break
+      case "nudge":
+        for (const pane of m.panes) {
+          const f = feeds.get(pane)
+          if (f?.watchers.size) void readFeed(pane, f)
+        }
+        break
       case "rpc":
         waiting.get(m.id)?.(m.result.result)
         waiting.delete(m.id)
@@ -599,6 +758,7 @@ export function createHostServer(d: HostServerDeps) {
 
   /** Stops everything (tests; the worker just exits). */
   function stop() {
+    for (const pane of [...feeds.keys()]) closeFeed(pane)
     clearInterval(pingTimer)
     clearInterval(refreshTimer)
     for (const c of clients) c.ws.terminate()

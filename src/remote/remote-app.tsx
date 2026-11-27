@@ -1,5 +1,13 @@
-import { useEffect, useMemo, useRef, useState } from "react"
-import type { PendingState, RemotePane, RemotePanes, SessionState } from "../lib/remote-protocol"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import type {
+  HostMessage,
+  PendingState,
+  Permission,
+  RemotePane,
+  RemotePanes,
+  SessionState,
+} from "../lib/remote-protocol"
+import { PaneView } from "./pane-view"
 import { Link, type LinkState, type SocketLike } from "./connection"
 
 async function getJson<T>(url: string, init?: RequestInit): Promise<T> {
@@ -124,7 +132,15 @@ function Approval({ id, onDone }: { id: string; onDone: () => void }) {
 function Connected() {
   const [link, setLink] = useState<LinkState>({ state: "connecting" })
   const [panes, setPanes] = useState<RemotePanes | null>(null)
+  const [permission, setPermission] = useState<Permission>("view")
+  const [epoch, setEpoch] = useState(0) // bumps on each welcome (a pane screen re-watches)
   const linkRef = useRef<Link | null>(null)
+  const listeners = useRef(new Set<(m: HostMessage) => void>())
+  const subscribe = useCallback((fn: (m: HostMessage) => void) => {
+    listeners.current.add(fn)
+    return () => void listeners.current.delete(fn)
+  }, [])
+  const send = useCallback((m: unknown) => linkRef.current?.send(m) ?? false, [])
 
   useEffect(() => {
     const l = new Link({
@@ -134,6 +150,11 @@ function Connected() {
       visible: () => document.visibilityState === "visible",
       onMessage: (m) => {
         if (m.t === "panes") setPanes(m.panes)
+        if (m.t === "welcome") {
+          setPermission(m.permission)
+          setEpoch((e) => e + 1)
+        }
+        for (const fn of listeners.current) fn(m)
       },
     })
     linkRef.current = l
@@ -204,7 +225,24 @@ function Connected() {
       {panes?.stale && (
         <div className="banner">The desktop window is closed: this list may be out of date.</div>
       )}
-      {panes ? <PaneList panes={panes} /> : <p className="dim pad">Loading panes…</p>}
+      {panes ? (
+        <PaneList
+          panes={panes}
+          open={(pane, back) => (
+            <PaneView
+              pane={pane}
+              permission={permission}
+              online={link.state === "open"}
+              epoch={epoch}
+              send={send}
+              subscribe={subscribe}
+              onBack={back}
+            />
+          )}
+        />
+      ) : (
+        <p className="dim pad">Loading panes…</p>
+      )}
     </div>
   )
 }
@@ -282,9 +320,17 @@ const WORD: Record<RemotePane["status"], string> = {
   idle: "idle",
 }
 
-function PaneList({ panes }: { panes: RemotePanes }) {
+function PaneList({
+  panes,
+  open: render,
+}: {
+  panes: RemotePanes
+  open: (pane: RemotePane, back: () => void) => React.ReactNode
+}) {
   const [waitingFirst, setWaitingFirst] = useState(false)
-  const [open, setOpen] = useState<RemotePane | null>(null)
+  const [openId, setOpenId] = useState<string | null>(null)
+  // The open pane as the latest list has it (its status moves); gone from the list: back to it.
+  const open = openId ? (panes.panes.find((p) => p.id === openId) ?? null) : null
   const groups = useMemo(() => {
     const byTab = panes.tabs.map((t) => ({
       tab: t,
@@ -296,16 +342,7 @@ function PaneList({ panes }: { panes: RemotePanes }) {
   }, [panes, waitingFirst])
   const waitingCount = panes.panes.filter((p) => p.status === "waiting").length
 
-  if (open)
-    return (
-      <div className="pane-view">
-        <button className="back" onClick={() => setOpen(null)}>
-          ‹ Panes
-        </button>
-        <h2>{open.title}</h2>
-        <p className="dim">Reading and sending to a pane comes in the next update.</p>
-      </div>
-    )
+  if (open) return render(open, () => setOpenId(null))
   return (
     <div className="list">
       <label className="toggle">
@@ -326,7 +363,7 @@ function PaneList({ panes }: { panes: RemotePanes }) {
                   key={`${g.tab.id}:${p.id}`}
                   className={`row${p.started ? "" : " unstarted"}`}
                   disabled={!p.started}
-                  onClick={() => setOpen(p)}
+                  onClick={() => setOpenId(p.id)}
                 >
                   <span className={`dot ${DOT[p.status]}`} />
                   <span className="names">

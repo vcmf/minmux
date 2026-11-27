@@ -2,7 +2,8 @@
 // it when off, and answers its questions from the device table (main holds the authority).
 // Off means no worker and no remote code on any path.
 
-import type { RemotePanes } from "../../src/lib/remote-protocol"
+import type { RemotePanes, SendRefusal } from "../../src/lib/remote-protocol"
+import type { ChatLead } from "../agents/chat"
 import type { DeviceTable } from "./devices"
 import type {
   ClientInfo,
@@ -31,6 +32,13 @@ export interface RemoteHostDeps {
   ask: (name: string, code: string) => Promise<Decision>
   /** Status or clients changed (for the renderer). */
   onChange: () => void
+  /** A device's message for a pane (main checks and types it). */
+  send?: (
+    deviceId: string,
+    pane: string,
+    text: string,
+    id: string,
+  ) => Promise<{ ok: boolean; reason?: SendRefusal }>
 }
 
 export type RemoteState = { status: HostStatus | { state: "off" }; clients: ClientInfo[] }
@@ -43,6 +51,7 @@ export const FAILED: { [K in RpcCall["op"]]: Extract<RpcResult, { op: K }> } = {
   approve: { op: "approve", result: { error: "limited" } },
   pending: { op: "pending", result: { state: "expired" } },
   unlock: { op: "unlock", result: "unknown" },
+  send: { op: "send", result: { ok: false, reason: "error" } },
 }
 
 export class RemoteHost {
@@ -78,6 +87,19 @@ export class RemoteHost {
     this.proc?.postMessage({ t: "panes", panes })
   }
 
+  private leads: Record<string, ChatLead> = {}
+
+  /** Each pane's lead agent session (sent on change; a new worker gets the latest). */
+  setLeads(leads: Record<string, ChatLead>): void {
+    this.leads = leads
+    this.proc?.postMessage({ t: "leads", leads })
+  }
+
+  /** These panes' agents did something: the worker reads their transcripts if watched. */
+  nudge(panes: string[]): void {
+    if (panes.length) this.proc?.postMessage({ t: "nudge", panes })
+  }
+
   /** Closes a device's sockets (revoked) or everyone's (no id). */
   drop(
     deviceId: string | undefined,
@@ -108,6 +130,7 @@ export class RemoteHost {
     })
     proc.postMessage({ t: "config", config: this.config! })
     if (this.panes) proc.postMessage({ t: "panes", panes: this.panes })
+    proc.postMessage({ t: "leads", leads: this.leads })
     this.deps.onChange()
   }
 
@@ -181,6 +204,12 @@ export class RemoteHost {
         const result = await devices.unlock(call.token, call.nodeId, call.pin)
         this.deps.onChange()
         return { op: "unlock", result }
+      }
+      case "send": {
+        const result = this.deps.send
+          ? await this.deps.send(call.deviceId, call.pane, call.text, call.id)
+          : ({ ok: false, reason: "error" } as const)
+        return { op: "send", result }
       }
     }
   }
