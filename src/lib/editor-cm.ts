@@ -1,7 +1,12 @@
 // The editor's CodeMirror pieces (docs/design/FILE_EDITING.md): the Tab command, the keymap the
 // app's shortcuts can live with, and the highlight style on the file tab's theme colours. Only
 // the editor's lazy chunk imports this: CodeMirror never loads with the app.
-import { EditorSelection, type Extension, type StateCommand } from "@codemirror/state"
+import {
+  EditorSelection,
+  type ChangeSpec,
+  type Extension,
+  type StateCommand,
+} from "@codemirror/state"
 import { type Command, type KeyBinding } from "@codemirror/view"
 import {
   defaultKeymap,
@@ -13,6 +18,7 @@ import {
 import { HighlightStyle, getIndentUnit, indentUnit, syntaxHighlighting } from "@codemirror/language"
 import { openSearchPanel, searchKeymap } from "@codemirror/search"
 import { tags as t } from "@lezer/highlight"
+import { diff } from "@codemirror/merge"
 
 // CodeMirror's own `insertTab` always types a tab character.
 /** Tab: spaces to the next indent stop (a tab in a tab-indented file); a selection indents. */
@@ -62,6 +68,18 @@ export function editorKeymap(save: Command, isMac: boolean): KeyBinding[] {
     ...historyKeymap,
     ...defaultKeymap.filter(kept),
   ]
+}
+
+// Each changed stretch on its own, so the text between two distant edits (an import at the top,
+// a line near the end) is untouched and a cursor there stays. A diff that would take too long
+// falls back to coarser stretches (the package's own timeout).
+/** The edits turning `from` into `to`, as CodeMirror changes (in `from`'s positions). */
+export function changesBetween(from: string, to: string): ChangeSpec[] {
+  return diff(from, to, { scanLimit: 500, timeout: 50 }).map((c) => ({
+    from: c.fromA,
+    to: c.toA,
+    insert: to.slice(c.fromB, c.toB),
+  }))
 }
 
 /** The indent unit for a file's indentation (lib/editor-text detectIndent). */

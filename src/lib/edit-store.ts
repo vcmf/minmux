@@ -25,7 +25,7 @@ export interface EditShown {
 }
 
 /** The text an edit started from (or last saved), as the editor holds it, with its bytes' hash. */
-export type EditBase = EditorText & { hash: string }
+export type EditBase = EditorText & { hash: string; seq: number } // seq: the read it came from
 
 interface Edit extends EditShown {
   startLine: number // the line it opened at
@@ -147,6 +147,7 @@ export class EditStore {
     hash: string,
     startLine = 1,
     asked = "source",
+    seq = 0,
   ): void {
     if (this.edits.has(id)) return
     const text = fromDisk(raw)
@@ -155,7 +156,7 @@ export class EditStore {
       asked,
       path,
       ...(wsl ? { wsl } : {}),
-      base: { ...text, hash },
+      base: { ...text, hash, seq },
       state: null,
       scroll: null,
       dirty: false,
@@ -216,13 +217,13 @@ export class EditStore {
     this.publish(id)
   }
 
-  /** The file changed on disk (an agent wrote it): its new text is the base now (the editor
-   *  follows it while nothing is unsaved). */
-  follow(id: string, raw: string, hash: string): EditBase | null {
+  // The editor follows it while nothing is unsaved (file-editor `follow`).
+  /** The file changed on disk (an agent wrote it): its new text, from read `seq`, is the base. */
+  follow(id: string, raw: string, hash: string, seq: number): EditBase | null {
     const e = this.edits.get(id)
     if (!e) return null
     const text = fromDisk(raw)
-    e.base = { ...text, hash }
+    e.base = { ...text, hash, seq }
     e.mixed = text.mixed
     e.notice = null
     this.publish(id)
@@ -257,7 +258,9 @@ export class EditStore {
       return null
     }
     const text = fromDisk(r.text)
-    e.base = { ...text, hash: r.hash }
+    // The file store takes this read too, as its latest: an older one landing after can't win.
+    const seq = r.stamp ? this.fileStore.saved(id, r.text, r.stamp, r.hash) : e.base.seq
+    e.base = { ...text, hash: r.hash, seq }
     e.mixed = text.mixed
     e.notice = null
     e.dirty = false
@@ -303,9 +306,9 @@ export class EditStore {
     if (this.edits.get(id) !== e) return r.kind // closed meanwhile
     e.saving = false
     if (r.kind === "saved") {
-      e.base = { text, bom: e.base.bom, eol: e.base.eol, mixed: false, hash: r.hash }
+      const seq = this.fileStore.saved(id, disk, r.stamp, r.hash)
+      e.base = { text, bom: e.base.bom, eol: e.base.eol, mixed: false, hash: r.hash, seq }
       e.mixed = false
-      this.fileStore.saved(id, disk, r.stamp, r.hash)
     } else {
       e.notice = r.kind === "error" ? { kind: "error", message: r.message } : { kind: r.kind }
     }

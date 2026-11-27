@@ -50,6 +50,7 @@ interface Entry extends FileShown {
   diffWant: DiffWant | null // the latest diff asked for
   diffReading: boolean // a diff read in flight: a newer key waits for it
   savedAt: number // bumped by a save: a read that started before it is stale when it lands
+  seq: number // bumped by each read taken (and each save): a later one is newer
 }
 
 type Read = (path: string, wsl?: WslContext, since?: FileStamp) => Promise<FileData>
@@ -109,6 +110,7 @@ export class FileStore {
         reading: false,
         again: false,
         savedAt: 0,
+        seq: 0,
         highlighted: null,
       }
     }
@@ -260,15 +262,22 @@ export class FileStore {
     return line
   }
 
-  /** It was just saved as `text`: that's its latest read, so the next one is `same`. */
-  saved(id: string, text: string, stamp: FileStamp, hash: string): void {
+  /** The order of its latest read (0: none): an edit follows only reads newer than its base. */
+  seqOf(id: string): number {
+    return this.files.get(id)?.seq ?? 0
+  }
+
+  /** It was just saved (or reloaded) as `text`: that's its latest read; its order back. */
+  saved(id: string, text: string, stamp: FileStamp, hash: string): number {
     const e = this.files.get(id)
-    if (!e) return
+    if (!e) return 0
     e.savedAt++
+    e.seq++
     e.stamp = stamp
     e.data = { kind: "text", text, truncated: false, size: stamp.size, stamp, hash, editable: true }
     if (text !== e.highlighted) void this.highlightNow(id, e, text)
     this.publish(id)
+    return e.seq
   }
 
   /** Its entry closed (or another took its place): its text and lines go now. */
@@ -295,6 +304,7 @@ export class FileStore {
         return
       }
       if (d.kind !== "same") {
+        e.seq++
         e.stamp = d.stamp
         e.data = d
         if (d.kind !== "text") {

@@ -99,19 +99,6 @@ export function saveCleanup(
   return changes
 }
 
-/** The one edit turning `from` into `to`: what's between their common start and end (an agent's
- *  rewrite of a file goes in as just its changed part, so the cursor and undo keep their place). */
-export function changedRange(from: string, to: string): TextChange | null {
-  if (from === to) return null
-  const max = Math.min(from.length, to.length)
-  let a = 0
-  while (a < max && from.charCodeAt(a) === to.charCodeAt(a)) a++
-  let b = 0
-  while (b < max - a && from.charCodeAt(from.length - 1 - b) === to.charCodeAt(to.length - 1 - b))
-    b++
-  return { from: a, to: from.length - b, insert: to.slice(a, to.length - b) }
-}
-
 /** `changes` applied to `text` (tests, and anything without an editor). */
 export function applyChanges(text: string, changes: readonly TextChange[]): string {
   let out = ""

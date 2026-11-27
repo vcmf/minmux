@@ -256,6 +256,50 @@ describe("FileEditor", () => {
       expect(doc()).toBe("one\nmine\n")
     })
 
+    it("deleted, then back with the same bytes: the bar goes", async () => {
+      await open("one\n")
+      vi.mocked(ipc.readFile).mockResolvedValue({ kind: "error", message: "gone", gone: true })
+      await act(async () => {
+        files.refresh(entryId)
+        await new Promise((r) => setTimeout(r, 0))
+      })
+      await screen.findByText("The file was deleted.")
+      await agentWrites("one\n", "h0") // git checkout back
+      await waitFor(() => expect(screen.queryByText("The file was deleted.")).toBeNull())
+    })
+
+    it("grown too large to edit: it says the file changed", async () => {
+      await open("one\n")
+      vi.mocked(ipc.readFile).mockResolvedValue({ kind: "too-large", size: 3_000_000 })
+      await act(async () => {
+        files.refresh(entryId)
+        await new Promise((r) => setTimeout(r, 0))
+      })
+      await screen.findByText("The file changed on disk since you opened it.")
+      expect(doc()).toBe("one\n")
+    })
+
+    it("a read older than the base (after Reload) isn't followed", async () => {
+      await open("one\n")
+      vi.mocked(ipc.readFile).mockResolvedValue(text("theirs\n", "hT"))
+      await act(async () => void (await edits.reload(entryId)))
+      // The editor shows what the reload read; the file store's older data (seq) can't win.
+      act(() =>
+        view().dispatch({ changes: { from: 0, to: view().state.doc.length, insert: "theirs\n" } }),
+      )
+      expect(edits.base(entryId)?.hash).toBe("hT")
+      expect(files.seqOf(entryId)).toBe(edits.base(entryId)?.seq)
+    })
+
+    it("unsaved text the file now holds exactly: no bar, it's saved", async () => {
+      await open("one\n")
+      type("two\n")
+      await agentWrites("one\ntwo\n", "h1")
+      await waitFor(() => expect(edits.base(entryId)?.hash).toBe("h1"))
+      expect(screen.queryByText(/changed on disk/)).toBeNull()
+      await waitFor(() => expect(document.querySelector(".file-editor-dot")).toBeNull())
+    })
+
     it("deleted: it says so", async () => {
       await open("one\n")
       vi.mocked(ipc.readFile).mockResolvedValue({ kind: "error", message: "gone", gone: true })

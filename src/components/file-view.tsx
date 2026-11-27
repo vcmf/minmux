@@ -335,7 +335,7 @@ function FileViewer({ entryId, tabId }: { entryId: string; tabId: string }) {
       at = rows.find((r) => r.newNo)?.newNo ?? at
     }
     useStore.getState().keepEntry(entryId) // a peek being edited is a kept tab: never replaced
-    edits.start(entryId, path, wsl, data.text, data.hash, at, asked)
+    edits.start(entryId, path, wsl, data.text, data.hash, at, asked, files.seqOf(entryId))
   }
   const canReveal = !wsl && isAbsoluteHostPath(path, platform)
   // A WSL file too: main opens it through the distro's share.

@@ -14,7 +14,7 @@ const text = (t: string, hash: string): FileData => ({
 })
 
 function make(write: (...a: unknown[]) => Promise<SaveResult>, read = vi.fn()) {
-  const fileStore = { pin: vi.fn(), saved: vi.fn() }
+  const fileStore = { pin: vi.fn(), saved: vi.fn(() => 7) }
   const store = new EditStore(write as never, read as never, fileStore)
   return { store, fileStore, read }
 }
@@ -130,7 +130,7 @@ describe("EditStore", () => {
     const { store } = make(vi.fn(), read)
     store.start("e", "/a", undefined, "a", "h0")
     store.setDirty("e", true)
-    expect(await store.reload("e")).toMatchObject({ text: "theirs\n", hash: "hT" })
+    expect(await store.reload("e")).toMatchObject({ text: "theirs\n", hash: "hT", seq: 7 })
     expect(store.get("e")?.dirty).toBe(false)
   })
 

@@ -26,8 +26,8 @@ import { search } from "@codemirror/search"
 import { languages } from "@codemirror/language-data"
 import { useStore } from "../store"
 import { edits, type EditShown } from "../lib/edit-store"
-import { changedRange, detectIndent, keepsTrailingSpace, saveCleanup } from "../lib/editor-text"
-import { editorKeymap, highlighting, indentFor } from "../lib/editor-cm"
+import { detectIndent, fromDisk, keepsTrailingSpace, saveCleanup } from "../lib/editor-text"
+import { changesBetween, editorKeymap, highlighting, indentFor } from "../lib/editor-cm"
 import { shortCwd } from "../lib/session-label"
 import { files } from "../lib/file-store"
 import { goKeyOf, viewOf, type FileEntry } from "../lib/folder-entries"
@@ -158,19 +158,41 @@ function follow(id: string): void {
   const data = files.get(id)?.data
   const base = edits.base(id)
   const now = edits.get(id)
-  if (!data || !base || !now || now.saving) return // (a save in flight: its own write lands next)
-  if (data.kind === "error" && data.gone) return edits.note(id, { kind: "missing" })
-  if (data.kind !== "text" || !data.hash || data.hash === base.hash) return
+  const path = edits.path(id)
+  if (!data || !base || !now || !path || now.saving) return // (a save's own write lands next)
+  const notice = now.notice?.kind
+  // Back to the bytes it was edited from (a checkout and back): a deleted / changed bar goes.
+  if (data.kind === "text" && data.hash === base.hash) {
+    if (notice === "missing" || notice === "changed") edits.dismiss(id)
+    return
+  }
+  // Only a read newer than the base counts: an older one (landing late, or still in the file
+  // store when the editor mounts again) would take the file back in time.
+  if (files.seqOf(id) <= base.seq) return
+  if (data.kind === "error") {
+    if (data.gone) edits.note(id, { kind: "missing" })
+    return // (another error is the read's, not the file's: the next read decides)
+  }
+  // Too large or not text any more: it can't be followed; saving over it asks first.
+  if (data.kind !== "text" || !data.hash || data.editable === false)
+    return edits.note(id, { kind: "changed" })
   flushDirty(id)
-  if (edits.get(id)?.dirty || data.editable === false) return edits.note(id, { kind: "changed" })
-  const next = edits.follow(id, data.text, data.hash)
-  if (!next) return
-  apply(id, (st) => {
-    const r = changedRange(st.doc.toString(), next.text)
-    return r ? { changes: r, annotations: Transaction.addToHistory.of(false) } : {}
-  })
   const st = current(id)
-  if (st) refreshDirty(id, st, true)
+  if (!st) return
+  const incoming = fromDisk(data.text).text
+  // Unsaved text: it stops following, unless the file now holds exactly that text.
+  if (edits.get(id)?.dirty && st.doc.toString() !== incoming)
+    return edits.note(id, { kind: "changed" })
+  const next = edits.follow(id, data.text, data.hash, files.seqOf(id))
+  if (!next) return
+  const indent = indentFor(detectIndent(next.text, path, useStore.getState().settings.editorIndent))
+  apply(id, (s) => ({
+    changes: changesBetween(s.doc.toString(), next.text),
+    effects: indentSlot.reconfigure(indent),
+    annotations: Transaction.addToHistory.of(false),
+  }))
+  const after = current(id)
+  if (after) refreshDirty(id, after, true)
 }
 
 const subscribe = (fn: () => void) => edits.subscribe(fn)
@@ -291,7 +313,8 @@ export default function FileEditor({
 
   // Each new read of the file (the watcher, a tab coming back) is followed.
   const read = useSyncExternalStore(subscribeFiles, () => files.get(entryId)?.data ?? null)
-  useEffect(() => follow(entryId), [read, entryId])
+  // …and again when a save ends or the text is clean again (a change that came meanwhile).
+  useEffect(() => follow(entryId), [read, entryId, shown.saving, shown.dirty])
 
   // The setting is the width for files that show none of their own.
   useEffect(() => {
