@@ -79,6 +79,7 @@ export type SendRefusal =
   | "no-pane"
   | "not-started"
   | "empty"
+  | "multiline" // several lines for a program without bracketed paste: they'd run one by one
   | "error"
 
 export const SEND_MAX = 16 * 1024

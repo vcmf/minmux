@@ -161,11 +161,23 @@ describe("setupRemoteControl", () => {
     rc.agentEvents([{ paneId: "p1" }, { paneId: "p1" }, {}])
     expect(p.sent).toContainEqual({ t: "nudge", panes: ["p1"] })
 
+    // An unknown device can't type; an approved one can.
     p.emit({
       t: "rpc",
-      id: 9,
-      call: { op: "send", deviceId: "d", pane: "p1", text: "go", id: "x" },
+      id: 8,
+      call: { op: "send", deviceId: "nope", pane: "p1", text: "go", id: "w" },
     })
+    await vi.waitFor(() =>
+      expect(p.sent).toContainEqual({
+        t: "rpc",
+        id: 8,
+        result: { op: "send", result: { ok: false, reason: "not-allowed" } },
+      }),
+    )
+    p.emit({ t: "rpc", id: 7, call: { op: "approve", nodeId: "n1", name: "iphone" } })
+    await vi.waitFor(async () => expect((await rc.view()).devices).toHaveLength(1))
+    const deviceId = (await rc.view()).devices[0]!.id
+    p.emit({ t: "rpc", id: 9, call: { op: "send", deviceId, pane: "p1", text: "go", id: "x" } })
     await vi.waitFor(() =>
       expect(p.sent).toContainEqual({
         t: "rpc",

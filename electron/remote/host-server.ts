@@ -465,14 +465,18 @@ export function createHostServer(d: HostServerDeps) {
   interface Feed {
     key: string // agent:sessionId the reader belongs to
     reader: ChatReader
-    watchers: Set<Client>
+    watchers: Set<Client> // watching this pane
+    ready: Set<Client> // …and already sent its fresh start: only these get changes
     poll: ReturnType<typeof setInterval> | null
     idle: ReturnType<typeof setTimeout> | null
-    failed: boolean
+    reading: Promise<void> | null // one read at a time; callers share it
+    errors: number // consecutive failed reads
+    failed: boolean // gave up: FEED_MAX_ERRORS in a row
   }
   let leads: Record<string, ChatLead> = {}
   const feeds = new Map<string, Feed>()
   const leadKey = (l: ChatLead) => `${l.agent}:${l.sessionId}`
+  const FEED_MAX_ERRORS = 5 // a locked database or a passing fs error is retried, not latched
 
   function closeFeed(pane: string) {
     const f = feeds.get(pane)
@@ -493,7 +497,17 @@ export function createHostServer(d: HostServerDeps) {
     closeFeed(pane)
     const reader = lead ? chatReaderFor(lead) : null
     if (!lead || !reader) return null
-    const f: Feed = { key: leadKey(lead), reader, watchers, poll: null, idle: null, failed: false }
+    const f: Feed = {
+      key: leadKey(lead),
+      reader,
+      watchers,
+      ready: new Set(),
+      poll: null,
+      idle: null,
+      reading: null,
+      errors: 0,
+      failed: false,
+    }
     feeds.set(pane, f)
     return f
   }
@@ -510,19 +524,25 @@ export function createHostServer(d: HostServerDeps) {
     }
   }
 
-  async function readFeed(pane: string, f: Feed, skip?: Client): Promise<void> {
-    if (f.failed) return
-    let changed: ChatItem[]
-    try {
-      changed = await f.reader.read()
-    } catch {
-      f.failed = true
-      for (const w of f.watchers)
-        sendTo(w, { t: "chat", pane, items: [], reset: true, unavailable: "error" })
-      return
-    }
-    if (feeds.get(pane) !== f || changed.length === 0) return
-    for (const w of f.watchers) if (w !== skip) sendTo(w, { t: "chat", pane, items: changed })
+  /** Reads what's new and sends it to the watchers that have their fresh start. */
+  function readFeed(pane: string, f: Feed): Promise<void> {
+    if (f.failed) return Promise.resolve()
+    f.reading ??= (async () => {
+      let changed: ChatItem[]
+      try {
+        changed = await f.reader.read()
+        f.errors = 0
+      } catch {
+        if (++f.errors < FEED_MAX_ERRORS) return // next poll tries again
+        f.failed = true
+        for (const w of f.watchers)
+          sendTo(w, { t: "chat", pane, items: [], reset: true, unavailable: "error" })
+        return
+      }
+      if (feeds.get(pane) !== f || changed.length === 0) return
+      for (const w of f.ready) sendTo(w, { t: "chat", pane, items: changed })
+    })().finally(() => (f.reading = null))
+    return f.reading
   }
 
   async function watch(c: Client, pane: string) {
@@ -533,11 +553,16 @@ export function createHostServer(d: HostServerDeps) {
     if (f.idle) clearTimeout(f.idle)
     f.idle = null
     f.watchers.add(c)
+    f.ready.delete(c) // a re-watch starts fresh too
     f.poll ??= setInterval(() => void readFeed(pane, f), CHAT_POLL_MS)
-    await readFeed(pane, f, c)
+    await readFeed(pane, f)
+    if (f.reading) await f.reading // one already running when we came: what it read is ours too
+    // The pane moved to another session (or the watch ended) while reading: that one answers.
+    if (feeds.get(pane) !== f || !c.watching.has(pane)) return
     if (f.failed)
       return sendTo(c, { t: "chat", pane, items: [], reset: true, unavailable: "error" })
-    if (c.watching.has(pane)) sendTo(c, tailOf(pane, f))
+    sendTo(c, tailOf(pane, f))
+    f.ready.add(c)
   }
 
   function unwatch(c: Client, pane: string) {
@@ -545,6 +570,7 @@ export function createHostServer(d: HostServerDeps) {
     const f = feeds.get(pane)
     if (!f) return
     f.watchers.delete(c)
+    f.ready.delete(c)
     if (f.watchers.size) return
     if (f.poll) clearInterval(f.poll)
     f.poll = null
@@ -553,7 +579,7 @@ export function createHostServer(d: HostServerDeps) {
 
   function more(c: Client, pane: string, before: string) {
     const f = feeds.get(pane)
-    if (!f || !c.watching.has(pane)) return
+    if (!f || !f.ready.has(c)) return
     const items = f.reader.log.items
     const at = items.findIndex((it) => it.id === before)
     if (at <= 0) return sendTo(c, { t: "chat", pane, items: [], older: true, more: false })

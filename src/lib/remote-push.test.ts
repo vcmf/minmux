@@ -12,7 +12,7 @@ describe("startRemotePush", () => {
     const subs = new Set<() => void>()
     let onWanted: (w: boolean) => void = () => {}
     const stop = startRemotePush({
-      build: () => ({ tabs: [], panes: [], stale: n > 1 }),
+      build: () => ({ tabs: [{ id: String(n > 1 ? n : 0), title: "" }], panes: [], stale: false }),
       send: (p) => sent.push(p),
       subscribe: (fn) => (subs.add(fn), () => subs.delete(fn)),
       wanted: async () => false,
@@ -31,8 +31,14 @@ describe("startRemotePush", () => {
     subs.forEach((f) => f())
     vi.advanceTimersByTime(PUSH_MS)
     expect(sent).toHaveLength(2)
+    n = 3
+    vi.advanceTimersByTime(1000 + PUSH_MS) // the periodic rebuild, no store change
+    expect(sent).toHaveLength(3)
     onWanted(false)
     expect(subs.size).toBe(0)
+    n = 4
+    vi.advanceTimersByTime(5000)
+    expect(sent).toHaveLength(3)
     stop()
   })
 })

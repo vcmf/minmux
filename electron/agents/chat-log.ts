@@ -8,6 +8,10 @@ import type { ChatItem } from "../../src/lib/remote-chat"
 
 export const MAX_ITEMS = 2000
 const CHUNK = 1 << 18
+// A first read starts this far from the end: the chat shows the recent conversation, and a
+// multi-GB transcript (Codex rollouts reach 16 GB) never gets read whole.
+export const FIRST_READ_MAX = 16 * 1024 * 1024
+const LINE_MAX = 8 * 1024 * 1024 // a longer line (a huge pasted blob) is skipped, not held
 
 /** A conversation being built: ordered items, upserted by id; reports what changed. */
 export class ChatLog {
@@ -24,6 +28,8 @@ export class ChatLog {
       this.items.push(item)
     } else this.items[i] = item
     this.changed.set(item.id, item)
+    // Trimmed while reading too (in batches), so a long read never holds more than ~1.5×.
+    if (this.items.length > MAX_ITEMS * 1.5) this.trim()
   }
 
   get(id: string): ChatItem | undefined {
@@ -45,6 +51,7 @@ export class ChatLog {
     this.items = this.items.slice(over)
     this.at = new Map(this.items.map((it, i) => [it.id, i]))
     for (const [k, v] of this.calls) if (!this.at.has(v)) this.calls.delete(k)
+    for (const k of this.changed.keys()) if (!this.at.has(k)) this.changed.delete(k)
   }
 }
 
@@ -63,8 +70,10 @@ const pause = () => new Promise<void>((r) => setImmediate(r))
 /** An append-only JSONL transcript, read from where it left off. */
 export class JsonlChat implements ChatReader {
   readonly log = new ChatLog()
-  private offset = 0
-  private rest = ""
+  private offset = -1 // -1: not read yet (the first read may start near the end)
+  private rest: string[] = [] // a line still being written, in pieces (never re-joined per chunk)
+  private restLen = 0
+  private skipping = false // inside a line over LINE_MAX: dropped up to its end
   private decoder = new StringDecoder("utf8") // a character split across two reads stays whole
   private lineNo = 0
   private file: string | null = null
@@ -94,10 +103,16 @@ export class JsonlChat implements ChatReader {
     }
     try {
       const { size } = await fh.stat()
-      if (size < this.offset) {
+      let skipFirst = false
+      if (this.offset < 0) {
+        this.offset = Math.max(0, size - FIRST_READ_MAX)
+        skipFirst = this.offset > 0 // started mid-line: drop the partial first one
+      } else if (size < this.offset) {
         // Rewritten from the start (rare): read it again.
         this.offset = 0
-        this.rest = ""
+        this.rest = []
+        this.restLen = 0
+        this.skipping = false
         this.lineNo = 0
         this.decoder = new StringDecoder("utf8")
       }
@@ -111,10 +126,25 @@ export class JsonlChat implements ChatReader {
         )
         if (bytesRead === 0) break
         this.offset += bytesRead
-        const text = this.rest + this.decoder.write(buf.subarray(0, bytesRead))
-        const lines = text.split("\n")
-        this.rest = lines.pop() ?? ""
-        for (const line of lines) this.fold(line)
+        const text = this.decoder.write(buf.subarray(0, bytesRead))
+        let from = 0
+        for (let nl = text.indexOf("\n"); nl >= 0; nl = text.indexOf("\n", from)) {
+          const line = this.rest.join("") + text.slice(from, nl)
+          this.rest = []
+          this.restLen = 0
+          from = nl + 1
+          if (skipFirst || this.skipping) skipFirst = this.skipping = false
+          else this.fold(line)
+        }
+        if (from < text.length && !this.skipping) {
+          this.rest.push(text.slice(from))
+          this.restLen += text.length - from
+          if (this.restLen > LINE_MAX) {
+            this.rest = []
+            this.restLen = 0
+            this.skipping = true
+          }
+        }
         await pause()
       }
     } finally {

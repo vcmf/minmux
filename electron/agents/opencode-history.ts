@@ -66,7 +66,7 @@ type ListRow = {
 /** A `like` pattern for `word` anywhere (its wildcards taken as text). */
 const likeAnywhere = (word: string) => `%${word.replace(/[\\%_]/g, "\\$&")}%`
 
-const BUSY_WAIT_MS = 1000
+export const BUSY_WAIT_MS = 1000
 
 /** Open, run, close: OpenCode keeps writing it, so it's never held open between reads. */
 function withDb<T>(file: string, read: (db: DatabaseSync) => T): T {

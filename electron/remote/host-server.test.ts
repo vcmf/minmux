@@ -458,6 +458,54 @@ describe("remote host server", () => {
     s.ws.send(JSON.stringify({ t: "watch", pane: "nope" })) // not listed: ignored
   })
 
+  it("chat: a passing read error is retried, not latched", async () => {
+    const f = path.join(dir, "gone.jsonl") // doesn't exist yet: reads find nothing
+    host.setPanes({
+      tabs: [{ id: "t", title: "t" }],
+      panes: [{ id: "p1", tab: "t", title: "a", kind: "agent", status: "idle", started: true }],
+      stale: false,
+    })
+    host.setLeads({ p1: { agent: "claude", sessionId: "s1", files: [f] } })
+    const s = await hello(await approve())
+    s.ws.send(JSON.stringify({ t: "watch", pane: "p1" }))
+    await until(() => s.got.some((m) => m.t === "chat" && m.reset))
+    fs.writeFileSync(
+      f,
+      JSON.stringify({ type: "user", uuid: "late", message: { content: "hi" } }) + "\n",
+    )
+    await until(() =>
+      s.got.some((m) => m.t === "chat" && (m.items as { id: string }[])[0]?.id === "late"),
+    )
+  })
+
+  it("chat: a new session in the pane replaces the conversation", async () => {
+    const a = path.join(dir, "a.jsonl")
+    const b = path.join(dir, "b.jsonl")
+    fs.writeFileSync(
+      a,
+      JSON.stringify({ type: "user", uuid: "fromA", message: { content: "a" } }) + "\n",
+    )
+    fs.writeFileSync(
+      b,
+      JSON.stringify({ type: "user", uuid: "fromB", message: { content: "b" } }) + "\n",
+    )
+    host.setPanes({
+      tabs: [{ id: "t", title: "t" }],
+      panes: [{ id: "p1", tab: "t", title: "a", kind: "agent", status: "idle", started: true }],
+      stale: false,
+    })
+    host.setLeads({ p1: { agent: "claude", sessionId: "A", files: [a] } })
+    const s = await hello(await approve())
+    s.ws.send(JSON.stringify({ t: "watch", pane: "p1" }))
+    await until(() => s.got.some((m) => m.t === "chat" && m.reset))
+    host.setLeads({ p1: { agent: "claude", sessionId: "B", files: [b] } })
+    await until(() => s.got.filter((m) => m.t === "chat" && m.reset).length === 2)
+    const last = s.got.filter((m) => m.t === "chat" && m.reset).at(-1) as unknown as {
+      items: { id: string }[]
+    }
+    expect(last.items.map((i) => i.id)).toEqual(["fromB"])
+  })
+
   it("send: relayed to main and acked; view-only devices refused here", async () => {
     const cookie = await approve()
     const s = await hello(cookie)

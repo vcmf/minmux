@@ -7,15 +7,18 @@ import { DatabaseSync } from "node:sqlite"
 import { clip, questionsOf, RESULT_MAX, TEXT_MAX, type ChatItem } from "../../src/lib/remote-chat"
 import { ChatLog, type ChatReader } from "./chat-log"
 import { toolSummary } from "./claude-chat"
-import { opencodeDb } from "./opencode-history"
+import { BUSY_WAIT_MS, opencodeDb } from "./opencode-history"
 
 const TAIL = 300 // parts read per refresh (the latest ones)
 
-const PARTS_SQL = `
+// The newest parts' ids and update times (cheap), then the data of the ones that changed only.
+const RECENT_SQL = `
+  select id, time_updated as t from part where session_id = ?
+  order by time_created desc, id desc limit ${TAIL}`
+const DATA_SQL = `
   select p.id, p.data, json_extract(m.data, '$.role') as role from part p
   join message m on m.id = p.message_id
-  where p.session_id = ?
-  order by p.time_created desc, p.id desc limit ${TAIL}`
+  where p.id = ?`
 
 type Row = { id: string; data: string; role: string | null }
 
@@ -58,7 +61,7 @@ export function opencodeItem(row: Row): ChatItem | null {
 export class OpenCodeChat implements ChatReader {
   readonly log = new ChatLog()
   private db: DatabaseSync | null = null
-  private seen = new Map<string, string>() // part id → its data (only changed parts are resent)
+  private seen = new Map<string, number>() // part id → its time_updated (changed parts only)
 
   constructor(
     private readonly sessionId: string,
@@ -66,14 +69,21 @@ export class OpenCodeChat implements ChatReader {
   ) {}
 
   async read(): Promise<ChatItem[]> {
-    this.db ??= new DatabaseSync(this.file, { readOnly: true })
-    const rows = (this.db.prepare(PARTS_SQL).all(this.sessionId) as Row[]).reverse()
-    for (const r of rows) {
-      if (this.seen.get(r.id) === r.data) continue
-      this.seen.set(r.id, r.data)
-      const item = opencodeItem(r)
+    // OpenCode may hold a lock for a moment (a checkpoint): wait for it like opencode-history.
+    this.db ??= new DatabaseSync(this.file, { readOnly: true, timeout: BUSY_WAIT_MS })
+    const recent = (
+      this.db.prepare(RECENT_SQL).all(this.sessionId) as { id: string; t: number }[]
+    ).reverse()
+    const data = this.db.prepare(DATA_SQL)
+    const keep = new Map<string, number>()
+    for (const { id, t } of recent) {
+      keep.set(id, t)
+      if (this.seen.get(id) === t) continue
+      const row = data.get(id) as Row | undefined
+      const item = row ? opencodeItem(row) : null
       if (item) this.log.upsert(item)
     }
+    this.seen = keep // only the parts still among the newest
     return this.log.takeChanged()
   }
 

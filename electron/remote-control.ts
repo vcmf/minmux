@@ -30,6 +30,18 @@ export interface RemoteControlDeps {
   writePty?: (pane: string, data: string) => boolean
 }
 
+// Hook events that mean the agent is asking (a dialog is up), and ones that mean it moved on.
+const ASKS = new Set(["Notification", "PermissionRequest"])
+const MOVES_ON = new Set([
+  "UserPromptSubmit",
+  "PreToolUse",
+  "PostToolUse",
+  "PermissionReplied",
+  "Stop",
+  "SessionStart",
+  "SessionEnd",
+])
+
 /** 7420 for the installed app, 7421 for a dev build, and one of 7430–7489 per other profile. */
 export function autoPort(profile: string): number {
   if (!profile) return 7420
@@ -159,7 +171,17 @@ export function setupRemoteControl(deps: RemoteControlDeps) {
   const sender = new Sender({
     pane: (id) => lastPanes?.panes.find((p) => p.id === id),
     write: (pane, data) => deps.writePty?.(pane, data) ?? false,
+    asking: (pane) => asking.has(pane),
+    // Main decides, not the worker: the device must still exist, be unlocked and able to send.
+    allowed: async (deviceId) => {
+      const p = (await devices()).permissionOf(deviceId)
+      return p === "send" || p === "keys"
+    },
   })
+
+  // Panes whose agent is asking right now, from hook events as they land (fresher than the
+  // renderer's throttled pane list): a message's Enter must never answer the agent's dialog.
+  const asking = new Set<string>()
 
   // Each listed pane's lead agent session, for the chat view (sent only while someone's connected).
   let lastLeads = ""
@@ -181,7 +203,12 @@ export function setupRemoteControl(deps: RemoteControlDeps) {
   }
 
   /** A batch of agent hook events: leads may have moved; the panes' transcripts grew. */
-  const agentEvents = (events: { paneId?: string }[]) => {
+  const agentEvents = (events: { paneId?: string; agentId?: string; event?: string }[]) => {
+    for (const ev of events) {
+      if (!ev.paneId || ev.agentId) continue // the pane's own session, not its sub-agents
+      if (ASKS.has(ev.event ?? "")) asking.add(ev.paneId)
+      else if (MOVES_ON.has(ev.event ?? "")) asking.delete(ev.paneId)
+    }
     if (!host.wanted) return
     pushLeads()
     host.nudge([...new Set(events.flatMap((e) => (e.paneId ? [e.paneId] : [])))])

@@ -287,6 +287,35 @@ describe("chat log and dispatch", () => {
     expect((await r.read()).map((i) => i.id)).toEqual(["b"])
   })
 
+  it("a huge transcript is read from near its end; an overlong line is skipped", async () => {
+    const f = tmp("big.jsonl")
+    const pad = "x".repeat(1024)
+    const fd = fs.openSync(f, "w")
+    for (let i = 0; i < 17 * 1024; i++) fs.writeSync(fd, line({ uuid: `old${i}`, pad }))
+    fs.writeSync(fd, line({ uuid: "newest", pad }))
+    fs.closeSync(fd)
+    const seen: string[] = []
+    const r = new JsonlChat([f], (o, log) => {
+      seen.push(String(o.uuid))
+      log.upsert({ id: String(o.uuid), kind: "user", text: "x" })
+    })
+    await r.read()
+    expect(seen.at(-1)).toBe("newest")
+    expect(seen).not.toContain("old0") // the first MBs were never read
+    expect(seen.length).toBeLessThan(17 * 1024)
+    expect(r.log.items.length).toBeLessThanOrEqual(MAX_ITEMS)
+
+    fs.appendFileSync(
+      f,
+      JSON.stringify({ uuid: "huge", pad: "y".repeat(9 * 1024 * 1024) }) +
+        "\n" +
+        line({ uuid: "after", pad }),
+    )
+    await r.read()
+    expect(seen).not.toContain("huge")
+    expect(seen.at(-1)).toBe("after")
+  }, 30_000)
+
   it("picks a reader per agent", () => {
     expect(chatReaderFor({ agent: "claude", sessionId: "s", files: ["/f"] })).not.toBeNull()
     expect(chatReaderFor({ agent: "claude", sessionId: "s", files: [] })).toBeNull()

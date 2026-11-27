@@ -71,6 +71,7 @@ const REFUSALS: Record<NonNullable<Outgoing["reason"]>, string> = {
   "no-pane": "That pane is gone.",
   "not-started": "That pane hasn't started on the computer yet.",
   empty: "Nothing to send.",
+  multiline: "This program would run each line on its own. Send one line at a time.",
   error: "Couldn't send.",
   offline: "Not sent: the connection dropped.",
 }

@@ -71,4 +71,55 @@ describe("typing a phone's message", () => {
     await s.send("other-device", "p", "x", "same")
     expect(writes).toHaveLength(4)
   })
+
+  it("messages to one pane go one at a time: paste, Enter, then the next", async () => {
+    const writes: string[] = []
+    let release: () => void = () => {}
+    const s = new Sender({
+      pane: () => pane({ paste: true }),
+      write: (_id, d) => (writes.push(d), true),
+      delay: () => new Promise<void>((r) => (release = r)),
+    })
+    const a = s.send("d", "p", "A", "1")
+    const b = s.send("d", "p", "B", "2")
+    await new Promise((r) => setTimeout(r, 0))
+    expect(writes).toEqual(["\x1b[200~A\x1b[201~"])
+    release()
+    await a
+    await new Promise((r) => setTimeout(r, 0))
+    release()
+    await b
+    expect(writes).toEqual(["\x1b[200~A\x1b[201~", "\r", "\x1b[200~B\x1b[201~", "\r"])
+  })
+
+  it("main's own asking state refuses and holds Enter, ahead of the pane list", async () => {
+    let asking = false
+    const writes: string[] = []
+    const s = new Sender({
+      pane: () => pane({ paste: true }),
+      write: (_id, d) => (writes.push(d), true),
+      asking: () => asking,
+      delay: async () => {
+        asking = true // a permission prompt landed between the paste and Enter
+      },
+    })
+    expect(await s.send("d", "p", "x", "1")).toEqual({ ok: false, reason: "held" })
+    expect(await s.send("d", "p", "y", "2")).toEqual({ ok: false, reason: "waiting" })
+    expect(writes).toHaveLength(1)
+  })
+
+  it("several lines without bracketed paste are refused; a device main refuses can't send", async () => {
+    expect(
+      await setup(pane({ kind: "shell", paste: false })).s.send("d", "p", "a\nb", "1"),
+    ).toEqual({
+      ok: false,
+      reason: "multiline",
+    })
+    const s = new Sender({
+      pane: () => pane(),
+      write: () => true,
+      allowed: async () => false,
+    })
+    expect(await s.send("d", "p", "x", "1")).toEqual({ ok: false, reason: "not-allowed" })
+  })
 })
