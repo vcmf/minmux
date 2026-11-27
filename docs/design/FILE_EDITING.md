@@ -129,7 +129,10 @@ The renderer's CSP already allows what CodeMirror does at runtime: `style-src 's
   process stuck in a dead mount that never exits holds it for the session. Other files save as
   usual. A known gap: the hold is by path, so a stuck save under one name doesn't hold
   another name of the same file (a symlink); the worker that could say it's one file is the stuck
-  one.
+  one. Another: the save worker runs four file operations at once, so four saves
+  hanging on a dead mount within `HUNG_MS` can make a fifth, healthy one time out and hold its
+  file for the session (an error, nothing written wrong). Accepted: it takes several hung saves at
+  once.
 - The WSL share loop tries the next share form only when a form has no file or won't open it, and
   answers `missing` only when no form had the file.
 - Main checks the request: an absolute path, an existing regular file (a symlink to one is written
