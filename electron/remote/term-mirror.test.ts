@@ -31,4 +31,16 @@ describe("TermMirror", () => {
     m.write(1, 5000, "LATE")
     expect(await screen).toContain("LATE")
   })
+
+  it("reads the live screen, and nothing from a mirror disposed while it waits", async () => {
+    const m = new TermMirror({ epoch: 1, offset: 0, cols: 20, rows: 2, text: "" })
+    m.write(1, 0, "one\r\ntwo\r\nthree")
+    expect(await m.lines()).toEqual(["two", "three"])
+    m.write(1, 15, "x".repeat(5000))
+    const lines = m.lines()
+    const screen = m.serialize()
+    m.dispose()
+    expect(await lines).toEqual([])
+    expect(await screen).toBe("")
+  })
 })

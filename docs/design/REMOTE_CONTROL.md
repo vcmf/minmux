@@ -371,9 +371,17 @@ matrix, apart from the renderer's reducer and its known flaw. Main feeds it ever
   for the dialog as the pane's **screen** shows it (the worker's mirror, or a snapshot taken for
   that look only): its question and numbered options (`electron/agents/answers.ts`, parsed from
   the screen's text, boxes and all).
-- An answer names the wait id, the option's number and its label. The worker reads the screen
-  again; main types the option's key only when the device may send, that dialog is still the open
-  one, the agent takes answers by number, and the screen still shows that number with that label.
+- Buttons show only for a **permission prompt shown whole**: a "Do you want…?" question with
+  "Yes" first, its top edge on screen within 30 lines, and nothing under it but blanks and its
+  "Esc to …" footer. A numbered list in the agent's own text has its input box under it; a
+  longer prompt is shown with "…" and answered at the computer.
+- An answer names the wait id, the option's number and the dialog the phone showed (question,
+  body, options). Main reads the screen itself, from the desktop window's terminal (its live
+  rows, wherever the desktop has scrolled), and types the option's key only when the device may
+  send, that wait is still the front one before and after the read, and the parsed dialog is a
+  whole permission prompt equal to what the phone showed. A closed window refuses; a pane the
+  window hasn't started says to use the Terminal view.
+- Looks are one at a time per pane per device (a repeat while one is in flight is dropped).
 - **Claude only** for now: its dialogs take the option's number (verified against Claude Code
   2.1.332's own strings). Codex's and OpenCode's options are shown with a way into the Terminal
   view and its keys bar; which key picks an option there isn't verified, and a wrong key into a

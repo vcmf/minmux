@@ -85,7 +85,7 @@ function App() {
           id,
           what === "paste"
             ? TerminalManager.bracketedPaste(pane)
-            : TerminalManager.screenLines(pane),
+            : (TerminalManager.screenLines(pane) ?? null),
         ),
       ),
     [],

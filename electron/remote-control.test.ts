@@ -347,6 +347,8 @@ describe("setupRemoteControl", () => {
     settings = JSON.stringify({ remote: { enabled: true } })
     let onScreen: string[] = []
     let windowOpen = true
+    let started = true
+    let duringRead = async () => {}
     const writes: [string, string][] = []
     const rc = setupRemoteControl({
       dir: "/app/out/main",
@@ -356,7 +358,10 @@ describe("setupRemoteControl", () => {
       window: () => null,
       leadOf: () => ({ agent: "claude", sessionId: "s" }),
       writePty: (pane, data) => (writes.push([pane, data]), true),
-      screen: async () => (windowOpen ? onScreen : undefined),
+      screen: async () => {
+        await duringRead()
+        return windowOpen ? (started ? onScreen : null) : undefined
+      },
     })
     rc.apply()
     const p = forks[0]!
@@ -374,7 +379,7 @@ describe("setupRemoteControl", () => {
       }
     ).panes.panes[0]!.waitId!
     expect(waitId).toBeTruthy()
-    const screen = ["Do you want to proceed?", "❯ 1. Yes", "  2. No"]
+    const screen = ["────────", "Do you want to proceed?", "❯ 1. Yes", "  2. No"]
     onScreen = screen
     let rid = 10
     const sig = (lines: string[]) => dialogSignature(parseDialog(lines)!)
@@ -411,7 +416,9 @@ describe("setupRemoteControl", () => {
     expect(await answer({ waitId: "w999" })).toEqual({ ok: false, reason: "stale" })
     // The device was shown another dialog (another command under the same question).
     expect(
-      await answer({ seen: sig(["Do you want to proceed?", "❯ 1. Yes", "  2. Maybe"]) }),
+      await answer({
+        seen: sig(["────────", "Do you want to proceed?", "❯ 1. Yes", "  2. Maybe"]),
+      }),
     ).toEqual({
       ok: false,
       reason: "changed",
@@ -426,11 +433,34 @@ describe("setupRemoteControl", () => {
     windowOpen = false
     expect(await answer({})).toEqual({ ok: false, reason: "no-window" })
     windowOpen = true
-    expect(await answer({ deadline: Date.now() - 1 })).toEqual({ ok: false, reason: "error" })
+    // The window has no terminal for it (a background tab not started since a reload).
+    started = false
+    expect(await answer({})).toEqual({ ok: false, reason: "unsupported" })
+    started = true
+    // The desktop answers while main reads the screen, and the agent asks again: not that one.
+    duringRead = async () => {
+      duringRead = async () => {}
+      rc.localInput("p1", "1")
+      rc.agentEvents([
+        { paneId: "p1", event: "Notification", notificationType: "permission_prompt" },
+      ])
+    }
+    expect(await answer({})).toEqual({ ok: false, reason: "stale" })
     expect(writes).toEqual([])
-    expect(await answer({})).toEqual({ ok: true })
+    const waitId2 = (
+      p.sent.filter((m) => (m as { t: string }).t === "panes").at(-1) as {
+        panes: { panes: { waitId?: string }[] }
+      }
+    ).panes.panes[0]!.waitId!
+    expect(waitId2).not.toBe(waitId)
+    expect(await answer({ waitId: waitId2, deadline: Date.now() - 1 })).toEqual({
+      ok: false,
+      reason: "error",
+    })
+    expect(writes).toEqual([])
+    expect(await answer({ waitId: waitId2 })).toEqual({ ok: true })
     expect(writes).toEqual([["p1", "1"]])
-    expect(await answer({})).toEqual({ ok: false, reason: "stale" }) // answered: closed
+    expect(await answer({ waitId: waitId2 })).toEqual({ ok: false, reason: "stale" }) // answered
     // A Codex dialog: its keys aren't verified, so nothing is typed.
     rc.agentEvents([{ paneId: "p1", event: "PermissionRequest", agent: "codex", toolKey: "k" }])
     const codexWait = (

@@ -1379,14 +1379,13 @@ export const TerminalManager = {
     return entries.has(id)
   },
 
-  /** The terminal's visible lines as text (remote control checks a dialog against them). */
+  /** The terminal's live screen as text, wherever it's scrolled (remote control checks a dialog). */
   screenLines(id: string): string[] | undefined {
     const t = entries.get(id)?.term
     if (!t) return undefined
     const b = t.buffer.active
     const out: string[] = []
-    for (let i = 0; i < t.rows; i++)
-      out.push(b.getLine(b.viewportY + i)?.translateToString(true) ?? "")
+    for (let i = 0; i < t.rows; i++) out.push(b.getLine(b.baseY + i)?.translateToString(true) ?? "")
     return out
   },
 

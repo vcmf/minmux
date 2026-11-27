@@ -33,7 +33,7 @@ export interface RemoteControlDeps {
   /** The pane's terminal's bracketed-paste mode now (asks the renderer; undefined if it can't). */
   pasteMode?: (pane: string) => Promise<boolean | undefined>
   /** The pane's visible lines, from the desktop's own terminal (undefined: no window). */
-  screen?: (pane: string) => Promise<string[] | undefined>
+  screen?: (pane: string) => Promise<string[] | null | undefined> // null: no terminal for it; undefined: no window
   /** A WSL pane (its agents' files live inside the distro). */
   wslPane?: (pane: string) => boolean
   // The terminal view: a pane's output so far (its tap starts), the tap stopped, all taps stopped.
@@ -142,7 +142,10 @@ export function setupRemoteControl(deps: RemoteControlDeps) {
       // worker's word). The whole dialog the device saw (kind, question, what it asks about,
       // options) must be what's there: every Claude prompt says "Do you want to proceed?".
       const lines = await deps.screen?.(call.pane)
+      if (lines === null) return { ok: false, reason: "unsupported" } // not started in the window
       if (!lines) return { ok: false, reason: "no-window" }
+      // The desktop may have answered while we read, and the agent asked an identical one.
+      if (waits.waits(call.pane)[0]?.id !== call.waitId) return { ok: false, reason: "stale" }
       const now = parseDialog(lines)
       if (
         !now ||

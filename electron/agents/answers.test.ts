@@ -69,6 +69,55 @@ describe("parseDialog", () => {
   })
 })
 
+describe("parseDialog: only a whole dialog, last on screen, is a permission prompt", () => {
+  const claudeNow = [
+    "⏺ Bash(ls)",
+    "────────────────────────────",
+    " Bash command",
+    "",
+    "   ls -la",
+    "",
+    " Do you want to proceed?",
+    " ❯ 1. Yes",
+    "   2. No",
+    "",
+    " Esc to cancel · Tab to amend",
+  ]
+
+  it("a framed prompt with its footer under it", () => {
+    const d = parseDialog(claudeNow)!
+    expect(d.kind).toBe("permission")
+    expect(d.body).toEqual(["Bash command", "ls -la"])
+  })
+
+  it("a numbered list in the agent's own text, with its input box under it, isn't one", () => {
+    const prose = [
+      "────────────────────────────",
+      "⏺ Do you want me to proceed?",
+      "  1. Yes, delete it",
+      "  2. No",
+      "",
+      "✻ Thinking… (esc to interrupt)",
+      "────────────────────────────",
+      "> ",
+      "────────────────────────────",
+    ]
+    expect(parseDialog(prose)?.kind).toBe("question")
+  })
+
+  it("a prompt whose top edge scrolled away, or too long to show whole, isn't one", () => {
+    expect(parseDialog(claudeNow.slice(2))?.kind).toBe("question")
+    const long = [
+      ...claudeNow.slice(0, 4),
+      ...Array.from({ length: 40 }, (_, k) => `   line ${k}`),
+      ...claudeNow.slice(5),
+    ]
+    const d = parseDialog(long)!
+    expect(d.kind).toBe("question")
+    expect(d.body[0]).toBe("…") // the phone is told there's more
+  })
+})
+
 describe("dialogSignature", () => {
   it("tells apart two prompts that ask the same question about different commands", () => {
     const a = parseDialog(claudePermission)!

@@ -8,6 +8,7 @@ import type { AgentKind } from "../../src/lib/agent-graph"
 import { dialogSignature, type Dialog, type DialogOption } from "../../src/lib/remote-protocol"
 
 export type { Dialog, DialogOption }
+export { dialogSignature }
 
 // "❯ 1. Yes", "  2. Yes, and don't ask again for …", "› 3. No, and tell Codex …"
 const OPTION = /^\s*(?:[❯›>▶▸]\s*)?([1-9])\.\s+(.+?)\s*$/
@@ -15,7 +16,7 @@ const OPTION = /^\s*(?:[❯›>▶▸]\s*)?([1-9])\.\s+(.+?)\s*$/
 const EDGE = /^\s*[╭╰┌└─━]/
 const MAX_GAP = 3 // wrapped / description lines kept with one option
 const LABEL_MAX = 300 // a label's length kept (a wide pane, a wrapped label)
-const BODY_MAX = 12 // body lines kept
+const BODY_MAX = 30 // body lines kept (a longer one: never answered from a phone)
 // The box's side borders, when the dialog is drawn in one.
 const BORDER = /^\s*[│|]\s?|\s?[│|]\s*$/g
 
@@ -36,11 +37,15 @@ export function parseDialog(lines: string[]): Dialog | null {
   let i = end
   let carry: string[] = [] // lines under the option found next (going up)
   // Lines under the last option, down to the block's end.
-  for (let k = end + 1; k < clean.length; k++) {
-    const t = clean[k]!.trim()
-    if (!t || EDGE.test(clean[k]!) || !/^\s{2,}/.test(clean[k]!)) break
+  let after = end + 1
+  for (; after < clean.length; after++) {
+    const t = clean[after]!.trim()
+    if (!t || EDGE.test(clean[after]!) || !/^\s{2,}/.test(clean[after]!)) break
     carry.push(t)
   }
+  // A dialog is the last thing on screen: under it only blanks, its edge, its "Esc to …" footer.
+  // (A numbered list in the agent's own text has its spinner, input box and prompt below it.)
+  const last = clean.slice(after).every((l) => !l.trim() || EDGE.test(l) || /\besc\b/i.test(l))
   for (; i >= 0; i--) {
     const line = clean[i]!
     const m = OPTION.exec(line)
@@ -67,29 +72,32 @@ export function parseDialog(lines: string[]): Dialog | null {
     }
   }
   if (!question) return null
-  // What it asks about: the box's lines above the question (the command, the file), so a phone
-  // never approves something it wasn't shown. Without a box, up to a blank line.
+  // What it asks about: the dialog's lines above the question (the command, the file), up to its
+  // top edge, so a phone never approves something it wasn't shown. Without an edge (no frame, or
+  // scrolled off): up to a blank line, and never answered from a phone.
   const body: string[] = []
-  const inBox = boxed(clean, q)
-  for (let k = q - 1; k >= 0 && body.length < BODY_MAX; k--) {
-    if (EDGE.test(clean[k]!)) break
+  const top = edgeAbove(clean, q)
+  let whole = top >= 0 && q - top - 1 <= BODY_MAX
+  for (let k = q - 1; k > top && body.length < BODY_MAX; k--) {
     const t = clean[k]!.trim()
     if (!t) {
-      if (!inBox) break // no box: a blank line ends it
+      if (top < 0) break // no frame: a blank line ends it
       continue
     }
     body.unshift(t.slice(0, LABEL_MAX))
   }
-  return { kind: kindOf(question, options), question, body, options }
+  if (!whole && top >= 0) body.unshift("…") // more above than is shown
+  whole &&= last
+  return { kind: whole ? kindOf(question, options) : "question", question, body, options }
 }
 
-/** Inside a drawn box (an edge above the question within a few lines)? */
-function boxed(clean: string[], q: number): boolean {
-  for (let k = q - 1; k >= 0 && k >= q - BODY_MAX - 2; k--) if (EDGE.test(clean[k]!)) return true
-  return false
+/** The row of the dialog's top edge above the question, or -1. */
+function edgeAbove(clean: string[], q: number): number {
+  for (let k = q - 1; k >= 0; k--) if (EDGE.test(clean[k]!)) return k
+  return -1
 }
 
-// A permission prompt asks whether to go ahead and offers "Yes" first (Claude: "Do you want to
+// A permission prompt (only one shown whole) asks whether to go ahead and offers "Yes" first (Claude: "Do you want to
 // proceed?", "Do you want to make this edit…?"); anything else is a question with choices.
 const kindOf = (question: string, options: DialogOption[]): Dialog["kind"] =>
   /^(Do you want|Would you like) /i.test(question) && /^Yes\b/.test(options[0]?.label ?? "")
@@ -100,7 +108,6 @@ const kindOf = (question: string, options: DialogOption[]): Dialog["kind"] =>
 // dialogs don't end on a digit (a multi-select or multi-question ask only picks), and Codex's and
 // OpenCode's keys aren't verified: those are answered in the Terminal view.
 /** The keys that answer a permission prompt with option `n`, or null where we don't type. */
-export { dialogSignature }
 
 export function answerKeys(
   agent: AgentKind | undefined,

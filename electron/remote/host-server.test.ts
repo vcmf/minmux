@@ -156,7 +156,7 @@ describe("remote host server", () => {
             offset: 0,
             cols: 40,
             rows: 6,
-            text: "Do you want to proceed?\r\n❯ 1. Yes\r\n  2. No",
+            text: "────────\r\nDo you want to proceed?\r\n❯ 1. Yes\r\n  2. No",
           }
         return { epoch: 1, offset: 5, cols: 40, rows: 5, text: "hello" }
       },

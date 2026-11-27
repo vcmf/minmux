@@ -358,6 +358,7 @@ export function createHostServer(d: HostServerDeps) {
     permission: Permission
     watching: Set<string> // panes whose chat feed it follows
     terms: Set<string> // panes whose terminal it follows
+    looking: Set<string> // panes with a dialog look in flight
   }
   const clients = new Set<Client>()
   const wss = new WebSocketServer({
@@ -407,6 +408,7 @@ export function createHostServer(d: HostServerDeps) {
         permission: a.device.permission,
         watching: new Set(),
         terms: new Set(),
+        looking: new Set(),
       }
       clients.add(c)
       ws.on("pong", () => (c.lastPong = Date.now()))
@@ -455,20 +457,24 @@ export function createHostServer(d: HostServerDeps) {
           dialog: null,
           answerable: false,
         })
-      // The hook can come before the agent draws its dialog: look again a few times.
-      let lines = await screenOf(m.pane)
-      for (let k = 0; k < DIALOG_RETRIES && !(lines && parseDialog(lines)); k++) {
-        await new Promise((r) => setTimeout(r, DIALOG_RETRY_MS))
-        lines = await screenOf(m.pane)
+      // One look per pane at a time per client: the reply in flight answers a repeat.
+      if (c.looking.has(m.pane)) return
+      c.looking.add(m.pane)
+      try {
+        // The hook can come before the agent draws its dialog: look again a few times.
+        const parse = (l: string[] | null | undefined) => (l ? parseDialog(l) : null)
+        let dialog = parse(await screenOf(m.pane))
+        for (let k = 0; k < DIALOG_RETRIES && dialog?.kind !== "permission"; k++) {
+          await new Promise((r) => setTimeout(r, DIALOG_RETRY_MS))
+          dialog = parse(await screenOf(m.pane))
+        }
+        // Buttons only for a permission prompt shown whole (main checks it again on an answer).
+        const answerable =
+          dialog?.kind === "permission" && (await rpc({ op: "answerable", pane: m.pane }))
+        return sendTo(c, { t: "dialog", pane: m.pane, waitId: m.waitId, dialog, answerable })
+      } finally {
+        c.looking.delete(m.pane)
       }
-      const answerable = await rpc({ op: "answerable", pane: m.pane })
-      return sendTo(c, {
-        t: "dialog",
-        pane: m.pane,
-        waitId: m.waitId,
-        dialog: lines ? parseDialog(lines) : null,
-        answerable,
-      })
     }
     if (m.t === "answer") {
       const ack = (ok: boolean, reason?: AnswerRefusal) =>

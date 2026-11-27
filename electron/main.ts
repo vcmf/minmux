@@ -391,6 +391,7 @@ const askPasteMode = async (pane: string) => {
 }
 const askScreen = async (pane: string) => {
   const v = await askRenderer("screen", pane)
+  if (v === null) return null // the window has no terminal for it (not started yet)
   return Array.isArray(v) && v.every((l) => typeof l === "string") ? (v as string[]) : undefined
 }
 
