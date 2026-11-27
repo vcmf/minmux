@@ -31,7 +31,15 @@ export interface Wait {
 
 type Ev = Pick<
   AgentEvent,
-  "event" | "agent" | "paneId" | "agentId" | "toolKey" | "toolName" | "message" | "notificationType"
+  | "event"
+  | "agent"
+  | "paneId"
+  | "agentId"
+  | "toolKey"
+  | "toolName"
+  | "message"
+  | "notificationType"
+  | "source"
 >
 
 /** Keys someone at the desktop answers a dialog with. Arrows and typing don't. */
@@ -66,6 +74,8 @@ export class WaitTracker {
     const slot = `${pane}\u0000${agent}`
     switch (ev.event) {
       case "SessionStart":
+        if (ev.source === "compact") return // a mid-turn compaction: its dialogs stay
+      // falls through
       case "SessionEnd":
       case "UserPromptSubmit":
         if (!ev.agentId) this.clear(pane)

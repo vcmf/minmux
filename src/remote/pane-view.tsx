@@ -56,7 +56,7 @@ export function PaneView({
 
   const agentName = AGENT[pane.agent ?? ""] ?? "The agent"
   const asking = !!pane.asking
-  const working = pane.kind === "agent" && !!pane.working && !asking
+  const working = !!pane.working && !asking // main sets it for agent panes only
   const canSend = permission !== "view" && online && pane.started && !asking && !working
 
   const submit = (e: React.FormEvent) => {

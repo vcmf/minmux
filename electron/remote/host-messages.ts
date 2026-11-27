@@ -2,7 +2,7 @@
 // asks; main decides (devices, tokens, PIN) and answers by request id.
 
 import type { RemotePanes, SendRefusal } from "../../src/lib/remote-protocol"
-import type { ChatLead } from "../agents/chat"
+import type { ChatLead } from "../agents/chat-lead"
 import type { ClientInfo, HostStatus } from "../../src/lib/remote-view"
 import type { AuthResult, UnlockResult } from "./devices"
 

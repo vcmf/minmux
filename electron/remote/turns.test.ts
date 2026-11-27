@@ -12,7 +12,7 @@ describe("turn tracker", () => {
   it("unknown counts as working; a fresh session or Stop is between", () => {
     const t = new TurnTracker()
     expect(t.turn(P)).toBe("working")
-    expect(run(t, { event: "SessionStart" })).toBe("between")
+    expect(run(t, { event: "SessionStart", source: "startup" })).toBe("between")
     expect(run(t, { event: "UserPromptSubmit" })).toBe("working")
     expect(
       run(
@@ -24,14 +24,37 @@ describe("turn tracker", () => {
     expect(run(t, { event: "PostToolUse" }, { event: "Stop" })).toBe("between")
   })
 
-  it("the idle reminder is between; a sub-agent's Stop is not", () => {
+  it("an auto-compaction mid-turn keeps the turn on", () => {
+    const t = new TurnTracker()
+    run(t, { event: "UserPromptSubmit" })
+    expect(run(t, { event: "SessionStart", source: "compact" })).toBe("working")
+  })
+
+  it("events between turns say nothing (title, file changes, token counts, quiet notices)", () => {
+    const t = new TurnTracker()
+    run(t, { event: "Stop" })
+    for (const event of [
+      "SessionTitle",
+      "FileChanged",
+      "CwdChanged",
+      "WorktreeRemove",
+      "TokenUsage",
+      "Toolbox",
+    ])
+      expect(run(t, { event })).toBe("between")
+    expect(run(t, { event: "Notification", notificationType: "auth_success" })).toBe("between")
+  })
+
+  it("the idle reminder is between; a sub-agent still running keeps it working", () => {
     const t = new TurnTracker()
     expect(run(t, { event: "Notification", notificationType: "idle_prompt" })).toBe("between")
     expect(run(t, { event: "Notification", message: "Claude is waiting for your input" })).toBe(
       "between",
     )
     expect(run(t, { event: "SubagentStart", agentId: "a" })).toBe("working")
-    expect(run(t, { event: "Stop", agentId: "a" })).toBe("working")
+    expect(run(t, { event: "Stop" })).toBe("working") // a background sub-agent goes on
+    expect(run(t, { event: "PostToolUse", agentId: "a" })).toBe("working")
+    expect(run(t, { event: "SubagentStop", agentId: "a" })).toBe("between")
   })
 
   it("a session end or the pane closing forgets it (working)", () => {

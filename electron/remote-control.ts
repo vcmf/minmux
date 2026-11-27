@@ -4,11 +4,11 @@
 import { dialog, utilityProcess, type BrowserWindow } from "electron"
 import path from "node:path"
 import { mergeRemoteSettings } from "../src/settings/schema"
-import { isPermission, type RemotePanes } from "../src/lib/remote-protocol"
+import { isPermission, type RemotePane, type RemotePanes } from "../src/lib/remote-protocol"
 import { DeviceFile } from "./remote/device-file"
 import type { RemoteView } from "../src/lib/remote-view"
 import type { AgentKind } from "../src/lib/agent-graph"
-import { chatLeadFor, type ChatLead } from "./agents/chat"
+import { chatLeadFor, type ChatLead } from "./agents/chat-lead"
 import { Sender } from "./remote/typing"
 import { TurnTracker } from "./remote/turns"
 import { WaitTracker } from "./remote/waits"
@@ -167,6 +167,7 @@ export function setupRemoteControl(deps: RemoteControlDeps) {
     write: (pane, data) => deps.writePty?.(pane, data) ?? false,
     asking: (pane) => waits.asking(pane),
     between: (pane) => turns.turn(pane) === "between",
+    isAgent: (pane) => !!deps.leadOf?.(pane),
     // Main decides, not the worker: the device must still exist, be unlocked and able to send.
     allowed: async (deviceId) => {
       const p = (await devices()).permissionOf(deviceId)
@@ -187,16 +188,17 @@ export function setupRemoteControl(deps: RemoteControlDeps) {
       const w = waits.waits(x.id)[0]
       const { asking: _old, ...rest } = x
       void _old
-      const working = x.kind === "agent" && turns.turn(x.id) !== "between"
+      const working = isAgentPane(x) && turns.turn(x.id) !== "between"
       const out = working ? { ...rest, working: true } : rest
       return w ? { ...out, asking: true, ...(w.message ? { detail: w.message } : {}) } : out
     }),
   })
+  const isAgentPane = (x: RemotePane) => x.kind === "agent" || !!deps.leadOf?.(x.id)
   const askingKey = (p: RemotePanes) =>
     p.panes
       .flatMap((x) => {
         const w = waits.waits(x.id)[0]
-        const working = x.kind === "agent" && turns.turn(x.id) !== "between"
+        const working = isAgentPane(x) && turns.turn(x.id) !== "between"
         return w || working ? [`${x.id}\u0000${w?.message ?? ""}\u0000${working}`] : []
       })
       .join("\u0001")

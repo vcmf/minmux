@@ -160,4 +160,15 @@ describe("typing a phone's message", () => {
     expect(await s.send("d", "p", "y", "2")).toEqual({ ok: false, reason: "working" })
     expect(writes).toHaveLength(1)
   })
+
+  it("main's own view of an agent pane counts (the list may show a shell after a reload)", async () => {
+    const s = new Sender({
+      pane: () => pane({ kind: "shell" }),
+      write: () => true,
+      isAgent: () => true,
+      between: () => false,
+    })
+    expect(await s.send("d", "p", "x", "1")).toEqual({ ok: false, reason: "working" })
+    expect(refusal(pane({ kind: "shell", asking: true }))).toBe("waiting") // any pane
+  })
 })

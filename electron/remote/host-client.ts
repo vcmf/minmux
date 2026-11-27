@@ -3,7 +3,7 @@
 // Off means no worker and no remote code on any path.
 
 import type { RemotePanes, SendRefusal } from "../../src/lib/remote-protocol"
-import type { ChatLead } from "../agents/chat"
+import type { ChatLead } from "../agents/chat-lead"
 import type { DeviceTable } from "./devices"
 import type {
   ClientInfo,

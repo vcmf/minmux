@@ -262,6 +262,14 @@ describe("OpenCode database", () => {
   })
 })
 
+describe("OpenCode backoff", () => {
+  it("after a failed read, waits before trying again", async () => {
+    const r = new OpenCodeChat("s", "/no/such/opencode.db")
+    await expect(r.read()).rejects.toThrow()
+    expect(await r.read()).toEqual([]) // within the backoff: no new try, no error
+  })
+})
+
 describe("chat log and dispatch", () => {
   it("keeps the newest items", () => {
     const log = new ChatLog()

@@ -28,18 +28,20 @@ export function cleanText(text: string): string {
 export const firstWrite = (text: string, paste: boolean): string =>
   paste ? `\x1b[200~${text}\x1b[201~` : text
 
+// `agent`: main's own view (the session ledger) too: after a renderer reload the pane list can
+// show an agent pane as a shell until the next hook. A dialog main knows of blocks any pane.
 /** Why a pane can't take a message now, or null when it can. */
 export function refusal(
   pane: RemotePane | undefined,
   asking = false,
   between = true,
+  agent = pane?.kind === "agent",
 ): SendRefusal | null {
   if (!pane) return "no-pane"
   if (!pane.started) return "not-started"
-  if (pane.kind !== "agent") return null
-  // An agent takes a message only between turns: a dialog can only be up during one.
   if (asking || pane.asking) return "waiting"
-  if (!between) return "working"
+  // An agent takes a message only between turns: a dialog can only be up during one.
+  if (agent && !between) return "working"
   return null
 }
 
@@ -48,6 +50,7 @@ export interface SenderDeps {
   write: (pane: string, data: string) => boolean // false: no such PTY (or still connecting)
   asking?: (pane: string) => boolean // main's latest hook state: the agent is asking
   between?: (pane: string) => boolean // the agent's turn is over (unset: always)
+  isAgent?: (pane: string) => boolean // main knows an agent leads the pane
   allowed?: (deviceId: string) => Promise<boolean> // main's device check (may send)
   delay?: (ms: number) => Promise<void>
   now?: () => number
@@ -95,12 +98,13 @@ export class Sender {
     const asking = () => this.d.asking?.(paneId) ?? false
     const between = () => this.d.between?.(paneId) ?? true
     const pane = this.d.pane(paneId)
-    const no = refusal(pane, asking(), between())
+    const agent = pane?.kind === "agent" || (this.d.isAgent?.(paneId) ?? false)
+    const no = refusal(pane, asking(), between(), agent)
     if (no) return { ok: false, reason: no }
     const text = cleanText(raw)
     if (!text.trim()) return { ok: false, reason: "empty" }
     // A pane whose program never said (no renderer): agents paste, shells don't.
-    const paste = pane!.paste ?? pane!.kind === "agent"
+    const paste = pane!.paste ?? agent
     // Without bracketed paste every newline is an Enter: a multi-line message would run line by
     // line, past every check here.
     if (!paste && text.includes("\n")) return { ok: false, reason: "multiline" }
@@ -110,7 +114,8 @@ export class Sender {
     await this.delay(ENTER_DELAY_MS)
     // The agent started asking between the paste and Enter: Enter would answer its dialog.
     // A turn started (someone at the desktop) or a dialog opened between the paste and Enter.
-    if (refusal(this.d.pane(paneId), asking(), between())) return { ok: false, reason: "held" }
+    if (refusal(this.d.pane(paneId), asking(), between(), agent))
+      return { ok: false, reason: "held" }
     return this.d.write(paneId, "\r") ? { ok: true } : { ok: false, reason: "no-pane" }
   }
 }

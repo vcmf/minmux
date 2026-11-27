@@ -182,4 +182,11 @@ describe("wait tracker: the desktop and the pane", () => {
     w.localInput(P, "\x03")
     expect(w.asking(P)).toBe(false)
   })
+
+  it("an auto-compaction mid-turn keeps dialogs open", () => {
+    const w = t()
+    run(w, { event: "Notification", notificationType: "permission_prompt" })
+    expect(run(w, { event: "SessionStart", source: "compact" })).toBe(true)
+    expect(run(w, { event: "SessionStart", source: "startup" })).toBe(false)
+  })
 })

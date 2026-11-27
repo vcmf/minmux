@@ -71,15 +71,26 @@ export class OpenCodeChat implements ChatReader {
     private readonly file = opencodeDb(),
   ) {}
 
+  private retryAt = 0
+  private fails = 0
+
   async read(): Promise<ChatItem[]> {
+    // After a failed read (OpenCode held a lock), wait a while: each try may block the worker
+    // that also serves the phones for up to the busy wait.
+    if (Date.now() < this.retryAt) return []
     // Open, read, close (OpenCode keeps writing it, like opencode-history).
     // A short wait: this runs in the worker that also serves the phones; a lock still held is
     // just tried again on the next poll.
-    const db = new DatabaseSync(this.file, { readOnly: true, timeout: CHAT_BUSY_WAIT_MS })
+    let db: DatabaseSync | null = null
     try {
+      db = new DatabaseSync(this.file, { readOnly: true, timeout: CHAT_BUSY_WAIT_MS })
       this.readFrom(db)
+      this.fails = 0
+    } catch (e) {
+      this.retryAt = Date.now() + Math.min(8000, 500 * 2 ** this.fails++)
+      throw e
     } finally {
-      db.close()
+      db?.close()
     }
     return this.log.takeChanged()
   }
@@ -90,16 +101,18 @@ export class OpenCodeChat implements ChatReader {
     ).reverse()
     const keep = new Map(recent.map(({ id, t }) => [id, t]))
     const changed = recent.filter(({ id, t }) => this.seen.get(id) !== t).map(({ id }) => id)
-    this.seen = keep // only the parts still among the newest
-    if (!changed.length) return
-    const rows = new Map(
-      (db.prepare(DATA_SQL).all(JSON.stringify(changed)) as Row[]).map((r) => [r.id, r]),
-    )
-    for (const id of changed) {
-      const row = rows.get(id)
-      const item = row ? opencodeItem(row) : null
-      if (item) this.log.upsert(item)
+    if (changed.length) {
+      const rows = new Map(
+        (db.prepare(DATA_SQL).all(JSON.stringify(changed)) as Row[]).map((r) => [r.id, r]),
+      )
+      for (const id of changed) {
+        const row = rows.get(id)
+        const item = row ? opencodeItem(row) : null
+        if (item) this.log.upsert(item)
+      }
     }
+    // Only now: a read that failed (a lock) leaves these parts to be read again next time.
+    this.seen = keep // the parts still among the newest
   }
 
   close(): void {}
