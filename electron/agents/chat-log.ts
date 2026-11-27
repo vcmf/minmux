@@ -21,12 +21,18 @@ export class ChatLog {
   /** A tool call's id (tool_use_id, call_id) → the item its result belongs to. */
   calls = new Map<string, string>()
 
+  private seq = 0
+
   upsert(item: ChatItem): void {
     const i = this.at.get(item.id)
     if (i === undefined) {
+      item = { ...item, seq: ++this.seq }
       this.at.set(item.id, this.items.length)
       this.items.push(item)
-    } else this.items[i] = item
+    } else {
+      item = { ...item, seq: this.items[i]!.seq }
+      this.items[i] = item
+    }
     this.changed.set(item.id, item)
     // Trimmed while reading too (in batches), so a long read never holds more than ~1.5×.
     if (this.items.length > MAX_ITEMS * 1.5) this.trim()

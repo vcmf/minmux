@@ -7,6 +7,9 @@ import type { RemotePane, SendRefusal } from "../../src/lib/remote-protocol"
 import { SEND_MAX } from "../../src/lib/remote-protocol"
 
 export const ENTER_DELAY_MS = 60
+// A message still queued after this long (main was busy) isn't typed: the phone's request has
+// nearly timed out (host-server SEND_TIMEOUT_MS) and it would call it failed.
+export const SEND_STALE_MS = 20_000
 const DEDUPE_MS = 10 * 60_000
 const DEDUPE_MAX = 100
 
@@ -67,7 +70,12 @@ export class Sender {
     if (again) return again.result
     // Queued per pane, so a second message never pastes between the first one and its Enter.
     const prev = this.queues.get(paneId) ?? Promise.resolve()
-    const result = prev.then(() => this.type(deviceId, paneId, text))
+    const queued = now
+    const result = prev.then(() =>
+      this.now() - queued > SEND_STALE_MS
+        ? ({ ok: false, reason: "error" } as SendResult)
+        : this.type(deviceId, paneId, text),
+    )
     const tail = result.catch(() => {})
     this.queues.set(paneId, tail)
     void tail.then(() => this.queues.get(paneId) === tail && this.queues.delete(paneId))
@@ -90,7 +98,9 @@ export class Sender {
     // Without bracketed paste every newline is an Enter: a multi-line message would run line by
     // line, past every check here.
     if (!paste && text.includes("\n")) return { ok: false, reason: "multiline" }
-    if (!this.d.write(paneId, firstWrite(text, paste))) return { ok: false, reason: "no-pane" }
+    // Typed keys: a tab would complete something; the message means a space.
+    const typed = paste ? text : text.replace(/\t/g, " ")
+    if (!this.d.write(paneId, firstWrite(typed, paste))) return { ok: false, reason: "no-pane" }
     await this.delay(ENTER_DELAY_MS)
     // The agent started asking between the paste and Enter: Enter would answer its dialog.
     if (refusal(this.d.pane(paneId), asking()) === "waiting") return { ok: false, reason: "held" }

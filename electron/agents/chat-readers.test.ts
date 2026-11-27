@@ -124,7 +124,7 @@ describe("Claude transcript", () => {
     const r = claudeChat([f])
     expect(await r.read()).toEqual([])
     fs.appendFileSync(f, whole.slice(20))
-    expect(await r.read()).toEqual([{ id: "u", kind: "user", text: "héllo wörld ✓" }])
+    expect(await r.read()).toEqual([{ id: "u", kind: "user", text: "héllo wörld ✓", seq: 1 }])
   })
 
   it("summaries", () => {
@@ -242,7 +242,7 @@ describe("OpenCode database", () => {
       }),
     )
     expect(await r.read()).toEqual([
-      { id: "p3", kind: "tool", name: "bash", summary: "ls", result: "boom", error: true },
+      { id: "p3", kind: "tool", name: "bash", summary: "ls", result: "boom", error: true, seq: 3 },
     ])
     expect(await r.read()).toEqual([])
     r.close()

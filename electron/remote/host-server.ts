@@ -70,6 +70,9 @@ export function createHostServer(d: HostServerDeps) {
   const PONG_TIMEOUT_MS = 45_000
   const TOUCH_EVERY_MS = d.timing?.touch ?? 60_000
   const RPC_TIMEOUT_MS = 10_000
+  // Longer than main's own limit (typing.ts SEND_STALE_MS): a message main gave up on is never
+  // typed after the phone heard "failed" (a retry would type it twice).
+  const SEND_TIMEOUT_MS = 30_000
   const CHAT_TAIL = 50 // items sent on a watch, and per `more`
   const CHAT_POLL_MS = d.timing?.chatPoll ?? 1000
   const FEED_IDLE_MS = 30_000
@@ -90,10 +93,13 @@ export function createHostServer(d: HostServerDeps) {
     const id = nextRpc++
     return new Promise<Results[K]>((resolve) => {
       // Main always answers; if it somehow doesn't, the safe "no" after a while (never a hang).
-      const timer = setTimeout(() => {
-        waiting.delete(id)
-        resolve(FAILED[call.op].result as Results[K])
-      }, RPC_TIMEOUT_MS)
+      const timer = setTimeout(
+        () => {
+          waiting.delete(id)
+          resolve(FAILED[call.op].result as Results[K])
+        },
+        call.op === "send" ? SEND_TIMEOUT_MS : RPC_TIMEOUT_MS,
+      )
       waiting.set(id, (r) => {
         clearTimeout(timer)
         resolve(r as Results[K])

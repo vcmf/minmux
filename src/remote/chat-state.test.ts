@@ -23,6 +23,20 @@ describe("applyChat", () => {
   })
 })
 
+describe("applyChat ordering", () => {
+  const q = (id: string, seq: number) => ({ id, kind: "user" as const, text: id, seq })
+  it("puts a late item in its place; ignores one older than what's loaded", () => {
+    let s = applyChat(emptyChat, {
+      t: "chat",
+      pane: "p",
+      items: [q("b", 5), q("d", 7)],
+      reset: true,
+    })
+    s = applyChat(s, { t: "chat", pane: "p", items: [q("c", 6), q("a", 2), q("e", 8)] })
+    expect(s.items.map((i) => i.id)).toEqual(["b", "c", "d", "e"])
+  })
+})
+
 describe("outbox", () => {
   const o = (id: string, at: number, state: Outgoing["state"] = "sending"): Outgoing => ({
     id,

@@ -10,13 +10,11 @@
 // keyed per agent (the pane's session or one of its sub-agents) and per tool call when known.
 // It closes when that agent moves on (the call finishes, another call starts, the turn ends, a
 // reply is recorded), when the session starts/ends or the user submits a prompt, on the idle
-// reminder (the agent is at its prompt), when someone at the desktop answers with a key
-// (Enter, Esc, a digit, y/n), and when the pane closes.
+// reminder (the agent is at its prompt), when someone at the desktop answers with a key (see
+// localInput), and when the pane closes.
 
 import type { AgentEvent } from "../../src/lib/agent-graph"
-
-export const QUESTION_TOOLS = new Set(["AskUserQuestion", "request_user_input", "question"])
-const IDLE = /waiting for your input/i
+import { isIdleNotification, isQuietNotification, QUESTION_TOOLS } from "../agents/dialogs"
 
 export interface Wait {
   agent: string // "" for the pane's session, else the sub-agent's id
@@ -33,7 +31,7 @@ type Ev = Pick<
 
 /** Keys someone at the desktop answers a dialog with. Arrows and typing don't. */
 export const isAnswerKey = (data: string): boolean =>
-  data === "\r" || data === "\x1b" || /^[0-9yYnN]$/.test(data)
+  data === "\r" || data === "\x1b" || data === "\x03" || /^[0-9yYnN]$/.test(data)
 
 export class WaitTracker {
   private panes = new Map<string, Wait[]>()
@@ -78,12 +76,11 @@ export class WaitTracker {
         this.close(pane, (w) => w.agent === agent && w.kind === "permission")
         return
       case "Notification": {
-        const t = ev.notificationType
-        if (t === "idle_prompt" || (!t && IDLE.test(ev.message ?? ""))) {
+        if (isIdleNotification(ev)) {
           this.clear(pane) // at its prompt, waiting for a message: nothing to answer
           return
         }
-        if (t === "auth_success") return
+        if (isQuietNotification(ev)) return
         this.open(pane, {
           agent,
           key: this.lastPre.get(slot) ?? "?",
@@ -114,9 +111,21 @@ export class WaitTracker {
     }
   }
 
-  /** Someone at the desktop typed into the pane: an answer key closes its dialogs. */
-  localInput(pane: string, data: string): void {
-    if (this.panes.has(pane) && isAnswerKey(data)) this.clear(pane)
+  /** Someone at the desktop typed into the pane. Ctrl+C interrupts: every dialog goes. Esc
+   *  dismisses the one in front (the oldest), question or prompt. Enter, a digit, y/n answer the
+   *  oldest permission prompt; in a question they only pick (a multi-question or multi-select
+   *  ask stays up until its tool returns). Returns whether anything closed. */
+  localInput(pane: string, data: string): boolean {
+    const list = this.panes.get(pane)
+    if (!list || !isAnswerKey(data)) return false
+    if (data === "\x03") {
+      this.clear(pane)
+      return true
+    }
+    const front = data === "\x1b" ? list[0] : list.find((w) => w.kind === "permission")
+    if (!front) return false
+    this.close(pane, (w) => w === front)
+    return true
   }
 
   /** The pane closed (or its process ended). */

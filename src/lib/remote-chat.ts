@@ -15,11 +15,14 @@ export interface ChatQuestion {
   options: ChatOption[]
 }
 
-export type ChatItem =
+// seq: the item's place in the conversation (set by the worker's log on first sight, kept on
+// updates), so the page puts a late update where it belongs.
+export type ChatItem = { seq?: number } & (
   | { id: string; kind: "user"; text: string }
   | { id: string; kind: "assistant"; text: string }
   | { id: string; kind: "tool"; name: string; summary: string; result?: string; error?: boolean }
   | { id: string; kind: "question"; questions: ChatQuestion[]; answer?: string }
+)
 
 export const TEXT_MAX = 8000
 export const RESULT_MAX = 2000

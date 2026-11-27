@@ -144,7 +144,9 @@ export function setupRemoteControl(deps: RemoteControlDeps) {
   // The desktop window is gone (⌘W on macOS keeps sessions running): the list goes stale.
   let lastPanes: RemotePanes | null = null
   const windowClosed = () => {
-    if (lastPanes) host.setPanes({ ...annotated(lastPanes), stale: true })
+    if (!lastPanes) return
+    lastPanes = { ...lastPanes, stale: true } // every later send keeps saying so
+    sendPanes()
   }
 
   /** The renderer's pane list (pushed only while a client is connected). */
@@ -152,7 +154,7 @@ export function setupRemoteControl(deps: RemoteControlDeps) {
     const p = panes as RemotePanes | null
     if (!p || !Array.isArray(p.panes) || !Array.isArray(p.tabs)) return
     lastPanes = { tabs: p.tabs, panes: p.panes, stale: false }
-    host.setPanes(annotated(lastPanes))
+    sendPanes()
     pushLeads()
   }
 
@@ -171,7 +173,7 @@ export function setupRemoteControl(deps: RemoteControlDeps) {
   // Which panes' agents show a dialog right now, from hook events as they land (fresher than the
   // renderer's throttled pane list): a message's Enter must never answer one.
   const waits = new WaitTracker()
-  let askingNow = ""
+  let askingNow = "" // what devices were last told: each asking pane and its prompt
   /** The pane list as devices see it: each pane's asking state is main's. */
   const annotated = (p: RemotePanes): RemotePanes => ({
     ...p,
@@ -182,16 +184,22 @@ export function setupRemoteControl(deps: RemoteControlDeps) {
       return w ? { ...rest, asking: true, ...(w.message ? { detail: w.message } : {}) } : rest
     }),
   })
-  /** Re-sends the list when a pane's asking state changed. */
-  const askingChanged = () => {
+  const askingKey = (p: RemotePanes) =>
+    p.panes
+      .flatMap((x) => {
+        const w = waits.waits(x.id)[0]
+        return w ? [`${x.id}\u0000${w.message ?? ""}`] : []
+      })
+      .join("\u0001")
+  /** The one way the list reaches devices: remembers what they were told. */
+  const sendPanes = () => {
     if (!lastPanes) return
-    const now = lastPanes.panes
-      .filter((p) => waits.asking(p.id))
-      .map((p) => p.id)
-      .join(",")
-    if (now === askingNow) return
-    askingNow = now
+    askingNow = askingKey(lastPanes)
     host.setPanes(annotated(lastPanes))
+  }
+  /** Re-sends the list when a pane's asking state (or its prompt) changed. */
+  const askingChanged = () => {
+    if (lastPanes && askingKey(lastPanes) !== askingNow) sendPanes()
   }
 
   // Each listed pane's lead agent session, for the chat view (sent only while someone's connected).
@@ -259,9 +267,7 @@ export function setupRemoteControl(deps: RemoteControlDeps) {
     agentEvents,
     /** Typed at the desktop into a pane: an answer key closes its dialogs. Per keystroke: O(1). */
     localInput: (pane: string, data: string) => {
-      if (!waits.any) return
-      waits.localInput(pane, data)
-      askingChanged()
+      if (waits.any && waits.localInput(pane, data)) askingChanged()
     },
     /** A pane's process ended or it closed. */
     paneGone: (pane: string) => {

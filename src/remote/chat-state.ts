@@ -18,14 +18,20 @@ export function applyChat(s: ChatState, m: Extract<HostMessage, { t: "chat" }>):
     const have = new Set(s.items.map((i) => i.id))
     return { ...s, items: [...m.items.filter((i) => !have.has(i.id)), ...s.items], more: !!m.more }
   }
-  const at = new Map(s.items.map((it, i) => [it.id, i]))
+  // Upserts by id, kept in conversation order (seq). An item older than the first one loaded
+  // (a late update far back) is left for "Load earlier".
   const items = [...s.items]
+  const first = items[0]?.seq
   for (const it of m.items) {
-    const i = at.get(it.id)
-    if (i === undefined) {
-      at.set(it.id, items.length)
-      items.push(it)
-    } else items[i] = it
+    const i = items.findIndex((x) => x.id === it.id)
+    if (i >= 0) {
+      items[i] = it
+      continue
+    }
+    if (it.seq !== undefined && first !== undefined && it.seq < first) continue
+    let at = items.length
+    if (it.seq !== undefined) while (at > 0 && (items[at - 1]!.seq ?? -1) > it.seq) at--
+    items.splice(at, 0, it)
   }
   return { ...s, items }
 }

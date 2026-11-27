@@ -123,4 +123,23 @@ describe("typing a phone's message", () => {
     })
     expect(await s.send("d", "p", "x", "1")).toEqual({ ok: false, reason: "not-allowed" })
   })
+
+  it("tabs become spaces without bracketed paste; a message queued too long isn't typed", async () => {
+    const { s, writes } = setup(pane({ kind: "shell", paste: false }))
+    await s.send("d", "p", "git\tstatus", "1")
+    expect(writes[0]).toBe("git status")
+    let t = 0
+    const slow = new Sender({
+      pane: () => pane({ paste: true }),
+      write: () => true,
+      now: () => t,
+      delay: async () => {
+        t += 25_000 // main stalls on the first message
+      },
+    })
+    const a = slow.send("d", "p", "a", "1")
+    const b = slow.send("d", "p", "b", "2")
+    expect(await a).toEqual({ ok: true })
+    expect(await b).toEqual({ ok: false, reason: "error" })
+  })
 })

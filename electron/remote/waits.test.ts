@@ -107,7 +107,7 @@ describe("wait tracker: Codex and OpenCode", () => {
 
 describe("wait tracker: the desktop and the pane", () => {
   it("an answer key typed at the desktop closes (Esc denies a Claude prompt without a hook)", () => {
-    for (const key of ["\x1b", "\r", "1", "y", "n"]) {
+    for (const key of ["\x1b", "\r", "1", "y", "n", "\x03"]) {
       const w = t()
       run(w, { event: "Notification", notificationType: "permission_prompt" })
       w.localInput(P, key)
@@ -140,5 +140,26 @@ describe("wait tracker: the desktop and the pane", () => {
       { event: "PermissionRequest", toolKey: "k" },
     )
     expect(w.waits(P)).toHaveLength(1)
+  })
+
+  it("picking in a question doesn't close it; Esc dismisses the front one; Ctrl+C all", () => {
+    const w = t()
+    run(w, { event: "PreToolUse", toolName: "AskUserQuestion", toolKey: "q" })
+    expect(w.localInput(P, "1")).toBe(false) // question 1 of 2: the dialog stays
+    expect(w.localInput(P, "\r")).toBe(false)
+    expect(w.asking(P)).toBe(true)
+    expect(w.localInput(P, "\x1b")).toBe(true)
+    expect(w.asking(P)).toBe(false)
+  })
+
+  it("queued prompts close one per answer", () => {
+    const w = t()
+    run(w, { event: "PermissionRequest", agentId: "a", toolKey: "k1" })
+    run(w, { event: "PermissionRequest", agentId: "b", toolKey: "k2" })
+    w.localInput(P, "1")
+    expect(w.waits(P).map((x) => x.key)).toEqual(["k2"])
+    run(w, { event: "PermissionRequest", agentId: "c", toolKey: "k3" })
+    w.localInput(P, "\x03")
+    expect(w.asking(P)).toBe(false)
   })
 })
