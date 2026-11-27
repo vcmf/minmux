@@ -104,27 +104,32 @@ The renderer's CSP already allows what CodeMirror does at runtime: `style-src 's
 ### Saving
 
 - **⌘S** (Ctrl+S elsewhere) saves while the editor has focus. There's no autosave.
-- Main writes through a new `fs:write-file(path, text, baseHash, wsl)`, run in the fs worker. The
-  worker reads the file's current bytes and compares their hash with `baseHash`. It writes only when
-  they match; otherwise it answers `changed`, and the editor asks **Overwrite** or **Reload**. A
-  stamp can't decide this: coarse mtimes on shares and FAT make a fresh save look changed for
-  2.5 s, and a same-size write within one mtime tick looks unchanged. Hashing at most 2 MB in the
-  worker is cheap.
+- Main writes through a new `fs:write-file(path, text, baseHash, wsl)`, run in a **save worker**:
+  a utility process of its own, started on the first save. A read stuck on a dead mount retires the
+  files browser's worker, and must never kill a save running beside it. The worker reads the
+  file's current bytes and compares their hash with `baseHash`. It writes only when they match;
+  otherwise it answers `changed`, and the editor asks **Overwrite** or **Reload**. A stamp can't
+  decide this: coarse mtimes on shares and FAT make a fresh save look changed for 2.5 s, and a
+  same-size write within one mtime tick looks unchanged. Hashing at most 2 MB in the worker is
+  cheap.
 - After a write, the worker answers the new stamp. The editor moves its base, and the file store
   takes the saved text and stamp as its `data`, so the watcher's next read is `same`.
 - It writes **in place**: open `r+`, write, then `ftruncate` to the new length. Truncating first
   would leave a window where the file reads empty. A rename from a temp file would replace a
   symlink with a file, break hard links, and drop the owner, mode and extended attributes. A crash
   in the middle of a write can leave the file mixed; editors that write in place accept the same.
-- **A write is never re-sent.** The fs worker client re-sends a retired worker's stranded reads to a
-  fresh worker, which is right for a read and wrong for a write: a hung save could land twice, or
-  after a newer one. A stranded or hung write fails like any request and its worker goes as usual;
-  the answer is `unknown`, and the editor re-reads the file and compares it with the text it tried
-  to save, keeping that text either way. A save still running after `HUNG_MS` (30 s, for at most
-  2 MB) is treated as hung. A failure after the first byte is written, or at close (where NFS
-  reports late errors), is `unknown` too. The WSL share loop tries the next share form only when a
-  form has no file or won't open.
-- Saves of one file run one at a time, queued in main.
+- **A write is never re-sent.** A write left behind on a retired worker stays there and its answer
+  counts; the worker isn't killed under it. A write that hangs itself (`HUNG_MS`, 30 s, for at
+  most 2 MB) answers `unknown` and its worker is killed. A failure after the first byte is written,
+  or at close (where NFS reports late errors), is `unknown` too. On `unknown` the editor re-reads
+  the file and compares it with the text it tried to save, keeping that text either way.
+- **Saves of one file run one at a time**, queued in main by path, and in the worker by inode (a
+  symlink or another case of the same name). A save that may still land holds its file until its
+  process is gone: later saves of that file fail at once with "an earlier save is stuck", and a
+  process stuck in a dead mount that never exits holds it for the session. Other files save as
+  usual.
+- The WSL share loop tries the next share form only when a form has no file or won't open it, and
+  answers `missing` only when no form had the file.
 - Main checks the request: an absolute path, an existing regular file (a symlink to one is written
   through), text within `FILE_READ_CAP`. Creating files is out of scope. The renderer can already
   spawn a shell, so this adds little exposure, but a write path should still refuse odd input.
