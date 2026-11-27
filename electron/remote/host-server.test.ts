@@ -150,6 +150,8 @@ describe("remote host server", () => {
         if (pane === "gone") return null
         if (pane === "busy" && snaps.filter((p) => p === "busy").length === 1)
           throw new Error("main busy") // the first answer fails: retried, not "gone"
+        if (pane === "prose")
+          return { epoch: 1, offset: 0, cols: 40, rows: 6, text: "Pick?\r\n  1. a\r\n  2. b\r\n> " }
         if (pane === "asks")
           return {
             epoch: 1,
@@ -754,6 +756,24 @@ describe("remote host server", () => {
     expect(s.got.find((m) => m.t === "answered")).toMatchObject({ ok: true, waitId: "w1" })
     expect(answers[0]).toMatchObject({ n: 1, seen: "sig" })
     expect(answers[0]!.deadline).toBeGreaterThan(Date.now()) // main types nothing after it
+  })
+
+  it("answers: no buttons for a list that isn't a whole prompt; a repeat look is dropped", async () => {
+    host.setPanes({
+      tabs: [{ id: "t", title: "t" }],
+      panes: [
+        { id: "prose", tab: "t", title: "a", kind: "agent", status: "waiting", started: true },
+      ],
+      stale: false,
+    })
+    const s = await hello(await approve())
+    s.ws.send(JSON.stringify({ t: "dialog", pane: "prose" }))
+    s.ws.send(JSON.stringify({ t: "dialog", pane: "prose" })) // in flight: answered by the first
+    await until(() => s.got.some((m) => m.t === "dialog"), 5000)
+    await new Promise((r) => setTimeout(r, 200))
+    const replies = s.got.filter((m) => m.t === "dialog")
+    expect(replies).toHaveLength(1)
+    expect(replies[0]).toMatchObject({ answerable: false, dialog: { kind: "question" } })
   })
 
   it("send: relayed to main and acked; view-only devices refused here", async () => {

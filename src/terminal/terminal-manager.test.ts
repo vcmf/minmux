@@ -1408,6 +1408,26 @@ describe("TerminalManager — a parked terminal behind a folder tab", () => {
   })
 })
 
+describe("TerminalManager — screenLines (remote answers)", () => {
+  beforeEach(() => {
+    resetStore()
+    vi.clearAllMocks()
+  })
+
+  it("reads the live screen, wherever it's scrolled; nothing for a terminal never started", () => {
+    expect(TerminalManager.screenLines("nope")).toBeUndefined()
+    st().newTab(testShell)
+    const id = st().tabs[0]!.activeSessionId
+    TerminalManager.ensureRunning(st().sessions[id] as Session)
+    const t = terms[terms.length - 1]!
+    t.rows = 2
+    t.buffer.active.baseY = 10
+    t.buffer.active.getLine = ((y: number) =>
+      y >= 10 ? { translateToString: () => `row ${y}` } : undefined) as never
+    expect(TerminalManager.screenLines(id)).toEqual(["row 10", "row 11"])
+  })
+})
+
 describe("TerminalManager — a path clicked in output", () => {
   beforeEach(() => {
     resetStore()

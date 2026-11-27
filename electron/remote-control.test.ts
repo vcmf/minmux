@@ -413,6 +413,12 @@ describe("setupRemoteControl", () => {
         return r.result.result
       })
     }
+    p.emit({ t: "rpc", id: 5, call: { op: "answerable", pane: "p1" } })
+    await vi.waitFor(() =>
+      expect(p.sent.find((m) => (m as { id?: number }).id === 5)).toMatchObject({
+        result: { result: true },
+      }),
+    )
     expect(await answer({ waitId: "w999" })).toEqual({ ok: false, reason: "stale" })
     // The device was shown another dialog (another command under the same question).
     expect(
