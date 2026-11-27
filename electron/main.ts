@@ -36,6 +36,7 @@ import {
 } from "./shell-integration"
 import { gitStatus, gitDiff } from "./git"
 import { OutputCoalescer } from "./coalescer"
+import { setupRemoteControl } from "./remote-control"
 import { OutputBuffer } from "./output-buffer"
 import { drainPtys, type Drainable, type DrainOptions } from "./pty-drain"
 import { AgentProcs, noop, posixProcs } from "./agent-procs"
@@ -353,6 +354,8 @@ const historyWorker = new SessionsWorkerClient(
     }) as unknown as SessionsProc,
 )
 const TOUCHED_MS = 5000 // the worker may be starting or mid-search
+// Remote control over Tailscale (docs/design/REMOTE_CONTROL.md): no worker until it's turned on.
+let remoteControl: ReturnType<typeof setupRemoteControl> | null = null
 /** The agents' commands: a process running one is an agent (one started outside the wrapper). */
 const agentNames = () => agentsOn(process.platform).map((k) => AGENT_KINDS[k].command)
 /** A pane's shell, for its processes (local panes only). */
@@ -473,6 +476,7 @@ function createWindow() {
   win.on("session-end", () => sessionLedger().freeze(60_000)) // Windows logout/shutdown — see onPower
   win.on("closed", () => {
     mainWindow = null
+    remoteControl?.windowClosed()
     fsWorker.setWatched([])
   })
   // A reloaded or crashed renderer re-sends its watch set when its folder tabs show again.
@@ -529,6 +533,7 @@ function startSettingsWatcher() {
     switchesOff = null // re-read the agent switches on the next spawn
     mainWindow?.webContents.send("settings-changed")
     sshService?.settingsChanged() // reloads only if the ssh block itself changed
+    remoteControl?.apply() // starts, restarts or stops remote control
   })
 }
 
@@ -2034,6 +2039,15 @@ app.whenReady().then(async () => {
   }
   createWindow()
   startSettingsWatcher()
+  remoteControl = setupRemoteControl({
+    dir,
+    configDir,
+    readSettings,
+    profile: PROFILE_CHOICE.profile,
+    devUrl: DEV_RENDERER_URL,
+    window: () => mainWindow,
+  })
+  remoteControl.apply()
   diag("boot", { pid: process.pid, version: app.getVersion() })
   // Power events tell us whether a lid-close SUSPENDS the app (suspend→resume with
   // PTYs intact) or the OS TERMINATES it (suspend, then a fresh boot with no quit).
@@ -2077,6 +2091,7 @@ app.on("will-quit", () => {
   gitRootsWorker.dispose()
   sessionsWorker.dispose()
   historyWorker.dispose() // stops a search (and its rg) too
+  remoteControl?.dispose() // says goodbye to remote clients, ends the worker
 })
 app.on("quit", () => diag("quit"))
 

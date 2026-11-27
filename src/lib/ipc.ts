@@ -1,4 +1,6 @@
 import type { FileData, FileStamp } from "./file-tab"
+import type { Permission, RemotePanes } from "./remote-protocol"
+import type { RemoteView } from "./remote-view"
 import type { ShellOption, SpawnOpts, SshHost } from "../types"
 import type { WslContext } from "./wsl"
 import type { AgentEvent, AgentKind } from "./agent-graph"
@@ -99,6 +101,16 @@ export interface Ipc {
   revealPath: (p: string) => void // show the file/folder in Finder/Explorer
   editorInfo: () => Promise<EditorInfo> // can the configured editor open a file?
   notify: (title: string, body: string) => void
+  remoteView: () => Promise<RemoteView> // remote control's state, devices and clients (Settings)
+  onRemoteChanged: (cb: () => void) => () => void
+  remoteWanted: () => Promise<boolean> // a remote client is connected: push the pane list
+  onRemoteWanted: (cb: (wanted: boolean) => void) => () => void
+  remotePanes: (panes: RemotePanes) => void
+  remoteRevoke: (id: string) => Promise<boolean>
+  remoteRename: (id: string, name: string) => Promise<boolean>
+  remotePermission: (id: string, permission: Permission) => Promise<boolean>
+  remoteSetPin: (pin: string) => Promise<boolean>
+  remoteDisconnectAll: () => Promise<boolean>
   clipboardWrite: (text: string) => void
   clipboardRead: () => Promise<string>
   // Lazy, one directory at a time (files browser). `wsl` translates a WSL pane's Linux

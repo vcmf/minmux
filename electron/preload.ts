@@ -1,4 +1,6 @@
 import { contextBridge, ipcRenderer } from "electron"
+import type { Permission, RemotePanes } from "../src/lib/remote-protocol"
+import type { RemoteView } from "../src/lib/remote-view"
 import type { AgentEvent, AgentKind } from "../src/lib/agent-graph"
 import type { InstalledAgent } from "../src/lib/agent-kinds"
 import type { SessionMeta } from "../src/lib/session-color"
@@ -140,6 +142,29 @@ const api = {
   revealPath: (p: string) => ipcRenderer.send("file:reveal", p),
   editorInfo: () => ipcRenderer.invoke("editor:info"),
   notify: (title: string, body: string) => ipcRenderer.send("notify", title, body),
+
+  // Remote control (docs/design/REMOTE_CONTROL.md): Settings, and the pane list while clients
+  // are connected.
+  remoteView: () => ipcRenderer.invoke("remote:view") as Promise<RemoteView>,
+  onRemoteChanged: (cb: () => void) => {
+    const listener = () => cb()
+    ipcRenderer.on("remote:changed", listener)
+    return () => ipcRenderer.removeListener("remote:changed", listener)
+  },
+  remoteWanted: () => ipcRenderer.invoke("remote:wanted") as Promise<boolean>,
+  onRemoteWanted: (cb: (wanted: boolean) => void) => {
+    const listener = (_e: unknown, wanted: boolean) => cb(wanted)
+    ipcRenderer.on("remote:wanted", listener)
+    return () => ipcRenderer.removeListener("remote:wanted", listener)
+  },
+  remotePanes: (panes: RemotePanes) => ipcRenderer.send("remote:panes", panes),
+  remoteRevoke: (id: string) => ipcRenderer.invoke("remote:revoke", id) as Promise<boolean>,
+  remoteRename: (id: string, name: string) =>
+    ipcRenderer.invoke("remote:rename", id, name) as Promise<boolean>,
+  remotePermission: (id: string, permission: Permission) =>
+    ipcRenderer.invoke("remote:permission", id, permission) as Promise<boolean>,
+  remoteSetPin: (pin: string) => ipcRenderer.invoke("remote:set-pin", pin) as Promise<boolean>,
+  remoteDisconnectAll: () => ipcRenderer.invoke("remote:disconnect-all") as Promise<boolean>,
 
   clipboardWrite: (text: string) => ipcRenderer.send("clipboard:write", text),
   clipboardRead: () => ipcRenderer.invoke("clipboard:read") as Promise<string>,

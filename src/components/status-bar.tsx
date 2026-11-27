@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react"
-import { HardDrives, Bell, GitBranch } from "@phosphor-icons/react"
+import { HardDrives, Bell, GitBranch, DeviceMobile } from "@phosphor-icons/react"
 import { focusedTerminal, useStore } from "../store"
 import { ipc } from "../lib/ipc"
 import { applyUpdateResult, type UpdateStatus } from "../lib/version"
@@ -77,6 +77,7 @@ export function StatusBar() {
         </span>
       )}
       <div className="status-spacer" />
+      <RemoteClients />
       <span className="status-item">
         <span className={`dot accent${running ? " pulse" : ""}`} /> {running} running
       </span>
@@ -105,5 +106,37 @@ export function StatusBar() {
           </span>
         ))}
     </div>
+  )
+}
+
+/** Who is connected through remote control right now (nothing when nobody is). */
+function RemoteClients() {
+  const enabled = useStore((s) => s.settings.remote.enabled)
+  const [names, setNames] = useState<string[]>([])
+  useEffect(() => {
+    if (!enabled) {
+      setNames([])
+      return
+    }
+    let live = true
+    const load = () =>
+      void ipc.remoteView().then((v) => live && setNames(v.clients.map((c) => c.name)))
+    load()
+    const off = ipc.onRemoteChanged(load)
+    return () => {
+      live = false
+      off()
+    }
+  }, [enabled])
+  if (!names.length) return null
+  return (
+    <button
+      className="status-item status-remote"
+      title={`Connected through remote control: ${names.join(", ")}. Manage in Settings.`}
+      onClick={() => useStore.getState().setSettingsOpen(true)}
+    >
+      <DeviceMobile size={13} weight="fill" color="var(--accent)" />
+      {names.length === 1 ? `${names[0]} connected` : `${names.length} devices connected`}
+    </button>
   )
 }

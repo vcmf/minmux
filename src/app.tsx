@@ -39,6 +39,8 @@ import { wslContext } from "./lib/wsl"
 import { isPosixShell, type ResumePlan } from "./lib/resume"
 import { resolveDefaultShell } from "./lib/shells"
 import { isMac } from "./lib/platform"
+import { buildRemotePanes } from "./lib/remote-panes"
+import { startRemotePush } from "./lib/remote-push"
 import type { ShellOption } from "./types"
 import "@xterm/xterm/css/xterm.css"
 import "./App.css"
@@ -72,6 +74,28 @@ function App() {
   const rightPanelWidth = useStore((s) => s.rightPanelWidth)
   const sidebarCollapsed = useStore((s) => s.sidebarCollapsed)
   const activeCwd = useActiveWorkCwd() // Claude's folder while it runs (worktree), else the shell's
+
+  // Remote control: the pane list goes to main only while a remote client is connected.
+  useEffect(
+    () =>
+      startRemotePush({
+        build: () => {
+          const s = useStore.getState()
+          return buildRemotePanes({
+            tabs: s.tabs,
+            sessions: s.sessions,
+            agents: s.agents,
+            home: s.home,
+            started: (id) => TerminalManager.isStarted(id),
+          })
+        },
+        send: (p) => ipc.remotePanes(p),
+        subscribe: (fn) => useStore.subscribe(fn),
+        wanted: () => ipc.remoteWanted(),
+        onWanted: (fn) => ipc.onRemoteWanted(fn),
+      }),
+    [],
+  )
 
   // Load shells + settings, then restore the saved workspace (VS Code-style) or open a tab.
   // Settings first: a restored pane spawns with the theme's bg (COLORFGBG light/dark), and

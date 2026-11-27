@@ -2527,6 +2527,7 @@ body.resizing-col {
 .settings-row input[type="text"],
 .settings-row input:not([type]),
 .settings-row input[type="number"],
+.settings-row input[type="password"],
 .settings-row select {
   width: 200px;
   background: var(--bg);
@@ -2541,6 +2542,97 @@ body.resizing-col {
 .settings-row input:focus,
 .settings-row select:focus {
   border-color: var(--accent);
+}
+.status-remote {
+  background: none;
+  border: none;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  padding: 0;
+}
+/* ── Settings → Remote control ── */
+.remote-settings {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.remote-note {
+  margin: 6px 0;
+  font-size: 12px;
+  color: var(--dim);
+  line-height: 1.5;
+}
+.remote-note.warn {
+  color: var(--amber);
+}
+.remote-dim {
+  color: var(--faint);
+  font-style: normal;
+  font-size: 11.5px;
+}
+.remote-address {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 0;
+  font-size: 12.5px;
+  border-bottom: 1px solid var(--border);
+}
+.remote-address code {
+  user-select: text;
+  color: var(--text);
+}
+.remote-qr {
+  display: block;
+  flex-basis: 100%;
+  max-width: 164px;
+  background: #fff; /* a QR code needs a light ground in every theme */
+  border-radius: 6px;
+  image-rendering: pixelated;
+}
+.remote-pin {
+  display: flex;
+  gap: 6px;
+}
+.settings-row .remote-pin input {
+  width: 120px;
+}
+.remote-devices {
+  display: flex;
+  flex-direction: column;
+  padding: 9px 0;
+  font-size: 12.5px;
+}
+.remote-devices-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  min-height: 28px;
+}
+.remote-device {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--border);
+}
+.remote-device-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.remote-device select {
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border2);
+  border-radius: 7px;
+  padding: 3px 6px;
+  font: inherit;
+  font-size: 12px;
 }
 .settings-footer {
   margin-top: 16px;

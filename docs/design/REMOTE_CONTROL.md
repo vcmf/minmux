@@ -130,8 +130,9 @@ tab, kind, agent, status, cwd, branch, started, paste }`. Computed in the existi
    - the peer has no `Node.Tags`, and its `UserProfile.ID` equals `Self.UserID`.
      Connections from this machine itself pass `whois` (it's our node), so the device token is what
      stops a local process (rule 3).
-3. **Approval.** Only a **top-level navigation** (`Sec-Fetch-Mode: navigate`, `Sec-Fetch-Dest:
-document`) can start one; an `<img>` or `fetch` from another site can't. The page gets a random
+3. **Approval.** Only a **POST from our own page** (its `Origin` must be this server) can start
+   one; an `<img>`, a link or a form on another site can't. (Fetch Metadata headers would say
+   more, but browsers send them to HTTPS pages only.) The page gets a random
    pending id and shows a **4-character code**. Main shows the prompt as a **native dialog**
    (works with no window): "iphone-15 wants to control minmux. Code K7QM. Allow / View only /
    Deny". Allow binds to that pending id only, and only that page's next poll gets the token.

@@ -1,0 +1,241 @@
+/* The phone's web app: minmux's dark tokens, sized for a thumb. */
+:root {
+  --bg: #0b0b0d;
+  --panel: #0f0f12;
+  --elev: #17171b;
+  --border: rgba(255, 255, 255, 0.08);
+  --text: #e8e8ea;
+  --dim: #9a9aa2;
+  --faint: #5c5c64;
+  --accent: #4ec97a;
+  --amber: #e0a94a;
+  --red: #f0625f;
+  --font: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  color-scheme: dark;
+}
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+html,
+body {
+  background: var(--bg);
+  color: var(--text);
+  font: 14px/1.45 var(--font);
+  -webkit-text-size-adjust: 100%;
+}
+body {
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom)
+    env(safe-area-inset-left);
+}
+button {
+  font: inherit;
+  color: inherit;
+}
+.dim {
+  color: var(--dim);
+}
+.warn {
+  color: var(--amber);
+}
+.pad {
+  padding: 16px;
+}
+
+/* Full-screen messages: access, approval code, lock. */
+.screen {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 48px 20px;
+  max-width: 440px;
+  margin: 0 auto;
+}
+.screen .logo {
+  color: var(--faint);
+  letter-spacing: 0.1em;
+  font-size: 12px;
+  text-transform: uppercase;
+}
+.screen h1 {
+  font-size: 20px;
+  font-weight: 600;
+}
+.code {
+  font-size: 44px;
+  font-weight: 600;
+  letter-spacing: 0.3em;
+  padding: 18px 0;
+  text-align: center;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel);
+}
+.button {
+  display: inline-block;
+  text-align: center;
+  text-decoration: none;
+  background: var(--elev);
+  border: 1px solid var(--accent);
+  color: var(--accent);
+  border-radius: 9px;
+  padding: 12px 16px;
+  cursor: pointer;
+}
+.button:disabled {
+  opacity: 0.5;
+}
+.pin {
+  display: flex;
+  gap: 8px;
+}
+.pin input {
+  flex: 1;
+  min-width: 0;
+  font: inherit;
+  font-size: 20px;
+  letter-spacing: 0.3em;
+  padding: 10px 12px;
+  border-radius: 9px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--text);
+}
+
+/* Connected: header, banners, pane list. */
+.bar {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 16px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+}
+.machine {
+  font-weight: 600;
+}
+.conn {
+  font-size: 12px;
+}
+.conn.ok {
+  color: var(--accent);
+}
+.conn.down {
+  color: var(--amber);
+}
+.banner {
+  padding: 10px 16px;
+  font-size: 12.5px;
+  color: var(--amber);
+  background: var(--elev);
+  border-bottom: 1px solid var(--border);
+}
+.list {
+  padding: 4px 0 24px;
+}
+.toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 16px;
+  font-size: 12.5px;
+  color: var(--dim);
+}
+.count {
+  color: var(--amber);
+}
+.list h3 {
+  padding: 14px 16px 6px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+.row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  border-bottom: 1px solid var(--border);
+  padding: 12px 16px;
+  min-height: 56px;
+}
+.row:active {
+  background: var(--elev);
+}
+.row.unstarted {
+  opacity: 0.45;
+}
+.names {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.name,
+.sub {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sub {
+  font-size: 12px;
+  color: var(--faint);
+}
+.badge {
+  margin-left: 8px;
+  font-size: 10.5px;
+  color: var(--dim);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0 4px;
+}
+.dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: none;
+}
+.dot.run {
+  background: var(--accent);
+}
+.dot.wait {
+  background: var(--amber);
+}
+.dot.idle {
+  background: var(--faint);
+}
+.word {
+  font-size: 11.5px;
+  flex: none;
+}
+.word.run {
+  color: var(--accent);
+}
+.word.wait {
+  color: var(--amber);
+}
+.word.idle {
+  color: var(--faint);
+}
+.pane-view {
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.back {
+  align-self: flex-start;
+  background: none;
+  border: none;
+  color: var(--accent);
+  padding: 4px 0;
+}
