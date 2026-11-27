@@ -145,7 +145,7 @@ const api = {
 
   // Remote control (docs/design/REMOTE_CONTROL.md): Settings, and the pane list while clients
   // are connected.
-  remoteView: () => ipcRenderer.invoke("remote:view") as Promise<RemoteView>,
+  remoteView: () => ipcRenderer.invoke("remote:view") as Promise<RemoteView | null>,
   onRemoteChanged: (cb: () => void) => {
     const listener = () => cb()
     ipcRenderer.on("remote:changed", listener)

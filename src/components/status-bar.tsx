@@ -120,7 +120,7 @@ function RemoteClients() {
     }
     let live = true
     const load = () =>
-      void ipc.remoteView().then((v) => live && setNames(v.clients.map((c) => c.name)))
+      void ipc.remoteView().then((v) => live && setNames(v?.clients.map((c) => c.name) ?? []))
     load()
     const off = ipc.onRemoteChanged(load)
     return () => {

@@ -20,12 +20,20 @@ export interface RemoteControlDeps {
   window: () => BrowserWindow | null
 }
 
-export const autoPort = (profile: string) => (profile ? 7421 : 7420)
+/** 7420 for the installed app, 7421 for a dev build, and one of 7430–7489 per other profile. */
+export function autoPort(profile: string): number {
+  if (!profile) return 7420
+  if (profile === "dev") return 7421
+  let h = 0
+  for (const ch of profile) h = (h * 31 + ch.charCodeAt(0)) >>> 0
+  return 7430 + (h % 60)
+}
 
 export function setupRemoteControl(deps: RemoteControlDeps) {
   let table: DeviceTable | null = null
   const file = () => path.join(deps.configDir(), "remote-devices.json")
   let writer: AtomicFile | null = null
+  let unsaved: string | null = null // the latest contents until its write lands
   const devices = (): DeviceTable => {
     if (table) return table
     let raw: string | null
@@ -35,7 +43,13 @@ export function setupRemoteControl(deps: RemoteControlDeps) {
       raw = null
     }
     writer = new AtomicFile(file())
-    table = new DeviceTable(raw, { save: (c) => writer!.write(c) })
+    table = new DeviceTable(raw, {
+      save: (c) => {
+        unsaved = c
+        writer!.write(c)
+        void writer!.flushed().then(() => unsaved === c && (unsaved = null))
+      },
+    })
     return table
   }
 
@@ -166,7 +180,17 @@ export function setupRemoteControl(deps: RemoteControlDeps) {
   return {
     apply,
     windowClosed,
-    dispose: () => host.dispose(),
+    dispose: () => {
+      host.dispose()
+      // Quitting: an approval or PIN change still queued is written now, not lost.
+      if (unsaved !== null) {
+        try {
+          fs.writeFileSync(file(), unsaved)
+        } catch {
+          // best-effort
+        }
+      }
+    },
     // IPC (registered in main.ts with the other handlers)
     view,
     setPanes,

@@ -1591,7 +1591,7 @@ function registerIpc() {
   })
 
   // Remote control (electron/remote-control.ts; docs/design/REMOTE_CONTROL.md).
-  ipcMain.handle("remote:view", () => remoteControl?.view() ?? null)
+  ipcMain.handle("remote:view", () => remoteControl?.view() ?? null) // null: not set up yet
   ipcMain.on("remote:panes", (_e, panes: unknown) => remoteControl?.setPanes(panes))
   ipcMain.handle("remote:wanted", () => remoteControl?.wanted() ?? false)
   ipcMain.handle("remote:revoke", (_e, id: unknown) => remoteControl?.revoke(id) ?? false)

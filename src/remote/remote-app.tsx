@@ -9,6 +9,7 @@ async function getJson<T>(url: string, init?: RequestInit): Promise<T> {
 }
 
 const pendingId = () => new URLSearchParams(location.search).get("pending")
+const PENDING_ID = /^([0-9a-f]{32}|limited|readonly)$/
 
 /** Asks the computer for access: a POST from this page (its Origin is checked), then the
  *  approval screen with the pending id in the address (a reload keeps waiting). */
@@ -53,6 +54,7 @@ function Approval({ id, onDone }: { id: string; onDone: () => void }) {
   )
   useEffect(() => {
     if (fixed) return
+    if (!PENDING_ID.test(id)) return setS({ state: "expired" })
     let live = true
     const poll = async () => {
       try {
@@ -65,8 +67,9 @@ function Approval({ id, onDone }: { id: string; onDone: () => void }) {
           return
         }
         if (r.state !== "pending") return
-      } catch {
-        // the machine blinked: keep asking
+      } catch (e) {
+        // A 4xx means the id is gone; anything else is the machine blinking: keep asking.
+        if (/^4\d\d$/.test((e as Error).message)) return live && setS({ state: "expired" })
       }
       if (live) setTimeout(() => void poll(), 1500)
     }

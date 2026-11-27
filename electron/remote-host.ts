@@ -97,13 +97,16 @@ async function peerOf(socket: net.Socket): Promise<PeerNode | null> {
   const ip = addr.startsWith("::ffff:") ? addr.slice(7) : addr
   const hit = whoisCache.get(ip)
   if (hit && Date.now() - hit.at < WHOIS_TTL_MS) return hit.peer
-  let peer: PeerNode | null
+  let out: string
   try {
-    peer = parseWhois(await runCli(cli, ["whois", "--json", ip], 4000))
+    out = await runCli(cli, ["whois", "--json", ip], 4000)
   } catch {
-    peer = null // not a tailnet address (Linux accepts packets for 100.x on any interface)
+    // Not a tailnet address (Linux takes packets for 100.x on any interface), or tailscaled
+    // was slow: refused now, never cached (a slow moment mustn't lock a phone out for a minute).
+    return null
   }
-  const ok = peer && peerAllowed(self, peer) ? peer : null
+  const peer = parseWhois(out)
+  const ok = peer && self && peerAllowed(self, peer) ? peer : null
   whoisCache.set(ip, { at: Date.now(), peer: ok })
   return ok
 }
@@ -459,10 +462,18 @@ async function doRefresh() {
     r = parseStatus(await runCli(cli, ["status", "--json"]))
   } catch (e) {
     cli = null // moved or removed: look again next time
+    // A slow or failed check while listening changes nothing: try again next time.
+    if (listeningKey) return
     return fail("error", String((e as Error).message ?? e))
   }
+  if (!r.ok && r.reason === "error" && listeningKey) return
   if (!r.ok) return fail(r.reason, r.detail)
   if (r.self.tagged) return fail("tagged")
+  // Another account or node: nobody connected or cached under the old identity stays.
+  if (self && (self.userId !== r.self.userId || self.nodeId !== r.self.nodeId)) {
+    whoisCache.clear()
+    for (const c of clients) c.ws.terminate()
+  }
   self = r.self
   const { port } = config
   hosts = allowedHosts([self.dnsName, self.shortName], self.ips, port)

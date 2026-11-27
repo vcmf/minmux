@@ -96,6 +96,7 @@ export function parseDeviceFile(raw: string | null): { file: FileShape; newer: b
   } catch {
     return empty
   }
+  if (!o || typeof o !== "object") return empty
   if (typeof o.v === "number" && o.v > FILE_VERSION)
     return { file: { v: o.v, devices: [] }, newer: true }
   const devices = Array.isArray(o.devices)
@@ -130,6 +131,8 @@ export class DeviceTable {
   private pending = new Map<string, Pending>()
   private pendingLog: { nodeId: string; at: number }[] = []
   private pinFailLog: number[] = []
+  private savedAt = new Map<string, number>() // per device: when its lastSeen was last saved
+  private unlocking: Promise<unknown> = Promise.resolve() // one PIN check at a time
   private now: () => number
   private random: (n: number) => Buffer
   private derive: (pin: string, salt: string) => Promise<string>
@@ -263,14 +266,27 @@ export class DeviceTable {
     const d = this.devices.find((x) => x.id === deviceId)
     if (!d || this.isLocked(d)) return
     const now = this.now()
-    // Saved at most once a minute: lastSeen only matters at hour scale.
-    const save = now - d.lastSeen > 60_000
     d.lastSeen = now
-    if (save) this.persist()
+    // Saved at most once a minute (lastSeen only matters at hour scale), counted from the last save.
+    if (now - (this.savedAt.get(d.id) ?? 0) >= 60_000) {
+      this.savedAt.set(d.id, now)
+      this.persist()
+    }
   }
 
   /** Lifts the idle lock with the PIN. Wrong PINs count per device and per hour overall. */
-  async unlock(token: string | null, nodeId: string, pin: string): Promise<UnlockResult> {
+  unlock(token: string | null, nodeId: string, pin: string): Promise<UnlockResult> {
+    // One at a time: parallel guesses can't slip past the hourly limit while scrypt runs.
+    const run = this.unlocking.then(() => this.unlockOne(token, nodeId, pin))
+    this.unlocking = run.catch(() => {})
+    return run
+  }
+
+  private async unlockOne(
+    token: string | null,
+    nodeId: string,
+    pin: string,
+  ): Promise<UnlockResult> {
     const d = this.find(token, nodeId)
     if (!d) return "unknown"
     if (!this.pin) return "no-pin"
@@ -280,6 +296,7 @@ export class DeviceTable {
     const hash = await this.derive(pin, this.pin.salt)
     // The device may have been revoked while scrypt ran.
     if (!this.devices.includes(d)) return "unknown"
+    if (this.pinDisabled) return "disabled"
     const a = Buffer.from(hash, "hex")
     const b = Buffer.from(this.pin.hash, "hex")
     const ok = a.length === b.length && crypto.timingSafeEqual(a, b)

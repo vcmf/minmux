@@ -101,7 +101,7 @@ export interface Ipc {
   revealPath: (p: string) => void // show the file/folder in Finder/Explorer
   editorInfo: () => Promise<EditorInfo> // can the configured editor open a file?
   notify: (title: string, body: string) => void
-  remoteView: () => Promise<RemoteView> // remote control's state, devices and clients (Settings)
+  remoteView: () => Promise<RemoteView | null> // remote control's state, devices and clients (Settings)
   onRemoteChanged: (cb: () => void) => () => void
   remoteWanted: () => Promise<boolean> // a remote client is connected: push the pane list
   onRemoteWanted: (cb: (wanted: boolean) => void) => () => void

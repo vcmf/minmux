@@ -157,6 +157,33 @@ describe("DeviceTable lock, PIN and expiry", () => {
     expect(await table.unlock(tokens[2]!, "c", "654321")).toBe("ok")
   })
 
+  it("saves lastSeen at least once a minute under frequent touches", () => {
+    const { table, saved, advance } = setup()
+    approve(table)
+    const id = table.list()[0]!.id
+    const before = saved.length
+    for (let i = 0; i < 6; i++) {
+      advance(30_000)
+      table.touch(id)
+    }
+    expect(saved.length - before).toBeGreaterThanOrEqual(2)
+  })
+
+  it("checks PINs one at a time, so parallel guesses can't pass the hourly limit", async () => {
+    const { table, advance } = setup()
+    await table.setPin("123456")
+    const tokens = Array.from({ length: 4 }, (_, i) => approve(table, `n${i}`))
+    advance(LOCK_AFTER_MS)
+    const guesses = tokens.flatMap((t, i) =>
+      Array.from({ length: 4 }, () => table.unlock(t, `n${i}`, "9")),
+    )
+    const r = await Promise.all(guesses)
+    expect(r.filter((x) => x === "wrong" || x === "blocked").length).toBeLessThanOrEqual(
+      PIN_TRIES_PER_HOUR,
+    )
+    expect(r.at(-1)).toBe("disabled")
+  })
+
   it("expires devices unused for 30 days", () => {
     const { table, advance } = setup()
     const token = approve(table)
@@ -194,6 +221,11 @@ describe("device file", () => {
     expect(table.createPending("n1", "x")).toBe("readonly")
     expect(await table.setPin("123456")).toBe("readonly")
     expect(saved).toHaveLength(0)
+  })
+
+  it("reads a null or non-object file as empty", () => {
+    expect(parseDeviceFile("null").file.devices).toEqual([])
+    expect(parseDeviceFile("3").file.devices).toEqual([])
   })
 
   it("drops malformed entries", () => {

@@ -36,7 +36,7 @@ export interface Settings {
 /** Remote control over Tailscale (docs/design/REMOTE_CONTROL.md). Off until turned on. */
 export interface RemoteSettings {
   enabled: boolean
-  port: number // 0 = automatic: 7420, or 7421 for any other profile (a dev build beside the app)
+  port: number // 0 = automatic: 7420; a dev build 7421; another profile its own (remote-control.ts)
 }
 
 export const defaultRemoteSettings: RemoteSettings = { enabled: false, port: 0 }
