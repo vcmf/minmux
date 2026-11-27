@@ -6,8 +6,7 @@ import fs from "node:fs"
 import { FILE_READ_CAP, type SaveResult } from "../src/lib/file-tab"
 import { hashBytes } from "./read-file"
 
-/** Write `text` (UTF-8) over `file` when its bytes still hash to `base`; with `create`, only
- *  where no file is (a file deleted while edited). Never throws. */
+/** Write `text` over `file` if its bytes still hash to `base` (`create`: only where none is). */
 export async function writeFileForTab(
   file: string,
   text: string,
@@ -24,8 +23,9 @@ export async function writeFileForTab(
     const code = (e as { code?: string }).code
     if (code === "ENOENT") return { kind: "missing" }
     if (code === "EEXIST") return { kind: "changed" }
-    return { kind: "error", message: String(e) }
+    return { kind: "error", message: String(e), unopened: true } // another share form may open
   }
+  let wrote = false // from the first write on, a failure may have left the file half written
   try {
     const st = await fh.stat()
     if (!st.isFile()) return { kind: "error", message: "Not a file" }
@@ -42,11 +42,12 @@ export async function writeFileForTab(
     }
     // Write first, then cut to length: the file never reads empty in between.
     let put = 0
+    wrote = true
     while (put < bytes.length) {
       const { bytesWritten } = await fh.write(bytes, put, bytes.length - put, put)
       put += bytesWritten
     }
-    await fh.truncate(bytes.length)
+    await fh.truncate(bytes.length) // (an empty text: no write above, the truncate is the write)
     const after = await fh.stat()
     return {
       kind: "saved",
@@ -54,18 +55,16 @@ export async function writeFileForTab(
       hash: hashBytes(bytes),
     }
   } catch (e) {
-    return { kind: "error", message: String(e) }
+    return wrote ? { kind: "unknown" } : { kind: "error", message: String(e) }
   } finally {
     await fh.close().catch(() => {})
   }
 }
 
-/** A worker failure for a write: it may have landed (hung, worker lost, stranded) or surely
- *  didn't (never started: too many stuck workers). */
+// A worker failure that surely wrote nothing: no worker to send it to, or a stuck save before it.
 const surelyNotWritten = (code: string | undefined) => code === "EBUSY"
 
-/** Save through each share form of a path in turn (a WSL file: `\\wsl.localhost`, `\\wsl$`):
- *  the next one only when there's no file at this one. Once a write may have landed, stop. */
+/** Save through a path's share forms in turn (WSL), moving on only while nothing was written. */
 export async function saveAcross(
   targets: string[],
   write: (target: string) => Promise<SaveResult>,
@@ -78,12 +77,13 @@ export async function saveAcross(
       const code = (e as { code?: string }).code
       return surelyNotWritten(code) ? { kind: "error", message: String(e) } : { kind: "unknown" }
     }
-    if (last.kind !== "missing") return last
+    // No file there, or it wouldn't open (as a read moves on, on any error): the next form.
+    if (last.kind !== "missing" && !(last.kind === "error" && last.unopened)) return last
   }
   return last
 }
 
-/** The renderer's save request, checked: a path main can write, text and a base it sent. */
+/** The renderer's save request is well-formed: an absolute path, text, a base (or `create`). */
 export function validSave(
   p: unknown,
   text: unknown,

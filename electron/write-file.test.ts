@@ -66,8 +66,14 @@ describe("writeFileForTab", () => {
     expect(await writeFileForTab(p, "y\n", null, true)).toEqual({ kind: "changed" })
   })
 
-  it("a folder isn't a file", async () => {
-    expect((await writeFileForTab(dir, "x", h(""))).kind).toBe("error")
+  it("a folder isn't written (it doesn't open for writing)", async () => {
+    expect(await writeFileForTab(dir, "x", h(""))).toMatchObject({ kind: "error" })
+  })
+
+  it("an empty text empties the file", async () => {
+    const p = put("abc")
+    expect((await writeFileForTab(p, "", h("abc"))).kind).toBe("saved")
+    expect(fs.readFileSync(p, "utf8")).toBe("")
   })
 
   it("text past the cap isn't written", async () => {
@@ -95,6 +101,16 @@ describe("saveAcross", () => {
     expect(r).toEqual({ kind: "changed" })
   })
 
+  it("moves on when a share form wouldn't open, as a read does", async () => {
+    const seen: string[] = []
+    const r = await saveAcross(["a", "b"], async (t) => {
+      seen.push(t)
+      return t === "a" ? { kind: "error", message: "EPERM", unopened: true } : { kind: "changed" }
+    })
+    expect(seen).toEqual(["a", "b"])
+    expect(r).toEqual({ kind: "changed" })
+  })
+
   it("stops at the first answer", async () => {
     const seen: string[] = []
     await saveAcross(["a", "b"], async (t) => {
@@ -105,7 +121,7 @@ describe("saveAcross", () => {
   })
 
   it("a hang or a lost worker is unknown, and nothing more is tried", async () => {
-    for (const code of ["EHUNG", "EWORKER", "EUNSURE"]) {
+    for (const code of ["EHUNG", "EWORKER"]) {
       const seen: string[] = []
       const r = await saveAcross(["a", "b"], async (t) => {
         seen.push(t)

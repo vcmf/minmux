@@ -1,14 +1,14 @@
 // An edited file's text on its way in and out of the editor (docs/design/FILE_EDITING.md): BOM
 // and line endings, the cleanup on save, and the indentation a file already uses. Pure.
 
-export type Eol = "\n" | "\r\n"
+export type Eol = "\n" | "\r\n" | "\r" // "\r": classic Mac
 
 /** A file's text as the editor holds it (`\n` lines, no BOM), and how to write it back. */
 export interface EditorText {
   text: string
   bom: boolean
   eol: Eol
-  mixed: boolean // both endings in it: written back with `eol` throughout
+  mixed: boolean // more than one ending in it: written back with `eol` throughout
 }
 
 const BOM = "﻿"
@@ -17,19 +17,22 @@ const BOM = "﻿"
 export function fromDisk(raw: string): EditorText {
   const bom = raw.startsWith(BOM)
   const body = bom ? raw.slice(1) : raw
+  // The editor splits lines as CodeMirror does: at \r\n, \n and a lone \r.
   const crlf = body.match(/\r\n/g)?.length ?? 0
   const lf = (body.match(/\n/g)?.length ?? 0) - crlf
+  const cr = (body.match(/\r/g)?.length ?? 0) - crlf
+  const eol: Eol = crlf > lf && crlf >= cr ? "\r\n" : cr > lf ? "\r" : "\n"
   return {
-    text: crlf ? body.replace(/\r\n/g, "\n") : body,
+    text: crlf || cr ? body.replace(/\r\n?/g, "\n") : body,
     bom,
-    eol: crlf > lf ? "\r\n" : "\n",
-    mixed: crlf > 0 && lf > 0,
+    eol,
+    mixed: [crlf, lf, cr].filter((n) => n > 0).length > 1,
   }
 }
 
 /** The editor's text as it goes to disk. */
 export function toDisk(text: string, how: { bom: boolean; eol: Eol }): string {
-  const body = how.eol === "\r\n" ? text.replace(/\n/g, "\r\n") : text
+  const body = how.eol === "\n" ? text : text.replace(/\n/g, how.eol)
   return how.bom ? BOM + body : body
 }
 
@@ -49,9 +52,10 @@ export interface TextChange {
   insert: string
 }
 
-/** The cleanup on save, as edits (in order, not overlapping) the editor applies as one undoable
- *  change: trailing spaces and tabs off every line (unless `keepTrailing`), trailing blank lines
- *  off with exactly one final newline. Lines in `keep` (0-based: the cursors') stay as they are. */
+// Trailing spaces and tabs off every line (unless `keepTrailing`), trailing blank lines off with
+// exactly one final newline. Lines in `keep` (0-based: the cursors') stay as they are. The edits
+// are in order and don't overlap, so the editor applies them as one undoable change.
+/** The cleanup on save, as edits. */
 export function saveCleanup(
   text: string,
   keep: ReadonlySet<number>,
@@ -114,8 +118,8 @@ export interface Indent {
 
 const ALWAYS_TABS = /(^|[\\/])(Makefile|GNUmakefile|makefile|go\.mod|go\.work)$|\.(mk|go)$/
 
-/** The indentation a file already uses, `fallback` spaces when it shows none. Makefiles and Go
- *  always use tabs (recipes need one; `gofmt` writes them). */
+// Makefiles and Go always use tabs (a recipe needs one; `gofmt` writes them).
+/** The indentation a file already uses; `fallback` spaces when it shows none. */
 export function detectIndent(text: string, path: string, fallback: number): Indent {
   if (ALWAYS_TABS.test(path)) return { tabs: true, width: fallback }
   let tabbed = 0

@@ -36,8 +36,14 @@ describe("fromDisk / toDisk", () => {
     expect(toDisk(t.text, t)).toBe("\uFEFFx\n")
   })
 
-  it("a lone \\r stays text", () => {
-    expect(fromDisk("a\rb\n").text).toBe("a\rb\n")
+  it("classic Mac \\r endings edit as LF and go back as \\r", () => {
+    const t = fromDisk("a\rb\r")
+    expect(t).toMatchObject({ text: "a\nb\n", eol: "\r", mixed: false })
+    expect(toDisk(t.text, t)).toBe("a\rb\r")
+  })
+
+  it("a lone \\r in an LF file is a line break (as CodeMirror splits it), and mixed", () => {
+    expect(fromDisk("a\rb\nc\n")).toMatchObject({ text: "a\nb\nc\n", eol: "\n", mixed: true })
   })
 })
 

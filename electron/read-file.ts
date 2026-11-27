@@ -14,8 +14,8 @@ import {
 /** A file's bytes as an editor's base: a save writes only over the bytes it was edited from. */
 export const hashBytes = (b: Uint8Array): string => createHash("sha256").update(b).digest("hex")
 
-/** Decoded losslessly: invalid UTF-8 decodes to U+FFFD, so only text holding one needs the
- *  full check (a real U+FFFD in the file encodes back to the same bytes). */
+// Invalid UTF-8 decodes to U+FFFD, so only text holding one needs the full check.
+/** The text encodes back to the bytes it was decoded from. */
 export const losslessUtf8 = (text: string, bytes: Uint8Array): boolean =>
   !text.includes("\uFFFD") || Buffer.from(text, "utf8").equals(bytes)
 
@@ -46,7 +46,12 @@ export async function readFileForTab(
     let bytesRead = 0
     const fh = await fs.promises.open(file, "r")
     try {
-      if (len > 0) ({ bytesRead } = await fh.read(buf, 0, len, 0))
+      // One read may return less (a network share): read on to the size, or the end.
+      while (bytesRead < len) {
+        const r = await fh.read(buf, bytesRead, len - bytesRead, bytesRead)
+        if (!r.bytesRead) break
+        bytesRead += r.bytesRead
+      }
     } finally {
       await fh.close()
     }

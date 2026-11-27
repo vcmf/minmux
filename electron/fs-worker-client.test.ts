@@ -62,27 +62,58 @@ describe("FsWorkerClient", () => {
     await expect(a).rejects.toMatchObject({ code: "ENOENT" })
   })
 
-  it("a write stranded behind a hung read isn't re-sent, and its worker lives until it ends", async () => {
+  it("a write stranded behind a hung read stays on its worker, and its reply counts", async () => {
     const c = client()
     const stuck = c.call({ op: "readdir", path: "/mnt/dead" })
     vi.advanceTimersByTime(800)
     const save = c.call({ op: "writefile", path: "/a.ts", text: "x", base: "h" })
+    await Promise.resolve() // (a write is queued per path first)
     vi.advanceTimersByTime(500)
     await expect(stuck).rejects.toMatchObject({ code: "EHUNG" })
-    await expect(save).rejects.toMatchObject({ code: "EUNSURE" })
-    expect(procs).toHaveLength(1) // never sent again: no fresh worker needed for it
+    expect(procs).toHaveLength(1) // never sent again: no fresh worker for it
     expect(procs[0]!.killed).toBe(false) // the write may still be landing
     const w = procs[0]!.sent[1]!
-    procs[0]!.reply({ id: w.id, ok: true, value: { kind: "missing" } })
+    procs[0]!.reply({ id: w.id, ok: true, value: { kind: "changed" } })
+    await expect(save).resolves.toEqual({ kind: "changed" }) // its real answer
     expect(procs[0]!.killed).toBe(true) // it ended: now the old worker goes
   })
 
-  it("a write that hangs itself fails as hung, and its worker can go", async () => {
+  it("a write that hangs fails as hung, but its worker isn't killed under it", async () => {
     const c = client()
     const save = c.call({ op: "writefile", path: "/mnt/dead/a", text: "x", base: "h" })
+    await Promise.resolve()
     vi.advanceTimersByTime(1300)
     await expect(save).rejects.toMatchObject({ code: "EHUNG" })
-    expect(procs[0]!.killed).toBe(true)
+    expect(procs[0]!.killed).toBe(false)
+    // While it may still land, another save of that file fails at once (nothing written)…
+    await expect(
+      c.call({ op: "writefile", path: "/mnt/dead/a", text: "y", base: "h" }),
+    ).rejects.toMatchObject({ code: "EBUSY" })
+    procs[0]!.reply({ id: procs[0]!.sent[0]!.id, ok: true, value: { kind: "unknown" } })
+    expect(procs[0]!.killed).toBe(true) // …until it ends
+    const again = c.call({ op: "writefile", path: "/mnt/dead/a", text: "y", base: "h" })
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(procs[1]!.sent.map((r) => r.op)).toEqual(["writefile"])
+    procs[1]!.reply({ id: procs[1]!.sent[0]!.id, ok: true, value: { kind: "missing" } })
+    await expect(again).resolves.toEqual({ kind: "missing" })
+  })
+
+  it("saves of one file run one at a time; other files don't wait", async () => {
+    const c = client()
+    const a1 = c.call({ op: "writefile", path: "/a", text: "1", base: "h" })
+    const a2 = c.call({ op: "writefile", path: "/a", text: "2", base: "h" })
+    const b = c.call({ op: "writefile", path: "/b", text: "3", base: "h" })
+    for (let i = 0; i < 4; i++) await Promise.resolve()
+    const texts = () => procs[0]!.sent.map((r) => (r.op === "writefile" ? r.text : ""))
+    expect(texts()).toEqual(["1", "3"]) // the second save of /a waits for the first
+    procs[0]!.reply({ id: procs[0]!.sent[0]!.id, ok: true, value: { kind: "missing" } })
+    await a1
+    for (let i = 0; i < 4; i++) await Promise.resolve()
+    expect(texts()).toEqual(["1", "3", "2"])
+    procs[0]!.reply({ id: procs[0]!.sent[1]!.id, ok: true, value: { kind: "missing" } })
+    procs[0]!.reply({ id: procs[0]!.sent[2]!.id, ok: true, value: { kind: "missing" } })
+    await Promise.all([a2, b])
   })
 
   it("a hung request fails alone; reads stranded behind it move to a fresh worker", async () => {
