@@ -30,6 +30,25 @@ export interface Settings {
   resumeBypassPermissions: boolean // Claude: also restore --permission-mode bypassPermissions
   agents: AgentSwitches // arm each agent in new terminals + resume it (default on)
   ssh: SshSettings
+  remote: RemoteSettings
+}
+
+/** Remote control over Tailscale (docs/design/REMOTE_CONTROL.md). Off until turned on. */
+export interface RemoteSettings {
+  enabled: boolean
+  port: number // 0 = automatic: 7420; a dev build 7421; another profile its own (remote-control.ts)
+}
+
+export const defaultRemoteSettings: RemoteSettings = { enabled: false, port: 0 }
+
+/** The remote block alone (main reads it too). */
+export function mergeRemoteSettings(v: unknown): RemoteSettings {
+  const o = v && typeof v === "object" ? (v as Record<string, unknown>) : {}
+  const port =
+    typeof o.port === "number" && Number.isInteger(o.port) && o.port >= 1024 && o.port <= 65535
+      ? o.port
+      : 0
+  return { enabled: o.enabled === true, port }
 }
 
 export const defaultSettings: Settings = {
@@ -56,6 +75,7 @@ export const defaultSettings: Settings = {
   resumeBypassPermissions: false,
   agents: defaultAgentSwitches(),
   ssh: mergeSshSettings({}),
+  remote: defaultRemoteSettings,
 }
 
 const num = (v: unknown, fallback: number, min: number, max: number): number =>
@@ -106,6 +126,7 @@ export function mergeSettings(input: unknown): Settings {
     resumeBypassPermissions: bool(o.resumeBypassPermissions, d.resumeBypassPermissions),
     agents: mergeAgentSwitches(o.agents),
     ssh: mergeSshSettings(o.ssh),
+    remote: mergeRemoteSettings(o.remote),
   }
 }
 

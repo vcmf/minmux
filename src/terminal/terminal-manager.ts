@@ -1374,6 +1374,11 @@ export const TerminalManager = {
     requestAnimationFrame(() => repairRenderers())
   },
 
+  /** Has this terminal been started (mounted or parked)? Remote control lists the others greyed. */
+  isStarted(id: string): boolean {
+    return entries.has(id)
+  },
+
   /** Resume banner actions: (re)type the pane's resume command now (offer / retry) — only
    *  at a shell prompt; returns whether it typed. */
   resumeNow(id: string): boolean {
