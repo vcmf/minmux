@@ -127,7 +127,9 @@ The renderer's CSP already allows what CodeMirror does at runtime: `style-src 's
   symlink or another case of the same name). A save that may still land holds its file until its
   process is gone: later saves of that file fail at once with "an earlier save is stuck", and a
   process stuck in a dead mount that never exits holds it for the session. Other files save as
-  usual.
+  usual. A known gap: the hold is by path, so a stuck save under one name doesn't hold
+  another name of the same file (a symlink); the worker that could say it's one file is the stuck
+  one.
 - The WSL share loop tries the next share form only when a form has no file or won't open it, and
   answers `missing` only when no form had the file.
 - Main checks the request: an absolute path, an existing regular file (a symlink to one is written
@@ -230,6 +232,9 @@ This is the common case in minmux: the agent beside the tab is writing the same 
   **Save**, **Discard** or **Cancel**. The close confirm has one action button today, so `file` is a
   new kind with its own dialog; a save that fails or answers `changed` leaves the entry open.
   `lib/close-confirm` counts unsaved files in pane and tab closes.
+- **A save in flight** counts as unsaved for these guards, and quitting waits for it (a few
+  seconds at most) before the save worker is stopped: stopping it mid-write leaves the file half
+  written.
 - **Leaving the page** (⌘R, force reload, ⌘W's Close Window on macOS, the red button, quit): while
   any file is unsaved, the renderer sets `beforeunload`, and main handles the window's
   `will-prevent-unload` with a dialog naming the files: **Discard** or **Cancel**. Without a
