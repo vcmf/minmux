@@ -4,6 +4,7 @@ import type { HostMessage, Permission, RemotePane } from "../lib/remote-protocol
 import { applyChat, emptyChat, refusalText, type ChatState } from "./chat-state"
 import type { Outbox } from "./outbox"
 import { TerminalView } from "./terminal-view"
+import { AnswerCard } from "./answer-card"
 
 export interface PaneViewProps {
   pane: RemotePane
@@ -174,10 +175,14 @@ export function PaneView({
       )}
 
       {asking && (
-        <div className="asking">
-          <b>{agentName} is asking something.</b> {pane.detail ? `${pane.detail}. ` : ""}Answer it
-          on the computer for now; answering from here comes in a later update.
-        </div>
+        <AnswerCard
+          pane={pane}
+          agentName={agentName}
+          canAnswer={permission !== "view" && online}
+          send={send}
+          subscribe={subscribe}
+          openTerminal={() => setView("terminal")}
+        />
       )}
       {working && (
         <div className="working-note">

@@ -116,7 +116,7 @@ describe("PaneView", () => {
     setup({
       pane: pane({ status: "waiting", asking: true, detail: "Claude needs your permission" }),
     })
-    expect(screen.getByText(/Claude is asking something/)).toBeInTheDocument()
+    expect(screen.getByText(/Claude is asking:/)).toBeInTheDocument()
     expect(screen.getByText("Send")).toBeDisabled()
   })
 

@@ -23,6 +23,7 @@ import {
 } from "../agents/dialogs"
 
 export interface Wait {
+  id: string // this dialog, as a device names it when answering
   agent: string // "" for the pane's session, else the sub-agent's id
   key: string // the tool call (toolKey) when known, else "?"
   kind: "permission" | "question"
@@ -167,10 +168,17 @@ export class WaitTracker {
       if (k.startsWith(`${pane}\u0000`)) this.running.delete(k)
   }
 
-  private open(pane: string, w: Omit<Wait, "since">): void {
+  private nextId = 0
+
+  private open(pane: string, w: Omit<Wait, "since" | "id">): void {
     const list = this.panes.get(pane) ?? []
     if (list.some((x) => x.agent === w.agent && x.key === w.key && x.kind === w.kind)) return
-    this.panes.set(pane, [...list, { ...w, since: this.now() }])
+    this.panes.set(pane, [...list, { ...w, id: `w${++this.nextId}`, since: this.now() }])
+  }
+
+  /** A device answered this dialog (the keys are typed): it's closed. */
+  answered(pane: string, id: string): void {
+    this.close(pane, (w) => w.id === id)
   }
 
   private close(pane: string, match: (w: Wait) => boolean): void {

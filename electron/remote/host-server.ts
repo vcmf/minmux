@@ -14,6 +14,7 @@ import {
   TICK_MS,
   parseClientMessage,
   type HostMessage,
+  type AnswerRefusal,
   type Permission,
   type PendingState,
   type RemotePanes,
@@ -43,6 +44,7 @@ import { LOCK_AFTER_MS } from "./devices"
 import { chatReaderFor, type ChatLead } from "../agents/chat"
 import type { ChatReader } from "../agents/chat-log"
 import { TermMirror } from "./term-mirror"
+import { parseDialog } from "../agents/answers"
 import type { ChatItem } from "../../src/lib/remote-chat"
 import { FAILED } from "./host-client"
 
@@ -441,6 +443,34 @@ export function createHostServer(d: HostServerDeps) {
     if (m.t === "unwatch") return unwatch(c, m.pane)
     if (m.t === "more") return more(c, m.pane, m.before, m.seq)
     if (m.t === "term") return void (m.on ? termOn(c, m.pane) : termOff(c, m.pane))
+    if (m.t === "dialog") {
+      const lines = await screenOf(m.pane)
+      const answerable = await rpc({ op: "answerable", pane: m.pane })
+      return sendTo(c, {
+        t: "dialog",
+        pane: m.pane,
+        dialog: lines ? parseDialog(lines) : null,
+        answerable,
+      })
+    }
+    if (m.t === "answer") {
+      const ack = (ok: boolean, reason?: AnswerRefusal) =>
+        sendTo(c, { t: "answered", pane: m.pane, waitId: m.waitId, ok, reason })
+      if (c.permission === "view") return ack(false, "not-allowed")
+      // The screen as it is now: main types the key only if the option is still there.
+      const lines = await screenOf(m.pane)
+      if (!lines) return ack(false, "changed")
+      const r = await rpc({
+        op: "answer",
+        deviceId: c.deviceId,
+        pane: m.pane,
+        waitId: m.waitId,
+        n: m.n,
+        label: m.label,
+        lines,
+      })
+      return ack(r.ok, r.reason)
+    }
     if (m.t === "keys") {
       if (c.permission !== "keys") return
       await rpc({ op: "keys", deviceId: c.deviceId, pane: m.pane, data: m.data })
@@ -713,6 +743,22 @@ export function createHostServer(d: HostServerDeps) {
     f.watchers.add(c)
     if (f.mirror) await sendScreen(c, pane, f)
     else await resnap(pane, f)
+  }
+
+  /** The pane's screen lines: from its mirror if someone watches its terminal, else a snapshot
+   *  taken for this look only (the tap stops again right after). */
+  async function screenOf(pane: string): Promise<string[] | null> {
+    const f = termFeeds.get(pane)
+    if (f?.mirror) return f.mirror.lines()
+    const snap = await rpc({ op: "snapshot", pane })
+    if (!snap || snap === "failed") return null
+    if (!termFeeds.has(pane)) post({ t: "untap", pane }) // nobody started watching meanwhile
+    const m = new TermMirror(snap)
+    try {
+      return await m.lines()
+    } finally {
+      m.dispose()
+    }
   }
 
   function termOff(c: Client, pane: string) {

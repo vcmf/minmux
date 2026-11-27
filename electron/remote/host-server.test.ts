@@ -93,6 +93,7 @@ describe("remote host server", () => {
   let snaps: string[] // panes main was asked a snapshot of
   let untapped: string[]
   let keys: string[]
+  let answers: { n: number; label: string; lines: string[] }[]
 
   beforeEach(async () => {
     port = await freePort()
@@ -109,6 +110,7 @@ describe("remote host server", () => {
     snaps = []
     untapped = []
     keys = []
+    answers = []
     host = new RemoteHost({
       fork: () => {
         const handlers: { message: ((m: FromHost) => void)[]; exit: (() => void)[] } = {
@@ -148,10 +150,23 @@ describe("remote host server", () => {
         if (pane === "gone") return null
         if (pane === "busy" && snaps.filter((p) => p === "busy").length === 1)
           throw new Error("main busy") // the first answer fails: retried, not "gone"
+        if (pane === "asks")
+          return {
+            epoch: 1,
+            offset: 0,
+            cols: 40,
+            rows: 6,
+            text: "Do you want to proceed?\r\n❯ 1. Yes\r\n  2. No",
+          }
         return { epoch: 1, offset: 5, cols: 40, rows: 5, text: "hello" }
       },
       untap: (pane) => void untapped.push(pane),
       keys: async (_d, pane, data) => (keys.push(`${pane}:${JSON.stringify(data)}`), true),
+      answerable: () => true,
+      answer: async (call) => {
+        answers.push(call)
+        return { ok: true }
+      },
       send: async (deviceId, pane, text, id) => {
         sent.push({ deviceId, pane, text, id })
         return { ok: true }
@@ -710,6 +725,35 @@ describe("remote host server", () => {
     s.ws.send(JSON.stringify({ t: "keys", pane: "gone", data: "x" }))
     await new Promise((r) => setTimeout(r, 100))
     expect(keys).toEqual([]) // "send" devices can't type raw keys
+  })
+
+  it("answers: the dialog read from the pane's screen; an answer goes to main with it", async () => {
+    host.setPanes({
+      tabs: [{ id: "t", title: "t" }],
+      panes: [
+        { id: "asks", tab: "t", title: "a", kind: "agent", status: "waiting", started: true },
+      ],
+      stale: false,
+    })
+    const s = await hello(await approve())
+    s.ws.send(JSON.stringify({ t: "dialog", pane: "asks" }))
+    await until(() => s.got.some((m) => m.t === "dialog"))
+    expect(s.got.find((m) => m.t === "dialog")).toMatchObject({
+      dialog: {
+        question: "Do you want to proceed?",
+        options: [
+          { n: 1, label: "Yes" },
+          { n: 2, label: "No" },
+        ],
+      },
+      answerable: true,
+    })
+    expect(untapped).toContain("asks") // a look only: the tap stops again
+    s.ws.send(JSON.stringify({ t: "answer", pane: "asks", waitId: "w1", n: 1, label: "Yes" }))
+    await until(() => s.got.some((m) => m.t === "answered"))
+    expect(s.got.find((m) => m.t === "answered")).toMatchObject({ ok: true, waitId: "w1" })
+    expect(answers[0]).toMatchObject({ n: 1, label: "Yes" })
+    expect(answers[0]!.lines.join("\n")).toContain("1. Yes")
   })
 
   it("send: relayed to main and acked; view-only devices refused here", async () => {

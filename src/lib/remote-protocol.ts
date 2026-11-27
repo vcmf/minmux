@@ -30,6 +30,7 @@ export interface RemotePane {
   started: boolean // false: a restored pane in a tab the desktop hasn't shown yet
   paste?: boolean // its program turned on bracketed paste (how a message is typed into it)
   asking?: boolean // its agent shows a dialog now (main's wait tracker; not the idle reminder)
+  waitId?: string // …which one (a device names it when answering)
   working?: boolean // its agent is mid-turn (or main hasn't seen it stop): no message until then
 }
 
@@ -54,6 +55,8 @@ export type ClientMessage =
   | { t: "send"; pane: string; text: string; id: string } // a message for the pane's agent or shell
   | { t: "term"; pane: string; on: boolean } // follow (or stop) the pane's terminal
   | { t: "keys"; pane: string; data: string } // raw keys (devices allowed them)
+  | { t: "dialog"; pane: string } // what the pane's dialog offers, read from its screen
+  | { t: "answer"; pane: string; waitId: string; n: number; label: string }
 
 export const SEEN_EVERY_MS = 60_000
 
@@ -75,6 +78,9 @@ export type HostMessage =
   | { t: "tsnap"; pane: string; cols: number; rows: number; data: string; gone?: boolean }
   | { t: "tout"; pane: string; data: string }
   | { t: "tsize"; pane: string; cols: number; rows: number }
+  // The pane's dialog as its screen shows it (null: none there); answerable: buttons may type.
+  | { t: "dialog"; pane: string; dialog: Dialog | null; answerable: boolean }
+  | { t: "answered"; pane: string; waitId: string; ok: boolean; reason?: AnswerRefusal }
   | { t: "locked"; reason: LockReason }
   | { t: "error"; code: string; message: string }
   | { t: "bye"; reason: ByeReason }
@@ -92,6 +98,23 @@ export type SendRefusal =
   | "error"
 
 export const SEND_MAX = 16 * 1024
+
+/** Why an answer wasn't typed. */
+export type AnswerRefusal =
+  | "not-allowed" // view-only device
+  | "stale" // that dialog isn't the open one any more
+  | "changed" // the screen no longer shows that option
+  | "unsupported" // this agent's dialogs are answered in the Terminal view
+  | "error"
+
+export interface DialogOption {
+  n: number
+  label: string
+}
+export interface Dialog {
+  question: string
+  options: DialogOption[]
+}
 
 export type LockReason = "idle" | "pin-attempts" | "expired"
 // disconnected: "Disconnect all" on the desktop (the page doesn't reconnect by itself).
@@ -155,6 +178,23 @@ export function parseClientMessage(raw: unknown): ClientMessage | null {
         m.data.length > 0 &&
         m.data.length <= 1024
         ? { t: "keys", pane: m.pane, data: m.data }
+        : null
+    case "dialog":
+      return typeof m.pane === "string" && m.pane.length <= 200
+        ? { t: "dialog", pane: m.pane }
+        : null
+    case "answer":
+      return typeof m.pane === "string" &&
+        m.pane.length <= 200 &&
+        typeof m.waitId === "string" &&
+        m.waitId.length <= 40 &&
+        typeof m.n === "number" &&
+        Number.isInteger(m.n) &&
+        m.n >= 1 &&
+        m.n <= 9 &&
+        typeof m.label === "string" &&
+        m.label.length <= 300
+        ? { t: "answer", pane: m.pane, waitId: m.waitId, n: m.n, label: m.label }
         : null
     case "send":
       return typeof m.pane === "string" &&

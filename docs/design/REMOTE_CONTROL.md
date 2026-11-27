@@ -365,6 +365,20 @@ matrix, apart from the renderer's reducer and its known flaw. Main feeds it ever
 - Codex sends nothing when an approval is answered on the desktop; the screen check is what
   catches a stale wait there.
 
+**As built (2026-11-27):**
+
+- Each open dialog in the wait tracker has an id; the pane list carries it. The phone's card asks
+  for the dialog as the pane's **screen** shows it (the worker's mirror, or a snapshot taken for
+  that look only): its question and numbered options (`electron/agents/answers.ts`, parsed from
+  the screen's text, boxes and all).
+- An answer names the wait id, the option's number and its label. The worker reads the screen
+  again; main types the option's key only when the device may send, that dialog is still the open
+  one, the agent takes answers by number, and the screen still shows that number with that label.
+- **Claude only** for now: its dialogs take the option's number (verified against Claude Code
+  2.1.332's own strings). Codex's and OpenCode's options are shown with a way into the Terminal
+  view and its keys bar; which key picks an option there isn't verified, and a wrong key into a
+  live dialog is the one thing this must never do.
+
 ## minmux on another machine (step 5)
 
 - The sidebar's **Remote** section gets **Machines**: peers from `tailscale status --json`

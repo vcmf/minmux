@@ -10,6 +10,7 @@ import type { RemoteView } from "../src/lib/remote-view"
 import type { AgentKind } from "../src/lib/agent-graph"
 import { chatLeadFor, type ChatLead } from "./agents/chat-lead"
 import { Sender } from "./remote/typing"
+import { answerKeys, parseDialog } from "./agents/answers"
 import type { TermSnapshot } from "./remote/term-mirror"
 import { ASSUMED_TURN_MS, TurnTracker } from "./remote/turns"
 import { WaitTracker } from "./remote/waits"
@@ -122,6 +123,25 @@ export function setupRemoteControl(deps: RemoteControlDeps) {
     workerGone: () => deps.terminal?.untapAll(),
     // Raw keys from a device allowed them (Terminal view's keys bar): typed as they come, like the
     // desktop's own keys, so an answer key also closes the pane's dialog.
+    answerable: (pane) => answerKeys(deps.leadOf?.(pane)?.agent, 1) !== null,
+    // An answer from a device: still that dialog (wait id), still on screen (the option at that
+    // number, by its label), an agent that takes numbers; then its key, like the desktop's.
+    answer: async (call) => {
+      const p = (await devices()).permissionOf(call.deviceId)
+      if (p !== "send" && p !== "keys") return { ok: false, reason: "not-allowed" }
+      const open = waits.waits(call.pane)
+      if (!open.some((w) => w.id === call.waitId)) return { ok: false, reason: "stale" }
+      const keys = answerKeys(deps.leadOf?.(call.pane)?.agent, call.n)
+      if (!keys) return { ok: false, reason: "unsupported" }
+      const option = parseDialog(call.lines)?.options.find((o) => o.n === call.n)
+      if (!option || option.label !== call.label) return { ok: false, reason: "changed" }
+      if (!(deps.writePty?.(call.pane, keys) ?? false)) return { ok: false, reason: "error" }
+      waits.answered(call.pane, call.waitId)
+      askingChanged()
+      const name = (await devices()).list().find((d) => d.id === call.deviceId)?.name ?? "a device"
+      send("remote:typed", call.pane, name)
+      return { ok: true }
+    },
     keys: async (deviceId, pane, data) => {
       if ((await devices()).permissionOf(deviceId) !== "keys") return false
       if (!lastPanes?.panes.some((p) => p.id === pane)) return false
@@ -230,11 +250,14 @@ export function setupRemoteControl(deps: RemoteControlDeps) {
     ...p,
     panes: p.panes.map((x) => {
       const w = waits.waits(x.id)[0]
-      const { asking: _old, ...rest } = x
+      const { asking: _old, waitId: _oldId, ...rest } = x
       void _old
+      void _oldId
       const working = isAgentPane(x) && turns.turn(x.id) !== "between"
       const out = working ? { ...rest, working: true } : rest
-      return w ? { ...out, asking: true, ...(w.message ? { detail: w.message } : {}) } : out
+      return w
+        ? { ...out, asking: true, waitId: w.id, ...(w.message ? { detail: w.message } : {}) }
+        : out
     }),
   })
   // Panes whose shell prompt came back (the agent is gone, even one that died without a word):
@@ -247,7 +270,9 @@ export function setupRemoteControl(deps: RemoteControlDeps) {
       .flatMap((x) => {
         const w = waits.waits(x.id)[0]
         const working = isAgentPane(x) && turns.turn(x.id) !== "between"
-        return w || working ? [`${x.id}\u0000${w?.message ?? ""}\u0000${working}`] : []
+        return w || working
+          ? [`${x.id}\u0000${w?.id ?? ""}\u0000${w?.message ?? ""}\u0000${working}`]
+          : []
       })
       .join("\u0001")
   /** The one way the list reaches devices: remembers what they were told. */

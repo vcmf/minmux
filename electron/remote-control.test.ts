@@ -341,4 +341,70 @@ describe("setupRemoteControl", () => {
     expect(untapped).toBe(1)
     rc.dispose()
   })
+
+it("answers: only the open dialog, only an option still on screen, only agents that take numbers", async () => {
+    settings = JSON.stringify({ remote: { enabled: true } })
+    const writes: [string, string][] = []
+    let agent: "claude" | "codex" = "claude"
+    const rc = setupRemoteControl({
+      dir: "/app/out/main",
+      configDir: () => cfg,
+      readSettings: () => settings,
+      profile: "",
+      window: () => null,
+      leadOf: () => ({ agent, sessionId: "s" }),
+      writePty: (pane, data) => (writes.push([pane, data]), true),
+    })
+    rc.apply()
+    const p = forks[0]!
+    rc.setPanes({
+      tabs: [],
+      panes: [{ id: "p1", tab: "t", title: "a", kind: "agent", status: "waiting", started: true }],
+    })
+    p.emit({ t: "rpc", id: 1, call: { op: "approve", nodeId: "n1", name: "iphone" } })
+    await vi.waitFor(async () => expect((await rc.view()).devices).toHaveLength(1))
+    const deviceId = (await rc.view()).devices[0]!.id
+    rc.agentEvents([{ paneId: "p1", event: "Notification", notificationType: "permission_prompt" }])
+    const waitId = (
+      p.sent.filter((m) => (m as { t: string }).t === "panes").at(-1) as {
+        panes: { panes: { waitId?: string }[] }
+      }
+    ).panes.panes[0]!.waitId!
+    expect(waitId).toBeTruthy()
+    const screen = ["Do you want to proceed?", "❯ 1. Yes", "  2. No"]
+    let rid = 10
+    const answer = async (o: { waitId?: string; n?: number; label?: string; lines?: string[] }) => {
+      const id = ++rid
+      p.emit({
+        t: "rpc",
+        id,
+        call: {
+          op: "answer",
+          deviceId,
+          pane: "p1",
+          waitId: o.waitId ?? waitId,
+          n: o.n ?? 1,
+          label: o.label ?? "Yes",
+          lines: o.lines ?? screen,
+        },
+      })
+      return vi.waitFor(() => {
+        const r = p.sent.find((m) => (m as { id?: number }).id === id) as {
+          result: { result: { ok: boolean; reason?: string } }
+        }
+        expect(r).toBeTruthy()
+        return r.result.result
+      })
+    }
+    expect(await answer({ waitId: "w999" })).toEqual({ ok: false, reason: "stale" })
+    expect(await answer({ label: "No" })).toEqual({ ok: false, reason: "changed" })
+    expect(await answer({ lines: ["$ "] })).toEqual({ ok: false, reason: "changed" })
+    agent = "codex"
+    expect(await answer({})).toEqual({ ok: false, reason: "unsupported" })
+    agent = "claude"
+    expect(await answer({})).toEqual({ ok: true })
+    expect(writes).toEqual([["p1", "1"]])
+    expect(await answer({})).toEqual({ ok: false, reason: "stale" }) // answered: closed
+    rc.dispose()
+  })
 })

@@ -75,6 +75,16 @@ export class TermMirror {
     return this.serializer.serialize({ scrollback: SNAPSHOT_LINES })
   }
 
+  /** The screen's lines as text, once every write so far is parsed (the dialog check). */
+  async lines(): Promise<string[]> {
+    await this.serialize() // same wait: everything fed is on screen
+    const b = this.term.buffer.active
+    const out: string[] = []
+    for (let i = 0; i < this.term.rows; i++)
+      out.push(b.getLine(b.viewportY + i)?.translateToString(true) ?? "")
+    return out
+  }
+
   dispose(): void {
     this.term.dispose()
   }
