@@ -32,18 +32,20 @@ there's no way to see which ones wait for you, read what they did, or send the n
 
 ## Decisions (2026-11-26/27, with the user)
 
-| Question                    | Decision                                                                        |
-| --------------------------- | ------------------------------------------------------------------------------- |
-| Transport                   | Tailscale only. Both devices run Tailscale signed in to the same account        |
-| QR code                     | Only a shortcut for the first visit: a QR of the plain address, no secret in it |
-| Pairing                     | Tailscale identity + approval on the desktop with a matching short code         |
-| Server for the web app      | minmux itself, from the remote-host worker                                      |
-| HTTP or HTTPS               | Plain HTTP on the Tailscale address first; `tailscale serve` HTTPS in step 6    |
-| Phone view of an agent pane | Chat view from the transcript first; Terminal view next                         |
-| Phone resizing the PTY      | Never. A minmux peer may drive the size while it has focus (step 5)             |
-| Default device permission   | Send: view, send messages, answer. Raw keys is a per-device upgrade             |
-| On or off by default        | Off until turned on in Settings (it opens a door to a shell)                    |
-| Repo                        | All in minmux                                                                   |
+| Question                    | Decision                                                                                             |
+| --------------------------- | ---------------------------------------------------------------------------------------------------- |
+| Transport                   | Tailscale only. Both devices run Tailscale signed in to the same account                             |
+| QR code                     | Only a shortcut for the first visit: a QR of the plain address, no secret in it                      |
+| Pairing                     | Tailscale identity + approval on the desktop with a matching short code                              |
+| Server for the web app      | minmux itself, from the remote-host worker                                                           |
+| HTTP or HTTPS               | Plain HTTP on the Tailscale address first; `tailscale serve` HTTPS in step 6                         |
+| Phone view of an agent pane | Chat view from the transcript first; Terminal view next                                              |
+| Phone resizing the PTY      | Never. A minmux peer may drive the size while it has focus (step 5)                                  |
+| Default device permission   | Send: view, send messages, answer. Raw keys is a per-device upgrade                                  |
+| On or off by default        | Off until turned on in Settings (it opens a door to a shell)                                         |
+| Repo                        | All in minmux                                                                                        |
+| Expiry                      | Locked after 24 h without use, unlocked with a PIN set on the Mac; expired after 30 days without use |
+| Messages while offline      | Never queued; one retry with the same id on reconnect, then "not sent, retry?"                       |
 
 ## Terms
 
@@ -161,8 +163,9 @@ frames for terminal bytes (step 3).
 ```
 client → host
 hello      { v, client: "web" | "minmux" }
-watch      { pane, view: "chat" | "terminal" }     unwatch { pane }
-send       { pane, text }                          // composer message
+watch      { pane, view, since? }                  unwatch { pane }   // since: resume point
+send       { pane, text, id }                      // composer message, id for dedupe
+unlock     { pin }                                 // device locked after 24 h idle
 keys       { pane, bytes }                         // raw input, permission "keys"
 start      { tab }                                 // step 3: start a tab the desktop never opened
 answer     { pane, waitId, choice }                // step 4
@@ -170,6 +173,8 @@ drive      { pane, cols, rows } | release { pane } // step 5, minmux peers only
 
 host → client
 welcome    { v, machine, device, permission }
+locked     { reason: "idle" | "pin-attempts" | "expired" }
+ack        { id, ok, reason? }                     // a send was written (or refused)
 panes      { tabs[], panes[], stale }              // full list, on change, ≤ 4/s
 chat       { pane, items[], before? }              // chat view: items (before = cursor for more)
 snapshot   { pane, epoch, offset, cols, rows, screen }   // step 3
@@ -182,6 +187,45 @@ bye        { reason }                              // revoked, turned off, quitt
 
 A `v` mismatch gets `bye { reason: "version" }` and the page says which side to update (only
 minmux peers can differ; the web app comes from the same minmux).
+
+## Connection loss and expiry
+
+### Unstable or lost connections
+
+- **Liveness.** The worker sends a WebSocket ping every 15 s. The client treats 35 s without a
+  ping as dead; the worker drops a socket after 45 s without a pong. The phone shows a
+  "Reconnecting…" bar and greys out the composer while it's down.
+- **Network switches.** The Tailscale address stays the same across Wi-Fi, cellular and DERP
+  relays, so a TCP connection often survives a switch. When it doesn't, the client reconnects with
+  backoff (1 s, doubling, capped at 30 s), and at once on `visibilitychange` to visible and on
+  `online` (iOS kills sockets of a backgrounded page).
+- **Resume, not restart.** The client keeps, per watched pane, its last chat item id and its
+  terminal `{ epoch, offset }`, and re-sends them in `watch { since }`. The worker answers with what
+  was missed when it still has it (chat: items after that id; terminal: bytes after that offset in
+  the same epoch, if `OutputBuffer` still holds them), else a fresh feed or snapshot.
+- **Sends are never queued while offline.** Each `send` carries a client id; the worker answers
+  `ack` once main wrote it (or refused it). An unacked send is retried once on reconnect with the
+  same id, and main ignores ids it has seen (last 100 per device, kept 10 minutes), so a message
+  can't be typed twice. A send older than 60 s is not retried: the phone shows "not sent, retry?",
+  since the agent may have moved on.
+- **Host unreachable.** The page can't tell a sleeping Mac from a closed minmux; it says "can't
+  reach <machine>: is it awake with minmux running?" and keeps retrying in the background. After a
+  minmux restart, approved devices reconnect on their own (the device table is on disk).
+- **Visible on the desktop.** While any device is connected, the status bar shows it
+  ("iphone-15 connected"); Settings has **Disconnect all**.
+
+### Expiry
+
+- **Locked after 24 h without use.** A device's `lastSeen` (any message from it) older than 24 h
+  makes it locked: its token still identifies it, but every message except `unlock` gets
+  `locked { reason: "idle" }` and the page asks for the PIN.
+- **PIN.** Set on the Mac when Remote control is turned on (6 or more digits), stored in main as
+  an scrypt hash, checked in main. A correct PIN unlocks for another 24 h of use. 5 wrong PINs lock
+  that device until it's approved again on the Mac (`pin-attempts`); 10 wrong PINs across all
+  devices within an hour turn PIN unlocking off until the user turns it back on in Settings. No PIN
+  set: a locked device needs approval on the Mac again.
+- **Expired after 30 days without use**: the device is removed, as if revoked.
+- Turning Remote control off ends every session at once; turning it back on keeps the devices.
 
 ## Chat view (step 2)
 
@@ -294,11 +338,11 @@ step 3; in step 2 it shows a placeholder).
   `@xterm/xterm` loaded only by Terminal view.
 - Layout: pane list grouped by tab (status dot, needs-input first) → pane screen (Chat / Terminal
   toggle, composer, wait card).
-- Reconnects with backoff when the phone wakes; re-sends `watch` and gets a fresh feed.
+- Reconnects and resumes as in "Connection loss and expiry"; a PIN screen when locked.
 
 ## Settings
 
-`remote.enabled` (false) · `remote.port` (7420) · `remote.https` (false, step 6). A **Remote
+`remote.enabled` (false) · `remote.port` (7420) · PIN (hash, main only) · `remote.https` (false, step 6). A **Remote
 control** section: on/off, status (Tailscale missing / signed out / tagged machine / listening at
 …), address + Copy + QR, devices (rename / permission / revoke).
 
@@ -326,11 +370,11 @@ Gates (`MINMUX_PERF=1`, new scenarios in `src/lib/perf.ts`):
 
 1. **Remote host** (#246): setting, worker lifecycle, CLI lookup, listen + `whois` + tag rules + Host /
    Origin checks, approval (navigation-only, code, native dialog), device table in main, Settings
-   section (address, QR, devices), `hello` / `welcome` / `panes`, renderer summary with remote
+   section (address, QR, devices), PIN, expiry and lock, pings and reconnect, `hello` / `welcome` / `panes`, renderer summary with remote
    status and the no-window fallback. Web app: pane list. Security pass before merge. Idle gates.
-2. **Chat view + send** (#247): per-agent chat readers, chat feed, composer, refuse-while-waiting,
+2. **Chat view + send** (#247): per-agent chat readers, chat feed with resume, composer with ids and acks, refuse-while-waiting,
    paste mode, sent-from chip.
-3. **Terminal view** (#248): offsets + epoch, tap, snapshot, headless mirror, backpressure, keys
+3. **Terminal view** (#248): offsets + epoch, resume from an offset, tap, snapshot, headless mirror, backpressure, keys
    permission + keys bar, start-tab. Security pass (raw keys). Input and e2e gates.
 4. **Answers** (#249): wait tracker + test matrix, Claude `PermissionRequest`, screen check, answer
    tables, wait cards.
