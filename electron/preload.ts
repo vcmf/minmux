@@ -154,6 +154,13 @@ const api = {
   },
   readFile: (path: string, wsl?: WslContext, since?: unknown) =>
     ipcRenderer.invoke("fs:read-file", path, wsl, since),
+  writeFile: (
+    path: string,
+    text: string,
+    base: string | null,
+    wsl?: WslContext,
+    create?: boolean,
+  ) => ipcRenderer.invoke("fs:write-file", path, text, base, wsl, create),
   readFilePreview: (path: string, wsl?: WslContext) =>
     ipcRenderer.invoke("fs:read-preview", path, wsl),
   fetchImage: (url: string) => ipcRenderer.invoke("image:fetch", url),

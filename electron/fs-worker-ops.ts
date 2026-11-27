@@ -5,19 +5,22 @@ import path from "node:path"
 import { readDirListing } from "./read-dir"
 import type { DirListing } from "../src/lib/dir-listing"
 import { readFileForTab } from "./read-file"
-import type { FileData, FileStamp } from "../src/lib/file-tab"
+import { writeFileForTab } from "./write-file"
+import type { FileData, FileStamp, SaveResult } from "../src/lib/file-tab"
 
 export type FsCall =
   | { op: "readdir" | "stat" | "watch" | "unwatch"; path: string }
   | { op: "gitroots"; paths: string[]; real: boolean } // `real`: resolve symlinks first
   | { op: "readfile"; path: string; since?: FileStamp } // a file tab's read (electron/read-file)
+  // An edited file's save (electron/write-file): never re-sent to another worker (see the client).
+  | { op: "writefile"; path: string; text: string; base: string | null; create?: boolean }
 export type FsRequest = FsCall & { id: number }
 
 /** Each folder's checkout root (null: in none); a folder whose search failed is left out. */
 export type GitRootsResult = { roots: Record<string, string | null> }
 
 export type FsResult =
-  DirListing | { isDir: boolean } | { watching: boolean } | GitRootsResult | FileData
+  DirListing | { isDir: boolean } | { watching: boolean } | GitRootsResult | FileData | SaveResult
 
 export type FsReply =
   { id: number; ok: true; value: FsResult } | { id: number; ok: false; code: string }
@@ -288,6 +291,8 @@ export async function handleFsRequest(req: FsRequest, watches?: Watches): Promis
     else if (req.op === "stat") value = { isDir: (await fs.promises.stat(req.path)).isDirectory() }
     else if (req.op === "gitroots") value = { roots: await gitRoots(req.paths, req.real) }
     else if (req.op === "readfile") value = await readFileForTab(req.path, undefined, req.since)
+    else if (req.op === "writefile")
+      value = await writeFileForTab(req.path, req.text, req.base, req.create)
     else if (req.op === "watch") {
       watches?.add(req.path) // sync: if it hangs (a dead mount), main sees this request hang
       value = { watching: true }

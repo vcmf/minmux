@@ -1,4 +1,4 @@
-import type { FileData, FileStamp } from "./file-tab"
+import type { FileData, FileStamp, SaveResult } from "./file-tab"
 import type { ShellOption, SpawnOpts, SshHost } from "../types"
 import type { WslContext } from "./wsl"
 import type { AgentEvent, AgentKind } from "./agent-graph"
@@ -117,6 +117,15 @@ export interface Ipc {
   readFilePreview: (path: string, wsl?: WslContext) => Promise<PreviewData>
   // A file tab's read (fs worker); `since`: skip it when the file still matches (`same`).
   readFile: (path: string, wsl?: WslContext, since?: FileStamp) => Promise<FileData>
+  // Save an edited file (the save worker): only over the bytes it was edited from (`base`, the read's
+  // hash); `create` writes back a file deleted while edited. Never re-sent: `unknown` = re-read.
+  writeFile: (
+    path: string,
+    text: string,
+    base: string | null,
+    wsl?: WslContext,
+    create?: boolean,
+  ) => Promise<SaveResult>
   // A remote image for a markdown view, fetched by main (the page's policy refuses remote ones).
   fetchImage: (url: string) => Promise<{ ok: true; dataUrl: string } | { ok: false; error: string }>
   // Native folder picker (Files root); `wsl` opens it at the distro's UNC share and returns
