@@ -201,4 +201,21 @@ describe("FileEditor", () => {
     expect(doc()).toBe("a\nb\n")
     expect(document.querySelector(".file-editor-dot")).not.toBeNull()
   })
+
+  it("a second save while one runs is busy, and the first stays the one waited for", async () => {
+    let finish!: (r: SaveResult) => void
+    vi.mocked(ipc.writeFile).mockImplementationOnce(() => new Promise((r) => (finish = r)))
+    await mount("a\n")
+    type("b\n")
+    fireEvent.click(screen.getByText("Save"))
+    await waitFor(() => expect(ipc.writeFile).toHaveBeenCalled())
+    expect(await edits.saveEntry(entryId)).toBe("busy")
+    let settled = false
+    void edits.settled(entryId).then(() => (settled = true))
+    await new Promise((r) => setTimeout(r, 10))
+    expect(settled).toBe(false) // still the real save
+    finish(saved())
+    await waitFor(() => expect(settled).toBe(true))
+    expect(edits.isUnsaved(entryId)).toBe(false)
+  })
 })

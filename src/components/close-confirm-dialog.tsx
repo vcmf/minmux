@@ -32,7 +32,13 @@ export function CloseConfirmDialog() {
     refocus()
   }
   // The keyboard goes to whatever is in front once the save has closed it (or kept it open).
-  const save = () => void useStore.getState().saveAndClose().then(refocus)
+  const save = () =>
+    void useStore
+      .getState()
+      .saveAndClose()
+      .then(() => {
+        if (!useStore.getState().closeConfirm) refocus() // asked again: the dialog keeps it
+      })
 
   useEffect(() => {
     if (!pending) return

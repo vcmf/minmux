@@ -288,13 +288,13 @@ let rendererAlive = false // a page to ask (loaded, not crashed)
 let quitChecks = 0
 const quitCheckReplies = new Map<number, (paths: string[]) => void>()
 const QUIT_CHECK_MS = 6000 // the renderer's own saves get SAVE_WAIT_MS; a hung page, no more
-/** Ask the page what's unsaved, once its saves have landed ([] if it doesn't answer). */
+/** Ask the page what's unsaved, once its saves have landed; no answer: the last list it pushed. */
 function askUnsaved(win: BrowserWindow): Promise<string[]> {
   const id = ++quitChecks
   return new Promise((resolve) => {
     const timer = setTimeout(() => {
       quitCheckReplies.delete(id)
-      resolve([])
+      resolve(unsavedFiles) // a page that doesn't answer: never "nothing unsaved" on a guess
     }, QUIT_CHECK_MS)
     quitCheckReplies.set(id, (paths) => {
       clearTimeout(timer)
@@ -526,15 +526,23 @@ function createWindow() {
     e.preventDefault()
     setImmediate(() => app.quit()) // after this close returns: the quit closes it again
   })
-  win.on("session-end", () => sessionLedger().freeze(60_000)) // Windows logout/shutdown — see onPower
+  win.on("session-end", () => {
+    sessionLedger().freeze(60_000) // Windows logout/shutdown — see onPower
+    osEnding = true // …and it isn't held for unsaved files either (the design: they're lost)
+    quitThrough = true
+  })
   win.on("closed", () => {
     mainWindow = null
     fsWorker.setWatched([])
     unsavedFiles = [] // its files went with it
+    rendererAlive = false
   })
   // A reloaded or crashed renderer re-sends its watch set when its folder tabs show again; its
   // unsaved files went with it.
-  win.webContents.on("did-start-loading", () => fsWorker.setWatched([]))
+  win.webContents.on("did-start-loading", () => {
+    fsWorker.setWatched([])
+    rendererAlive = false // a page that can answer a quit's check comes with did-finish-load
+  })
   // Its unsaved files go only once the new page is in: a reload starts loading before the old
   // page's beforeunload runs, and that needs the list to ask.
   win.webContents.on("did-finish-load", () => {
@@ -551,7 +559,9 @@ function createWindow() {
   win.webContents.on("will-prevent-unload", (e) => {
     // The page holds its unload only with unsaved files: ask even if their list hasn't come yet
     // (a same-length edit settled in its beforeunload).
-    if (unsavedChecked || osEnding) return e.preventDefault() // a quit already settled it
+    // A quit already settled it, or the OS is ending the session as we speak (an osEnding left
+    // from a cancelled logout alone doesn't count).
+    if (unsavedChecked || (osEnding && quitThrough)) return e.preventDefault()
     const choice = dialog.showMessageBoxSync(win, {
       type: "warning",
       buttons: ["Cancel", "Discard changes"],
@@ -2388,6 +2398,12 @@ app.on("before-quit", (e) => {
         unsavedChecked = true
         return app.quit()
       }
+      // The window may have gone while it answered (⌘W): an app-modal dialog then.
+      const target = !win.isDestroyed()
+        ? win
+        : mainWindow && !mainWindow.isDestroyed()
+          ? mainWindow
+          : null
       quitAsking = true
       const ask: Electron.MessageBoxOptions = {
         type: "warning",
@@ -2398,8 +2414,14 @@ app.on("before-quit", (e) => {
         detail: `${unsavedList(files)} ${files.length === 1 ? "has" : "have"} unsaved changes: quitting drops them.`,
         noLink: true,
       }
-      void dialog
-        .showMessageBox(win, ask)
+      let shown: Promise<Electron.MessageBoxReturnValue>
+      try {
+        shown = target ? dialog.showMessageBox(target, ask) : dialog.showMessageBox(ask)
+      } catch {
+        quitAsking = false
+        return quitAbandoned()
+      }
+      void shown
         .then(({ response }) => {
           quitAsking = false
           if (response !== 1) return quitAbandoned()

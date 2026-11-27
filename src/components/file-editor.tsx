@@ -131,6 +131,8 @@ async function saveEntry(
 }
 // Tracked whole (write + unsaved check): a close's Save and a quit wait for it.
 const trackedSave = (id: string, opts?: { overwrite?: boolean; create?: boolean }) => {
+  // One already running stays the one tracked (this call would only answer "busy").
+  if (edits.get(id)?.saving) return Promise.resolve("busy" as const)
   const p = saveEntry(id, opts)
   edits.track(id, p)
   return p
