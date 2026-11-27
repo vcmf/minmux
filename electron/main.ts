@@ -364,25 +364,34 @@ const historyWorker = new SessionsWorkerClient(
     }) as unknown as SessionsProc,
 )
 const TOUCHED_MS = 5000 // the worker may be starting or mid-search
-// A pane's bracketed-paste mode, asked of the renderer's terminal when a remote message is typed
-// (its own state, not in the store). Undefined when there's no window or it doesn't answer soon.
-let pasteAsks = 0
-const pasteReplies = new Map<number, (v: boolean | undefined) => void>()
-function askPasteMode(pane: string): Promise<boolean | undefined> {
+// Asked of the renderer's terminal for remote control: a pane's bracketed-paste mode (how a
+// message is typed) or its visible lines (an answer's last check). Its own state, not in the
+// store. Undefined when there's no window or it doesn't answer soon.
+let rendererAsks = 0
+const rendererReplies = new Map<number, (v: unknown) => void>()
+function askRenderer(what: "paste" | "screen", pane: string): Promise<unknown> {
   const w = mainWindow
   if (!w || w.isDestroyed()) return Promise.resolve(undefined)
-  const id = ++pasteAsks
+  const id = ++rendererAsks
   return new Promise((resolve) => {
     const timer = setTimeout(() => {
-      pasteReplies.delete(id)
+      rendererReplies.delete(id)
       resolve(undefined)
     }, 300)
-    pasteReplies.set(id, (v) => {
+    rendererReplies.set(id, (v) => {
       clearTimeout(timer)
       resolve(v)
     })
-    w.webContents.send("remote:paste-mode?", id, pane)
+    w.webContents.send("remote:ask", id, what, pane)
   })
+}
+const askPasteMode = async (pane: string) => {
+  const v = await askRenderer("paste", pane)
+  return typeof v === "boolean" ? v : undefined
+}
+const askScreen = async (pane: string) => {
+  const v = await askRenderer("screen", pane)
+  return Array.isArray(v) && v.every((l) => typeof l === "string") ? (v as string[]) : undefined
 }
 
 // Remote control over Tailscale (docs/design/REMOTE_CONTROL.md): no worker until it's turned on.
@@ -1657,10 +1666,10 @@ function registerIpc() {
     (_e, id: unknown, p: unknown) => remoteControl?.setPermission(id, p) ?? false,
   )
   ipcMain.handle("remote:set-pin", (_e, pin: unknown) => remoteControl?.setPin(pin) ?? "error")
-  ipcMain.on("remote:paste-mode", (_e, id: unknown, value: unknown) => {
+  ipcMain.on("remote:answer-ask", (_e, id: unknown, value: unknown) => {
     if (typeof id !== "number") return
-    pasteReplies.get(id)?.(typeof value === "boolean" ? value : undefined)
-    pasteReplies.delete(id)
+    rendererReplies.get(id)?.(value)
+    rendererReplies.delete(id)
   })
   ipcMain.handle("remote:disconnect-all", () => {
     remoteControl?.disconnectAll()
@@ -2131,6 +2140,7 @@ app.whenReady().then(async () => {
     transcriptTargets,
     wslPane: (pane) => !!sessions.get(pane)?.wslDistro,
     pasteMode: askPasteMode,
+    screen: askScreen,
     // The terminal view: a pane's output so far (coalescer flushed first, so the tap carries on
     // exactly from here), and the tap turned on or off.
     terminal: {

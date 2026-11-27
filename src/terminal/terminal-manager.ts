@@ -1379,6 +1379,17 @@ export const TerminalManager = {
     return entries.has(id)
   },
 
+  /** The terminal's visible lines as text (remote control checks a dialog against them). */
+  screenLines(id: string): string[] | undefined {
+    const t = entries.get(id)?.term
+    if (!t) return undefined
+    const b = t.buffer.active
+    const out: string[] = []
+    for (let i = 0; i < t.rows; i++)
+      out.push(b.getLine(b.viewportY + i)?.translateToString(true) ?? "")
+    return out
+  },
+
   /** Did the terminal's program turn on bracketed paste? (How a remote message is typed.) */
   bracketedPaste(id: string): boolean | undefined {
     return entries.get(id)?.term.modes.bracketedPasteMode

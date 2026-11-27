@@ -20,12 +20,14 @@ const claudePermission = [
 describe("parseDialog", () => {
   it("reads Claude's permission prompt: question and options, by number", () => {
     expect(parseDialog(claudePermission)).toEqual({
+      kind: "permission",
       question: "Do you want to proceed?",
       body: ["Bash command", "rm -rf build"], // what it asks about: shown on the phone
       options: [
         { n: 1, label: "Yes" },
-        { n: 2, label: "Yes, and don't ask again for rm" },
-        { n: 3, label: "No, and tell Claude what to do" },
+        // A wrapped label is kept whole: the phone shows the full scope it grants.
+        { n: 2, label: "Yes, and don't ask again for rm commands in /repo" },
+        { n: 3, label: "No, and tell Claude what to do differently (esc)" },
       ],
     })
   })
@@ -41,7 +43,10 @@ describe("parseDialog", () => {
       "",
       "Enter to select · Esc to cancel",
     ]
-    expect(parseDialog(lines)?.options.map((o) => o.label)).toEqual(["Staging", "Production"])
+    const d = parseDialog(lines)!
+    expect(d.kind).toBe("question") // not a go-ahead prompt: never answered by a digit
+    expect(d.options.map((o) => o.label)).toEqual(["Staging Safe first", "Production Careful"])
+    expect(d.body).toEqual([]) // no box: nothing unrelated above it
   })
 
   it("a numbered list higher up isn't joined to a dialog whose option 1 scrolled away", () => {

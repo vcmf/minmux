@@ -38,7 +38,7 @@ export type RpcCall =
       waitId: string
       n: number
       seen: string // the dialog the device was shown (dialogSignature)
-      lines: string[] // the pane's screen as the worker's mirror has it now
+      deadline: number // ms epoch: past it, main types nothing (the worker gave up waiting)
     }
 
 export type RpcResult =

@@ -75,8 +75,9 @@ export class TermMirror {
     let w: Promise<void>
     do {
       w = this.writing
-      await w
-    } while (w !== this.writing)
+      // A disposed terminal never calls back: don't wait for it forever.
+      await Promise.race([w, new Promise<void>((r) => setTimeout(r, 2000))])
+    } while (w !== this.writing && !this.disposed)
   }
 
   /** The screen's lines as text, once every write so far is parsed (the dialog check). */
@@ -89,7 +90,10 @@ export class TermMirror {
     return out
   }
 
+  private disposed = false
+
   dispose(): void {
+    this.disposed = true
     this.term.dispose()
   }
 

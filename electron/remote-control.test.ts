@@ -345,6 +345,8 @@ describe("setupRemoteControl", () => {
 
   it("answers: only the open dialog, only an option still on screen, only agents that take numbers", async () => {
     settings = JSON.stringify({ remote: { enabled: true } })
+    let onScreen: string[] = []
+    let windowOpen = true
     const writes: [string, string][] = []
     const rc = setupRemoteControl({
       dir: "/app/out/main",
@@ -354,6 +356,7 @@ describe("setupRemoteControl", () => {
       window: () => null,
       leadOf: () => ({ agent: "claude", sessionId: "s" }),
       writePty: (pane, data) => (writes.push([pane, data]), true),
+      screen: async () => (windowOpen ? onScreen : undefined),
     })
     rc.apply()
     const p = forks[0]!
@@ -372,9 +375,17 @@ describe("setupRemoteControl", () => {
     ).panes.panes[0]!.waitId!
     expect(waitId).toBeTruthy()
     const screen = ["Do you want to proceed?", "❯ 1. Yes", "  2. No"]
+    onScreen = screen
     let rid = 10
     const sig = (lines: string[]) => dialogSignature(parseDialog(lines)!)
-    const answer = async (o: { waitId?: string; n?: number; seen?: string; lines?: string[] }) => {
+    const answer = async (o: {
+      waitId?: string
+      n?: number
+      seen?: string
+      lines?: string[]
+      deadline?: number
+    }) => {
+      onScreen = o.lines ?? screen
       const id = ++rid
       p.emit({
         t: "rpc",
@@ -386,7 +397,7 @@ describe("setupRemoteControl", () => {
           waitId: o.waitId ?? waitId,
           n: o.n ?? 1,
           seen: o.seen ?? sig(screen),
-          lines: o.lines ?? screen,
+          deadline: o.deadline ?? Date.now() + 5000,
         },
       })
       return vi.waitFor(() => {
@@ -406,6 +417,17 @@ describe("setupRemoteControl", () => {
       reason: "changed",
     })
     expect(await answer({ lines: ["$ "] })).toEqual({ ok: false, reason: "changed" })
+    // A question dialog on screen (not a go-ahead prompt): no digit, whatever the tracker says.
+    const question = ["Which target?", "› 1. Staging", "  2. Production"]
+    expect(await answer({ lines: question, seen: sig(question) })).toEqual({
+      ok: false,
+      reason: "changed",
+    })
+    windowOpen = false
+    expect(await answer({})).toEqual({ ok: false, reason: "no-window" })
+    windowOpen = true
+    expect(await answer({ deadline: Date.now() - 1 })).toEqual({ ok: false, reason: "error" })
+    expect(writes).toEqual([])
     expect(await answer({})).toEqual({ ok: true })
     expect(writes).toEqual([["p1", "1"]])
     expect(await answer({})).toEqual({ ok: false, reason: "stale" }) // answered: closed

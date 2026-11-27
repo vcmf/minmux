@@ -87,8 +87,9 @@ export function createHostServer(d: HostServerDeps) {
   const CHAT_POLL_MS = d.timing?.chatPoll ?? 1000
   const FEED_IDLE_MS = d.timing?.feedIdle ?? 30_000
   const TERM_FLUSH_MS = 60 // a device's terminal output, batched
-  const DIALOG_RETRIES = 4
-  const DIALOG_RETRY_MS = 250
+  const DIALOG_RETRIES = 2 // a hook can come before its dialog is drawn
+  const DIALOG_RETRY_MS = 400
+  const ANSWER_DEADLINE_MS = 8_000 // under the RPC timeout: main never types after we gave up
   const TERM_BEHIND = d.timing?.termBehind ?? 256 * 1024 // unsent bytes past which a device is skipped
 
   let config: HostConfig | null = null
@@ -474,9 +475,8 @@ export function createHostServer(d: HostServerDeps) {
         sendTo(c, { t: "answered", pane: m.pane, waitId: m.waitId, ok, reason })
       if (c.permission === "view") return ack(false, "not-allowed")
       if (!panes.panes.some((p) => p.id === m.pane)) return ack(false, "stale")
-      // The screen as it is now: main types the key only if the option is still there.
-      const lines = await screenOf(m.pane)
-      if (!lines) return ack(false, "changed")
+      // Main checks the screen itself (the desktop's terminal) and decides.
+      const deadline = Date.now() + ANSWER_DEADLINE_MS
       const r = await rpc({
         op: "answer",
         deviceId: c.deviceId,
@@ -484,7 +484,7 @@ export function createHostServer(d: HostServerDeps) {
         waitId: m.waitId,
         n: m.n,
         seen: m.seen,
-        lines,
+        deadline,
       })
       return ack(r.ok, r.reason)
     }
@@ -768,7 +768,12 @@ export function createHostServer(d: HostServerDeps) {
   async function screenOf(pane: string): Promise<string[] | null> {
     const f = termFeeds.get(pane)
     if (f?.snapping) await f.snapping // a re-snapshot under way: the screen after it
-    if (f?.mirror) return f.mirror.lines()
+    const held = f?.mirror
+    if (held) {
+      const lines = await held.lines()
+      // Still that feed's mirror (not disposed by someone leaving meanwhile): its lines stand.
+      if (termFeeds.get(pane) === f && f.mirror === held) return lines
+    }
     const snap = await rpc({ op: "snapshot", pane })
     // Asked or not, main may have started the tap: stop it unless someone watches now.
     if (!termFeeds.has(pane)) post({ t: "untap", pane })

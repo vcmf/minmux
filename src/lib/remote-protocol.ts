@@ -98,6 +98,11 @@ export type SendRefusal =
   | "error"
 
 export const SEND_MAX = 16 * 1024
+export const SEEN_MAX = 64 * 1024 // a dialog signature: 12 body lines + 9 labels of 300, escaped
+
+/** What a device saw of a dialog; main compares it with the screen before typing an answer. */
+export const dialogSignature = (d: Dialog): string =>
+  JSON.stringify([d.kind, d.question, d.body, d.options.map((o) => [o.n, o.label])])
 
 /** Why an answer wasn't typed. */
 export type AnswerRefusal =
@@ -105,6 +110,7 @@ export type AnswerRefusal =
   | "stale" // that dialog isn't the open one any more
   | "changed" // the screen no longer shows that option
   | "unsupported" // this agent's dialogs are answered in the Terminal view
+  | "no-window" // the desktop window is closed: main can't see the screen to check
   | "error"
 
 export interface DialogOption {
@@ -112,6 +118,7 @@ export interface DialogOption {
   label: string
 }
 export interface Dialog {
+  kind: "permission" | "question" // a go-ahead prompt, or a question with choices
   question: string
   body: string[] // what it asks about (the command, the file), as the box shows it
   options: DialogOption[]
@@ -198,7 +205,7 @@ export function parseClientMessage(raw: unknown): ClientMessage | null {
         m.n >= 1 &&
         m.n <= 9 &&
         typeof m.seen === "string" &&
-        m.seen.length <= 8000
+        m.seen.length <= SEEN_MAX
         ? { t: "answer", pane: m.pane, waitId: m.waitId, n: m.n, seen: m.seen }
         : null
     case "send":

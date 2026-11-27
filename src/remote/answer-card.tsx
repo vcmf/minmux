@@ -1,11 +1,18 @@
 import { useEffect, useState } from "react"
-import type { AnswerRefusal, Dialog, HostMessage, RemotePane } from "../lib/remote-protocol"
+import {
+  dialogSignature,
+  type AnswerRefusal,
+  type Dialog,
+  type HostMessage,
+  type RemotePane,
+} from "../lib/remote-protocol"
 
 const REASON: Record<AnswerRefusal, string> = {
   "not-allowed": "This device can only view. Change it in minmux's Settings.",
   stale: "That question was already answered.",
   changed: "The screen changed. Look again before answering.",
   unsupported: "Answer it in the Terminal view.",
+  "no-window": "The computer's minmux window is closed: answers need it open to check the screen.",
   error: "Couldn't answer.",
 }
 
@@ -65,11 +72,7 @@ export function AnswerCard({
     if (!dialog?.d) return
     setNote("")
     // What this phone showed: main types the key only if the screen still shows exactly that.
-    const seen = JSON.stringify([
-      dialog.d.question,
-      dialog.d.body,
-      dialog.d.options.map((o) => [o.n, o.label]),
-    ])
+    const seen = dialogSignature(dialog.d)
     if (!send({ t: "answer", pane: pane.id, waitId, n, seen })) return setNote(REASON.error)
     setBusy(n)
   }

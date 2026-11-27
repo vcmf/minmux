@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest"
 import { act, fireEvent, render, screen } from "@testing-library/react"
 import { AnswerCard } from "./answer-card"
-import type { HostMessage, RemotePane } from "../lib/remote-protocol"
+import { dialogSignature, type HostMessage, type RemotePane } from "../lib/remote-protocol"
 
 const pane: RemotePane = {
   id: "p",
@@ -37,6 +37,7 @@ function setup(canAnswer = true, keysAllowed = true) {
 }
 
 const dialog = {
+  kind: "permission" as const,
   question: "Do you want to proceed?",
   body: ["Bash command", "rm -rf build"],
   options: [
@@ -67,14 +68,7 @@ describe("AnswerCard", () => {
       pane: "p",
       waitId: "w1",
       n: 1,
-      seen: JSON.stringify([
-        dialog.question,
-        dialog.body,
-        [
-          [1, "Yes"],
-          [2, "No"],
-        ],
-      ]),
+      seen: dialogSignature(dialog),
     })
     push({ t: "answered", pane: "p", waitId: "w1", ok: false, reason: "changed" })
     expect(screen.getByText(/The screen changed/)).toBeInTheDocument()

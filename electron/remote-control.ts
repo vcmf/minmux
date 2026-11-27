@@ -32,6 +32,8 @@ export interface RemoteControlDeps {
   transcriptTargets?: (p: string, pane: string) => string[]
   /** The pane's terminal's bracketed-paste mode now (asks the renderer; undefined if it can't). */
   pasteMode?: (pane: string) => Promise<boolean | undefined>
+  /** The pane's visible lines, from the desktop's own terminal (undefined: no window). */
+  screen?: (pane: string) => Promise<string[] | undefined>
   /** A WSL pane (its agents' files live inside the distro). */
   wslPane?: (pane: string) => boolean
   // The terminal view: a pane's output so far (its tap starts), the tap stopped, all taps stopped.
@@ -136,11 +138,21 @@ export function setupRemoteControl(deps: RemoteControlDeps) {
       if (!wait || wait.id !== call.waitId) return { ok: false, reason: "stale" }
       const keys = answerKeys(wait.agentKind, wait.kind, call.n)
       if (!keys) return { ok: false, reason: "unsupported" }
-      // The whole dialog as the device saw it (question, what it asks about, options) must still be
-      // on screen: every Claude prompt says "Do you want to proceed?" and "1. Yes".
-      const now = parseDialog(call.lines)
-      if (!now || dialogSignature(now) !== call.seen || !now.options.some((o) => o.n === call.n))
+      // Main reads the screen itself, from the desktop's terminal (never the network-facing
+      // worker's word). The whole dialog the device saw (kind, question, what it asks about,
+      // options) must be what's there: every Claude prompt says "Do you want to proceed?".
+      const lines = await deps.screen?.(call.pane)
+      if (!lines) return { ok: false, reason: "no-window" }
+      const now = parseDialog(lines)
+      if (
+        !now ||
+        now.kind !== "permission" ||
+        dialogSignature(now) !== call.seen ||
+        !now.options.some((o) => o.n === call.n)
+      )
         return { ok: false, reason: "changed" }
+      // The worker gave up waiting (it told the phone "couldn't"): typing now would surprise it.
+      if (Date.now() > call.deadline) return { ok: false, reason: "error" }
       if (!(deps.writePty?.(call.pane, keys) ?? false)) return { ok: false, reason: "error" }
       waits.answered(call.pane, call.waitId)
       askingChanged()

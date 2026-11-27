@@ -107,8 +107,9 @@ export interface Ipc {
   onRemoteWanted: (cb: (wanted: boolean) => void) => () => void
   remotePanes: (panes: RemotePanes) => void
   onRemoteTyped: (cb: (pane: string, device: string) => void) => () => void // a device typed here
-  onRemotePasteQuery: (cb: (id: number, pane: string) => void) => () => void // main asks a mode
-  remotePasteReply: (id: number, value: boolean | undefined) => void
+  // Main asks a pane's terminal something (its paste mode, its visible lines); the reply by id.
+  onRemoteAsk: (cb: (id: number, what: "paste" | "screen", pane: string) => void) => () => void
+  remoteAnswerAsk: (id: number, value: unknown) => void
   remoteRevoke: (id: string) => Promise<boolean>
   remoteRename: (id: string, name: string) => Promise<boolean>
   remotePermission: (id: string, permission: Permission) => Promise<boolean>

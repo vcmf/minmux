@@ -93,7 +93,7 @@ describe("remote host server", () => {
   let snaps: string[] // panes main was asked a snapshot of
   let untapped: string[]
   let keys: string[]
-  let answers: { n: number; seen: string; lines: string[] }[]
+  let answers: { n: number; seen: string; deadline: number }[]
 
   beforeEach(async () => {
     port = await freePort()
@@ -753,7 +753,7 @@ describe("remote host server", () => {
     await until(() => s.got.some((m) => m.t === "answered"))
     expect(s.got.find((m) => m.t === "answered")).toMatchObject({ ok: true, waitId: "w1" })
     expect(answers[0]).toMatchObject({ n: 1, seen: "sig" })
-    expect(answers[0]!.lines.join("\n")).toContain("1. Yes")
+    expect(answers[0]!.deadline).toBeGreaterThan(Date.now()) // main types nothing after it
   })
 
   it("send: relayed to main and acked; view-only devices refused here", async () => {
