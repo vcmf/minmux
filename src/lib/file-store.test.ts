@@ -109,18 +109,34 @@ describe("FileStore", () => {
     expect(s.get("a")).toBeUndefined() // unpinned: evictable again
   })
 
-  it("a read that started before a save doesn't land after it (it reads again)", async () => {
+  it("ordered by when they start: an older read landing late is dropped", async () => {
     const { read, pending } = reads()
     const s = new FileStore(read, hl)
     s.show("e", "/e")
     pending.shift()!.resolve(text("v0"))
     await tick()
     s.refresh("e") // a read starts…
-    s.saved("e", "v1\n", { size: 3, mtimeMs: 9 }, "h1") // …a save lands…
-    pending.shift()!.resolve(text("v0", 5)) // …the old read answers with the old text
+    const save = s.ticket("e") // …then a save…
+    s.saved("e", "v1\n", { size: 3, mtimeMs: 9 }, "h1", save) // …which lands first
+    pending.shift()!.resolve(text("v0", 5)) // the read (older) answers with the old text
     await tick()
     expect(s.get("e")!.data).toMatchObject({ text: "v1\n" }) // not taken
-    expect(read).toHaveBeenCalledTimes(3) // read again instead
+    expect(s.seqOf("e")).toBe(save)
+  })
+
+  it("a reload that started before a newer read landed doesn't put older text back", async () => {
+    const { read, pending } = reads()
+    const s = new FileStore(read, hl)
+    s.show("e", "/e")
+    pending.shift()!.resolve(text("v0"))
+    await tick()
+    const reload = s.ticket("e") // Reload theirs starts reading…
+    s.refresh("e") // …the watcher's read starts after it…
+    pending.shift()!.resolve(text("v2", 7)) // …and lands first with the newest text
+    await tick()
+    s.saved("e", "v1\n", { size: 3, mtimeMs: 6 }, "h1", reload) // the reload lands: older
+    expect(s.get("e")!.data).toMatchObject({ text: "v2" })
+    expect(s.seqOf("e")).toBeGreaterThan(reload)
   })
 
   it("the same error again is no news (a deleted file's folder busy)", async () => {
@@ -167,7 +183,7 @@ describe("FileStore", () => {
     s.show("e", "/e")
     pending.shift()!.resolve(text("old"))
     await tick()
-    s.saved("e", "new\n", { size: 4, mtimeMs: 9 }, "h1")
+    s.saved("e", "new\n", { size: 4, mtimeMs: 9 }, "h1", s.ticket("e"))
     expect(s.get("e")!.data).toMatchObject({ text: "new\n", hash: "h1", editable: true })
     s.refresh("e")
     expect(pending[0]!.since).toEqual({ size: 4, mtimeMs: 9 })

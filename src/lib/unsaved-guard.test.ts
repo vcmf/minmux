@@ -3,7 +3,11 @@ import { EditStore } from "./edit-store"
 import { installUnsavedGuard } from "./unsaved-guard"
 
 function setup(settleMs = 50) {
-  const edits = new EditStore(vi.fn(), vi.fn(), { pin: vi.fn(), saved: vi.fn() })
+  const edits = new EditStore(vi.fn(), vi.fn(), {
+    pin: vi.fn(),
+    saved: vi.fn(),
+    ticket: vi.fn(() => 1),
+  })
   let answer: (() => Promise<string[]>) | null = null
   const ipc = {
     setUnsaved: vi.fn(),

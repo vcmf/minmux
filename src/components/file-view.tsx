@@ -337,7 +337,8 @@ function FileViewer({ entryId, tabId }: { entryId: string; tabId: string }) {
     useStore.getState().keepEntry(entryId) // a peek being edited is a kept tab: never replaced
     // The text and its order from the same moment (a read may have landed since this render).
     const latest = files.get(entryId)?.data
-    if (latest?.kind !== "text" || !latest.hash) return
+    if (latest?.kind !== "text" || !latest.hash || latest.editable === false) return
+    if (latest.size > FILE_READ_CAP) return
     edits.start(entryId, path, wsl, latest.text, latest.hash, at, asked, files.seqOf(entryId))
   }
   const canReveal = !wsl && isAbsoluteHostPath(path, platform)

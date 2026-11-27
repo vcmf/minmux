@@ -34,6 +34,7 @@ interface Edit extends EditShown {
   wsl?: WslContext
   base: EditBase
   state: unknown // the editor's own state (CodeMirror's EditorState)
+  noticeSeq: number // the file store number the notice was raised at (a later read may clear it)
   scroll: unknown // where the editor was scrolled (CodeMirror's scroll snapshot), or null
 }
 
@@ -61,7 +62,7 @@ export class EditStore {
   constructor(
     private readonly write: Write = (p, t, b, w, c) => ipc.writeFile(p, t, b, w, c),
     private readonly read: Read = (p, w) => ipc.readFile(p, w),
-    private readonly fileStore: Pick<typeof files, "pin" | "saved"> = files,
+    private readonly fileStore: Pick<typeof files, "pin" | "saved" | "ticket"> = files,
   ) {}
 
   subscribe(fn: () => void): () => void {
@@ -159,6 +160,7 @@ export class EditStore {
       base: { ...text, hash, seq },
       state: null,
       scroll: null,
+      noticeSeq: 0,
       dirty: false,
       saving: false,
       notice: null,
@@ -231,12 +233,18 @@ export class EditStore {
 
   // A save's own trouble (an error, an unsure save) stays: it says why the text isn't on disk.
   /** Show `notice` (a change on disk with unsaved text, a deleted file), unless it already is. */
-  note(id: string, notice: EditNotice): void {
+  note(id: string, notice: EditNotice, seq: number): void {
     const e = this.edits.get(id)
     const kind = e?.notice?.kind
     if (!e || kind === notice.kind || kind === "error" || kind === "unknown") return
     e.notice = notice
+    e.noticeSeq = seq
     this.publish(id)
+  }
+
+  /** The file store number its notice was raised at. */
+  noticeSeq(id: string): number {
+    return this.edits.get(id)?.noticeSeq ?? 0
   }
 
   /** Drop a notice (the bar's ×). */
@@ -251,6 +259,7 @@ export class EditStore {
   async reload(id: string): Promise<EditBase | null> {
     const e = this.edits.get(id)
     if (!e) return null
+    const ticket = this.fileStore.ticket(id) // numbered as it starts: a later read beats it
     const r = await this.read(e.path, e.wsl).catch(() => null)
     if (this.edits.get(id) !== e) return null
     if (r?.kind !== "text" || !r.hash || r.editable === false) {
@@ -259,9 +268,10 @@ export class EditStore {
       return null
     }
     const text = fromDisk(r.text)
-    // The file store takes this read too, as its latest: an older one landing after can't win.
-    const seq = r.stamp ? this.fileStore.saved(id, r.text, r.stamp, r.hash) : e.base.seq
-    e.base = { ...text, hash: r.hash, seq }
+    // The file store takes this read too, unless something newer landed meanwhile (then the
+    // editor follows that one: its number is higher than this base's).
+    if (r.stamp) this.fileStore.saved(id, r.text, r.stamp, r.hash, ticket)
+    e.base = { ...text, hash: r.hash, seq: ticket }
     e.mixed = text.mixed
     e.notice = null
     e.dirty = false
@@ -285,6 +295,7 @@ export class EditStore {
     this.publish(id)
     const disk = toDisk(text, e.base)
     let r: SaveResult
+    let ticket = 0
     try {
       let base: string | null = e.base.hash
       let create = !!opts.create
@@ -296,6 +307,8 @@ export class EditStore {
           base = null
         } else base = null // unreadable, or not text now (a binary, too large): refused below
       }
+      // Numbered as the write starts: a read that started later is newer than what it wrote.
+      ticket = this.fileStore.ticket(id)
       r =
         base === null && !create
           ? { kind: "error", message: "It can't be read as text now" }
@@ -307,11 +320,12 @@ export class EditStore {
     if (this.edits.get(id) !== e) return r.kind // closed meanwhile
     e.saving = false
     if (r.kind === "saved") {
-      const seq = this.fileStore.saved(id, disk, r.stamp, r.hash)
-      e.base = { text, bom: e.base.bom, eol: e.base.eol, mixed: false, hash: r.hash, seq }
+      this.fileStore.saved(id, disk, r.stamp, r.hash, ticket)
+      e.base = { text, bom: e.base.bom, eol: e.base.eol, mixed: false, hash: r.hash, seq: ticket }
       e.mixed = false
     } else {
       e.notice = r.kind === "error" ? { kind: "error", message: r.message } : { kind: r.kind }
+      e.noticeSeq = ticket // only a read that started after this save can clear its bar
     }
     this.publish(id)
     return r.kind

@@ -49,8 +49,11 @@ interface Entry extends FileShown {
   diffTimer?: ReturnType<typeof setTimeout> // a re-read waiting out DIFF_MIN_MS
   diffWant: DiffWant | null // the latest diff asked for
   diffReading: boolean // a diff read in flight: a newer key waits for it
-  savedAt: number // bumped by a save: a read that started before it is stale when it lands
-  seq: number // bumped by each read taken (and each save): a later one is newer
+  // Reads, saves and reloads are numbered when they START (`issued`); `seq` is the number of the
+  // one its data came from. One landing with a number at or below `seq` started before what's
+  // there: it's older, and dropped.
+  issued: number
+  seq: number
 }
 
 type Read = (path: string, wsl?: WslContext, since?: FileStamp) => Promise<FileData>
@@ -109,7 +112,7 @@ export class FileStore {
         diffReading: false,
         reading: false,
         again: false,
-        savedAt: 0,
+        issued: 0,
         seq: 0,
         highlighted: null,
       }
@@ -245,10 +248,14 @@ export class FileStore {
   pin(id: string, on: boolean): void {
     if (on) return void this.pinned.add(id)
     this.pinned.delete(id)
-    // Back to the view: its lines are of the text it has now.
+    // Back to the view: its lines are of the text it has now (plain at once, so the view mounts
+    // with the right length and lands on its line; highlighted when the worker answers).
     const e = this.files.get(id)
-    if (e?.data?.kind === "text" && e.data.text !== e.highlighted)
-      void this.highlightNow(id, e, e.data.text)
+    if (e?.data?.kind !== "text" || e.data.text === e.highlighted) return
+    e.lines = e.data.text.length <= HIGHLIGHT_MAX ? plainLines(e.data.text) : []
+    e.highlighted = null
+    this.publish(id)
+    void this.highlightNow(id, e, e.data.text)
   }
 
   /** Leaving Edit: its view shows `line` at the top (Source, or the Preview's block there). */
@@ -266,22 +273,27 @@ export class FileStore {
     return line
   }
 
-  /** The order of its latest read (0: none): an edit follows only reads newer than its base. */
+  /** The number of what its data came from (0: none): an edit follows only newer ones. */
   seqOf(id: string): number {
     return this.files.get(id)?.seq ?? 0
   }
 
-  /** It was just saved (or reloaded) as `text`: that's its latest read; its order back. */
-  saved(id: string, text: string, stamp: FileStamp, hash: string): number {
+  /** A number for a save or a reload starting now (reads take theirs as they start). */
+  ticket(id: string): number {
     const e = this.files.get(id)
-    if (!e) return 0
-    e.savedAt++
-    e.seq++
+    return e ? ++e.issued : 0
+  }
+
+  // Taken only if nothing that started later has landed meanwhile (then that one is newer).
+  /** A save or reload with number `ticket` found the file as `text`. */
+  saved(id: string, text: string, stamp: FileStamp, hash: string, ticket: number): void {
+    const e = this.files.get(id)
+    if (!e || ticket <= e.seq) return
+    e.seq = ticket
     e.stamp = stamp
     e.data = { kind: "text", text, truncated: false, size: stamp.size, stamp, hash, editable: true }
-    if (text !== e.highlighted) void this.highlightNow(id, e, text)
+    if (text !== e.highlighted && !this.pinned.has(id)) void this.highlightNow(id, e, text)
     this.publish(id)
-    return e.seq
   }
 
   /** Its entry closed (or another took its place): its text and lines go now. */
@@ -296,35 +308,31 @@ export class FileStore {
 
   private async readNow(id: string, e: Entry): Promise<void> {
     e.reading = true
-    const savedAt = e.savedAt
+    const ticket = ++e.issued
     try {
       const d = await this.read(e.path, e.wsl, e.data ? e.stamp : undefined).catch(
         (err): FileData => ({ kind: "error", message: String(err) }),
       )
       if (this.files.get(id) !== e) return // closed or reused meanwhile
-      // Saved meanwhile: this read is of the file before the save; the next one is current.
-      if (e.savedAt !== savedAt) {
-        e.again = true
-        return
+      // Something that started later (a save, a reload, a read) landed first: this is older.
+      if (ticket <= e.seq || d.kind === "same") return
+      // The same error again (a deleted file, re-read on every change in its folder) is no news:
+      // nothing moves, so a dismissed bar about it stays dismissed.
+      if (d.kind === "error" && e.data?.kind === "error" && e.data.message === d.message) return
+      e.seq = ticket
+      e.stamp = d.stamp
+      e.data = d
+      if (d.kind !== "text") {
+        e.lines = []
+        e.highlighted = null
+      } else if (d.text !== e.highlighted) {
+        // A first read: plain lines while it's highlighted (a big one waits for the worker:
+        // escaping 2 MB here would hold up the thread xterm draws on).
+        if (!e.lines.length && d.text.length <= HIGHLIGHT_MAX) e.lines = plainLines(d.text)
+        // Not while it's in Edit: nobody sees these lines (Done highlights what's there then).
+        if (!this.pinned.has(id)) void this.highlightNow(id, e, d.text)
       }
-      // The same error again (a deleted file, re-read on every change in its folder) is no news.
-      const again = d.kind === "error" && e.data?.kind === "error" && e.data.message === d.message
-      if (d.kind !== "same" && !again) {
-        e.seq++
-        e.stamp = d.stamp
-        e.data = d
-        if (d.kind !== "text") {
-          e.lines = []
-          e.highlighted = null
-        } else if (d.text !== e.highlighted) {
-          // A first read: plain lines while it's highlighted (a big one waits for the worker:
-          // escaping 2 MB here would hold up the thread xterm draws on).
-          if (!e.lines.length && d.text.length <= HIGHLIGHT_MAX) e.lines = plainLines(d.text)
-          // Not while it's in Edit: nobody sees these lines (Done highlights what's there then).
-          if (!this.pinned.has(id)) void this.highlightNow(id, e, d.text)
-        }
-        this.publish(id)
-      }
+      this.publish(id)
     } finally {
       e.reading = false
       if (e.again && this.files.get(id) === e) {

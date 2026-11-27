@@ -3,6 +3,7 @@
 // lib/edit-store, so a surface switch unmounts this and coming back finds it as it was.
 import { useEffect, useRef, useState, useSyncExternalStore } from "react"
 import {
+  Annotation,
   Compartment,
   EditorState,
   Text,
@@ -34,6 +35,7 @@ import { goKeyOf, viewOf, type FileEntry } from "../lib/folder-entries"
 import { isFocusedEntry } from "./refocus-terminal"
 
 const indentSlot = new Compartment()
+const following = Annotation.define<boolean>() // a change that follows the file on disk
 const languageSlot = new Compartment()
 const DIRTY_MS = 150 // a same-length text is compared with its base after typing pauses this long
 
@@ -163,36 +165,42 @@ function follow(id: string): void {
   // Only a read newer than the base counts: an older one (landing late, or still in the file
   // store when the editor mounts again) would take the file back in time, or clear a bar a
   // save just put up.
-  if (files.seqOf(id) <= base.seq) return
+  const seq = files.seqOf(id)
+  if (seq <= base.seq) return
   const notice = now.notice?.kind
-  // Back to the bytes it was edited from (a checkout and back): a deleted / changed bar goes.
+  // Back to the bytes it was edited from (a checkout and back): a deleted / changed bar goes,
+  // if this read started after the bar went up (an older one says nothing about it).
   if (data.kind === "text" && data.hash === base.hash) {
-    if (notice === "missing" || notice === "changed") edits.dismiss(id)
+    if ((notice === "missing" || notice === "changed") && seq > edits.noticeSeq(id))
+      edits.dismiss(id)
     return
   }
   if (data.kind === "error") {
-    if (data.gone) edits.note(id, { kind: "missing" })
+    if (data.gone) edits.note(id, { kind: "missing" }, seq)
     return // (another error is the read's, not the file's: the next read decides)
   }
   // Too large or not text any more: it can't be followed; saving over it asks first.
   if (data.kind !== "text" || !data.hash || data.editable === false)
-    return edits.note(id, { kind: "changed" })
+    return edits.note(id, { kind: "changed" }, seq)
   flushDirty(id)
   const st = current(id)
   if (!st) return
   const incoming = fromDisk(data.text)
   const dirty = !!edits.get(id)?.dirty
-  // Unsaved text: it stops following, unless the file now holds exactly that text.
-  if (dirty && st.doc.toString() !== incoming.text) return edits.note(id, { kind: "changed" })
+  // Unsaved text: it stops following, unless the file now holds exactly that text (a length
+  // that differs settles it without making a string of the document).
+  if (dirty && (st.doc.length !== incoming.text.length || st.doc.toString() !== incoming.text))
+    return edits.note(id, { kind: "changed" }, seq)
   // Clean, the document is the base: its string stands in (no copy of a 2 MB document).
   const was = dirty ? st.doc.toString() : base.text
-  const next = edits.follow(id, incoming, data.hash, files.seqOf(id))
+  const next = edits.follow(id, incoming, data.hash, seq)
   if (!next) return
   const indent = indentFor(detectIndent(next.text, path, useStore.getState().settings.editorIndent))
   apply(id, () => ({
     changes: changesBetween(was, next.text),
     effects: indentSlot.reconfigure(indent),
-    annotations: Transaction.addToHistory.of(false),
+    // Out of undo; and not checked against the base (it IS the base: set just below).
+    annotations: [Transaction.addToHistory.of(false), following.of(true)],
   }))
   // The document is the new base now: it becomes the base's text (no second copy built), clean.
   const after = current(id)
@@ -262,7 +270,7 @@ export default function FileEditor({
       dispatch: (tr) => {
         view.update([tr])
         edits.keep(entryId, view.state)
-        if (tr.docChanged) refreshDirty(entryId, view.state)
+        if (tr.docChanged && !tr.annotation(following)) refreshDirty(entryId, view.state)
       },
     })
     viewRef.current = view

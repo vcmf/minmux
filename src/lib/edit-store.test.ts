@@ -14,7 +14,7 @@ const text = (t: string, hash: string): FileData => ({
 })
 
 function make(write: (...a: unknown[]) => Promise<SaveResult>, read = vi.fn()) {
-  const fileStore = { pin: vi.fn(), saved: vi.fn(() => 7) }
+  const fileStore = { pin: vi.fn(), saved: vi.fn(), ticket: vi.fn(() => 7) }
   const store = new EditStore(write as never, read as never, fileStore)
   return { store, fileStore, read }
 }
@@ -48,7 +48,7 @@ describe("EditStore", () => {
     expect(await store.save("e", "a\nb\n")).toBe("saved")
     expect(write).toHaveBeenCalledWith("/a", "a\r\nb\r\n", "h0", undefined, false)
     expect(store.base("e")).toMatchObject({ text: "a\nb\n", hash: "h1" })
-    expect(fileStore.saved).toHaveBeenCalledWith("e", "a\r\nb\r\n", stamp, "h1")
+    expect(fileStore.saved).toHaveBeenCalledWith("e", "a\r\nb\r\n", stamp, "h1", 7)
   })
 
   it("changed and missing become notices", async () => {

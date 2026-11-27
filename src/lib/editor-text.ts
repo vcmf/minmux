@@ -17,6 +17,9 @@ const BOM = "\uFEFF"
 export function fromDisk(raw: string): EditorText {
   const bom = raw.startsWith(BOM)
   const body = bom ? raw.slice(1) : raw
+  // No \r at all (most files): plain \n, nothing to count (one pass instead of three over a
+  // file the editor follows on the thread xterm draws on).
+  if (!body.includes("\r")) return { text: body, bom, eol: "\n", mixed: false }
   // The editor splits lines as CodeMirror does: at \r\n, \n and a lone \r.
   const crlf = body.match(/\r\n/g)?.length ?? 0
   const lf = (body.match(/\n/g)?.length ?? 0) - crlf
