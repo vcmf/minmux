@@ -335,7 +335,10 @@ function FileViewer({ entryId, tabId }: { entryId: string; tabId: string }) {
       at = rows.find((r) => r.newNo)?.newNo ?? at
     }
     useStore.getState().keepEntry(entryId) // a peek being edited is a kept tab: never replaced
-    edits.start(entryId, path, wsl, data.text, data.hash, at, asked, files.seqOf(entryId))
+    // The text and its order from the same moment (a read may have landed since this render).
+    const latest = files.get(entryId)?.data
+    if (latest?.kind !== "text" || !latest.hash) return
+    edits.start(entryId, path, wsl, latest.text, latest.hash, at, asked, files.seqOf(entryId))
   }
   const canReveal = !wsl && isAbsoluteHostPath(path, platform)
   // A WSL file too: main opens it through the distro's share.

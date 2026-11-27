@@ -160,15 +160,16 @@ function follow(id: string): void {
   const now = edits.get(id)
   const path = edits.path(id)
   if (!data || !base || !now || !path || now.saving) return // (a save's own write lands next)
+  // Only a read newer than the base counts: an older one (landing late, or still in the file
+  // store when the editor mounts again) would take the file back in time, or clear a bar a
+  // save just put up.
+  if (files.seqOf(id) <= base.seq) return
   const notice = now.notice?.kind
   // Back to the bytes it was edited from (a checkout and back): a deleted / changed bar goes.
   if (data.kind === "text" && data.hash === base.hash) {
     if (notice === "missing" || notice === "changed") edits.dismiss(id)
     return
   }
-  // Only a read newer than the base counts: an older one (landing late, or still in the file
-  // store when the editor mounts again) would take the file back in time.
-  if (files.seqOf(id) <= base.seq) return
   if (data.kind === "error") {
     if (data.gone) edits.note(id, { kind: "missing" })
     return // (another error is the read's, not the file's: the next read decides)
@@ -179,20 +180,25 @@ function follow(id: string): void {
   flushDirty(id)
   const st = current(id)
   if (!st) return
-  const incoming = fromDisk(data.text).text
+  const incoming = fromDisk(data.text)
+  const dirty = !!edits.get(id)?.dirty
   // Unsaved text: it stops following, unless the file now holds exactly that text.
-  if (edits.get(id)?.dirty && st.doc.toString() !== incoming)
-    return edits.note(id, { kind: "changed" })
-  const next = edits.follow(id, data.text, data.hash, files.seqOf(id))
+  if (dirty && st.doc.toString() !== incoming.text) return edits.note(id, { kind: "changed" })
+  // Clean, the document is the base: its string stands in (no copy of a 2 MB document).
+  const was = dirty ? st.doc.toString() : base.text
+  const next = edits.follow(id, incoming, data.hash, files.seqOf(id))
   if (!next) return
   const indent = indentFor(detectIndent(next.text, path, useStore.getState().settings.editorIndent))
-  apply(id, (s) => ({
-    changes: changesBetween(s.doc.toString(), next.text),
+  apply(id, () => ({
+    changes: changesBetween(was, next.text),
     effects: indentSlot.reconfigure(indent),
     annotations: Transaction.addToHistory.of(false),
   }))
+  // The document is the new base now: it becomes the base's text (no second copy built), clean.
   const after = current(id)
-  if (after) refreshDirty(id, after, true)
+  if (!after) return
+  baseDocs.set(id, { hash: next.hash, doc: after.doc })
+  edits.setDirty(id, false)
 }
 
 const subscribe = (fn: () => void) => edits.subscribe(fn)

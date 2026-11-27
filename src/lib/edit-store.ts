@@ -219,10 +219,9 @@ export class EditStore {
 
   // The editor follows it while nothing is unsaved (file-editor `follow`).
   /** The file changed on disk (an agent wrote it): its new text, from read `seq`, is the base. */
-  follow(id: string, raw: string, hash: string, seq: number): EditBase | null {
+  follow(id: string, text: EditorText, hash: string, seq: number): EditBase | null {
     const e = this.edits.get(id)
     if (!e) return null
-    const text = fromDisk(raw)
     e.base = { ...text, hash, seq }
     e.mixed = text.mixed
     e.notice = null
@@ -230,10 +229,12 @@ export class EditStore {
     return e.base
   }
 
+  // A save's own trouble (an error, an unsure save) stays: it says why the text isn't on disk.
   /** Show `notice` (a change on disk with unsaved text, a deleted file), unless it already is. */
   note(id: string, notice: EditNotice): void {
     const e = this.edits.get(id)
-    if (!e || e.notice?.kind === notice.kind) return
+    const kind = e?.notice?.kind
+    if (!e || kind === notice.kind || kind === "error" || kind === "unknown") return
     e.notice = notice
     this.publish(id)
   }

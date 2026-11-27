@@ -243,8 +243,12 @@ export class FileStore {
 
   /** It's being edited (or not any more): kept however many files are open. */
   pin(id: string, on: boolean): void {
-    if (on) this.pinned.add(id)
-    else this.pinned.delete(id)
+    if (on) return void this.pinned.add(id)
+    this.pinned.delete(id)
+    // Back to the view: its lines are of the text it has now.
+    const e = this.files.get(id)
+    if (e?.data?.kind === "text" && e.data.text !== e.highlighted)
+      void this.highlightNow(id, e, e.data.text)
   }
 
   /** Leaving Edit: its view shows `line` at the top (Source, or the Preview's block there). */
@@ -303,7 +307,9 @@ export class FileStore {
         e.again = true
         return
       }
-      if (d.kind !== "same") {
+      // The same error again (a deleted file, re-read on every change in its folder) is no news.
+      const again = d.kind === "error" && e.data?.kind === "error" && e.data.message === d.message
+      if (d.kind !== "same" && !again) {
         e.seq++
         e.stamp = d.stamp
         e.data = d
@@ -314,7 +320,8 @@ export class FileStore {
           // A first read: plain lines while it's highlighted (a big one waits for the worker:
           // escaping 2 MB here would hold up the thread xterm draws on).
           if (!e.lines.length && d.text.length <= HIGHLIGHT_MAX) e.lines = plainLines(d.text)
-          void this.highlightNow(id, e, d.text)
+          // Not while it's in Edit: nobody sees these lines (Done highlights what's there then).
+          if (!this.pinned.has(id)) void this.highlightNow(id, e, d.text)
         }
         this.publish(id)
       }

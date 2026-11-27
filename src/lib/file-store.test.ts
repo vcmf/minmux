@@ -123,6 +123,34 @@ describe("FileStore", () => {
     expect(read).toHaveBeenCalledTimes(3) // read again instead
   })
 
+  it("the same error again is no news (a deleted file's folder busy)", async () => {
+    const { read, pending } = reads()
+    const s = new FileStore(read, hl)
+    s.show("e", "/e")
+    pending.shift()!.resolve({ kind: "error", message: "This file is gone", gone: true })
+    await tick()
+    const seq = s.seqOf("e")
+    s.refresh("e")
+    pending.shift()!.resolve({ kind: "error", message: "This file is gone", gone: true })
+    await tick()
+    expect(s.seqOf("e")).toBe(seq)
+  })
+
+  it("in Edit, reads aren't highlighted; back to the view, the text there is", async () => {
+    const { read, pending } = reads()
+    const h = vi.fn(async (t: string) => t.split("\n").map((l) => `<i>${l}</i>`))
+    const s = new FileStore(read, h)
+    s.show("e", "/e")
+    s.pin("e", true)
+    pending.shift()!.resolve(text("a\nb"))
+    await tick()
+    expect(h).not.toHaveBeenCalled()
+    s.pin("e", false)
+    await tick()
+    expect(h).toHaveBeenCalledTimes(1)
+    expect(s.get("e")!.lines).toEqual(["<i>a</i>", "<i>b</i>"])
+  })
+
   it("leaving Edit: the view's line, taken once", () => {
     const { read } = reads()
     const s = new FileStore(read, hl)
