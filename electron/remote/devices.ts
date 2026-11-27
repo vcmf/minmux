@@ -201,6 +201,8 @@ export class DeviceTable {
     p.decision = decision
     if (decision === "deny") return true
     const token = this.random(32).toString("base64url")
+    // Approving a node again replaces its locked entries (asked again from the Locked screen).
+    this.devices = this.devices.filter((d) => !(d.nodeId === p.nodeId && this.isLocked(d)))
     const base = p.name || "device"
     const taken = new Set(this.devices.map((d) => d.name))
     let name = base
@@ -364,6 +366,7 @@ export class DeviceTable {
   /** Removes devices unused for 30 days. */
   sweep(): void {
     const now = this.now()
+    this.dropOldPending(now) // an approval nobody collected takes its device with it
     const keep = this.devices.filter((d) => now - d.lastSeen < EXPIRE_AFTER_MS)
     if (keep.length !== this.devices.length) {
       this.devices = keep

@@ -26,7 +26,7 @@ export type Decision = "allow" | "view" | "deny"
 
 export interface RemoteHostDeps {
   fork: () => HostProc
-  devices: () => DeviceTable
+  devices: () => Promise<DeviceTable>
   /** Shows the approval prompt (a native dialog); resolves the user's choice. */
   ask: (name: string, code: string) => Promise<Decision>
   /** Status or clients changed (for the renderer). */
@@ -146,7 +146,7 @@ export class RemoteHost {
         break
       }
       case "touch":
-        this.deps.devices().touch(m.deviceId)
+        void this.deps.devices().then((t) => t.touch(m.deviceId))
         break
       case "rpc":
         // Only to the worker that asked: a replacement numbers its requests from 1 again.
@@ -158,7 +158,7 @@ export class RemoteHost {
   }
 
   private async answer(call: RpcCall): Promise<RpcResult> {
-    const devices = this.deps.devices()
+    const devices = await this.deps.devices()
     switch (call.op) {
       case "auth":
         return { op: "auth", result: devices.auth(call.token, call.nodeId) }

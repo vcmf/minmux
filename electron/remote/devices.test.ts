@@ -92,6 +92,22 @@ describe("DeviceTable approval", () => {
     expect(table.list()).toHaveLength(0)
   })
 
+  it("re-approving a locked device replaces it, keeping its name", () => {
+    const { table, advance } = setup()
+    approve(table, "n1")
+    advance(LOCK_AFTER_MS)
+    approve(table, "n1")
+    expect(table.list().map((d) => [d.name, d.locked])).toEqual([["iphone-15", false]])
+  })
+
+  it("drops an uncollected approval on the next look, not only on the next prompt", () => {
+    const { table, advance } = setup()
+    const p = pend(table, "n1", "x")
+    table.decide(p.id, "allow")
+    advance(PENDING_MS)
+    expect(table.list()).toHaveLength(0)
+  })
+
   it("names a second device on the same name apart", () => {
     const { table } = setup()
     approve(table, "n1")

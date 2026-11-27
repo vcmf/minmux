@@ -45,7 +45,7 @@ describe("RemoteHost", () => {
         procs.push(p)
         return p
       },
-      devices: () => table,
+      devices: async () => table,
       ask: async () => answer,
       onChange: changes,
     })

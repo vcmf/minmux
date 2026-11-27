@@ -2,13 +2,12 @@
 // worker's lifecycle from settings, the approval dialog, and the renderer's IPC for Settings.
 
 import { dialog, utilityProcess, type BrowserWindow } from "electron"
-import fs from "node:fs"
 import path from "node:path"
 import { mergeRemoteSettings } from "../src/settings/schema"
 import { isPermission, type RemotePanes } from "../src/lib/remote-protocol"
-import { AtomicFile } from "./atomic-file"
+import { DeviceFile } from "./remote/device-file"
 import type { RemoteView } from "../src/lib/remote-view"
-import { DeviceTable, type SetPinResult } from "./remote/devices"
+import { DeviceTable, PENDING_MS, type SetPinResult } from "./remote/devices"
 import { RemoteHost, type Decision, type HostProc } from "./remote/host-client"
 
 export interface RemoteControlDeps {
@@ -30,28 +29,11 @@ export function autoPort(profile: string): number {
 }
 
 export function setupRemoteControl(deps: RemoteControlDeps) {
-  let table: DeviceTable | null = null
-  const file = () => path.join(deps.configDir(), "remote-devices.json")
-  let writer: AtomicFile | null = null
-  let unsaved: string | null = null // the latest contents until its write lands
-  const devices = (): DeviceTable => {
-    if (table) return table
-    let raw: string | null
-    try {
-      raw = fs.readFileSync(file(), "utf8")
-    } catch {
-      raw = null
-    }
-    writer = new AtomicFile(file())
-    table = new DeviceTable(raw, {
-      save: (c) => {
-        unsaved = c
-        writer!.write(c)
-        void writer!.flushed().then(() => unsaved === c && (unsaved = null))
-      },
-    })
-    return table
-  }
+  // The device table: read once, off main's thread, on first use.
+  const store = new DeviceFile(path.join(deps.configDir(), "remote-devices.json"))
+  let loading: Promise<DeviceTable> | null = null
+  const devices = (): Promise<DeviceTable> =>
+    (loading ??= store.read().then((raw) => new DeviceTable(raw, { save: (c) => store.write(c) })))
 
   const settings = () => {
     try {
@@ -68,9 +50,13 @@ export function setupRemoteControl(deps: RemoteControlDeps) {
     if (w && !w.isDestroyed()) w.webContents.send(channel, ...args)
   }
 
+  // The prompt closes itself when the request expires (its answer would do nothing then).
   const ask = async (name: string, code: string): Promise<Decision> => {
     const w = deps.window()
+    const signal = AbortSignal.timeout(PENDING_MS)
+    if (w && !w.isDestroyed() && w.isMinimized()) w.restore()
     const opts = {
+      signal,
       type: "question" as const,
       buttons: ["Allow", "View only", "Deny"],
       defaultId: 2,
@@ -84,6 +70,7 @@ export function setupRemoteControl(deps: RemoteControlDeps) {
       w && !w.isDestroyed()
         ? await dialog.showMessageBox(w, opts)
         : await dialog.showMessageBox(opts)
+    if (signal.aborted) return "deny"
     return r.response === 0 ? "allow" : r.response === 1 ? "view" : "deny"
   }
 
@@ -105,9 +92,9 @@ export function setupRemoteControl(deps: RemoteControlDeps) {
     },
   })
 
-  const view = (): RemoteView => {
+  const view = async (): Promise<RemoteView> => {
     const s = settings()
-    const t = devices()
+    const t = await devices()
     return {
       ...host.state,
       enabled: s.enabled,
@@ -146,19 +133,20 @@ export function setupRemoteControl(deps: RemoteControlDeps) {
     lastPanes = { tabs: p.tabs, panes: p.panes, stale: false }
     host.setPanes(lastPanes)
   }
-  const revoke = (id: unknown) => {
-    if (typeof id !== "string" || !devices().revoke(id)) return false
+  const revoke = async (id: unknown) => {
+    if (typeof id !== "string" || !(await devices()).revoke(id)) return false
     host.drop(id, "revoked")
     send("remote:changed")
     return true
   }
-  const rename = (id: unknown, name: unknown) => {
-    const ok = typeof id === "string" && typeof name === "string" && devices().rename(id, name)
+  const rename = async (id: unknown, name: unknown) => {
+    const ok =
+      typeof id === "string" && typeof name === "string" && (await devices()).rename(id, name)
     if (ok) send("remote:changed")
     return ok
   }
-  const setPermission = (id: unknown, p: unknown) => {
-    const ok = typeof id === "string" && isPermission(p) && devices().setPermission(id, p)
+  const setPermission = async (id: unknown, p: unknown) => {
+    const ok = typeof id === "string" && isPermission(p) && (await devices()).setPermission(id, p)
     // A new permission takes effect on the next connection: its pages reconnect at once.
     if (ok) {
       host.drop(id as string, "off")
@@ -169,7 +157,7 @@ export function setupRemoteControl(deps: RemoteControlDeps) {
   const setPin = async (pin: unknown): Promise<SetPinResult> => {
     if (typeof pin !== "string") return "invalid"
     try {
-      const r = await devices().setPin(pin)
+      const r = await (await devices()).setPin(pin)
       if (r === "ok") send("remote:changed")
       return r
     } catch {
@@ -182,14 +170,7 @@ export function setupRemoteControl(deps: RemoteControlDeps) {
     windowClosed,
     dispose: () => {
       host.dispose()
-      // Quitting: an approval or PIN change still queued is written now, not lost.
-      if (unsaved !== null) {
-        try {
-          fs.writeFileSync(file(), unsaved)
-        } catch {
-          // best-effort
-        }
-      }
+      store.close() // quitting: a change still queued is written now, not lost
     },
     // IPC (registered in main.ts with the other handlers)
     view,

@@ -215,7 +215,7 @@ function proxyDev(req: http.IncomingMessage, res: http.ServerResponse, devUrl: s
       r.pipe(res)
     },
   )
-  up.on("error", () => send(res, 502, "dev server not running"))
+  up.on("error", () => (res.headersSent ? res.destroy() : send(res, 502, "dev server not running")))
   up.end()
 }
 
@@ -536,10 +536,12 @@ function listen(ip: string, port: number): Promise<http.Server> {
   })
 }
 
+// Stopped or failed: no cached whois answer survives (the next tailnet may differ).
 function fail(
   reason: Extract<import("./remote/host-messages").HostStatus, { state: "error" }>["reason"],
   detail?: string,
 ) {
+  whoisCache.clear()
   closeServers()
   self = null
   for (const c of clients) c.ws.terminate()
