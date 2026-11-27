@@ -482,7 +482,8 @@ export function createHostServer(d: HostServerDeps) {
   // Each pane's last lead, kept after its session ends: its conversation can still be opened.
   const lastLead = new Map<string, ChatLead>()
   const feeds = new Map<string, Feed>()
-  const leadKey = (l: ChatLead) => `${l.agent}:${l.sessionId}`
+  // The transcript's files too: Claude moving a session into a worktree keeps its id, not its file.
+  const leadKey = (l: ChatLead) => `${l.agent}:${l.sessionId}:${l.files.join("|")}`
   const FEED_MAX_ERRORS = 5 // failed reads in a row before the page hears (reads go on)
 
   function closeFeed(pane: string) {
@@ -491,6 +492,7 @@ export function createHostServer(d: HostServerDeps) {
     if (f.poll) clearInterval(f.poll)
     if (f.idle) clearTimeout(f.idle)
     f.reader.close()
+    f.ready.clear() // a read still in flight sends nothing more
     feeds.delete(pane)
   }
 
@@ -536,7 +538,9 @@ export function createHostServer(d: HostServerDeps) {
       let changed: ChatItem[]
       try {
         changed = await f.reader.read()
-      } catch {
+      } catch (e) {
+        if (feeds.get(pane) !== f) return // replaced meanwhile: its watchers follow the new one
+        if ((e as { skipped?: boolean }).skipped) return // a backoff wait, not a new failure
         // Tell the page after a few in a row, but never stop trying (a lock clears; a file comes).
         if (++f.errors === FEED_MAX_ERRORS)
           for (const w of f.ready)

@@ -77,8 +77,9 @@ export class OpenCodeChat implements ChatReader {
   async read(): Promise<ChatItem[]> {
     // After a failed read (OpenCode held a lock), wait a while: each try may block the worker
     // that also serves the phones for up to the busy wait.
-    // (Still a failure for the feed: a database that can't be read must reach "couldn't be read".)
-    if (Date.now() < this.retryAt) throw new Error("opencode: waiting after a failed read")
+    // (Thrown, not "nothing new", but marked skipped: the feed neither counts it nor clears its count.)
+    if (Date.now() < this.retryAt)
+      throw Object.assign(new Error("opencode: waiting after a failed read"), { skipped: true })
     // Open, read, close (OpenCode keeps writing it, like opencode-history).
     // A short wait: this runs in the worker that also serves the phones; a lock still held is
     // just tried again on the next poll.

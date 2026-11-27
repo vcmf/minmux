@@ -16,6 +16,7 @@
 import type { AgentEvent } from "../../src/lib/agent-graph"
 import {
   answersSilently,
+  isCompactRestart,
   isIdleNotification,
   isQuietNotification,
   QUESTION_TOOLS,
@@ -74,7 +75,7 @@ export class WaitTracker {
     const slot = `${pane}\u0000${agent}`
     switch (ev.event) {
       case "SessionStart":
-        if (ev.source === "compact") return // a mid-turn compaction: its dialogs stay
+        if (isCompactRestart(ev)) return // a mid-turn compaction: its dialogs stay
       // falls through
       case "SessionEnd":
       case "UserPromptSubmit":

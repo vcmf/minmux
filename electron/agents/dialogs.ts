@@ -19,3 +19,7 @@ export const isQuietNotification = (ev: Pick<AgentEvent, "notificationType">) =>
 // Claude and OpenCode report an answer (the call runs, or PermissionReplied); Codex doesn't.
 /** Agents whose next tool call is the only sign a permission prompt was answered. */
 export const answersSilently = (agent: AgentEvent["agent"]) => agent === "codex"
+
+/** A session started again by compaction (Claude's auto-compact mid-turn): its turn goes on. */
+export const isCompactRestart = (ev: Pick<AgentEvent, "event" | "source">) =>
+  ev.event === "SessionStart" && ev.source === "compact"

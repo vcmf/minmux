@@ -558,6 +558,34 @@ describe("remote host server", () => {
     await until(() => s.got.some((m) => m.t === "chat" && m.reset))
   })
 
+  it("chat: the same session moving to another transcript (a worktree) follows it", async () => {
+    const a = path.join(dir, "main.jsonl")
+    const b = path.join(dir, "wt.jsonl")
+    fs.writeFileSync(
+      a,
+      JSON.stringify({ type: "user", uuid: "inMain", message: { content: "a" } }) + "\n",
+    )
+    fs.writeFileSync(
+      b,
+      JSON.stringify({ type: "user", uuid: "inWorktree", message: { content: "b" } }) + "\n",
+    )
+    host.setPanes({
+      tabs: [{ id: "t", title: "t" }],
+      panes: [{ id: "p1", tab: "t", title: "a", kind: "agent", status: "idle", started: true }],
+      stale: false,
+    })
+    host.setLeads({ p1: { agent: "claude", sessionId: "S", files: [a] } })
+    const s = await hello(await approve())
+    s.ws.send(JSON.stringify({ t: "watch", pane: "p1" }))
+    await until(() => s.got.some((m) => m.t === "chat" && m.reset))
+    host.setLeads({ p1: { agent: "claude", sessionId: "S", files: [b] } })
+    await until(() =>
+      s.got.some(
+        (m) => m.t === "chat" && m.reset && (m.items as { id: string }[])[0]?.id === "inWorktree",
+      ),
+    )
+  })
+
   it("send: relayed to main and acked; view-only devices refused here", async () => {
     const cookie = await approve()
     const s = await hello(cookie)

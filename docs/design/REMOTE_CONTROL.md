@@ -266,6 +266,10 @@ A dialog can only be up during a turn, so a message's Enter can't answer one. Ba
 nested sessions in the same pane are left out. Mid-turn the phone lets you write and says the
 agent is working; Send waits for the turn to end. Shell panes aren't affected.
 
+Known limit: Claude fires no hook when someone interrupts it at the desktop (Esc, Ctrl+C mid-turn),
+so the phone shows "working" until its idle reminder, about a minute later. Taking Esc as a turn's
+end isn't safe (it also just closes a dialog while the turn goes on).
+
 The wait tracker below stays for what the phone shows (the "asking" banner and its prompt) and
 for step 4's answer cards; it no longer decides whether a message may be sent alone.
 

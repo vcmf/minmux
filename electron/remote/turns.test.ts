@@ -92,4 +92,14 @@ describe("turn tracker", () => {
     now = 20_000
     expect(t.turn(P)).toBe("working")
   })
+
+  it("an event that decides nothing doesn't cancel an assumed start's expiry", () => {
+    let now = 0
+    const t = new TurnTracker(() => now)
+    run(t, { event: "Stop" })
+    t.started(P)
+    run(t, { event: "FileChanged" }, { event: "SessionStart", source: "compact" })
+    now = 5000
+    expect(t.turn(P)).toBe("between")
+  })
 })

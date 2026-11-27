@@ -6,7 +6,7 @@
 // lead's hook events (nested and background sessions in the pane are left out by the caller).
 
 import type { AgentEvent } from "../../src/lib/agent-graph"
-import { isIdleNotification, isQuietNotification } from "../agents/dialogs"
+import { isCompactRestart, isIdleNotification, isQuietNotification } from "../agents/dialogs"
 
 export type Turn = "between" | "working"
 
@@ -56,21 +56,24 @@ export class TurnTracker {
     if (!pane) return
     const t = this.panes.get(pane) ?? { stopped: false, subs: new Set<string>() }
     this.panes.set(pane, t)
-    t.startedAt = undefined // a hook speaks for itself from here
     const root = !ev.agentId
     switch (ev.event) {
       case "SessionStart":
         // A compaction mid-turn starts the session again: the turn goes on.
-        if (root && ev.source !== "compact") {
+        if (root && !isCompactRestart(ev)) {
           t.stopped = true
           t.subs.clear()
+          t.startedAt = undefined
         }
         return
       case "SessionEnd":
         if (root) this.panes.delete(pane)
         return
       case "Stop":
-        if (root) t.stopped = true
+        if (root) {
+          t.stopped = true
+          t.startedAt = undefined
+        }
         return
       case "SubagentStop":
         if (ev.agentId) t.subs.delete(ev.agentId)
@@ -82,6 +85,7 @@ export class TurnTracker {
           if (root) {
             t.stopped = true
             t.subs.clear()
+            t.startedAt = undefined
           }
         } else if (!isQuietNotification(ev)) this.inTurn(t, ev)
         return
@@ -102,7 +106,10 @@ export class TurnTracker {
     this.panes.delete(pane)
   }
 
+  // Only events that decide the turn confirm an assumed start; others (a file change, a title)
+  // leave its expiry running.
   private inTurn(t: PaneTurn, ev: Ev): void {
+    t.startedAt = undefined
     if (ev.agentId) t.subs.add(ev.agentId)
     else {
       t.stopped = false
