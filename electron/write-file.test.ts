@@ -3,7 +3,7 @@ import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import { hashBytes, readFileForTab } from "./read-file"
-import { KeyedQueue, saveAcross, validSave, writeFileForTab } from "./write-file"
+import { KeyedQueue, SaveLocks, saveAcross, validSave, writeFileForTab } from "./write-file"
 import { FILE_READ_CAP, type SaveResult } from "../src/lib/file-tab"
 
 let dir = ""
@@ -72,6 +72,32 @@ describe("writeFileForTab", () => {
     expect(await writeFileForTab(p, "y\n", null, true)).toEqual({ kind: "changed" })
   })
 
+  it("create never follows a link whose file is gone", async () => {
+    const link = path.join(dir, `dangling${n++}`)
+    fs.symlinkSync(path.join(dir, "nowhere.txt"), link)
+    expect(await writeFileForTab(link, "x", null, true)).toMatchObject({ kind: "error" })
+    expect(fs.existsSync(path.join(dir, "nowhere.txt"))).toBe(false)
+  })
+
+  it("text with a lone surrogate isn't written (it would become U+FFFD)", async () => {
+    const p = put("a")
+    expect(await writeFileForTab(p, "x\uD800y", h("a"))).toMatchObject({ kind: "error" })
+    expect(fs.readFileSync(p, "utf8")).toBe("a")
+    expect((await writeFileForTab(p, "😀", h("a"))).kind).toBe("saved") // a real pair is fine
+  })
+
+  it("two saves of one file through two names run one after the other", async () => {
+    const p = put("base\n")
+    const link = path.join(dir, `alias${n++}`)
+    fs.symlinkSync(p, link)
+    const [a, b] = await Promise.all([
+      writeFileForTab(p, "first text\n", h("base\n")),
+      writeFileForTab(link, "second\n", h("base\n")),
+    ])
+    expect([a.kind, b.kind].sort()).toEqual(["changed", "saved"]) // the second sees the first
+    expect(["first text\n", "second\n"]).toContain(fs.readFileSync(p, "utf8"))
+  })
+
   it("a folder isn't written (it doesn't open for writing)", async () => {
     expect(await writeFileForTab(dir, "x", h(""))).toMatchObject({ kind: "error" })
   })
@@ -117,6 +143,13 @@ describe("saveAcross", () => {
     expect(r).toEqual({ kind: "changed" })
   })
 
+  it("a form that has the file but won't open it wins over a later missing", async () => {
+    const r = await saveAcross(["a", "b"], async (t) =>
+      t === "a" ? { kind: "error", message: "EACCES", unopened: true } : { kind: "missing" },
+    )
+    expect(r).toMatchObject({ kind: "error", message: "EACCES" })
+  })
+
   it("stops at the first answer", async () => {
     const seen: string[] = []
     await saveAcross(["a", "b"], async (t) => {
@@ -160,6 +193,7 @@ describe("validSave", () => {
     expect(validSave("/a", "x", 5, undefined, abs)).toBe(false)
     expect(validSave("/a", "x", null, undefined, abs)).toBe(false) // no base, not a create
     expect(validSave("/a", "x", "h", "yes", abs)).toBe(false)
+    expect(validSave("/a", "x".repeat(FILE_READ_CAP + 1), "h", undefined, abs)).toBe(false)
   })
 })
 
@@ -183,5 +217,45 @@ describe("KeyedQueue", () => {
     const q = new KeyedQueue()
     await expect(q.run("a", async () => Promise.reject(new Error("x")))).rejects.toThrow("x")
     await expect(q.run("a", async () => 1)).resolves.toBe(1)
+  })
+})
+
+describe("SaveLocks", () => {
+  const saved: SaveResult = { kind: "saved", stamp: { size: 1, mtimeMs: 1 }, hash: "h" }
+
+  it("saves of one file run in order", async () => {
+    const locks = new SaveLocks()
+    const log: string[] = []
+    let release!: () => void
+    const a = locks.run("/f", async () => {
+      await new Promise<void>((r) => (release = r))
+      log.push("a")
+      return saved
+    })
+    const b = locks.run("/f", async () => (log.push("b"), saved))
+    await Promise.resolve()
+    expect(log).toEqual([])
+    release()
+    await Promise.all([a, b])
+    expect(log).toEqual(["a", "b"])
+  })
+
+  it("after a save that may still land, the file's saves fail at once until its process is gone", async () => {
+    const locks = new SaveLocks()
+    let gone!: () => void
+    const ended = new Promise<void>((r) => (gone = r))
+    const first = locks.run("/f", async (track) => {
+      track(ended)
+      return { kind: "unknown" }
+    })
+    const queued = locks.run("/f", async () => saved) // waiting behind it
+    expect(await first).toEqual({ kind: "unknown" })
+    expect(await queued).toMatchObject({ kind: "error" })
+    expect(await locks.run("/f", async () => saved)).toMatchObject({ kind: "error" })
+    expect(await locks.run("/other", async () => saved)).toEqual(saved) // other files don't wait
+    gone()
+    await ended
+    await new Promise((r) => setTimeout(r, 0))
+    expect(await locks.run("/f", async () => saved)).toEqual(saved)
   })
 })

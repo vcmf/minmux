@@ -62,16 +62,33 @@ describe("FsWorkerClient", () => {
     await expect(a).rejects.toMatchObject({ code: "ENOENT" })
   })
 
-  it("a write stranded behind a hung read isn't re-sent: it fails, and goes with the worker", async () => {
+  it("a write stranded behind a hung request stays on its worker: its reply counts", async () => {
     const c = client()
-    const stuck = c.call({ op: "readdir", path: "/mnt/dead" })
+    const stuck = c.call({ op: "writefile", path: "/mnt/dead/a", text: "x", base: "h" })
     vi.advanceTimersByTime(800)
-    const save = c.call({ op: "writefile", path: "/a.ts", text: "x", base: "h" })
+    const save = c.track({ op: "writefile", path: "/home/b", text: "y", base: "h" })
     vi.advanceTimersByTime(500)
     await expect(stuck).rejects.toMatchObject({ code: "EHUNG" })
-    await expect(save).rejects.toMatchObject({ code: "EUNSURE" })
-    expect(procs).toHaveLength(1) // not sent to a fresh worker
+    expect(procs).toHaveLength(1) // not re-sent to a fresh worker
+    expect(procs[0]!.killed).toBe(false) // not killed under the write
+    procs[0]!.reply({ id: procs[0]!.sent[1]!.id, ok: true, value: { kind: "changed" } })
+    await expect(save.result).resolves.toEqual({ kind: "changed" })
+    await save.ended
+    expect(procs[0]!.killed).toBe(true) // only the hung one was left: now it goes
+  })
+
+  it("track: a hung call ends when its worker exits, not when it fails", async () => {
+    const c = client()
+    const t = c.track({ op: "writefile", path: "/mnt/dead/a", text: "x", base: "h" })
+    let ended = false
+    void t.ended.then(() => (ended = true))
+    vi.advanceTimersByTime(1300)
+    await expect(t.result).rejects.toMatchObject({ code: "EHUNG" })
+    await Promise.resolve()
+    expect(ended).toBe(false) // it may still be writing
     expect(procs[0]!.killed).toBe(true)
+    procs[0]!.exit()
+    await t.ended // gone: it can't land any more
   })
 
   it("a hung request fails alone; reads stranded behind it move to a fresh worker", async () => {

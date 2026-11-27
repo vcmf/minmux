@@ -34,6 +34,7 @@ type Pending = {
   reject: (e: Error) => void
   at: number
   hung?: boolean // failed as hung; its late reply is ignored
+  ended?: () => void // left its worker: answered, or the worker exited (see `track`)
 }
 
 /** One worker process and the requests it holds. */
@@ -76,6 +77,33 @@ export class FsWorkerClient {
 
   call(req: FsCall): Promise<FsResult> {
     return new Promise<FsResult>((resolve, reject) => this.send({ req, resolve, reject, at: 0 }))
+  }
+
+  /** A call, and when it left its worker: answered, or the worker exited (it can't run any more).
+   *  A hung write's `ended` waits for its process to go, which a dead mount may never let happen. */
+  track(req: FsCall): { result: Promise<FsResult>; ended: Promise<void> } {
+    let ended!: () => void
+    const left = new Promise<void>((r) => (ended = r))
+    const result = new Promise<FsResult>((resolve, reject) =>
+      this.send({
+        req,
+        resolve,
+        reject: (e) => {
+          if (!this.holds(req)) ended() // never sent, or its worker is gone
+          reject(e)
+        },
+        at: 0,
+        ended,
+      }),
+    )
+    return { result, ended: left }
+  }
+
+  /** Some worker still holds this request. */
+  private holds(req: FsCall): boolean {
+    for (const w of [this.live, ...this.retired])
+      if (w) for (const p of w.pending.values()) if (p.req === req) return true
+    return false
   }
 
   /** Hand a request to the live worker (starting one if needed). */
@@ -217,6 +245,7 @@ export class FsWorkerClient {
       const p = w.pending.get(reply.id)
       if (!p) return
       w.pending.delete(reply.id)
+      p.ended?.()
       if (!p.hung) {
         if (reply.ok) p.resolve(reply.value)
         else p.reject(fail(reply.code))
@@ -228,6 +257,7 @@ export class FsWorkerClient {
       if (this.live === w)
         this.end(w, "EWORKER") // crashed: fail what it held
       else for (const p of w.pending.values()) if (!p.hung) p.reject(fail("EWORKER"))
+      for (const p of w.pending.values()) p.ended?.()
       w.pending.clear()
     })
     return w
@@ -268,7 +298,7 @@ export class FsWorkerClient {
 
   /** Stop sending to `w`; the next call starts a fresh worker. Its other reads may be queued
    *  behind the hung ones on its threads: re-send them to the fresh worker (a read is
-   *  idempotent; the old worker's late reply is ignored). A write is failed instead. */
+   *  idempotent; the old worker's late reply is ignored). A write stays. */
   private retire(w: Worker): void {
     w.retired = true
     this.retired.add(w)
@@ -278,13 +308,13 @@ export class FsWorkerClient {
     }
     for (const [id, p] of [...w.pending]) {
       if (p.hung) continue
+      // A write isn't re-sent (it may have started, and would land twice): it stays on its
+      // worker, and its reply counts. The worker isn't killed under it.
+      if (p.req.op === "writefile") continue
       w.pending.delete(id)
       // A stranded watch / unwatch isn't re-sent: the fresh worker starts with no watchers
       // and the watch set is re-added to it (lostWorker).
       if (p.req.op === "watch" || p.req.op === "unwatch") p.reject(fail("EWORKER"))
-      // A write isn't re-sent: it may have started, and would land twice. Failed (its outcome
-      // unknown: the caller re-reads), it goes with the old worker like a hung read.
-      else if (p.req.op === "writefile") p.reject(fail("EUNSURE"))
       else this.send(p)
     }
   }
@@ -307,6 +337,7 @@ export class FsWorkerClient {
     }
     this.retired.delete(w)
     for (const p of w.pending.values()) if (!p.hung) p.reject(fail(code))
+    for (const p of w.pending.values()) p.ended?.()
     w.pending.clear()
     try {
       w.proc.kill()

@@ -122,7 +122,7 @@ import {
   type PreviewData,
 } from "../src/lib/file-preview"
 import type { FileData, FileStamp, SaveResult } from "../src/lib/file-tab"
-import { KeyedQueue, saveAcross, validSave } from "./write-file"
+import { SaveLocks, saveAcross, validSave } from "./write-file"
 import { isBundle, osMayOpen, type Os } from "./open-policy"
 import { browserLaunch, type BrowserLaunch } from "./open-in-browser"
 import { isHtmlPath } from "../src/lib/file-actions"
@@ -341,6 +341,15 @@ const sessionsWorker = new FsWorkerClient(
   () =>
     utilityProcess.fork(path.join(dir, "fs-worker.js"), [], {
       serviceName: "minmux session folders",
+      stdio: "ignore",
+    }) as unknown as WorkerProc,
+)
+// Saves get a worker of their own: a read stuck on a dead mount retires the files browser's
+// worker, and must never kill a save running beside it (docs/design/FILE_EDITING.md).
+const saveWorker = new FsWorkerClient(
+  () =>
+    utilityProcess.fork(path.join(dir, "fs-worker.js"), [], {
+      serviceName: "minmux saves",
       stdio: "ignore",
     }) as unknown as WorkerProc,
 )
@@ -1738,7 +1747,7 @@ function registerIpc() {
     },
   )
 
-  const saves = new KeyedQueue()
+  const saves = new SaveLocks()
   // Save an edited file, in the fs worker: only over the bytes it was edited from (`base`, the
   // read's hash), in place, never re-sent (docs/design/FILE_EDITING.md, "Saving").
   ipcMain.handle(
@@ -1753,20 +1762,19 @@ function registerIpc() {
     ): Promise<SaveResult> => {
       if (!validSave(p, text, base, create, path.isAbsolute))
         return { kind: "error", message: "Bad save request" }
-      // One save of a file at a time (two ⌘S in a row): a hung one fails after HUNG_MS, so the
-      // next isn't held for good.
-      return saves.run(p, () =>
-        saveAcross(
-          wslTargets(p, wsl),
-          (target) =>
-            fsWorker.call({
-              op: "writefile",
-              path: target,
-              text: text as string,
-              base: base as string | null,
-              create: create === true,
-            }) as Promise<SaveResult>,
-        ),
+      // One save of a file at a time, never past one that may still land (SaveLocks).
+      return saves.run(p, (track) =>
+        saveAcross(wslTargets(p, wsl), (target) => {
+          const call = saveWorker.track({
+            op: "writefile",
+            path: target,
+            text: text as string,
+            base: base as string | null,
+            create: create === true,
+          })
+          track(call.ended)
+          return call.result as Promise<SaveResult>
+        }),
       )
     },
   )
@@ -2108,6 +2116,7 @@ app.on("will-quit", () => {
   void hookWatcher?.close() // stop the file-drop watcher
   if (reaper) clearInterval(reaper)
   fsWorker.dispose() // stop the fs worker process
+  saveWorker.dispose()
   gitRootsWorker.dispose()
   sessionsWorker.dispose()
   historyWorker.dispose() // stops a search (and its rg) too
