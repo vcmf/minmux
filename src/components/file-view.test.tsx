@@ -560,6 +560,8 @@ describe("FileView: Edit", () => {
     fireEvent.click(screen.getByText("Done"))
     await waitFor(() => expect(screen.queryByText("Done")).toBeNull())
     expect(screen.getByTitle("Edit")).toBeTruthy()
+    // The view is back and drawing its lines (it mounted afresh).
+    await waitFor(() => expect(document.querySelector(".file-view-line")).not.toBeNull())
   })
 
   it("no Edit for text that isn't valid UTF-8", async () => {

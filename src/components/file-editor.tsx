@@ -2,7 +2,13 @@
 // its own chunk the first time a file tab enters Edit. Its state (text, selection, undo) lives in
 // lib/edit-store, so a surface switch unmounts this and coming back finds it as it was.
 import { useEffect, useRef, useState, useSyncExternalStore } from "react"
-import { Compartment, EditorState, Text, type Extension } from "@codemirror/state"
+import {
+  Compartment,
+  EditorState,
+  Text,
+  type Extension,
+  type TransactionSpec,
+} from "@codemirror/state"
 import {
   EditorView,
   drawSelection,
@@ -23,9 +29,20 @@ import { shortCwd } from "../lib/session-label"
 
 const indentSlot = new Compartment()
 const languageSlot = new Compartment()
+const DIRTY_MS = 150 // a same-length text is compared with its base after typing pauses this long
 
-// The base as a CodeMirror text, by entry, made again when the base moves (a save, a reload):
-// "unsaved" is the document against it (Text.eq: a length check first, then the text).
+// The editor on screen for each entry: something that lands later (a language, a reload) goes to
+// it, or into the kept state when it's unmounted.
+const mounted = new Map<string, EditorView>()
+function apply(id: string, spec: (state: EditorState) => TransactionSpec): void {
+  const view = mounted.get(id)
+  if (view) return view.dispatch(spec(view.state))
+  const kept = edits.state(id) as EditorState | null
+  if (kept) edits.keep(id, kept.update(spec(kept)).state)
+}
+const current = (id: string) => (mounted.get(id)?.state ?? edits.state(id)) as EditorState | null
+
+// The base as a CodeMirror text, by entry, made again when the base moves (a save, a reload).
 const baseDocs = new Map<string, { hash: string; doc: Text }>()
 function baseDoc(id: string): Text | null {
   const base = edits.base(id)
@@ -36,9 +53,35 @@ function baseDoc(id: string): Text | null {
   baseDocs.set(id, { hash: base.hash, doc })
   return doc
 }
-const refreshDirty = (id: string, state: EditorState) => {
+
+// Unsaved: a length that differs is decided at once; the same length means comparing the whole
+// text (up to 2 MB), which waits for a pause in typing, off the keystroke.
+const dirtyTimers = new Map<string, ReturnType<typeof setTimeout>>()
+function refreshDirty(id: string, state: EditorState, now = false): void {
   const doc = baseDoc(id)
-  edits.setDirty(id, !!doc && !state.doc.eq(doc))
+  clearTimeout(dirtyTimers.get(id))
+  dirtyTimers.delete(id)
+  if (!doc) return
+  if (state.doc.length !== doc.length) return edits.setDirty(id, true)
+  const compare = () => {
+    dirtyTimers.delete(id)
+    const latest = current(id)
+    if (latest && baseDoc(id) === doc) edits.setDirty(id, !latest.doc.eq(doc))
+  }
+  if (now) compare()
+  else dirtyTimers.set(id, setTimeout(compare, DIRTY_MS))
+}
+
+/** Load the file's language (a chunk per language) unless its state already has it. */
+function loadLanguage(id: string, path: string, state: EditorState): void {
+  const has = languageSlot.get(state)
+  if (has && !(Array.isArray(has) && has.length === 0)) return
+  const name = path.split(/[\\/]/).pop() ?? path
+  const lang = LanguageDescription.matchFilename(languages, name)
+  if (lang)
+    void lang.load().then((support) => {
+      if (edits.get(id)) apply(id, () => ({ effects: languageSlot.reconfigure(support) }))
+    })
 }
 
 /** Save the editor's text: the cleanup on save first (one undoable change), then the write. */
@@ -48,15 +91,22 @@ async function saveView(
   view: EditorView,
   opts?: { overwrite?: boolean; create?: boolean },
 ): Promise<void> {
+  if (edits.get(id)?.saving) return // one at a time: no cleanup for a save that won't happen
   const st = view.state
   const keep = new Set(st.selection.ranges.map((r) => st.doc.lineAt(r.head).number - 1))
   const changes = saveCleanup(st.doc.toString(), keep, keepsTrailingSpace(path))
   if (changes.length) view.dispatch({ changes, userEvent: "input.cleanup" })
   const r = await edits.save(id, view.state.doc.toString(), opts)
-  if (r === "saved") {
-    const now = (edits.state(id) as EditorState | null) ?? view.state // typed on, or unmounted
-    refreshDirty(id, now)
-  }
+  const now = current(id)
+  if (r === "saved" && now) refreshDirty(id, now, true) // typed on during the save, or not
+}
+
+/** Stop editing `id`: its state and the editor's own caches go. */
+function stopEditing(id: string): void {
+  clearTimeout(dirtyTimers.get(id))
+  dirtyTimers.delete(id)
+  baseDocs.delete(id)
+  edits.stop(id)
 }
 
 const subscribe = (fn: () => void) => edits.subscribe(fn)
@@ -65,13 +115,13 @@ const NOT_EDITING: EditShown = { dirty: false, saving: false, notice: null, mixe
 /** The editor for entry `entryId` (its edit already started: lib/edit-store `start`). */
 export default function FileEditor({
   entryId,
+  tabId,
   path,
-  startLine,
   onDone,
 }: {
   entryId: string
+  tabId: string
   path: string
-  startLine: number // the line to open at (top of the view, or the line a path click named)
   onDone: (topLine: number) => void
 }) {
   const host = useRef<HTMLDivElement>(null)
@@ -105,11 +155,8 @@ export default function FileEditor({
         // The pane focuses an entry by `data-entry` (refocus-terminal): the text is the entry.
         EditorView.contentAttributes.of({ "data-entry": entryId }),
       ]
-      const line = Math.min(
-        Math.max(1, startLine),
-        Math.max(1, base.text.split("\n", startLine).length),
-      )
       const doc = Text.of(base.text.split("\n"))
+      const line = Math.min(Math.max(1, edits.startLine(entryId)), doc.lines)
       state = EditorState.create({ doc, extensions, selection: { anchor: doc.line(line).from } })
     }
     const view: EditorView = new EditorView({
@@ -122,30 +169,17 @@ export default function FileEditor({
       },
     })
     viewRef.current = view
+    mounted.set(entryId, view)
     edits.keep(entryId, view.state)
-    if (fresh) {
-      view.dispatch({
-        effects: EditorView.scrollIntoView(view.state.selection.main.head, { y: "start" }),
-      })
-      // Its language, loaded on first use (a chunk per language).
-      const name = path.split(/[\\/]/).pop() ?? path
-      const lang = LanguageDescription.matchFilename(languages, name)
-      if (lang)
-        void lang.load().then((support) => {
-          if (viewRef.current === view)
-            view.dispatch({ effects: languageSlot.reconfigure(support) })
-          else {
-            const kept = edits.state(entryId) as EditorState | null
-            if (kept)
-              edits.keep(entryId, kept.update({ effects: languageSlot.reconfigure(support) }).state)
-          }
-        })
-    } else {
-      const top = view.state.selection.main.head
-      view.dispatch({ effects: EditorView.scrollIntoView(top, { y: "center" }) })
-    }
-    view.focus()
+    loadLanguage(entryId, path, view.state) // (again after a remount that beat the first load)
+    const head = view.state.selection.main.head
+    view.dispatch({ effects: EditorView.scrollIntoView(head, { y: fresh ? "start" : "center" }) })
+    // The keyboard follows the store: a fresh Edit takes it; a remount only when it's the focus.
+    const s = useStore.getState()
+    const tab = s.tabs.find((t) => t.id === tabId)
+    if (fresh || (s.activeTabId === tabId && tab?.activeEntryId === entryId)) view.focus()
     return () => {
+      if (mounted.get(entryId) === view) mounted.delete(entryId)
       viewRef.current = null
       view.destroy()
     }
@@ -155,17 +189,15 @@ export default function FileEditor({
 
   // The setting is the width for files that show none of their own.
   useEffect(() => {
-    const view = viewRef.current
     const base = edits.base(entryId)
-    if (!view || !base) return
-    view.dispatch({
-      effects: indentSlot.reconfigure(indentFor(detectIndent(base.text, path, indentSetting))),
-    })
+    if (!base) return
+    const indent = indentFor(detectIndent(base.text, path, indentSetting))
+    apply(entryId, () => ({ effects: indentSlot.reconfigure(indent) }))
   }, [indentSetting, entryId, path])
 
   const topLine = () => {
     const view = viewRef.current
-    if (!view) return startLine
+    if (!view) return edits.startLine(entryId)
     return view.state.doc.lineAt(view.lineBlockAtHeight(view.scrollDOM.scrollTop).from).number
   }
   const save = (opts?: { overwrite?: boolean; create?: boolean }) => {
@@ -174,18 +206,17 @@ export default function FileEditor({
   }
   const reload = async () => {
     const base = await edits.reload(entryId)
-    const view = viewRef.current
-    if (!base || !view) return
-    view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: base.text } })
-    refreshDirty(entryId, view.state)
+    if (!base) return
+    apply(entryId, (st) => ({ changes: { from: 0, to: st.doc.length, insert: base.text } }))
+    const now = current(entryId)
+    if (now) refreshDirty(entryId, now, true)
   }
   const leave = () => {
     const line = topLine()
-    edits.stop(entryId)
-    baseDocs.delete(entryId)
+    stopEditing(entryId)
     onDone(line)
   }
-  const done = () => (shown.dirty || shown.saving ? setAsking(true) : leave())
+  const done = () => (shown.dirty ? setAsking(true) : leave())
   const saveAndLeave = async () => {
     const view = viewRef.current
     if (!view) return
@@ -212,7 +243,8 @@ export default function FileEditor({
           >
             {shown.saving ? "Saving…" : "Save"}
           </button>
-          <button className="seg-btn" onClick={done}>
+          {/* Not while a save runs: its answer (a conflict, an error) must have somewhere to show. */}
+          <button className="seg-btn" disabled={shown.saving} onClick={done}>
             Done
           </button>
         </div>
@@ -220,10 +252,10 @@ export default function FileEditor({
       {asking && (
         <div className="file-view-banner file-editor-bar">
           <span>Save your changes before leaving Edit?</span>
-          <button className="link-btn" onClick={() => void saveAndLeave()}>
+          <button className="link-btn" disabled={shown.saving} onClick={() => void saveAndLeave()}>
             Save
           </button>
-          <button className="link-btn" onClick={leave}>
+          <button className="link-btn" disabled={shown.saving} onClick={leave}>
             Discard
           </button>
           <button className="link-btn" onClick={() => setAsking(false)}>

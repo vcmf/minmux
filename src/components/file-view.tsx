@@ -20,7 +20,7 @@ import { useStore } from "../store"
 import { ipc } from "../lib/ipc"
 import { watches } from "../lib/fs-reads"
 import { formatSize, HIGHLIGHT_MAX } from "../lib/file-preview"
-import { files, type FileShown } from "../lib/file-store"
+import { files, LINE_PX, type FileShown } from "../lib/file-store"
 import { edits } from "../lib/edit-store"
 import { FILE_READ_CAP } from "../lib/file-tab"
 import { gitFileFor, hasDiffToggle } from "../lib/git-file"
@@ -37,8 +37,9 @@ import { findPane } from "../lib/pane-tree"
 import { rowWindow } from "../lib/virtual-rows"
 import { shortCwd } from "../lib/session-label"
 import { restoreSelection, saveSelection, type SavedSelection } from "../lib/keep-selection"
+import { focusEntry } from "./refocus-terminal"
 
-const LINE_H = 18 // every line of a file tab (App.css .file-view-line): the window needs it
+const LINE_H = LINE_PX // every line of a file tab (App.css .file-view-line): the window needs it
 const RELOAD_MS = 200 // a live file (an agent writing it) re-reads at most this often
 const BIG_RELOAD_MS = 2000 // …and one past the highlight cap (a growing log) this often
 const WSL_POLL_MS = 3000 // a WSL file's stamp, checked this often while it shows
@@ -56,10 +57,29 @@ const subscribeEdits = (fn: () => void) => edits.subscribe(fn)
 // CodeMirror and the editor load the first time a file enters Edit (their own chunk).
 const FileEditor = lazy(() => import("./file-editor"))
 
+/** A file entry in its pane: the file's view, or its editor while it's in Edit. */
+export function FileView({ entryId, tabId }: { entryId: string; tabId: string }) {
+  const editing = useSyncExternalStore(subscribeEdits, () => !!edits.get(entryId))
+  const path = useStore((s) => (s.objects[entryId] as FileEntry | undefined)?.path ?? "")
+  if (!editing) return <FileViewer entryId={entryId} tabId={tabId} />
+  // Done: the viewer mounts afresh at the editor's top line, and takes the keyboard back.
+  const done = (topLine: number) => {
+    files.returnTo(entryId, topLine)
+    requestAnimationFrame(() => focusEntry(entryId))
+  }
+  return (
+    <div className="file-view">
+      <Suspense fallback={<div className="file-view-note">Loading the editor…</div>}>
+        <FileEditor entryId={entryId} tabId={tabId} path={path} onDone={done} />
+      </Suspense>
+    </div>
+  )
+}
+
 // Read through the fs worker; highlighted in a worker (lib/highlight-client); only the lines in
 // view are rendered; its folder is watched while it shows, so an agent's edits appear.
-/** A file entry's view in its pane: the file, highlighted, with line numbers. */
-export function FileView({ entryId, tabId }: { entryId: string; tabId: string }) {
+/** A file entry's view: the file, highlighted, with line numbers. */
+function FileViewer({ entryId, tabId }: { entryId: string; tabId: string }) {
   const file = useStore((s) => s.objects[entryId]) as FileEntry | undefined
   const home = useStore((s) => s.home)
   const platform = useStore((s) => s.platform)
@@ -69,7 +89,6 @@ export function FileView({ entryId, tabId }: { entryId: string; tabId: string })
   const shown = useSyncExternalStore(subscribeFiles, () => files.get(entryId) ?? EMPTY)
   const data = shown.data
   const diff = shown.diff
-  const editing = useSyncExternalStore(subscribeEdits, () => !!edits.get(entryId))
   useEffect(() => {
     if (!path) return
     files.show(entryId, path, wsl)
@@ -222,8 +241,14 @@ export function FileView({ entryId, tabId }: { entryId: string; tabId: string })
     el.scrollTop = Math.max(0, (line - 1) * LINE_H - el.clientHeight / 3)
   }, [line, goKey, lines.length, entryId, view])
 
-  // Switching between Preview and Source keeps the same lines in view.
+  // Switching between Preview and Source keeps the same lines in view (and leaving Edit: the
+  // editor's top line, taken once when this mounts).
   const startLine = useRef<number | null>(null) // for the Preview, from the Source's top line
+  const back = useRef<number | null | undefined>(undefined)
+  if (back.current === undefined) {
+    back.current = files.takeReturn(entryId)
+    startLine.current = back.current
+  }
   // Handed to the Preview once (its first placement): a remount later uses its saved scroll.
   useLayoutEffect(() => {
     if (showPreview) startLine.current = null
@@ -271,34 +296,14 @@ export function FileView({ entryId, tabId }: { entryId: string; tabId: string })
     if (el && view === "source") at = Math.floor(el.scrollTop / LINE_H) + 1
     const body = el?.firstElementChild as HTMLElement | null
     if (el && body && view === "preview") at = topBlock(el, body).line
-    editLine.current = at
     useStore.getState().keepEntry(entryId) // a peek being edited is a kept tab: never replaced
-    edits.start(entryId, path, wsl, data.text, data.hash)
-  }
-  const editLine = useRef(1)
-  // Done: back to the view it came from, at the editor's top line.
-  const doneEditing = (topLine: number) => {
-    files.setScroll(entryId, (topLine - 1) * LINE_H, "source")
-    restored.current = null
+    edits.start(entryId, path, wsl, data.text, data.hash, at)
   }
   const canReveal = !wsl && isAbsoluteHostPath(path, platform)
   // A WSL file too: main opens it through the distro's share.
   const canBrowse = isHtmlPath(path) && (!!wsl || isAbsoluteHostPath(path, platform))
 
   if (!file) return null
-  if (editing)
-    return (
-      <div className="file-view">
-        <Suspense fallback={<div className="file-view-note">Loading the editor…</div>}>
-          <FileEditor
-            entryId={entryId}
-            path={path}
-            startLine={editLine.current}
-            onDone={doneEditing}
-          />
-        </Suspense>
-      </div>
-    )
   return (
     // Keyboard focus goes to what scrolls (arrows, PageDown, Space): the lines when it's text.
     <div

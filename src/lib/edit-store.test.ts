@@ -68,6 +68,29 @@ describe("EditStore", () => {
     expect(write).toHaveBeenCalledWith("/a", "mine", "hT", undefined, false)
   })
 
+  it("overwrite writes a deleted file back, but never on another read error", async () => {
+    const write = vi.fn(async () => ({ kind: "saved", stamp, hash: "h2" }) as SaveResult)
+    const read = vi.fn(async (): Promise<FileData> => ({
+      kind: "error",
+      message: "gone",
+      gone: true,
+    }))
+    const { store } = make(write, read)
+    store.start("e", "/a", undefined, "a", "h0")
+    await store.save("e", "mine", { overwrite: true })
+    expect(write).toHaveBeenLastCalledWith("/a", "mine", null, undefined, true)
+    write.mockClear()
+    read.mockResolvedValue({ kind: "error", message: "EACCES" })
+    expect(await store.save("e", "mine", { overwrite: true })).toBe("error")
+    expect(write).not.toHaveBeenCalled()
+  })
+
+  it("keeps the line it opened at", () => {
+    const { store } = make(vi.fn())
+    store.start("e", "/a", undefined, "a\nb\n", "h", 2)
+    expect(store.startLine("e")).toBe(2)
+  })
+
   it("an unknown save that landed (the file holds our text) counts as saved", async () => {
     const read = vi.fn(async () => text("mine", "hM"))
     const { store } = make(

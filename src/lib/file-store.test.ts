@@ -109,6 +109,16 @@ describe("FileStore", () => {
     expect(s.get("a")).toBeUndefined() // unpinned: evictable again
   })
 
+  it("leaving Edit: the view's line, taken once", () => {
+    const { read } = reads()
+    const s = new FileStore(read, hl)
+    s.show("e", "/e")
+    s.returnTo("e", 11)
+    expect(s.scrollOf("e")).toBe(10 * 18)
+    expect(s.takeReturn("e")).toBe(11)
+    expect(s.takeReturn("e")).toBeNull()
+  })
+
   it("a save is its latest read: the next re-read asks with its stamp", async () => {
     const { read, pending } = reads()
     const s = new FileStore(read, hl)

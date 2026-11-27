@@ -65,6 +65,7 @@ export async function readFileForTab(
     return { kind: "text", text, truncated: false, size, stamp, hash, editable }
   } catch (e) {
     const code = (e as { code?: string }).code
-    return { kind: "error", message: code === "ENOENT" ? "This file is gone" : String(e) }
+    if (code === "ENOENT") return { kind: "error", message: "This file is gone", gone: true }
+    return { kind: "error", message: String(e) }
   }
 }

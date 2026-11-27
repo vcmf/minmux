@@ -28,6 +28,7 @@ export interface EditShown {
 export type EditBase = EditorText & { hash: string }
 
 interface Edit extends EditShown {
+  startLine: number // the line it opened at
   path: string
   wsl?: WslContext
   base: EditBase
@@ -71,10 +72,18 @@ export class EditStore {
   }
 
   /** Start editing entry `id` from its read (`raw`: the file's text as read, `hash` its bytes'). */
-  start(id: string, path: string, wsl: WslContext | undefined, raw: string, hash: string): void {
+  start(
+    id: string,
+    path: string,
+    wsl: WslContext | undefined,
+    raw: string,
+    hash: string,
+    startLine = 1,
+  ): void {
     if (this.edits.has(id)) return
     const text = fromDisk(raw)
     this.edits.set(id, {
+      startLine,
       path,
       ...(wsl ? { wsl } : {}),
       base: { ...text, hash },
@@ -86,6 +95,11 @@ export class EditStore {
     })
     this.fileStore.pin(id, true)
     this.publish(id)
+  }
+
+  /** The line its editor opened at. */
+  startLine(id: string): number {
+    return this.edits.get(id)?.startLine ?? 1
   }
 
   /** Its base: what a save writes over, and what "unsaved" compares with. */
@@ -162,13 +176,14 @@ export class EditStore {
       if (opts.overwrite) {
         const now = await this.read(e.path, e.wsl).catch(() => null)
         if (now?.kind === "text" && now.hash) base = now.hash
-        else if (now?.kind === "error")
-          create = true // gone: written back
-        else base = null // not text now (a binary, too large): refused below
+        else if (now?.kind === "error" && now.gone) {
+          create = true // deleted: written back
+          base = null
+        } else base = null // unreadable, or not text now (a binary, too large): refused below
       }
       r =
         base === null && !create
-          ? { kind: "error", message: "It isn't a text file now" }
+          ? { kind: "error", message: "It can't be read as text now" }
           : await this.write(e.path, disk, base, e.wsl, create)
       if (r.kind === "unknown") r = await this.settle(e, disk)
     } catch (err) {
