@@ -68,10 +68,10 @@ describe("TerminalView", () => {
 
   it("the keys bar shows only for devices allowed raw keys", () => {
     const a = setup("send")
-    expect(screen.queryByText("Ctrl-C")).toBeNull()
+    expect(screen.queryByLabelText("Ctrl-C")).toBeNull()
     void a
     const b = setup("keys")
-    fireEvent.click(screen.getByText("Ctrl-C"))
+    fireEvent.click(screen.getByLabelText("Ctrl-C"))
     expect(b.sent[b.sent.length - 1]).toEqual({ t: "keys", pane: "p", data: "\x03" })
   })
 

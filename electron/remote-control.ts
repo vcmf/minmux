@@ -16,6 +16,7 @@ import { ASSUMED_TURN_MS, TurnTracker } from "./remote/turns"
 import { WaitTracker } from "./remote/waits"
 import { DeviceTable, PENDING_MS, type SetPinResult } from "./remote/devices"
 import { RemoteHost, type Decision, type HostProc } from "./remote/host-client"
+import { createApprovals, type ApprovalRequest } from "./remote/approvals"
 
 export interface RemoteControlDeps {
   dir: string // main's build dir (remote-host.js beside it, the renderer at ../renderer)
@@ -82,11 +83,11 @@ export function setupRemoteControl(deps: RemoteControlDeps) {
     if (w && !w.isDestroyed()) w.webContents.send(channel, ...args)
   }
 
-  // The prompt closes itself when the request expires (its answer would do nothing then).
-  const ask = async (name: string, code: string, machine: boolean): Promise<Decision> => {
+  // A device asking in: the window's own dialog, else (no window, or it doesn't show it) a
+  // native prompt. Either closes when the request expires (its answer would do nothing then).
+  const native = async (r: ApprovalRequest, signal: AbortSignal): Promise<Decision> => {
     const w = deps.window()
-    const signal = AbortSignal.timeout(PENDING_MS)
-    if (w && !w.isDestroyed() && w.isMinimized()) w.restore()
+    const { name, code, machine } = r
     const opts = {
       signal,
       type: "question" as const,
@@ -102,13 +103,25 @@ export function setupRemoteControl(deps: RemoteControlDeps) {
         ? `Check that ${name} shows the code ${code}.\n\nAllow lets it see your panes and type in them. View only lets it see them.`
         : `Check that the device shows the code ${code}.\n\nAllow lets it read your panes and send messages. View only lets it read them.`,
     }
-    const r =
+    const res =
       w && !w.isDestroyed()
         ? await dialog.showMessageBox(w, opts)
         : await dialog.showMessageBox(opts)
     if (signal.aborted) return "deny"
-    return r.response === 0 ? "allow" : r.response === 1 ? "view" : "deny"
+    return res.response === 0 ? "allow" : res.response === 1 ? "view" : "deny"
   }
+  const approvals = createApprovals({
+    ttlMs: PENDING_MS,
+    native,
+    show: (list) => {
+      const w = deps.window()
+      if (!w || w.isDestroyed()) return false
+      if (list.length && w.isMinimized()) w.restore()
+      w.webContents.send("remote:approvals", list)
+      return true
+    },
+  })
+  const ask = (name: string, code: string, machine: boolean) => approvals.ask(name, code, machine)
 
   let lastWanted = false
   const host = new RemoteHost({
@@ -431,6 +444,7 @@ export function setupRemoteControl(deps: RemoteControlDeps) {
       askingChanged()
     },
     dispose: () => {
+      approvals.dispose()
       host.dispose()
       store.close() // quitting: a change still queued is written now, not lost
     },
@@ -443,5 +457,10 @@ export function setupRemoteControl(deps: RemoteControlDeps) {
     setPermission,
     setPin,
     disconnectAll: () => host.drop(undefined, "disconnected"),
+    approvals: () => approvals.list(),
+    approvalShown: (id: unknown) => approvals.shown(id),
+    /** The window reloads or its renderer died: what it showed may not be shown any more. */
+    rendererGone: () => approvals.unshown(),
+    approve: (id: unknown, decision: unknown) => approvals.answer(id, decision),
   }
 }

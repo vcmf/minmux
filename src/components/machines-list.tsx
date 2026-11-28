@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react"
-import { CaretDown, CaretRight, Desktop, Terminal } from "@phosphor-icons/react"
+import { CaretDown, CaretRight, Desktop, Devices, Terminal } from "@phosphor-icons/react"
 import { ipc } from "../lib/ipc"
 import { useMachines } from "../lib/machines-store"
 import { machineLine, panesByTab, type MachineView } from "../lib/remote-machines"
+import type { ClientInfo } from "../lib/remote-view"
 import { useStore } from "../store"
 
 const OPEN_KEY = "minmux.machines.open"
@@ -28,10 +29,49 @@ export function MachinesList() {
   }
   return (
     <div className="machines">
+      <UsingThis />
       <button className="remote-group machines-toggle" onClick={toggle} aria-expanded={open}>
-        {open ? <CaretDown size={10} /> : <CaretRight size={10} />} Machines
+        {open ? <CaretDown size={10} /> : <CaretRight size={10} />} Your other machines
       </button>
       {open && <MachinesFound />}
+    </div>
+  )
+}
+
+/** The devices connected to this minmux right now (phones, other machines): only when there are. */
+function UsingThis() {
+  const [clients, setClients] = useState<ClientInfo[]>([])
+  useEffect(() => {
+    let live = true
+    const load = () =>
+      void ipc.remoteView().then((v) => {
+        if (!live) return
+        const seen = new Set<string>()
+        // One row per device (a phone may have two tabs open).
+        setClients((v?.clients ?? []).filter((c) => !seen.has(c.deviceId) && seen.add(c.deviceId)))
+      })
+    load()
+    const off = ipc.onRemoteChanged(load)
+    return () => {
+      live = false
+      off()
+    }
+  }, [])
+  if (clients.length === 0) return null
+  return (
+    <div className="using-this">
+      <div className="remote-group">Using this computer</div>
+      {clients.map((c) => (
+        <div key={c.deviceId} className="tree-row remote-row using-row" style={{ paddingLeft: 12 }}>
+          <span className="tree-icon">
+            <Devices size={14} color="var(--dim)" />
+          </span>
+          <span className="tree-labels">
+            <span className="tree-primary">{c.name}</span>
+          </span>
+          <span className="dot accent" title="Connected" />
+        </div>
+      ))}
     </div>
   )
 }
@@ -100,7 +140,7 @@ function MachineRow({ m }: { m: MachineView }) {
             Connect
           </button>
         )}
-        {live && <span className="dot accent" title="Connected" />}
+        {live && <span className="dot blue" title="Connected" />}
       </div>
       {live && open && m.panes && <MachinePanes m={m} />}
     </div>

@@ -572,8 +572,14 @@ function createWindow() {
     fsWorker.setWatched([])
   })
   // A reloaded or crashed renderer re-sends its watch set when its folder tabs show again.
-  win.webContents.on("did-start-loading", () => fsWorker.setWatched([]))
-  win.webContents.on("render-process-gone", () => fsWorker.setWatched([]))
+  win.webContents.on("did-start-loading", () => {
+    fsWorker.setWatched([])
+    remoteControl?.rendererGone() // a request it showed: shown again after the load, or natively
+  })
+  win.webContents.on("render-process-gone", () => {
+    fsWorker.setWatched([])
+    remoteControl?.rendererGone()
+  })
 
   // Tell the renderer when maximize state changes (custom controls swap icon).
   // (A window closing out of full screen can report after it's destroyed.)
@@ -1747,6 +1753,12 @@ function registerIpc() {
   })
   ipcMain.on("remote:panes", (_e, panes: unknown) => remoteControl?.setPanes(panes))
   ipcMain.handle("remote:wanted", () => remoteControl?.wanted() ?? false)
+  // A device asking in: the window's dialog lists the open requests and answers them.
+  ipcMain.handle("remote:approvals", () => remoteControl?.approvals() ?? [])
+  ipcMain.on("remote:approval-shown", (_e, id: unknown) => remoteControl?.approvalShown(id))
+  ipcMain.on("remote:approve", (_e, id: unknown, decision: unknown) => {
+    remoteControl?.approve(id, decision)
+  })
   ipcMain.handle("remote:revoke", (_e, id: unknown) => remoteControl?.revoke(id) ?? false)
   ipcMain.handle(
     "remote:rename",

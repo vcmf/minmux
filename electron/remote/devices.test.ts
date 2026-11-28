@@ -8,6 +8,7 @@ import {
   PIN_TRIES_PER_DEVICE,
   PIN_TRIES_PER_HOUR,
   parseDeviceFile,
+  type Decision,
 } from "./devices"
 
 function setup(raw: string | null = null) {
@@ -30,7 +31,7 @@ function setup(raw: string | null = null) {
 type Pending = { id: string; code: string; existing?: boolean }
 const pend = (t: DeviceTable, node: string, name: string) => t.createPending(node, name) as Pending
 
-function approve(table: DeviceTable, nodeId = "n1", decision: "allow" | "view" = "allow") {
+function approve(table: DeviceTable, nodeId = "n1", decision: Decision = "allow") {
   const p = table.createPending(nodeId, "iphone-15") as { id: string; code: string }
   expect(table.decide(p.id, decision)).toBe(true)
   const s = table.pendingState(p.id, nodeId)
@@ -53,6 +54,13 @@ describe("DeviceTable approval", () => {
     expect(table.auth(token, "n1").state).toBe("ok")
     expect(table.auth(token, "n2").state).toBe("none") // bound to its node
     expect(table.list()[0]!.permission).toBe("send")
+  })
+
+  it("approves with the permission the desktop picked", () => {
+    const { table } = setup()
+    approve(table, "n1", "keys")
+    approve(table, "n2", "send")
+    expect(table.list().map((d) => d.permission)).toEqual(["keys", "send"])
   })
 
   it("view only and deny", () => {

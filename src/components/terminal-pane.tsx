@@ -2,6 +2,7 @@ import { useDriven } from "../lib/driven-store"
 import { useEffect, useRef, useState } from "react"
 import { useShallow } from "zustand/react/shallow"
 import {
+  Desktop,
   Globe,
   Plugs,
   Terminal,
@@ -518,7 +519,8 @@ export function TerminalPane({ pane, tabId }: { pane: PaneLeaf; tabId: string })
           </span>
         ) : session?.peer ? (
           // Another minmux's pane: the machine it's on.
-          <span className="host-chip" title={session.peer.key}>
+          <span className="host-chip peer" title={`On ${session.peer.key}, over your tailnet`}>
+            <Desktop size={11} aria-hidden />
             {session.peer.machine}
           </span>
         ) : (

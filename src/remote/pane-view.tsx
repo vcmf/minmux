@@ -34,6 +34,10 @@ export function PaneView({
   const out = outbox.out
   const [draft, setDraft] = useState("")
   const list = useRef<HTMLDivElement>(null)
+  const box = useRef<HTMLTextAreaElement>(null)
+  useLayoutEffect(() => {
+    if (box.current) grow(box.current) // typed, sent (empty again) or put back to retry
+  }, [draft])
   const stick = useRef(true) // follow new items while the reader is at the bottom
 
   useEffect(
@@ -81,29 +85,45 @@ export function PaneView({
   return (
     <div className="pane-view">
       <header className="pane-head">
-        <button className="back" onClick={onBack}>
-          ‹ Panes
-        </button>
-        <span className="pane-title">{pane.title}</span>
-        <span
-          className={`word ${pane.status === "working" ? "run" : pane.status === "waiting" ? "wait" : "idle"}`}
-        >
-          {pane.status === "waiting" ? "needs input" : pane.status}
-        </span>
-      </header>
-      <div className="view-toggle" role="tablist">
-        {(["chat", "terminal"] as const).map((v) => (
-          <button
-            key={v}
-            role="tab"
-            aria-selected={view === v}
-            className={view === v ? "on" : ""}
-            onClick={() => setView(v)}
+        <button className="back" onClick={onBack} aria-label="Back to panes">
+          <svg
+            width="20"
+            height="20"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            aria-hidden
           >
-            {v === "chat" ? "Chat" : "Terminal"}
-          </button>
-        ))}
-      </div>
+            <path d="M15 6l-6 6 6 6" />
+          </svg>
+        </button>
+        <span className="pane-names">
+          <span className="pane-title">{pane.title}</span>
+          <span className="pane-status">
+            <span
+              className={`dot ${pane.status === "working" ? "run" : pane.status === "waiting" ? "wait" : "idle"}`}
+            />
+            {pane.agent ? `${agentName} · ` : ""}
+            {pane.status === "waiting" ? "needs you" : pane.status}
+          </span>
+        </span>
+        <div className="view-toggle" role="tablist" aria-label="View">
+          {(["chat", "terminal"] as const).map((v) => (
+            <button
+              key={v}
+              role="tab"
+              aria-selected={view === v}
+              className={view === v ? "on" : ""}
+              onClick={() => setView(v)}
+            >
+              {v === "chat" ? "Chat" : "Terminal"}
+            </button>
+          ))}
+        </div>
+      </header>
 
       {view === "terminal" ? (
         <TerminalView
@@ -189,12 +209,18 @@ export function PaneView({
       )}
       {working && (
         <div className="working-note">
-          {agentName} is working. You can write now and send once it finishes its turn.
+          <span className="dots" aria-hidden>
+            <span />
+            <span />
+            <span />
+          </span>
+          {agentName} is working. Write now, send once it finishes.
         </div>
       )}
       <form className="composer" onSubmit={submit}>
         <textarea
           value={draft}
+          ref={box}
           onChange={(e) => setDraft(e.target.value)}
           placeholder={
             permission === "view"
@@ -205,16 +231,34 @@ export function PaneView({
                   ? `Message ${agentName}…`
                   : "A line for this shell…"
           }
-          rows={2}
+          rows={1}
           disabled={permission === "view" || !pane.started}
           aria-label="Message"
         />
-        <button className="button" disabled={!canSend || !draft.trim()}>
-          Send
+        <button className="send" aria-label="Send" disabled={!canSend || !draft.trim()}>
+          <svg
+            width="18"
+            height="18"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2.4"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            aria-hidden
+          >
+            <path d="M12 19V5M6 11l6-6 6 6" />
+          </svg>
         </button>
       </form>
     </div>
   )
+}
+
+/** The message box grows with its text, up to its max height (no `field-sizing` in Safari). */
+function grow(el: HTMLTextAreaElement) {
+  el.style.height = "auto"
+  el.style.height = `${el.scrollHeight}px`
 }
 
 function Item({ item }: { item: ChatItem }) {
@@ -237,6 +281,7 @@ function Item({ item }: { item: ChatItem }) {
         <div className={`tool${item.error ? " error" : ""}`}>
           {/* Only the header toggles: the output below can be selected and copied. */}
           <button className="tool-head" aria-expanded={open} onClick={() => setOpen((v) => !v)}>
+            <ToolIcon name={item.name} />
             <span className="tool-name">{item.name}</span>
             <span className="tool-summary">{item.summary}</span>
           </button>
@@ -282,5 +327,40 @@ function Question({ q }: { q: ChatQuestion }) {
         ))}
       </ol>
     </div>
+  )
+}
+
+const TOOL_PATHS: [RegExp, string][] = [
+  [/^(Read|NotebookRead)$/, "M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9zM14 3v6h6"],
+  [
+    /^(Edit|MultiEdit|Write|NotebookEdit|apply_patch)$/,
+    "M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z",
+  ],
+  [/^(Bash|shell|exec|local_shell)$/, "M4 17l6-5-6-5M12 19h8"],
+  [/^(Grep|Glob|LS|search)$/, "M11 4a7 7 0 1 0 0 14 7 7 0 0 0 0-14zM20 20l-4-4"],
+  [
+    /^Web/,
+    "M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM3 12h18M12 3c3 3.5 3 14.5 0 18M12 3c-3 3.5-3 14.5 0 18",
+  ],
+]
+
+/** A small line icon per kind of tool (files read, edits, commands, searches, the web). */
+function ToolIcon({ name }: { name: string }) {
+  const d = TOOL_PATHS.find(([re]) => re.test(name))?.[1] ?? "M12 11a1 1 0 1 0 0 2 1 1 0 0 0 0-2z"
+  return (
+    <svg
+      className="tool-icon"
+      width="14"
+      height="14"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      <path d={d} />
+    </svg>
   )
 }

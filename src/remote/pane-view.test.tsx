@@ -98,14 +98,14 @@ describe("PaneView", () => {
   it("sends a message, shows it until acked, explains a refusal", () => {
     const { sent, push } = setup()
     fireEvent.change(screen.getByLabelText("Message"), { target: { value: "run the tests" } })
-    fireEvent.click(screen.getByText("Send"))
+    fireEvent.click(screen.getByLabelText("Send"))
     const msg = sent[sent.length - 1]!
     expect(msg).toMatchObject({ t: "send", pane: "p", text: "run the tests" })
     expect(screen.getByText("Sending…")).toBeInTheDocument()
     push({ t: "ack", id: msg.id as string, ok: false, reason: "error" })
     fireEvent.click(screen.getByText("Edit and retry"))
     expect((screen.getByLabelText("Message") as HTMLTextAreaElement).value).toBe("run the tests")
-    fireEvent.click(screen.getByText("Send"))
+    fireEvent.click(screen.getByLabelText("Send"))
     const again = sent[sent.length - 1]!
     push({ t: "ack", id: again.id as string, ok: false, reason: "held" })
     expect(screen.getByText(/In the agent's input box, not sent/)).toBeInTheDocument()
@@ -116,14 +116,14 @@ describe("PaneView", () => {
     setup({
       pane: pane({ status: "waiting", asking: true, detail: "Claude needs your permission" }),
     })
-    expect(screen.getByText(/Claude is asking:/)).toBeInTheDocument()
-    expect(screen.getByText("Send")).toBeDisabled()
+    expect(screen.getByRole("region", { name: "Claude is asking" })).toBeInTheDocument()
+    expect(screen.getByLabelText("Send")).toBeDisabled()
   })
 
   it("waiting for a message (the idle reminder) still lets you send", () => {
     setup({ pane: pane({ status: "waiting" }) })
     fireEvent.change(screen.getByLabelText("Message"), { target: { value: "next step" } })
-    expect(screen.getByText("Send")).not.toBeDisabled()
+    expect(screen.getByLabelText("Send")).not.toBeDisabled()
     expect(screen.queryByText(/is asking something/)).toBeNull()
   })
 
@@ -135,9 +135,9 @@ describe("PaneView", () => {
 
   it("mid-turn: write now, send once the agent finishes", () => {
     setup({ pane: pane({ working: true }) })
-    expect(screen.getByText(/is working\. You can write now/)).toBeInTheDocument()
+    expect(screen.getByText(/is working\. Write now/)).toBeInTheDocument()
     fireEvent.change(screen.getByLabelText("Message"), { target: { value: "next" } })
-    expect(screen.getByText("Send")).toBeDisabled()
+    expect(screen.getByLabelText("Send")).toBeDisabled()
   })
 
   it("view-only and unavailable panes", () => {
@@ -155,12 +155,12 @@ describe("PaneView", () => {
   it("after a reconnect, re-watches and resends what wasn't answered", () => {
     const { sent, rerender, props } = setup()
     fireEvent.change(screen.getByLabelText("Message"), { target: { value: "hello" } })
-    fireEvent.click(screen.getByText("Send"))
+    fireEvent.click(screen.getByLabelText("Send"))
     const id = sent[sent.length - 1]!.id
     rerender({ epoch: 2 })
     expect(sent.filter((m) => m.t === "watch")).toHaveLength(2)
     expect(sent.filter((m) => m.t === "send" && m.id === id)).toHaveLength(2)
-    fireEvent.click(screen.getByText("‹ Panes"))
+    fireEvent.click(screen.getByLabelText("Back to panes"))
     expect(props.onBack).toHaveBeenCalled()
   })
 })

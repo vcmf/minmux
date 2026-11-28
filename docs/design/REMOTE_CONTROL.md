@@ -450,6 +450,19 @@ matrix, apart from the renderer's reducer and its known flaw. Main feeds it ever
   closes, when the socket that drove it goes (not one a reconnect replaced), when the device is
   lowered below keys or removed, when remote control's worker goes, and on a reload on A.
 
+**As built, the redesign (2026-11-28):**
+
+- The approval prompt is the window's own dialog: the code in boxes, and what the device may do
+  (Watch / Send / Type keys for a phone, Send first; Watch / Type keys for another minmux, Type
+  keys first). Deny has focus, Escape denies. With no window, or if the window hasn't shown the
+  request within 1.5 s, the native prompt asks as before; answering either closes the other.
+- The phone: Geist for reading, Geist Mono for labels, code and the terminal. The pane list
+  opens on the machine's name; a pane waiting on its agent is an amber card on top (this replaces
+  the "needs input first" switch). The agent's dialog is a sheet above the message box, one large
+  button per option. The keys bar is one row of eight.
+- The desktop: a remote tab and its chip carry a blue machine icon; the sidebar lists the devices
+  connected now under "Using this computer".
+
 ## HTTPS and notifications (step 6)
 
 - **Use HTTPS**: `tailscale serve --bg` forwarding to a **unix socket** with 0600 permissions (or,

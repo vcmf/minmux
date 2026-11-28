@@ -53,11 +53,11 @@ describe("MachinesList", () => {
     vi.mocked(ipc.machinesList).mockClear()
     const { unmount } = render(<MachinesList />)
     expect(ipc.machinesList).not.toHaveBeenCalled()
-    fireEvent.click(screen.getByText("Machines"))
+    fireEvent.click(screen.getByText("Your other machines"))
     expect(ipc.machinesList).toHaveBeenLastCalledWith(true)
     expect(screen.getByText(/Looking for minmux/)).toBeInTheDocument()
     expect(localStorage.getItem("minmux.machines.open")).toBe("1")
-    fireEvent.click(screen.getByText("Machines"))
+    fireEvent.click(screen.getByText("Your other machines"))
     expect(ipc.machinesList).toHaveBeenLastCalledWith(false)
     unmount()
   })
@@ -135,5 +135,36 @@ describe("MachinesList", () => {
     )
     expect(screen.getByText("No panes open")).toBeInTheDocument()
     expect(screen.getByText("View only")).toBeInTheDocument()
+  })
+
+  it("lists the devices using this computer now, once each, and follows changes", async () => {
+    const view = (clients: { deviceId: string; name: string }[]) => ({
+      status: { state: "off" as const },
+      clients,
+      enabled: true,
+      port: 7420,
+      devices: [],
+      hasPin: false,
+      pinUnlockOff: false,
+      newerFile: false,
+    })
+    let changed = () => {}
+    vi.mocked(ipc.onRemoteChanged).mockImplementationOnce((cb) => {
+      changed = cb
+      return () => {}
+    })
+    vi.mocked(ipc.remoteView)
+      .mockResolvedValueOnce(
+        view([
+          { deviceId: "d1", name: "iphone" },
+          { deviceId: "d1", name: "iphone" },
+        ]),
+      )
+      .mockResolvedValueOnce(view([]))
+    render(<MachinesList />)
+    expect(await screen.findByText("Using this computer")).toBeInTheDocument()
+    expect(screen.getAllByText("iphone")).toHaveLength(1)
+    await act(async () => changed())
+    expect(screen.queryByText("Using this computer")).toBeNull()
   })
 })

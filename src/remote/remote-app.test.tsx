@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { RemoteApp } from "./remote-app"
+import { subline } from "./pane-lines"
 import type { RemotePanes } from "../lib/remote-protocol"
 
 class FakeWs {
@@ -95,27 +96,75 @@ async function connect() {
 describe("RemoteApp", () => {
   it("lists panes by tab, with status, and opens one", async () => {
     await connect()
-    expect(screen.getByText("connected")).toBeInTheDocument()
+    expect(screen.getByText("live")).toBeInTheDocument()
+    expect(screen.getByRole("heading", { name: "mac" })).toBeInTheDocument()
     expect(screen.getByText("agent-fleet")).toBeInTheDocument()
-    expect(screen.getByText("Claude needs your permission")).toBeInTheDocument()
+    // The waiting pane: a card on top, and its row in its tab.
+    expect(screen.getAllByText("Claude needs your permission")).toHaveLength(2)
+    expect(screen.getByText(/Claude is asking$/)).toBeInTheDocument()
     expect(screen.getByText("not started on the desktop")).toBeInTheDocument()
     expect(screen.getByText("map-editor").closest("button")).toBeDisabled()
-    fireEvent.click(screen.getByRole("checkbox"))
-    expect(screen.getByText("Needs input")).toBeInTheDocument()
-    fireEvent.click(screen.getAllByText("agent-fleet")[0]!)
-    expect(screen.getByText(/Claude is asking:/)).toBeInTheDocument()
-    fireEvent.click(screen.getByText("‹ Panes"))
+    fireEvent.click(screen.getByText(/Claude is asking$/))
+    expect(screen.getByRole("region", { name: "Claude is asking" })).toBeInTheDocument()
+    fireEvent.click(screen.getByLabelText("Back to panes"))
     expect(screen.getByText("zsh")).toBeInTheDocument()
+  })
+
+  it("one tab, one pane: counts in the singular; an asking shell names no agent", async () => {
+    const ws = await connect()
+    ws.recv({
+      t: "panes",
+      panes: {
+        tabs: [{ id: "t1", title: "only" }],
+        panes: [
+          {
+            id: "s",
+            tab: "t1",
+            title: "box",
+            kind: "ssh",
+            status: "waiting",
+            asking: true,
+            started: true,
+          },
+        ],
+        stale: false,
+      },
+    })
+    expect(await screen.findByText("1 tab · 1 pane")).toBeInTheDocument()
+    expect(screen.getByText("only · It is asking")).toBeInTheDocument()
+    expect(screen.getByText("needs your input")).toBeInTheDocument()
+    expect(screen.getByText("ssh")).toBeInTheDocument()
+    ws.recv({ t: "panes", panes: { tabs: [], panes: [], stale: false } })
+    expect(await screen.findByText("No terminals open.")).toBeInTheDocument()
+  })
+
+  it("a row's second line: why it waits, what runs there, or where", () => {
+    const p = { id: "x", tab: "t", title: "x", kind: "agent", started: true } as const
+    expect(subline({ ...p, status: "waiting", agent: "claude" })).toBe("Claude · waiting for you")
+    expect(subline({ ...p, kind: "shell", status: "waiting" })).toBe("needs input")
+    expect(subline({ ...p, status: "working", agent: "codex" })).toBe("Codex · working")
+    expect(subline({ ...p, status: "idle", agent: "opencode", cwd: "~/w" })).toBe("OpenCode · ~/w")
+    expect(subline({ ...p, kind: "shell", status: "working", cwd: "~" })).toBe("~")
+  })
+
+  it("no card for an agent only waiting for the next message", async () => {
+    const ws = await connect()
+    ws.recv({
+      t: "panes",
+      panes: { ...panes, panes: panes.panes.map((p) => ({ ...p, asking: false })) },
+    })
+    await waitFor(() => expect(screen.queryByText(/Claude is asking$/)).toBeNull())
+    expect(screen.getByText("Claude needs your permission")).toBeInTheDocument() // its row
   })
 
   it("an unanswered message is sent again after a reconnect, even from the pane list", async () => {
     const ws = await connect()
     fireEvent.click(screen.getByText("zsh"))
     fireEvent.change(screen.getByLabelText("Message"), { target: { value: "ls" } })
-    fireEvent.click(screen.getByText("Send"))
+    fireEvent.click(screen.getByLabelText("Send"))
     const first = ws.sent.map((d) => JSON.parse(d)).find((m) => m.t === "send")
     expect(first).toMatchObject({ pane: "b", text: "ls" })
-    fireEvent.click(screen.getByText("‹ Panes"))
+    fireEvent.click(screen.getByLabelText("Back to panes"))
     act(() => ws.onclose?.())
     await waitFor(() => expect(FakeWs.all).toHaveLength(2), { timeout: 3000 })
     const ws2 = FakeWs.all[1]!
@@ -159,7 +208,7 @@ describe("RemoteApp", () => {
         ? { body: { state: "pending", code: "K7QM", machine: "mac" } }
         : { body: { state: "approved" } }
     render(<RemoteApp />)
-    expect(await screen.findByText("K7QM")).toBeInTheDocument()
+    expect(await screen.findByRole("img", { name: "K7QM" })).toBeInTheDocument()
     await waitFor(() => expect(FakeWs.all).toHaveLength(1), { timeout: 3000 })
     expect(location.search).toBe("")
   })
