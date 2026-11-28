@@ -459,6 +459,8 @@ export function setupRemoteControl(deps: RemoteControlDeps) {
     disconnectAll: () => host.drop(undefined, "disconnected"),
     approvals: () => approvals.list(),
     approvalShown: (id: unknown) => approvals.shown(id),
+    /** The window reloads or its renderer died: what it showed may not be shown any more. */
+    rendererGone: () => approvals.unshown(),
     approve: (id: unknown, decision: unknown) => approvals.answer(id, decision),
   }
 }

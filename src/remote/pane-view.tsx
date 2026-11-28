@@ -34,6 +34,10 @@ export function PaneView({
   const out = outbox.out
   const [draft, setDraft] = useState("")
   const list = useRef<HTMLDivElement>(null)
+  const box = useRef<HTMLTextAreaElement>(null)
+  useLayoutEffect(() => {
+    if (box.current) grow(box.current) // typed, sent (empty again) or put back to retry
+  }, [draft])
   const stick = useRef(true) // follow new items while the reader is at the bottom
 
   useEffect(
@@ -216,6 +220,7 @@ export function PaneView({
       <form className="composer" onSubmit={submit}>
         <textarea
           value={draft}
+          ref={box}
           onChange={(e) => setDraft(e.target.value)}
           placeholder={
             permission === "view"
@@ -248,6 +253,12 @@ export function PaneView({
       </form>
     </div>
   )
+}
+
+/** The message box grows with its text, up to its max height (no `field-sizing` in Safari). */
+function grow(el: HTMLTextAreaElement) {
+  el.style.height = "auto"
+  el.style.height = `${el.scrollHeight}px`
 }
 
 function Item({ item }: { item: ChatItem }) {

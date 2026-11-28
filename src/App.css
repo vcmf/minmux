@@ -2782,6 +2782,9 @@ body.resizing-col {
   padding: 24px;
   box-shadow: 0 30px 70px -20px var(--shadow);
 }
+.approval-dialog:focus {
+  outline: none;
+}
 .approval-dialog .confirm-actions {
   margin-top: 0;
 }

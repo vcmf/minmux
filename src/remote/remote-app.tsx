@@ -8,6 +8,7 @@ import type {
   SessionState,
 } from "../lib/remote-protocol"
 import { PaneView } from "./pane-view"
+import { AGENT, subline } from "./pane-lines"
 import { useOutbox } from "./outbox"
 import { Link, type LinkState, type SocketLike } from "./connection"
 
@@ -315,17 +316,6 @@ function Locked({
 }
 
 const DOT: Record<RemotePane["status"], string> = { working: "run", waiting: "wait", idle: "idle" }
-const AGENT: Record<string, string> = { claude: "Claude", codex: "Codex", opencode: "OpenCode" }
-
-/** The row's second line: why it waits, what runs there, or where. */
-function subline(p: RemotePane): string {
-  if (!p.started) return "not started on the desktop"
-  const agent = p.agent ? AGENT[p.agent] : ""
-  if (p.status === "waiting")
-    return p.detail ?? (agent ? `${agent} · waiting for you` : "needs input")
-  if (p.status === "working" && agent) return `${agent} · working`
-  return [agent, p.cwd].filter(Boolean).join(" · ")
-}
 
 function PaneList({
   panes,
@@ -351,7 +341,8 @@ function PaneList({
   const tabTitle = (id: string) => panes?.tabs.find((t) => t.id === id)?.title ?? ""
 
   if (open) return render(open, () => setOpenId(null))
-  const waiting = (panes?.panes ?? []).filter((p) => p.status === "waiting" && p.started)
+  // A card only for a question on screen (a dialog), not the idle "waiting for your message".
+  const waiting = (panes?.panes ?? []).filter((p) => p.asking && p.started)
   const count = panes?.panes.length ?? 0
   return (
     <div className="list">

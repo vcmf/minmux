@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { RemoteApp } from "./remote-app"
+import { subline } from "./pane-lines"
 import type { RemotePanes } from "../lib/remote-protocol"
 
 class FakeWs {
@@ -107,6 +108,53 @@ describe("RemoteApp", () => {
     expect(screen.getByRole("region", { name: "Claude is asking" })).toBeInTheDocument()
     fireEvent.click(screen.getByLabelText("Back to panes"))
     expect(screen.getByText("zsh")).toBeInTheDocument()
+  })
+
+  it("one tab, one pane: counts in the singular; an asking shell names no agent", async () => {
+    const ws = await connect()
+    ws.recv({
+      t: "panes",
+      panes: {
+        tabs: [{ id: "t1", title: "only" }],
+        panes: [
+          {
+            id: "s",
+            tab: "t1",
+            title: "box",
+            kind: "ssh",
+            status: "waiting",
+            asking: true,
+            started: true,
+          },
+        ],
+        stale: false,
+      },
+    })
+    expect(await screen.findByText("1 tab · 1 pane")).toBeInTheDocument()
+    expect(screen.getByText("only · It is asking")).toBeInTheDocument()
+    expect(screen.getByText("needs your input")).toBeInTheDocument()
+    expect(screen.getByText("ssh")).toBeInTheDocument()
+    ws.recv({ t: "panes", panes: { tabs: [], panes: [], stale: false } })
+    expect(await screen.findByText("No terminals open.")).toBeInTheDocument()
+  })
+
+  it("a row's second line: why it waits, what runs there, or where", () => {
+    const p = { id: "x", tab: "t", title: "x", kind: "agent", started: true } as const
+    expect(subline({ ...p, status: "waiting", agent: "claude" })).toBe("Claude · waiting for you")
+    expect(subline({ ...p, kind: "shell", status: "waiting" })).toBe("needs input")
+    expect(subline({ ...p, status: "working", agent: "codex" })).toBe("Codex · working")
+    expect(subline({ ...p, status: "idle", agent: "opencode", cwd: "~/w" })).toBe("OpenCode · ~/w")
+    expect(subline({ ...p, kind: "shell", status: "working", cwd: "~" })).toBe("~")
+  })
+
+  it("no card for an agent only waiting for the next message", async () => {
+    const ws = await connect()
+    ws.recv({
+      t: "panes",
+      panes: { ...panes, panes: panes.panes.map((p) => ({ ...p, asking: false })) },
+    })
+    await waitFor(() => expect(screen.queryByText(/Claude is asking$/)).toBeNull())
+    expect(screen.getByText("Claude needs your permission")).toBeInTheDocument() // its row
   })
 
   it("an unanswered message is sent again after a reconnect, even from the pane list", async () => {

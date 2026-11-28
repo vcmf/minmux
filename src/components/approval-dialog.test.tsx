@@ -24,7 +24,8 @@ describe("ApprovalDialog", () => {
     expect(screen.getByLabelText("Code K 7 Q M")).toBeInTheDocument()
     expect(window.minmux.remoteApprovalShown).toHaveBeenCalledWith(3)
     expect(screen.getByRole("radio", { name: "Send" })).toHaveAttribute("aria-checked", "true")
-    expect(screen.getByText("Deny")).toHaveFocus() // Enter never lets it in unseen
+    // The dialog takes focus, not a button: a Space or Enter typed for the terminal answers nothing.
+    expect(screen.getByRole("alertdialog")).toHaveFocus()
     fireEvent.click(screen.getByRole("radio", { name: "Type keys" }))
     expect(screen.getByText(/type into terminals/)).toBeInTheDocument()
     fireEvent.click(screen.getByText("Allow"))
@@ -38,13 +39,19 @@ describe("ApprovalDialog", () => {
     ).toBeInTheDocument()
     expect(screen.queryByRole("radio", { name: "Send" })).toBeNull()
     expect(screen.getByRole("radio", { name: "Type keys" })).toHaveAttribute("aria-checked", "true")
+    // Tab from the dialog goes to its first button, wraps, and never leaves it.
     fireEvent.keyDown(window, { key: "Tab" })
-    expect(screen.getByText("Allow")).toHaveFocus()
-    fireEvent.keyDown(window, { key: "Tab" })
-    expect(screen.getByRole("radio", { name: "Watch" })).toHaveFocus() // stays in the dialog
+    expect(screen.getByRole("radio", { name: "Watch" })).toHaveFocus()
     fireEvent.keyDown(window, { key: "Tab", shiftKey: true })
     expect(screen.getByText("Allow")).toHaveFocus()
+    fireEvent.keyDown(window, { key: "Tab" })
+    expect(screen.getByRole("radio", { name: "Watch" })).toHaveFocus()
+    // The topmost modal owns Escape: other window listeners don't see it.
+    const other = vi.fn()
+    window.addEventListener("keydown", other)
     fireEvent.keyDown(window, { key: "Escape" })
+    window.removeEventListener("keydown", other)
+    expect(other).not.toHaveBeenCalled()
     expect(window.minmux.remoteApprove).toHaveBeenCalledWith(4, "deny")
   })
 
@@ -59,5 +66,40 @@ describe("ApprovalDialog", () => {
     expect(screen.getByText(/minmux on linux/)).toBeInTheDocument()
     push([])
     expect(screen.queryByRole("alertdialog")).toBeNull()
+  })
+
+  it("a late reply to the first fetch never overrides a newer push", async () => {
+    let reply: (l: ApprovalRequest[]) => void = () => {}
+    vi.mocked(window.minmux.remoteApprovals).mockReturnValueOnce(
+      new Promise((r) => {
+        reply = r
+      }),
+    )
+    let push: (l: ApprovalRequest[]) => void = () => {}
+    vi.mocked(window.minmux.onRemoteApprovals).mockImplementationOnce((cb) => {
+      push = cb
+      return () => {}
+    })
+    render(<ApprovalDialog />)
+    act(() => push([]))
+    await act(async () => reply([phone]))
+    expect(screen.queryByRole("alertdialog")).toBeNull()
+  })
+
+  it("gives the keyboard back to the terminal once the last request goes, however it goes", async () => {
+    const raf = vi.spyOn(window, "requestAnimationFrame").mockImplementation((cb) => {
+      cb(0)
+      return 0
+    })
+    const { push } = mount([])
+    await waitFor(() => expect(window.minmux.remoteApprovals).toHaveBeenCalled())
+    push([phone])
+    expect(screen.getByRole("alertdialog")).toHaveFocus()
+    raf.mockClear()
+    push([machine]) // the next one: no refocus while it shows
+    expect(raf).not.toHaveBeenCalled()
+    push([]) // expired
+    expect(raf).toHaveBeenCalledTimes(1)
+    raf.mockRestore()
   })
 })

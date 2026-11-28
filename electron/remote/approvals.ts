@@ -21,6 +21,7 @@ interface Open {
   req: ApprovalRequest
   resolve: (d: Decision) => void
   shown: boolean
+  asking: boolean // the native prompt is up
   abort: AbortController
   ttl: ReturnType<typeof setTimeout>
   ack?: ReturnType<typeof setTimeout>
@@ -48,7 +49,8 @@ export function createApprovals(d: ApprovalsDeps) {
   }
 
   function native(o: Open) {
-    if (!open.has(o.req.id)) return
+    if (!open.has(o.req.id) || o.asking) return
+    o.asking = true
     d.native(o.req, o.abort.signal).then(
       (v) => finish(o.req.id, v),
       () => finish(o.req.id, "deny"),
@@ -65,6 +67,7 @@ export function createApprovals(d: ApprovalsDeps) {
           req,
           resolve,
           shown: false,
+          asking: false,
           abort: new AbortController(),
           ttl: setTimeout(() => finish(id, "deny"), d.ttlMs),
         }
@@ -78,6 +81,16 @@ export function createApprovals(d: ApprovalsDeps) {
     shown(id: unknown) {
       const o = typeof id === "number" ? open.get(id) : undefined
       if (o) o.shown = true
+    },
+    /** The window reloads or its renderer died: each request must be shown again soon (the
+     *  reloaded window fetches the list), else the native prompt asks. */
+    unshown() {
+      for (const o of open.values()) {
+        if (!o.shown) continue
+        o.shown = false
+        if (o.ack) clearTimeout(o.ack)
+        o.ack = setTimeout(() => !o.shown && native(o), d.ackMs ?? 1500)
+      }
     },
     /** The window's answer. False when the request is gone (answered, expired) or it's no answer. */
     answer(id: unknown, decision: unknown): boolean {

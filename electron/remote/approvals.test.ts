@@ -72,6 +72,25 @@ describe("approvals", () => {
     expect(a.list()).toEqual([])
   })
 
+  it("a reload or a dead renderer: shown again soon, else asked natively, once", async () => {
+    const { a, natives } = setup()
+    const p = a.ask("iphone", "K7QM", false)
+    a.shown(1)
+    a.unshown() // the window reloads
+    a.shown(1) // and shows it again
+    vi.advanceTimersByTime(2000)
+    expect(natives).toHaveLength(0)
+    a.unshown() // its renderer died
+    vi.advanceTimersByTime(1500)
+    expect(natives).toHaveLength(1)
+    a.shown(1)
+    a.unshown() // already asked natively: never a second prompt
+    vi.advanceTimersByTime(1500)
+    expect(natives).toHaveLength(1)
+    natives[0]!.answer("send")
+    await expect(p).resolves.toBe("send")
+  })
+
   it("a native prompt that fails denies", async () => {
     const a = createApprovals({
       ttlMs: 1000,

@@ -120,6 +120,47 @@ describe("setupRemoteControl", () => {
     rc.dispose()
   })
 
+  it("asks in the window's own dialog when there is one, with the permission it picks", async () => {
+    settings = JSON.stringify({ remote: { enabled: true } })
+    const sent: unknown[][] = []
+    const restore = vi.fn()
+    const win = {
+      isDestroyed: () => false,
+      isMinimized: () => true,
+      restore,
+      webContents: { send: (...a: unknown[]) => sent.push(a) },
+    }
+    const rc = setupRemoteControl({
+      dir: "/app/out/main",
+      configDir: () => cfg,
+      readSettings: () => settings,
+      profile: "dev",
+      window: () => win as never,
+    })
+    rc.apply()
+    showMessageBox.mockClear()
+    forks[0]!.emit({
+      t: "rpc",
+      id: 1,
+      call: { op: "approve", nodeId: "n1", name: "linux", machine: true },
+    })
+    await vi.waitFor(() => expect(rc.approvals()).toHaveLength(1))
+    const req = rc.approvals()[0]!
+    expect(req).toMatchObject({ name: "linux", machine: true })
+    const lastList = () => sent.filter((m) => m[0] === "remote:approvals").at(-1)
+    expect(lastList()).toEqual(["remote:approvals", [req]])
+    expect(restore).toHaveBeenCalled() // a minimized window comes back to show it
+    rc.approvalShown(req.id)
+    rc.rendererGone() // reloaded: it shows the list again after the load
+    rc.approvalShown(req.id)
+    expect(rc.approve(req.id, "view")).toBe(true)
+    await vi.waitFor(async () => expect((await rc.view()).devices).toHaveLength(1))
+    expect((await rc.view()).devices[0]!.permission).toBe("view")
+    expect(showMessageBox).not.toHaveBeenCalled()
+    expect(lastList()).toEqual(["remote:approvals", []])
+    rc.dispose()
+  })
+
   it("while someone's connected: leads and nudges for the chat, messages typed into panes", async () => {
     settings = JSON.stringify({ remote: { enabled: true } })
     const writes: [string, string][] = []

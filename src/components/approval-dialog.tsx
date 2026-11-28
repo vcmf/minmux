@@ -34,18 +34,36 @@ export function ApprovalDialog() {
   const [list, setList] = useState<ApprovalRequest[]>([])
   useEffect(() => {
     let live = true
+    let pushed = false // main's pushes are newer than the first fetch's reply
     const take = (l: ApprovalRequest[]) => {
       if (!live) return
       setList(l)
       for (const r of l) ipc.remoteApprovalShown(r.id) // this window shows them: no native prompt
     }
-    void ipc.remoteApprovals().then(take)
-    const off = ipc.onRemoteApprovals(take)
+    void ipc.remoteApprovals().then((l) => !pushed && take(l))
+    const off = ipc.onRemoteApprovals((l) => {
+      pushed = true
+      take(l)
+    })
     return () => {
       live = false
       off()
     }
   }, [])
+  // However the last request goes (answered, expired, answered natively), the keyboard goes back
+  // to the active terminal if it was left nowhere; never while another request still shows.
+  const wasOpen = useRef(false)
+  useEffect(() => {
+    if (list.length) wasOpen.current = true
+    else if (wasOpen.current) {
+      wasOpen.current = false
+      requestAnimationFrame(() => {
+        const a = document.activeElement
+        if (!document.querySelector(".approval-dialog") && (!a || a === document.body))
+          focusActiveEntry()
+      })
+    }
+  }, [list])
   const req = list[0]
   return req ? <Request key={req.id} req={req} /> : null
 }
@@ -54,30 +72,27 @@ function Request({ req }: { req: ApprovalRequest }) {
   const choices = CHOICES[req.machine ? "machine" : "phone"]
   const [perm, setPerm] = useState<Permission>(req.machine ? "keys" : "send")
   const box = useRef<HTMLDivElement>(null)
-  const denyRef = useRef<HTMLButtonElement>(null)
 
-  const answer = (d: Permission | "deny") => {
-    ipc.remoteApprove(req.id, d)
-    requestAnimationFrame(focusActiveEntry)
-  }
+  const answer = (d: Permission | "deny") => ipc.remoteApprove(req.id, d)
 
   useEffect(() => {
-    denyRef.current?.focus() // Enter never lets a device in unseen
+    // The dialog itself takes focus, not a button: a request can arrive mid-typing, and a
+    // Space or Enter meant for the terminal must not answer it unread.
+    box.current?.focus()
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        e.preventDefault()
-        answer("deny")
-      } else if (e.key === "Tab") {
-        // Modal: Tab stays inside the dialog, never out to the terminal behind.
-        const els = [...(box.current?.querySelectorAll<HTMLElement>("button") ?? [])]
-        if (els.length === 0) return
-        e.preventDefault()
-        const i = els.indexOf(document.activeElement as HTMLElement)
-        els[(i + (e.shiftKey ? els.length - 1 : 1)) % els.length]?.focus()
-      }
+      if (e.key !== "Escape" && e.key !== "Tab") return
+      // Capture phase, and only this listener: the topmost modal owns these keys.
+      e.preventDefault()
+      e.stopImmediatePropagation()
+      if (e.key === "Escape") return answer("deny")
+      // Modal: Tab stays inside the dialog, never out to the terminal behind.
+      const els = [...(box.current?.querySelectorAll<HTMLElement>("button") ?? [])]
+      const i = els.indexOf(document.activeElement as HTMLElement)
+      const next = i < 0 ? (e.shiftKey ? els.length - 1 : 0) : i + (e.shiftKey ? -1 : 1)
+      els[(next + els.length) % els.length]?.focus()
     }
-    window.addEventListener("keydown", onKey)
-    return () => window.removeEventListener("keydown", onKey)
+    window.addEventListener("keydown", onKey, true)
+    return () => window.removeEventListener("keydown", onKey, true)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -87,6 +102,7 @@ function Request({ req }: { req: ApprovalRequest }) {
       <div
         ref={box}
         className="approval-dialog"
+        tabIndex={-1}
         role="alertdialog"
         aria-labelledby="approval-title"
         aria-describedby="approval-code-note"
@@ -139,7 +155,7 @@ function Request({ req }: { req: ApprovalRequest }) {
         </div>
 
         <div className="confirm-actions">
-          <button ref={denyRef} className="btn" onClick={() => answer("deny")}>
+          <button className="btn" onClick={() => answer("deny")}>
             Deny
           </button>
           <button className="btn primary" onClick={() => answer(perm)}>

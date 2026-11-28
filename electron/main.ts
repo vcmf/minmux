@@ -572,8 +572,14 @@ function createWindow() {
     fsWorker.setWatched([])
   })
   // A reloaded or crashed renderer re-sends its watch set when its folder tabs show again.
-  win.webContents.on("did-start-loading", () => fsWorker.setWatched([]))
-  win.webContents.on("render-process-gone", () => fsWorker.setWatched([]))
+  win.webContents.on("did-start-loading", () => {
+    fsWorker.setWatched([])
+    remoteControl?.rendererGone() // a request it showed: shown again after the load, or natively
+  })
+  win.webContents.on("render-process-gone", () => {
+    fsWorker.setWatched([])
+    remoteControl?.rendererGone()
+  })
 
   // Tell the renderer when maximize state changes (custom controls swap icon).
   // (A window closing out of full screen can report after it's destroyed.)
