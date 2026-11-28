@@ -293,8 +293,15 @@ textarea:focus-visible {
   place-items: center;
   border-radius: 12px;
   background: rgba(224, 169, 74, 0.16);
-  color: var(--amber);
-  font: 600 16px var(--mono);
+}
+.pane-icon {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 20px;
+}
+.pane-head .pane-icon {
+  margin-right: 8px;
 }
 .needs .sub {
   color: #c9a873;
@@ -493,6 +500,103 @@ textarea:focus-visible {
 }
 .msg.assistant {
   line-height: 1.55;
+}
+
+/* An agent's reply, rendered from markdown. */
+.md {
+  white-space: normal;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.md > * {
+  margin: 0;
+}
+.md h1,
+.md h2,
+.md h3,
+.md h4 {
+  font-weight: 600;
+  line-height: 1.3;
+  letter-spacing: -0.01em;
+}
+.md h1 {
+  font-size: 19px;
+}
+.md h2 {
+  font-size: 17px;
+}
+.md h3,
+.md h4 {
+  font-size: 15px;
+}
+.md ul,
+.md ol {
+  padding-left: 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.md li > p {
+  margin: 0;
+}
+.md a {
+  color: var(--blue);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  overflow-wrap: anywhere;
+}
+.md code {
+  font: 13px var(--mono);
+  background: var(--elev);
+  padding: 1px 6px;
+  border-radius: 6px;
+  overflow-wrap: anywhere;
+}
+.md pre {
+  padding: 12px 14px;
+  overflow-x: auto;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  -webkit-overflow-scrolling: touch;
+}
+.md pre code {
+  padding: 0;
+  background: none;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre;
+  overflow-wrap: normal;
+}
+.md blockquote {
+  padding-left: 12px;
+  border-left: 2px solid var(--border2);
+  color: var(--dim);
+}
+.md hr {
+  border: 0;
+  border-top: 1px solid var(--border);
+}
+.md-table {
+  max-width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+.md table {
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.md th,
+.md td {
+  padding: 6px 10px;
+  border: 1px solid var(--border2);
+  text-align: left;
+  white-space: nowrap;
+}
+.md th {
+  font-weight: 600;
+  background: var(--panel);
 }
 .msg.pending {
   opacity: 0.85;

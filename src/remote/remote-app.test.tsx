@@ -44,6 +44,7 @@ const panes: RemotePanes = {
       title: "agent-fleet",
       kind: "agent",
       agent: "claude",
+      color: "#f0913d",
       status: "waiting",
       asking: true,
       detail: "Claude needs your permission",
@@ -104,6 +105,9 @@ describe("RemoteApp", () => {
     expect(screen.getByText(/Claude is asking$/)).toBeInTheDocument()
     expect(screen.getByText("not started on the desktop")).toBeInTheDocument()
     expect(screen.getByText("map-editor").closest("button")).toBeDisabled()
+    // Each agent pane shows its agent's mark in its session's colour, as the sidebar does.
+    const row = screen.getByText("agent-fleet").closest("button")!
+    expect(row.querySelector(".pane-icon svg")).toHaveStyle({ color: "rgb(240, 145, 61)" })
     fireEvent.click(screen.getByText(/Claude is asking$/))
     expect(screen.getByRole("region", { name: "Claude is asking" })).toBeInTheDocument()
     fireEvent.click(screen.getByLabelText("Back to panes"))

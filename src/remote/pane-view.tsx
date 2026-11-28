@@ -1,10 +1,12 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react"
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
 import type { ChatItem, ChatQuestion } from "../lib/remote-chat"
 import type { HostMessage, Permission, RemotePane } from "../lib/remote-protocol"
 import { applyChat, emptyChat, refusalText, type ChatState } from "./chat-state"
 import type { Outbox } from "./outbox"
 import { TerminalView } from "./terminal-view"
 import { AnswerCard } from "./answer-card"
+import { PaneIcon } from "./pane-icon"
+import { chatMarkdown } from "../lib/chat-markdown"
 
 export interface PaneViewProps {
   pane: RemotePane
@@ -100,6 +102,7 @@ export function PaneView({
             <path d="M15 6l-6 6 6 6" />
           </svg>
         </button>
+        <PaneIcon pane={pane} />
         <span className="pane-names">
           <span className="pane-title">{pane.title}</span>
           <span className="pane-status">
@@ -261,6 +264,16 @@ function grow(el: HTMLTextAreaElement) {
   el.style.height = `${el.scrollHeight}px`
 }
 
+/** An agent's reply, its markdown rendered (raw HTML never: lib/chat-markdown). */
+function Reply({ text }: { text: string }) {
+  const html = useMemo(() => chatMarkdown(text), [text])
+  return (
+    <div className="msg assistant">
+      <div className="text md" dangerouslySetInnerHTML={{ __html: html }} />
+    </div>
+  )
+}
+
 function Item({ item }: { item: ChatItem }) {
   const [open, setOpen] = useState(false)
   switch (item.kind) {
@@ -271,11 +284,7 @@ function Item({ item }: { item: ChatItem }) {
         </div>
       )
     case "assistant":
-      return (
-        <div className="msg assistant">
-          <div className="text">{item.text}</div>
-        </div>
-      )
+      return <Reply text={item.text} />
     case "tool":
       return (
         <div className={`tool${item.error ? " error" : ""}`}>

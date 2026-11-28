@@ -24,6 +24,7 @@ export interface RemotePane {
   title: string
   kind: "agent" | "shell" | "ssh"
   agent?: "claude" | "codex" | "opencode"
+  color?: string // its agent session's accent (/color, or from its name), as the sidebar shows it
   status: RemoteStatus
   detail?: string // why it needs input, when known
   cwd?: string

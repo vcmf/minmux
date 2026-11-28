@@ -22,6 +22,7 @@ export interface RemotePanesInput {
   home: string
   started: (id: string) => boolean
   paste?: (id: string) => boolean | undefined
+  color?: (id: string) => string | undefined // the agent session's accent (a dark-theme hex)
 }
 
 export function buildRemotePanes(i: RemotePanesInput): RemotePanes {
@@ -48,6 +49,8 @@ export function buildRemotePanes(i: RemotePanesInput): RemotePanes {
         started: i.started(id),
       }
       if (lead) pane.agent = lead.agent
+      const color = lead ? i.color?.(id) : undefined
+      if (color) pane.color = color
       const paste = i.paste?.(id)
       if (paste !== undefined) pane.paste = paste
       const detail = status === "waiting" ? (s.detail ?? lead?.lastMessage) : undefined

@@ -9,6 +9,7 @@ import type {
 } from "../lib/remote-protocol"
 import { PaneView } from "./pane-view"
 import { AGENT, subline } from "./pane-lines"
+import { PaneIcon } from "./pane-icon"
 import { useOutbox } from "./outbox"
 import { Link, type LinkState, type SocketLike } from "./connection"
 
@@ -367,8 +368,8 @@ function PaneList({
 
       {waiting.map((p) => (
         <button key={`w:${p.id}`} className="needs" onClick={() => setOpenId(p.id)}>
-          <span className="needs-icon" aria-hidden>
-            !
+          <span className="needs-icon">
+            <PaneIcon pane={p} />
           </span>
           <span className="names">
             <span className="name">
@@ -393,7 +394,7 @@ function PaneList({
                 disabled={!p.started}
                 onClick={() => setOpenId(p.id)}
               >
-                <span className={`dot ${DOT[p.status]}`} />
+                <PaneIcon pane={p} />
                 <span className="names">
                   <span className="name">
                     {p.title}

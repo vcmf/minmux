@@ -53,6 +53,7 @@ describe("buildRemotePanes", () => {
       agents,
       home: "/Users/me",
       started: (id) => id !== "c",
+      color: () => "#f0913d", // asked for agent panes only
     })
     expect(r.tabs.map((t) => t.id)).toEqual(["t1", "t2"])
     expect(r.panes).toEqual([
@@ -62,6 +63,7 @@ describe("buildRemotePanes", () => {
         title: "a",
         kind: "agent",
         agent: "claude",
+        color: "#f0913d",
         status: "waiting",
         detail: "Claude needs your permission",
         cwd: "/Users/me/a",

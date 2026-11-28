@@ -67,7 +67,7 @@ describe("PaneView", () => {
       more: true,
       items: [
         { id: "1", kind: "user", text: "fix it" },
-        { id: "2", kind: "assistant", text: "On it." },
+        { id: "2", kind: "assistant", text: "**On it.** See [the PR](https://e.com/1)" },
         { id: "3", kind: "tool", name: "Bash", summary: "make test", result: "ok" },
         {
           id: "4",
@@ -84,6 +84,8 @@ describe("PaneView", () => {
       ],
     })
     expect(screen.getByText("fix it")).toBeInTheDocument()
+    expect(screen.getByText("On it.").tagName).toBe("STRONG") // the reply's markdown, rendered
+    expect(screen.getByText("the PR")).toHaveAttribute("target", "_blank")
     expect(screen.getByText("Which?")).toBeInTheDocument()
     expect(screen.getByText("Several can be picked")).toBeInTheDocument()
     expect(screen.getByText("first")).toBeInTheDocument()
