@@ -1,7 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { RemoteApp } from "./remote-app"
-import { subline } from "./pane-lines"
 import type { RemotePanes } from "../lib/remote-protocol"
 
 class FakeWs {
@@ -142,13 +141,39 @@ describe("RemoteApp", () => {
     expect(await screen.findByText("No terminals open.")).toBeInTheDocument()
   })
 
-  it("a row's second line: why it waits, what runs there, or where", () => {
-    const p = { id: "x", tab: "t", title: "x", kind: "agent", started: true } as const
-    expect(subline({ ...p, status: "waiting", agent: "claude" })).toBe("Claude · waiting for you")
-    expect(subline({ ...p, kind: "shell", status: "waiting" })).toBe("needs input")
-    expect(subline({ ...p, status: "working", agent: "codex" })).toBe("Codex · working")
-    expect(subline({ ...p, status: "idle", agent: "opencode", cwd: "~/w" })).toBe("OpenCode · ~/w")
-    expect(subline({ ...p, kind: "shell", status: "working", cwd: "~" })).toBe("~")
+  it("lists panes as the sidebar's tree: tab head, then each row's lines; a tab folds", async () => {
+    const ws = await connect()
+    ws.recv({
+      t: "panes",
+      panes: {
+        tabs: [{ id: "t1", title: "minmux", sub: "main • ~/term", shell: "zsh" }],
+        panes: [
+          {
+            id: "x",
+            tab: "t1",
+            title: "tailscale",
+            kind: "agent",
+            agent: "claude",
+            shell: "zsh",
+            status: "working",
+            snippet: "Got it. When the permission check…",
+            where: "fix/path • ~/term",
+            pr: { number: 213, state: "merged" },
+            started: true,
+          },
+        ],
+        stale: false,
+      },
+    })
+    expect(await screen.findByText("main • ~/term")).toBeInTheDocument()
+    expect(screen.getByText("1 pane")).toBeInTheDocument()
+    expect(screen.getByText("Got it. When the permission check…")).toBeInTheDocument()
+    expect(screen.getByText("fix/path • ~/term")).toBeInTheDocument()
+    expect(screen.getByText("PR #213")).toBeInTheDocument()
+    expect(screen.getByText("merged")).toHaveStyle({ color: "var(--blue)" })
+    expect(screen.getByText("running")).toBeInTheDocument()
+    fireEvent.click(screen.getByRole("button", { name: /main • ~\/term/ }))
+    expect(screen.queryByText("tailscale")).toBeNull()
   })
 
   it("no card for an agent only waiting for the next message", async () => {

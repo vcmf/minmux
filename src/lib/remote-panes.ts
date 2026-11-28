@@ -4,8 +4,15 @@
 
 import { paneLeads, type AgentGraph, type AgentStatus } from "./agent-graph"
 import { allSessionIds } from "./pane-tree"
-import type { RemotePane, RemotePanes, RemoteStatus } from "./remote-protocol"
-import { displaySessionTitle, remoteRowTitle, tabTitle } from "./session-label"
+import type { RemotePane, RemotePanes, RemoteStatus, RemoteTab } from "./remote-protocol"
+import { messageSnippet, type PaneGitInfo } from "./pane-git"
+import {
+  displaySessionTitle,
+  remoteRowTitle,
+  sessionSubline,
+  shellType,
+  tabTitle,
+} from "./session-label"
 import type { Session, Tab } from "../types"
 
 const AGENT_STATUS: Record<AgentStatus, RemoteStatus> = {
@@ -23,6 +30,7 @@ export interface RemotePanesInput {
   started: (id: string) => boolean
   paste?: (id: string) => boolean | undefined
   color?: (id: string) => string | undefined // the agent session's accent (a dark-theme hex)
+  git?: (id: string) => PaneGitInfo | undefined // its branch and PR, as the sidebar has them
 }
 
 export function buildRemotePanes(i: RemotePanesInput): RemotePanes {
@@ -57,9 +65,26 @@ export function buildRemotePanes(i: RemotePanesInput): RemotePanes {
       if (detail) pane.detail = detail.slice(0, 200)
       const cwd = s.remote ? s.remoteCwd : s.cwd
       if (cwd) pane.cwd = cwd
+      if (!s.remote) {
+        pane.shell = shellType(s.command)
+        const git = i.git?.(id)
+        if (git?.branch) pane.branch = git.branch
+        if (git?.pr) pane.pr = { number: git.pr.number, state: git.pr.state }
+        const where = sessionSubline(s.cwd, i.home, git?.branch)
+        if (where) pane.where = where
+      } else if (s.remoteCwd) pane.where = s.remoteCwd
+      const snippet = status !== "waiting" ? messageSnippet(lead?.lastMessage) : ""
+      if (snippet) pane.snippet = snippet.slice(0, 160)
       panes.push(pane)
     }
-    return { id: tab.id, title: tabTitle(tab, i.sessions, i.home) }
+    const focused = i.sessions[tab.activeSessionId]
+    const out: RemoteTab = { id: tab.id, title: tabTitle(tab, i.sessions, i.home) }
+    if (focused && !focused.remote && !focused.peer) {
+      const sub = sessionSubline(focused.cwd, i.home, i.git?.(tab.activeSessionId)?.branch)
+      if (sub) out.sub = sub
+      out.shell = shellType(focused.command)
+    }
+    return out
   })
   return { tabs, panes, stale: false }
 }

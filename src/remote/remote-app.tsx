@@ -8,7 +8,7 @@ import type {
   SessionState,
 } from "../lib/remote-protocol"
 import { PaneView } from "./pane-view"
-import { AGENT, subline } from "./pane-lines"
+import { AGENT } from "./pane-lines"
 import { PaneIcon } from "./pane-icon"
 import { useOutbox } from "./outbox"
 import { Link, type LinkState, type SocketLike } from "./connection"
@@ -383,36 +383,120 @@ function PaneList({
         </button>
       ))}
 
-      {groups.map((g) => (
-        <section key={g.tab.id} className="group">
-          <h2>{g.tab.title}</h2>
-          <div className="card">
-            {g.panes.map((p) => (
-              <button
-                key={p.id}
-                className={`row${p.started ? "" : " unstarted"}`}
-                disabled={!p.started}
-                onClick={() => setOpenId(p.id)}
-              >
-                <PaneIcon pane={p} />
-                <span className="names">
-                  <span className="name">
-                    {p.title}
-                    {p.kind === "ssh" && <span className="badge">ssh</span>}
-                  </span>
-                  <span className="sub">{subline(p)}</span>
-                </span>
-                <span className={`word ${DOT[p.status]}`}>
-                  {p.status === "waiting" ? "needs you" : p.status}
-                </span>
-              </button>
-            ))}
-          </div>
-        </section>
-      ))}
+      <div className="tree">
+        {groups.map((g) => (
+          <TabGroup key={g.tab.id} tab={g.tab} panes={g.panes} open={(id) => setOpenId(id)} />
+        ))}
+      </div>
       {panes && count === 0 && <p className="dim pad">No terminals open.</p>}
       <footer className="list-foot">Over your tailnet · encrypted</footer>
     </div>
+  )
+}
+
+const WORD: Record<RemotePane["status"], string> = {
+  working: "running",
+  waiting: "needs input",
+  idle: "idle",
+}
+const PR_COLOR = {
+  open: "var(--accent)",
+  draft: "var(--dim)",
+  merged: "var(--blue)",
+  closed: "var(--red)",
+}
+
+/** One tab as the desktop's sidebar shows it: its name, shell and folder, then its panes. */
+function TabGroup({
+  tab,
+  panes,
+  open,
+}: {
+  tab: RemotePanes["tabs"][number]
+  panes: RemotePane[]
+  open: (id: string) => void
+}) {
+  const [shown, setShown] = useState(true)
+  return (
+    <section className="tree-group">
+      <button className="tree-head" aria-expanded={shown} onClick={() => setShown(!shown)}>
+        <svg
+          className="tree-caret"
+          width="13"
+          height="13"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2.2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          aria-hidden
+        >
+          <path d={shown ? "M6 9l6 6 6-6" : "M9 6l6 6-6 6"} />
+        </svg>
+        <span className="tree-labels">
+          <span className="tree-primary-row">
+            <span className="tree-primary session">{tab.title}</span>
+            {tab.shell && <span className="badge">{tab.shell}</span>}
+          </span>
+          {tab.sub && <span className="tree-sub">{tab.sub}</span>}
+        </span>
+        <span className="tree-meta">
+          {panes.length} {panes.length === 1 ? "pane" : "panes"}
+        </span>
+      </button>
+      {shown &&
+        panes.map((p) => (
+          <button
+            key={p.id}
+            className={`tree-row${p.started ? "" : " unstarted"}`}
+            disabled={!p.started}
+            onClick={() => open(p.id)}
+          >
+            <PaneIcon pane={p} size={16} />
+            <span className="tree-labels">
+              <span className="tree-primary-row">
+                <span className="tree-primary">{p.title}</span>
+                <span className="badge">{p.kind === "ssh" ? "ssh" : (p.shell ?? "shell")}</span>
+              </span>
+              {!p.started ? (
+                <span className="tree-sub">not started on the desktop</span>
+              ) : p.status === "waiting" ? (
+                <span className="tree-attn">{p.detail ?? "needs input"}</span>
+              ) : (
+                p.snippet && <span className="tree-snippet">{p.snippet}</span>
+              )}
+              {p.where && <span className="tree-sub">{p.where}</span>}
+              {p.pr && (
+                <span className="tree-pr">
+                  <svg
+                    width="12"
+                    height="12"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    aria-hidden
+                  >
+                    <circle cx="6" cy="6" r="2.5" />
+                    <circle cx="6" cy="18" r="2.5" />
+                    <circle cx="18" cy="18" r="2.5" />
+                    <path d="M6 8.5v7M18 15.5V11a3 3 0 0 0-3-3h-4" />
+                  </svg>
+                  <span className="tree-pr-n">PR #{p.pr.number}</span>
+                  <span style={{ color: PR_COLOR[p.pr.state] }}>{p.pr.state}</span>
+                </span>
+              )}
+            </span>
+            {p.status !== "waiting" && (
+              <span className={`tree-meta ${DOT[p.status]}`}>{WORD[p.status]}</span>
+            )}
+            <span className={`dot ${DOT[p.status]}`} />
+          </button>
+        ))}
+    </section>
   )
 }
 
