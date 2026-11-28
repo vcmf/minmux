@@ -250,3 +250,15 @@ describe("device file", () => {
     expect(parseDeviceFile("{oops").file.devices).toEqual([])
   })
 })
+
+describe("another minmux asking", () => {
+  it("Allow lets it type (keys); View only stays view", () => {
+    const { table } = setup()
+    const p = table.createPending("n1", "linux", true) as Pending
+    table.decide(p.id, "allow")
+    expect(table.list()[0]!.permission).toBe("keys")
+    const q = table.createPending("n2", "box", true) as Pending
+    table.decide(q.id, "view")
+    expect(table.list()[1]!.permission).toBe("view")
+  })
+})

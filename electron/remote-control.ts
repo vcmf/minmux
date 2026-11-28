@@ -80,7 +80,7 @@ export function setupRemoteControl(deps: RemoteControlDeps) {
   }
 
   // The prompt closes itself when the request expires (its answer would do nothing then).
-  const ask = async (name: string, code: string): Promise<Decision> => {
+  const ask = async (name: string, code: string, machine: boolean): Promise<Decision> => {
     const w = deps.window()
     const signal = AbortSignal.timeout(PENDING_MS)
     if (w && !w.isDestroyed() && w.isMinimized()) w.restore()
@@ -92,8 +92,12 @@ export function setupRemoteControl(deps: RemoteControlDeps) {
       cancelId: 2,
       noLink: true,
       title: "Remote control",
-      message: `${name} wants to control minmux`,
-      detail: `Check that the device shows the code ${code}.\n\nAllow lets it read your panes and send messages. View only lets it read them.`,
+      message: machine
+        ? `minmux on ${name} wants to open your terminals`
+        : `${name} wants to control minmux`,
+      detail: machine
+        ? `Check that ${name} shows the code ${code}.\n\nAllow lets it see your panes and type in them. View only lets it see them.`
+        : `Check that the device shows the code ${code}.\n\nAllow lets it read your panes and send messages. View only lets it read them.`,
     }
     const r =
       w && !w.isDestroyed()

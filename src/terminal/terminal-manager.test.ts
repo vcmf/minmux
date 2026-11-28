@@ -1408,6 +1408,31 @@ describe("TerminalManager — a parked terminal behind a folder tab", () => {
   })
 })
 
+describe("TerminalManager — a remote surface (another minmux's pane)", () => {
+  it("asks main for that pane, takes its grid instead of fitting, never resizes it", async () => {
+    st().newTab(testShell)
+    const tab = st().tabs[0]!
+    st().openPeer({ key: "linux:7420", pane: "p9", machine: "linux" }, "zsh")
+    const id = st().tabs.find((t) => t.id === tab.id)!.activeEntryId
+    let pinned: ((c: number, r: number) => void) | undefined
+    vi.mocked(ipc.onPtyPinned).mockImplementation((_id, cb) => ((pinned = cb), () => {}))
+    TerminalManager.ensureRunning(st().sessions[id] as Session)
+    await flush()
+    expect(spawnCalls()[spawnCalls().length - 1]).toMatchObject({
+      id,
+      peer: { key: "linux:7420", pane: "p9" },
+    })
+    const t = terms[terms.length - 1]!
+    const resize = vi.spyOn(t, "resize")
+    pinned!(120, 40)
+    expect(resize).toHaveBeenCalledWith(120, 40)
+    vi.mocked(ipc.ptyResize).mockClear()
+    TerminalManager.sizeHidden(id, 300, 200) // its box changes: still the remote grid
+    expect(ipc.ptyResize).not.toHaveBeenCalled()
+    TerminalManager.dispose(id)
+  })
+})
+
 describe("TerminalManager — screenLines (remote answers)", () => {
   beforeEach(() => {
     resetStore()

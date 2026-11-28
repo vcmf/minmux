@@ -1,5 +1,6 @@
 import type { FileData, FileStamp } from "./file-tab"
 import type { Permission, RemotePanes } from "./remote-protocol"
+import type { MachineView } from "./remote-machines"
 import type { RemoteView } from "./remote-view"
 import type { ShellOption, SpawnOpts, SshHost } from "../types"
 import type { WslContext } from "./wsl"
@@ -49,6 +50,13 @@ export interface Ipc {
   // An integrated ssh pane's host took its nonce: its shell's reports carry it from now on
   // (sent before the output that follows, and before a reattach's replay).
   onPtyNonce: (id: string, cb: (nonce: string) => void) => () => void
+  // A remote surface's grid: the remote pane's size (its xterm takes it instead of fitting).
+  onPtyPinned: (id: string, cb: (cols: number, rows: number) => void) => () => void
+  // Machines: the user's other minmux on the tailnet (listed while the sidebar shows them).
+  machinesList: (on: boolean) => void
+  machinesPair: (key: string) => void
+  machinesForget: (key: string) => void
+  onMachines: (cb: (list: MachineView[]) => void) => () => void
   ptyWrite: (id: string, data: string) => void
   ptyResize: (id: string, cols: number, rows: number) => void
   ptyKill: (id: string) => void

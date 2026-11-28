@@ -110,6 +110,8 @@ interface Entry {
   offData?: () => void
   offExit?: () => void
   offNonce?: () => void
+  offPinned?: () => void
+  pinned?: Grid // a remote surface: the remote pane's grid, taken instead of fitting
   remote?: RemotePhase // ssh panes only: where the connection is (rules: lib/remote-connect)
   failure?: SshFailure // with remote = "failed": why, so Enter / Retry only act when they can
   lastKey?: string // ssh panes: the last input sent (a prompt check skips a line being typed)
@@ -510,6 +512,8 @@ function requestPty(id: string, entry: Entry, attachOnly: boolean, given?: Sessi
       cwd: session.cwd, // inherited from the pane this was split/opened from
       // An ssh session: main rebuilds the command from its own host list (never ours).
       ...(session.remote ? { remote: session.remote } : {}),
+      // A remote surface: main follows that pane over remote control (no process here).
+      ...(session.peer ? { peer: session.peer } : {}),
       ...(attachOnly ? { attachOnly: true } : {}),
       ...(reopen ? { reopen } : {}), // used only by an integrated host (the handshake)
       // → COLORFGBG so agents detect light/dark (fallback when the OSC-11 bg query can't
@@ -783,6 +787,22 @@ function spawn(session: Session, entry: Entry) {
     }, IDLE_MS)
   })
 
+  if (session.peer) {
+    // A remote surface shows the remote pane at its own size (applied after what's written).
+    entry.offPinned = ipc.onPtyPinned(session.id, (cols, rows) => {
+      term.write("", () => {
+        if (entries.get(session.id) !== entry) return
+        entry.pinned = { cols, rows }
+        entry.host.classList.add("pinned")
+        try {
+          if (term.cols !== cols || term.rows !== rows) term.resize(cols, rows)
+        } catch {
+          // an invalid size: keep the grid
+        }
+      })
+    })
+  }
+
   if (session.remote) {
     // The host took this connection's nonce (main saw its ok): trust reports carrying it.
     entry.offNonce = ipc.onPtyNonce(session.id, (nonce) => {
@@ -926,6 +946,8 @@ function spawn(session: Session, entry: Entry) {
 
   // OSC 7 — the shell reports its working directory (file://host/path).
   term.parser.registerOscHandler(7, (data) => {
+    // A remote surface's folder is on the other machine: never this one's cwd (git, splits).
+    if (session.peer) return true
     // An ssh pane's folder is on the host: shown, never read locally, never sent back.
     if (session.remote) {
       if (!untrusted(entry)) return true // our shell, at its prompt, reports its folder itself
@@ -1235,6 +1257,7 @@ function failResume(id: string, entry: Entry, exitCode?: number) {
 }
 
 function syncSize(id: string, entry: Entry) {
+  if (entry.pinned) return // a remote surface: the remote pane's size, never its box's
   try {
     entry.fit.fit()
     const { cols, rows } = entry.term
@@ -1332,7 +1355,7 @@ export const TerminalManager = {
   followSize(id: string, likeId: string) {
     const entry = entries.get(id)
     const like = entries.get(likeId)
-    if (!entry || !like?.opened) return
+    if (!entry || !like?.opened || entry.pinned) return
     const { cols, rows } = like.term
     if (!gridChanged(entry.lastGrid, cols, rows)) return
     try {
@@ -1577,6 +1600,7 @@ export const TerminalManager = {
     entry.offData?.()
     entry.offExit?.()
     entry.offNonce?.()
+    entry.offPinned?.()
     ipc.ptyKill(id)
     entry.term.dispose()
     entry.host.remove()

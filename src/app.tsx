@@ -42,6 +42,7 @@ import { isMac } from "./lib/platform"
 import { buildRemotePanes } from "./lib/remote-panes"
 import { startRemotePush } from "./lib/remote-push"
 import { useRemoteTyped } from "./lib/remote-typed"
+import { useMachines } from "./lib/machines-store"
 import type { ShellOption } from "./types"
 import "@xterm/xterm/css/xterm.css"
 import "./App.css"
@@ -96,6 +97,9 @@ function App() {
     () => ipc.onRemoteTyped((pane, device) => useRemoteTyped.getState().typed(pane, device)),
     [],
   )
+
+  // Machines: the user's other minmux on the tailnet, as main's remote-client finds them.
+  useEffect(() => ipc.onMachines((list) => useMachines.getState().set(list)), [])
 
   // Remote control: the pane list goes to main only while a remote client is connected.
   useEffect(

@@ -14,6 +14,8 @@ import { DeviceTable } from "./devices"
 import { RemoteHost, type Decision, type HostProc } from "./host-client"
 import type { FromHost, ToHost } from "./host-messages"
 import { createHostServer } from "./host-server"
+import { createPeerClient } from "./peer-client"
+import type { FromClient } from "./client-messages"
 
 const ME = "77"
 const freePort = () =>
@@ -659,6 +661,97 @@ describe("remote host server", () => {
 
     s.ws.send(JSON.stringify({ t: "term", pane: "p1", on: false }))
     await until(() => untapped.includes("p1"))
+  })
+
+  it("another minmux: found, asks for access (keys), opens a pane, types, gets output", async () => {
+    host.setPanes({
+      tabs: [{ id: "t", title: "t" }],
+      panes: [{ id: "p1", tab: "t", title: "a", kind: "shell", status: "idle", started: true }],
+      stale: false,
+    })
+    const got: FromClient[] = []
+    const client = createPeerClient({
+      post: (m) => got.push(m),
+      ports: [port],
+      ownPort: 1,
+      timing: { pendingPoll: 20 },
+      tailnet: async () => ({
+        self: { ok: false, reason: "stopped" },
+        peers: [],
+      }),
+    })
+    // No tailnet: nothing found.
+    client.handle({ t: "list", on: true })
+    await new Promise((r) => setTimeout(r, 50))
+    expect(client.machines()).toEqual([])
+    client.stop()
+
+    const c = createPeerClient({
+      post: (m) => got.push(m),
+      ports: [port],
+      ownPort: 1,
+      timing: { pendingPoll: 20 },
+      tailnet: async () => ({
+        self: {
+          ok: true,
+          self: {
+            userId: ME,
+            nodeId: "self",
+            dnsName: "",
+            shortName: "",
+            label: "me",
+            ips: ["127.0.0.1"],
+            tagged: false,
+            certDomains: [],
+          },
+        },
+        peers: [{ dnsName: "", label: "mac", host: "127.0.0.1", self: false }],
+      }),
+    })
+    const key = `127.0.0.1:${port}`
+    const last = () =>
+      (got.filter((m) => m.t === "machines").at(-1) as Extract<FromClient, { t: "machines" }>)
+        ?.machines[0]
+    try {
+      c.handle({ t: "tokens", tokens: {} })
+      c.handle({ t: "list", on: true })
+      await until(() => last()?.state === "new")
+      expect(last()).toMatchObject({ key, label: "mac" })
+      c.handle({ t: "pair", key })
+      await until(() => got.some((m) => m.t === "token" && m.token))
+      expect(table.list()[0]).toMatchObject({ permission: "keys" }) // another minmux types in terminals
+      await until(() => last()?.state === "connected" && !!last()?.panes?.panes.length, 5000)
+      expect(last()?.permission).toBe("keys")
+
+      c.handle({ t: "open", sid: "s1", key, pane: "p1" })
+      await until(() => got.some((m) => m.t === "snap" && m.sid === "s1"))
+      expect(got.find((m) => m.t === "snap")).toMatchObject({ cols: 40, rows: 5 })
+      host.tap({ t: "tout", pane: "p1", epoch: 1, offset: 5, data: " world" })
+      await until(() => got.some((m) => m.t === "out" && m.data === " world"))
+      host.tap({ t: "tsize", pane: "p1", cols: 60, rows: 8 })
+      await until(() => got.some((m) => m.t === "size" && m.cols === 60))
+      c.handle({ t: "seen" })
+      c.handle({ t: "keys", sid: "s1", data: "x" })
+      await until(() => keys.length === 1)
+      expect(keys[0]).toBe('p1:"x"')
+      c.handle({ t: "keys", sid: "nope", data: "y" }) // no such surface: nothing
+      c.handle({ t: "close", sid: "s1" })
+      await until(() => untapped.includes("p1"))
+
+      // Removed on that computer: the client forgets its token and says so.
+      c.handle({ t: "open", sid: "s2", key, pane: "p1" })
+      await until(() => got.filter((m) => m.t === "snap").length >= 2)
+      const id = table.list()[0]!.id
+      table.revoke(id)
+      host.drop(id, "revoked")
+      await until(() => got.some((m) => m.t === "token" && m.token === null))
+      await until(() => last()?.state === "new")
+      expect(got.some((m) => m.t === "note" && /removed/.test(m.text))).toBe(true)
+      c.handle({ t: "forget", key })
+      c.handle({ t: "list", on: false })
+    } finally {
+      c.stop()
+    }
   })
 
   it("terminal: a device that falls behind is skipped, then sent a fresh screen", async () => {

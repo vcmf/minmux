@@ -15,6 +15,7 @@ export default defineConfig({
           "fs-worker": "electron/fs-worker.ts",
           "sessions-worker": "electron/sessions-worker.ts",
           "remote-host": "electron/remote-host.ts",
+          "remote-client": "electron/remote-client.ts",
         },
       },
     },

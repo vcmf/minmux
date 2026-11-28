@@ -1,5 +1,5 @@
 import type { ViewKind } from "./view-tabs"
-import type { PaneNode, RemoteRef, Session, Tab } from "../types"
+import type { PaneNode, PeerRef, RemoteRef, Session, Tab } from "../types"
 import type { ObjectEntry, FolderView } from "./folder-entries"
 import { parseRemoteRef, sshLabel } from "./ssh-validate"
 import { parseReopen, reopenFor, type ReopenCwd } from "./remote-reports"
@@ -36,6 +36,8 @@ interface PersistedSession {
   // An ssh session's verified folder, reopened after a relaunch (integrated hosts only).
   // Older builds ignore it.
   reopen?: ReopenCwd
+  // A remote surface (another minmux's pane). Older builds ignore it and open a local shell.
+  peer?: PeerRef
 }
 
 /** A leaf as written: its terminals, the visible one, and the legacy `sessionId` mirror. */
@@ -134,6 +136,7 @@ export function serializeWorkspace(state: WorkspaceState): PersistedWorkspace {
             }
           : {}),
       ...(reopenFor(s) ? { reopen: reopenFor(s) } : {}),
+      ...(s.peer ? { peer: { key: s.peer.key, pane: s.peer.pane, machine: s.peer.machine } } : {}),
     })),
     ...(state.rightPanelWidth !== undefined ? { rightPanelWidth: state.rightPanelWidth } : {}),
   }
@@ -196,6 +199,16 @@ const UNAVAILABLE_REMOTE = (v: unknown): RemoteRef => ({
   env: "native",
 })
 
+/** A saved remote surface's pane, if it still reads as one. */
+export function restorePeer(v: unknown): PeerRef | undefined {
+  if (!v || typeof v !== "object") return undefined
+  const o = v as Record<string, unknown>
+  const ok = (x: unknown, max: number): x is string =>
+    typeof x === "string" && x.length > 0 && x.length <= max
+  if (!ok(o.key, 300) || !/:\d{1,5}$/.test(o.key) || !ok(o.pane, 200)) return undefined
+  return { key: o.key, pane: o.pane, machine: ok(o.machine, 200) ? o.machine : o.key }
+}
+
 /** Rebuild store state from a parsed workspace; null if malformed/empty. */
 export function deserializeWorkspace(input: unknown): WorkspaceState | null {
   if (!input || typeof input !== "object") return null
@@ -214,6 +227,11 @@ export function deserializeWorkspace(input: unknown): WorkspaceState | null {
       status: "idle",
       unread: false,
       cwd: typeof p.cwd === "string" ? p.cwd : undefined,
+    }
+    const peer = restorePeer(p.peer)
+    if (peer) {
+      sessions[p.id]!.peer = peer
+      delete sessions[p.id]!.cwd // its folder is on the other machine
     }
     if (p.remote !== undefined) {
       // A remote that no longer validates (e.g. from a newer build) is still remote: main

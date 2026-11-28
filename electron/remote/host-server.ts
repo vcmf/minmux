@@ -302,7 +302,15 @@ export function createHostServer(d: HostServerDeps) {
     }
     if (req.method === "POST" && p === "/api/approve") {
       if (!fromOwnPage(req.headers)) return send(res, 403, "cross-site")
-      const r = await rpc({ op: "approve", nodeId: peer.nodeId, name: peer.name })
+      // Another minmux says so (it shows the code in its own window; the dialog says what it gets).
+      let machine = false
+      try {
+        machine =
+          (JSON.parse((await readBody(req)) || "{}") as { machine?: unknown }).machine === true
+      } catch {
+        // a page's empty body
+      }
+      const r = await rpc({ op: "approve", nodeId: peer.nodeId, name: peer.name, machine })
       return json(res, 200, "id" in r ? { pending: r.id } : { error: r.error })
     }
     const pend = /^\/api\/pending\/([0-9a-f]{32})$/.exec(p)

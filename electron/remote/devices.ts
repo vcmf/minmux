@@ -27,6 +27,7 @@ export interface Device {
   addedAt: number
   lastSeen: number
   pinFails: number
+  machine?: true // another minmux (it types in terminals: "keys" when allowed)
 }
 
 export type { DeviceView }
@@ -46,6 +47,7 @@ interface Pending {
   name: string
   code: string
   at: number
+  machine?: boolean
   decision?: "allow" | "view" | "deny"
   token?: string // set on approval, handed out once
   deviceId?: string // the device the approval created
@@ -174,6 +176,7 @@ export class DeviceTable {
   createPending(
     nodeId: string,
     name: string,
+    machine = false,
   ): { id: string; code: string; existing?: boolean } | "limited" | "readonly" {
     if (this.readOnly) return "readonly"
     const now = this.now()
@@ -188,7 +191,7 @@ export class DeviceTable {
     const id = this.random(16).toString("hex")
     const bytes = this.random(4)
     const code = [...bytes].map((b) => CODE_ALPHABET[b % CODE_ALPHABET.length]).join("")
-    this.pending.set(id, { id, nodeId, name, code, at: now })
+    this.pending.set(id, { id, nodeId, name, code, at: now, ...(machine ? { machine } : {}) })
     return { id, code }
   }
 
@@ -212,7 +215,9 @@ export class DeviceTable {
       id,
       nodeId: p.nodeId,
       name,
-      permission: decision === "view" ? "view" : "send",
+      // Another minmux opens terminals: Allow lets it type in them.
+      permission: decision === "view" ? "view" : p.machine ? "keys" : "send",
+      ...(p.machine ? { machine: true as const } : {}),
       tokenHash: sha256(token),
       addedAt: now,
       lastSeen: now,

@@ -2,7 +2,7 @@ import { create, type StateCreator } from "zustand"
 import { leavingView, withView, withoutView, type ViewKind } from "./lib/view-tabs"
 import { moveTo } from "./lib/tab-order"
 import { moveTerminal as moveTerminalPure, type GroupDrop } from "./lib/group-move"
-import type { Session, ShellOption, SshHost, Tab } from "./types"
+import type { PeerRef, Session, ShellOption, SshHost, Tab } from "./types"
 import type { PrRef } from "./lib/pr-detail"
 import {
   addSurface,
@@ -329,6 +329,8 @@ export interface AppState {
   openFolderInSplit: (cwd: string, paneId?: string, host?: boolean) => void
   splitPaneAt: (paneId: string, cwd: string) => void // split beside that pane (its shell); not "seen"
   newSurface: (fallback?: ShellOption) => void // new terminal tab in the focused pane
+  // Another minmux's pane as a terminal tab in the focused pane (or the one already showing it).
+  openPeer: (peer: PeerRef, title: string) => void
   closeSurface: (tabId: string, sessionId: string) => void // one terminal; last one closes the pane
   closePane: (tabId: string, paneId: string) => void // the pane with all its terminals
   requestClosePane: (tabId: string, paneId: string) => void // confirms first if several terminals
@@ -571,6 +573,7 @@ const SHOWS_TERMINALS = [
   "splitActive",
   "openFolderInSplit",
   "splitPaneAt",
+  "openPeer",
   "newSurface",
   "resumeInSplit",
   "moveTerminal",
@@ -1235,6 +1238,38 @@ export const useStore = create<AppState>()(
           tabs: replaceTab(state.tabs, tab.id, (t) => withFocus(t, session.id, root)),
         }
         return { ...next, ...hintFor(state, shell, next) }
+      }),
+
+    openPeer: (peer, title) =>
+      set((state) => {
+        // Already open: show that one (a pane shows in one surface here).
+        for (const t of state.tabs) {
+          const s = Object.values(state.sessions).find(
+            (x) => x.peer?.key === peer.key && x.peer.pane === peer.pane && findPane(t.root, x.id),
+          )
+          if (s)
+            return {
+              activeTabId: t.id,
+              tabs: replaceTab(state.tabs, t.id, (tab) => withFocus(tab, s.id, tab.root)),
+            }
+        }
+        const tab = state.tabs.find((t) => t.id === state.activeTabId)
+        const pane = tab && findPane(tab.root, tab.activeEntryId)
+        if (!tab || !pane) return {}
+        const session: Session = {
+          id: newId(),
+          title: `${title} · ${peer.machine}`,
+          command: "",
+          args: [],
+          status: "idle",
+          unread: false,
+          peer: { ...peer },
+        }
+        const root = addSurface(tab.root, pane.id, session.id)
+        return {
+          sessions: { ...state.sessions, [session.id]: session },
+          tabs: replaceTab(state.tabs, tab.id, (t) => withFocus(t, session.id, root)),
+        }
       }),
 
     closeSurface: (tabId, sessionId) =>

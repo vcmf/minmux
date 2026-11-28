@@ -160,3 +160,52 @@ export function runCli(cli: string, args: string[], timeoutMs = 5000): Promise<s
     )
   })
 }
+
+/** Another machine of the tailnet, as `status --json` lists it. */
+export interface TailnetPeer {
+  dnsName: string
+  label: string // short MagicDNS name, else its host name
+  host: string // what to connect to: the MagicDNS name, else the Tailscale IPv4
+  self: boolean // this machine (another minmux profile can run here)
+}
+
+// Phones and tablets run no minmux: not probed.
+const MOBILE = new Set(["ios", "android"])
+
+/** Machines that may run a minmux of this user's: online, untagged, same user, this one too. */
+export function peersOf(raw: string, self: SelfNode): TailnetPeer[] {
+  let o: Record<string, unknown>
+  try {
+    o = JSON.parse(raw) as Record<string, unknown>
+  } catch {
+    return []
+  }
+  const host = (dns: string, ips: string[]) =>
+    dns || ips.find((a) => !a.includes(":")) || (ips[0] ? `[${ips[0]}]` : "")
+  const out: TailnetPeer[] = []
+  if (!self.tagged) {
+    out.push({
+      dnsName: self.dnsName,
+      label: self.label,
+      host: host(self.dnsName, self.ips),
+      self: true,
+    })
+    const peers = o.Peer && typeof o.Peer === "object" ? Object.values(o.Peer) : []
+    for (const v of peers) {
+      if (!v || typeof v !== "object") continue
+      const p = v as Record<string, unknown>
+      if (p.Online !== true || str(p.UserID) !== self.userId || strs(p.Tags).length) continue
+      if (MOBILE.has(str(p.OS).toLowerCase())) continue
+      const dnsName = trimDot(str(p.DNSName))
+      const h = host(dnsName, strs(p.TailscaleIPs))
+      if (!h) continue
+      out.push({
+        dnsName,
+        label: firstLabel(dnsName) || str(p.HostName) || h,
+        host: h,
+        self: false,
+      })
+    }
+  }
+  return out
+}
