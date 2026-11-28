@@ -1,4 +1,5 @@
-import { isFocusReport, isTerminalReply } from "../lib/terminal-replies"
+import { useDriven } from "../lib/driven-store"
+import { isFocusReport, isTerminalReply, mouseReport } from "../lib/terminal-replies"
 import { Terminal, type ILinkHandler } from "@xterm/xterm"
 import { HINT_AFTER_MS, hintDue, launchedAgent } from "../lib/agent-hint"
 import { paneLeads, type AgentKind } from "../lib/agent-graph"
@@ -112,6 +113,10 @@ interface Entry {
   offExit?: () => void
   offNonce?: () => void
   offPinned?: () => void
+  offDriven?: () => void
+  drove?: Grid // a remote surface: the grid it last asked the other machine for
+  driveTimer?: ReturnType<typeof setTimeout> // …asked once resizing settles (one per drag)
+  drivenHere?: boolean // another machine sizes this pane (pinned to its size until typing)
   pinned?: Grid // a remote surface: the remote pane's grid, taken instead of fitting
   parsing?: number // a remote surface: output written, not parsed yet (its replies are dropped)
   remote?: RemotePhase // ssh panes only: where the connection is (rules: lib/remote-connect)
@@ -768,7 +773,7 @@ function spawn(session: Session, entry: Entry) {
   const store = useStore.getState()
 
   entry.offData = ipc.onPtyData(session.id, (bytes) => {
-    if (session.peer) {
+    if (session.peer || entry.drivenHere) {
       // Counted so xterm's replies to this output can be told from typing (see onData).
       entry.parsing = (entry.parsing ?? 0) + 1
       term.write(bytes, () => void (entry.parsing = (entry.parsing ?? 1) - 1))
@@ -793,13 +798,54 @@ function spawn(session: Session, entry: Entry) {
     }, IDLE_MS)
   })
 
+  if (!session.peer) {
+    // Another machine sizes this pane while someone works there: shown at that size (pinned),
+    // until typing here takes it back (main) and it fits its box again.
+    entry.offDriven = ipc.onPtyDriven(session.id, (size) => {
+      term.write("", () => {
+        if (entries.get(session.id) !== entry) return
+        useDriven.getState().set(session.id, size?.by ?? null)
+        if (size) {
+          entry.drivenHere = true
+          entry.pinned = { cols: size.cols, rows: size.rows }
+          entry.host.classList.add("pinned")
+          try {
+            term.resize(size.cols, size.rows)
+          } catch {
+            // an invalid size: keep the grid
+          }
+        } else if (entry.pinned) {
+          entry.drivenHere = false
+          entry.pinned = undefined
+          entry.host.classList.remove("pinned")
+          entry.lastGrid = undefined // the PTY has the other size: tell it ours again
+          // Parked: its pane's grid (a hidden surface), or its own once shown (lastGrid is
+          // cleared, so showing it resizes the PTY), never the parking lot's box. On screen: its
+          // box, and the hidden surfaces behind it, which kept their grid while it was pinned.
+          if (entry.host.parentElement !== parking) syncSize(session.id, entry)
+          TerminalManager.syncHiddenSizes()
+        }
+      })
+    })
+  }
+
   if (session.peer) {
+    // Focused, it asks the other machine for the grid its box fits (see syncSize); blurred, it
+    // stops asking (the other machine keeps that size until someone types there).
+    term.textarea?.addEventListener("focus", () => driveRemote(session.id, entry))
+    term.textarea?.addEventListener("blur", () => {
+      clearTimeout(entry.driveTimer)
+      entry.drove = undefined
+      ipc.peerUndrive(session.id)
+    })
     // A remote surface shows the remote pane at its own size (applied after what's written).
     entry.offPinned = ipc.onPtyPinned(session.id, (cols, rows) => {
       term.write("", () => {
         if (entries.get(session.id) !== entry) return
         entry.pinned = { cols, rows }
         entry.host.classList.add("pinned")
+        // Not the size it asked for (the other machine took it back): asked again on focus.
+        if (entry.drove && gridChanged(entry.drove, cols, rows)) entry.drove = undefined
         try {
           if (term.cols !== cols || term.rows !== rows) term.resize(cols, rows)
         } catch {
@@ -906,6 +952,14 @@ function spawn(session: Session, entry: Entry) {
     }
     // A remote surface: the pane's own terminal over there answers its program already.
     if (session.peer && (isFocusReport(data) || (entry.parsing && isTerminalReply(data)))) return
+    // Sized by another machine: a real key here takes the size back (xterm's replies to the
+    // program's queries aren't typing).
+    // (Moving the pointer over a mouse-mode program, or scrolling, isn't working there.)
+    const reply = !!entry.parsing && isTerminalReply(data)
+    if (entry.drivenHere && !reply && !isFocusReport(data) && mouseReport(data) !== "move") {
+      entry.drivenHere = false
+      ipc.ptyTakeBack(session.id)
+    }
     ipc.ptyWrite(session.id, data)
   })
 
@@ -1268,8 +1322,27 @@ function failResume(id: string, entry: Entry, exitCode?: number) {
   if (r) useStore.getState().setResume(id, { phase: "failed", plan: r.plan, exitCode })
 }
 
+const DRIVE_SETTLE_MS = 120 // asked once resizing settles: each ask resizes a PTY over there
+
+/** A remote surface in use asks the other machine for the grid its box fits. */
+function driveRemote(id: string, entry: Entry) {
+  clearTimeout(entry.driveTimer)
+  entry.driveTimer = setTimeout(() => {
+    if (!entry.term.textarea || document.activeElement !== entry.term.textarea) return
+    const dims = entry.fit.proposeDimensions()
+    if (!dims || !Number.isFinite(dims.cols) || !Number.isFinite(dims.rows)) return
+    if (!gridChanged(entry.drove, dims.cols, dims.rows)) return
+    entry.drove = { cols: dims.cols, rows: dims.rows }
+    ipc.peerDrive(id, dims.cols, dims.rows)
+  }, DRIVE_SETTLE_MS)
+}
+
 function syncSize(id: string, entry: Entry) {
-  if (entry.pinned) return // a remote surface: the remote pane's size, never its box's
+  if (entry.pinned) {
+    // A remote surface takes the other pane's size; in use, it asks for its own box's.
+    if (useStore.getState().sessions[id]?.peer) driveRemote(id, entry)
+    return // pinned: never its box's size (and never this PTY resized)
+  }
   try {
     entry.fit.fit()
     const { cols, rows } = entry.term
@@ -1614,6 +1687,9 @@ export const TerminalManager = {
     entry.offExit?.()
     entry.offNonce?.()
     entry.offPinned?.()
+    entry.offDriven?.()
+    clearTimeout(entry.driveTimer)
+    useDriven.getState().set(id, null)
     ipc.ptyKill(id)
     entry.term.dispose()
     entry.host.remove()

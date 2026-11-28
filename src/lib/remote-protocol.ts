@@ -55,6 +55,10 @@ export type ClientMessage =
   | { t: "send"; pane: string; text: string; id: string } // a message for the pane's agent or shell
   | { t: "term"; pane: string; on: boolean } // follow (or stop) the pane's terminal
   | { t: "keys"; pane: string; data: string } // raw keys (devices allowed them)
+  // Another minmux showing the pane sets its size while you work there ("keys" devices only);
+  // the desktop's own typing takes it back.
+  | { t: "drive"; pane: string; cols: number; rows: number }
+  | { t: "release"; pane: string }
   | { t: "dialog"; pane: string; waitId?: string } // the dialog as its screen shows it
   | { t: "answer"; pane: string; waitId: string; n: number; seen: string } // seen: the dialog shown
 
@@ -143,6 +147,9 @@ export type PendingState =
 
 const MAX_MESSAGE = 64 * 1024
 
+const isGrid = (v: unknown, min: number, max: number): v is number =>
+  typeof v === "number" && Number.isInteger(v) && v >= min && v <= max
+
 /** Parses one client frame; null for anything malformed or unknown. */
 export function parseClientMessage(raw: unknown): ClientMessage | null {
   if (typeof raw !== "string" || raw.length > MAX_MESSAGE) return null
@@ -186,6 +193,17 @@ export function parseClientMessage(raw: unknown): ClientMessage | null {
         m.data.length > 0 &&
         m.data.length <= 1024
         ? { t: "keys", pane: m.pane, data: m.data }
+        : null
+    case "drive":
+      return typeof m.pane === "string" &&
+        m.pane.length <= 200 &&
+        isGrid(m.cols, 20, 500) &&
+        isGrid(m.rows, 5, 200)
+        ? { t: "drive", pane: m.pane, cols: m.cols, rows: m.rows }
+        : null
+    case "release":
+      return typeof m.pane === "string" && m.pane.length <= 200
+        ? { t: "release", pane: m.pane }
         : null
     case "dialog":
       return typeof m.pane === "string" && m.pane.length <= 200

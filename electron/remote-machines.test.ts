@@ -112,6 +112,14 @@ describe("remote machines (main)", () => {
     rm.write("s1", "ls\r")
     expect(p.sent.slice(-2)).toEqual([{ t: "keys", sid: "s1", data: "ls\r" }, { t: "seen" }])
     rm.write("nope", "x") // not a surface: nothing
+    rm.drive("s1", 90, 30)
+    expect(p.sent.at(-1)).toEqual({ t: "drive", sid: "s1", cols: 90, rows: 30 })
+    rm.drive("s1", 900, 300) // capped
+    expect(p.sent.at(-1)).toEqual({ t: "drive", sid: "s1", cols: 500, rows: 200 })
+    const n = p.sent.length
+    rm.drive("s1", 3, 30) // too small: nothing
+    rm.drive("nope", 90, 30)
+    expect(p.sent.length).toBe(n)
     rm.kill("s1")
     expect(p.sent.at(-1)).toEqual({ t: "close", sid: "s1" })
     rm.kill("s1") // twice: nothing
@@ -161,8 +169,8 @@ describe("remote machines (main)", () => {
         focused: () => focused,
       })
       rm2.list(true)
-      await vi.advanceTimersByTimeAsync(10)
       const p = ps[0]!
+      for (let i = 0; i < 100 && !p.sent.length; i++) await vi.advanceTimersByTimeAsync(10)
       expect(p.sent[0]).toEqual({ t: "port", own: 7458 })
       p.emit({
         t: "machines",
@@ -176,8 +184,8 @@ describe("remote machines (main)", () => {
       expect(p.killed).toBe(true)
       // A surface's output while the window has focus: "seen", at most once a minute.
       rm2.spawn(new FakeSender(), "s1", { key: "k:1", pane: "p" })
-      await vi.advanceTimersByTimeAsync(10)
       const q = ps[1]!
+      for (let i = 0; i < 100 && !q.sent.length; i++) await vi.advanceTimersByTimeAsync(10)
       focused = true
       q.emit({ t: "out", sid: "s1", data: "a" })
       q.emit({ t: "out", sid: "s1", data: "b" })

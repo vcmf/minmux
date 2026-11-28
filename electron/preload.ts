@@ -75,6 +75,20 @@ const api = {
     ipcRenderer.on(channel, listener)
     return () => ipcRenderer.removeListener(channel, listener)
   },
+  onPtyDriven: (
+    id: string,
+    cb: (size: { cols: number; rows: number; by: string } | null) => void,
+  ) => {
+    const channel = `pty:driven:${id}`
+    const listener = (_e: unknown, cols: number | null, rows?: number, by?: string) =>
+      cb(cols === null ? null : { cols, rows: rows ?? 24, by: by ?? "" })
+    ipcRenderer.on(channel, listener)
+    return () => ipcRenderer.removeListener(channel, listener)
+  },
+  peerDrive: (id: string, cols: number, rows: number) =>
+    ipcRenderer.send("peer:drive", id, cols, rows),
+  peerUndrive: (id: string) => ipcRenderer.send("peer:undrive", id),
+  ptyTakeBack: (id: string) => ipcRenderer.send("pty:take-back", id),
   machinesList: (on: boolean) => ipcRenderer.send("machines:list", on),
   machinesPair: (key: string) => ipcRenderer.send("machines:pair", key),
   machinesForget: (key: string) => ipcRenderer.send("machines:forget", key),

@@ -121,11 +121,13 @@ interface Machine {
   permission?: Permission
   panes?: RemotePanes
   pairing?: boolean
+  drove?: Set<string> // panes this link set the size of (released when their last surface goes)
 }
 
 interface Surface {
   key: string
   pane: string
+  drive?: { cols: number; rows: number } // the size it last asked for (asked again on a new link)
 }
 
 export function createPeerClient(d: PeerClientDeps) {
@@ -212,6 +214,7 @@ export function createPeerClient(d: PeerClientDeps) {
       case "open":
         m.state = "connected"
         m.open = true
+        m.drove = new Set() // the old socket's close released its own
         // A fresh link: follow every pane a surface shows again (each starts with a clean screen).
         for (const pane of new Set(
           [...surfaces.values()].filter((x) => x.key === m.found.key).map((x) => x.pane),
@@ -254,6 +257,11 @@ export function createPeerClient(d: PeerClientDeps) {
     report()
   }
 
+  function sendDrive(m: Machine, pane: string, size: { cols: number; rows: number }) {
+    m.link?.send({ t: "drive", pane, ...size })
+    ;(m.drove ??= new Set()).add(pane)
+  }
+
   function note(m: Machine, text: string) {
     for (const [sid, s] of surfaces) if (s.key === m.found.key) d.post({ t: "note", sid, text })
   }
@@ -273,6 +281,10 @@ export function createPeerClient(d: PeerClientDeps) {
         const was = m.permission
         m.permission = msg.permission
         if (msg.permission !== "keys" && was !== msg.permission) note(m, VIEW_ONLY)
+        // A size asked for before the link (or the permission) was there: asked now.
+        if (msg.permission === "keys")
+          for (const s of surfaces.values())
+            if (s.key === m.found.key && s.drive) sendDrive(m, s.pane, s.drive)
         return report()
       }
       case "panes":
@@ -493,6 +505,9 @@ export function createPeerClient(d: PeerClientDeps) {
         if (!m) return
         const still = [...surfaces.values()].some((x) => x.key === s.key && x.pane === s.pane)
         if (!still && m.open) m.link?.send({ t: "term", pane: s.pane, on: false })
+        // (Asked for while focused: the blur before a close click already cleared `drive`.)
+        if (!still && m.open && m.drove?.delete(s.pane))
+          m.link?.send({ t: "release", pane: s.pane })
         sync(m)
         return report()
       }
@@ -500,6 +515,22 @@ export function createPeerClient(d: PeerClientDeps) {
         const s = surfaces.get(msg.sid)
         const m = s && machines.get(s.key)
         if (s && m?.open) m.link?.send({ t: "term", pane: s.pane, on: true })
+        return
+      }
+      case "drive": {
+        const s = surfaces.get(msg.sid)
+        const m = s && machines.get(s.key)
+        if (!s) return
+        // The one in use: no other surface of that pane asks for its size on a reconnect.
+        for (const x of surfaces.values())
+          if (x.key === s.key && x.pane === s.pane) x.drive = undefined
+        s.drive = { cols: msg.cols, rows: msg.rows }
+        if (m?.open && m.permission === "keys") sendDrive(m, s.pane, s.drive)
+        return
+      }
+      case "undrive": {
+        const s = surfaces.get(msg.sid)
+        if (s) s.drive = undefined
         return
       }
       case "keys": {

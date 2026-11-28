@@ -58,6 +58,9 @@ export type FromHost =
   | { t: "clients"; clients: ClientInfo[] }
   | { t: "touch"; deviceId: string }
   | { t: "untap"; pane: string } // nobody watches its terminal any more
+  // Another minmux sets a pane's size (keys devices), or stops (pane omitted: all of its panes).
+  | { t: "drive"; deviceId: string; name: string; pane: string; cols: number; rows: number }
+  | { t: "release"; deviceId: string; pane?: string }
   | { t: "rpc"; id: number; call: RpcCall }
 
 /** Main → worker. */

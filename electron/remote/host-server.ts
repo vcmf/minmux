@@ -367,6 +367,7 @@ export function createHostServer(d: HostServerDeps) {
     watching: Set<string> // panes whose chat feed it follows
     terms: Set<string> // panes whose terminal it follows
     looking: Set<string> // panes with a dialog look in flight
+    driving: Set<string> // panes it has set the size of (released when it goes)
   }
   const clients = new Set<Client>()
   const wss = new WebSocketServer({
@@ -417,6 +418,7 @@ export function createHostServer(d: HostServerDeps) {
         watching: new Set(),
         terms: new Set(),
         looking: new Set(),
+        driving: new Set(),
       }
       clients.add(c)
       ws.on("pong", () => (c.lastPong = Date.now()))
@@ -425,6 +427,10 @@ export function createHostServer(d: HostServerDeps) {
         clients.delete(c)
         for (const pane of c.watching) unwatch(c, pane)
         for (const pane of c.terms) termOff(c, pane)
+        // Not a pane the same device drives from another socket (a reconnect beat this close).
+        for (const pane of c.driving)
+          if (![...clients].some((o) => o.deviceId === c.deviceId && o.driving.has(pane)))
+            post({ t: "release", deviceId: c.deviceId, pane })
         reportClients()
       })
       ws.on("error", () => ws.terminate())
@@ -501,6 +507,16 @@ export function createHostServer(d: HostServerDeps) {
         deadline,
       })
       return ack(r.ok, r.reason)
+    }
+    if (m.t === "drive" || m.t === "release") {
+      if (c.permission !== "keys" || !panes.panes.some((p) => p.id === m.pane)) return
+      if (m.t === "release") {
+        c.driving.delete(m.pane)
+        return post({ t: "release", deviceId: c.deviceId, pane: m.pane })
+      }
+      for (const o of clients) if (o.deviceId === c.deviceId) o.driving.delete(m.pane)
+      c.driving.add(m.pane)
+      return post({ ...m, deviceId: c.deviceId, name: c.name })
     }
     if (m.t === "keys") {
       if (c.permission !== "keys") return

@@ -6,6 +6,7 @@ import { hostShellOption } from "../lib/ssh-hosts-ui"
 import { SSH_ERRORS } from "../lib/ssh-errors"
 import type { Session } from "../types"
 import { reduceAgentEvents } from "../lib/agent-graph"
+import { useDriven } from "../lib/driven-store"
 
 // A stand-in xterm: records writes and exposes the onData handler (jsdom has no canvas).
 const terms: FakeTerminal[] = []
@@ -85,6 +86,9 @@ vi.mock("@xterm/xterm", () => ({ Terminal: FakeTerminal }))
 vi.mock("@xterm/addon-fit", () => ({
   FitAddon: class {
     fit() {}
+    proposeDimensions() {
+      return { cols: 80, rows: 24 }
+    }
   },
 }))
 vi.mock("@xterm/addon-web-links", () => ({ WebLinksAddon: class {} }))
@@ -1472,6 +1476,85 @@ describe("TerminalManager — a remote surface (another minmux's pane)", () => {
     const resize = vi.spyOn(localTerm, "resize")
     TerminalManager.syncHiddenSizes()
     expect(resize).not.toHaveBeenCalled()
+  })
+})
+
+describe("TerminalManager — sized by another machine", () => {
+  it("shows the pane at that size with a chip; back to its box when released", async () => {
+    st().newTab(testShell)
+    const id = st().tabs[0]!.activeSessionId
+    let driven: ((s: { cols: number; rows: number; by: string } | null) => void) | undefined
+    vi.mocked(ipc.onPtyDriven).mockImplementation((_id, cb) => ((driven = cb), () => {}))
+    TerminalManager.ensureRunning(st().sessions[id] as Session)
+    await flush()
+    const t = terms[terms.length - 1]!
+    const resize = vi.spyOn(t, "resize")
+    driven!({ cols: 50, rows: 20, by: "linux" })
+    expect(resize).toHaveBeenCalledWith(50, 20)
+    expect(useDriven.getState().by[id]).toBe("linux")
+    vi.mocked(ipc.ptyResize).mockClear()
+    TerminalManager.sizeHidden(id, 900, 600) // its box: not while driven
+    expect(ipc.ptyResize).not.toHaveBeenCalled()
+    driven!(null)
+    expect(useDriven.getState().by[id]).toBeUndefined()
+    driven!(null) // twice: nothing more
+    TerminalManager.dispose(id)
+  })
+
+  it("a remote surface in use asks for the grid its box fits", async () => {
+    st().newTab(testShell)
+    st().openPeer({ key: "linux:7420", pane: "p9", machine: "linux" }, "zsh")
+    const id = st().tabs[0]!.activeEntryId
+    let pinned: ((c: number, r: number) => void) | undefined
+    vi.mocked(ipc.onPtyPinned).mockImplementation((_id, cb) => ((pinned = cb), () => {}))
+    TerminalManager.ensureRunning(st().sessions[id] as Session)
+    await flush()
+    const t = terms[terms.length - 1]!
+    pinned!(120, 40)
+    document.body.appendChild(t.textarea)
+    t.textarea.focus()
+    const settle = () => new Promise((r) => setTimeout(r, 150))
+    TerminalManager.sizeHidden(id, 600, 400)
+    TerminalManager.sizeHidden(id, 610, 400) // a drag: asked once it settles
+    await settle()
+    expect(ipc.peerDrive).toHaveBeenCalledTimes(1)
+    TerminalManager.sizeHidden(id, 600, 400) // same grid: not asked again
+    await settle()
+    expect(ipc.peerDrive).toHaveBeenCalledTimes(1)
+    // The other machine took its size back: a refocus asks again.
+    pinned!(160, 45)
+    t.textarea.blur()
+    expect(ipc.peerUndrive).toHaveBeenCalledWith(id)
+    t.textarea.focus()
+    await settle()
+    expect(ipc.peerDrive).toHaveBeenCalledTimes(2)
+    t.textarea.remove()
+    TerminalManager.dispose(id)
+  })
+
+  it("sized by another machine: a real key takes it back, xterm's replies don't", async () => {
+    st().newTab(testShell)
+    const id = st().tabs[0]!.activeSessionId
+    let driven: ((s: { cols: number; rows: number; by: string } | null) => void) | undefined
+    vi.mocked(ipc.onPtyDriven).mockImplementation((_id, cb) => ((driven = cb), () => {}))
+    TerminalManager.ensureRunning(st().sessions[id] as Session)
+    await flush()
+    const t = terms[terms.length - 1]!
+    driven!({ cols: 50, rows: 20, by: "linux" })
+    // A reply while output is parsed, focus, pointer motion: no one typing.
+    let parsed: (() => void) | undefined
+    t.write = (_s: string, cb?: () => void) => void (parsed = cb)
+    const onData = vi.mocked(ipc.onPtyData).mock.calls.find((c) => c[0] === id)![1]
+    onData("\x1b[6n")
+    t.type("\x1b[12;1R")
+    t.type("\x1b[I")
+    t.type("\x1b[<35;3;4M")
+    expect(ipc.ptyTakeBack).not.toHaveBeenCalled()
+    parsed!()
+    t.type("\x1b[1;2R") // Shift+F3 with nothing parsing: a key
+    t.type("s")
+    expect(ipc.ptyTakeBack).toHaveBeenCalledTimes(1)
+    TerminalManager.dispose(id)
   })
 })
 

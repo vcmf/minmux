@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest"
-import { isFocusReport, isTerminalReply } from "./terminal-replies"
+import { isFocusReport, isTerminalReply, mouseReport } from "./terminal-replies"
 
 describe("terminal replies", () => {
   it("tells xterm's answers from typing", () => {
@@ -21,5 +21,16 @@ describe("terminal replies", () => {
     expect(isFocusReport("\x1b[I")).toBe(true)
     expect(isFocusReport("\x1b[O")).toBe(true)
     expect(isFocusReport("\x1b[A")).toBe(false)
+  })
+
+  it("mouse reports: a press is use; motion, wheel and releases aren't", () => {
+    expect(mouseReport("\x1b[<0;10;5M")).toBe("use")
+    expect(mouseReport("\x1b[<0;10;5m")).toBe("move") // release
+    expect(mouseReport("\x1b[<35;10;5M")).toBe("move") // motion
+    expect(mouseReport("\x1b[<64;10;5M")).toBe("move") // wheel
+    expect(mouseReport("\x1b[M" + String.fromCharCode(32, 40, 40))).toBe("use")
+    expect(mouseReport("\x1b[M" + String.fromCharCode(35, 40, 40))).toBe("move") // X10 release
+    expect(mouseReport("\x1b[M" + String.fromCharCode(96, 40, 40))).toBe("move") // wheel
+    expect(mouseReport("a")).toBeNull()
   })
 })

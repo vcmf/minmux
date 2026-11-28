@@ -318,6 +318,44 @@ describe("setupRemoteControl", () => {
     rc.dispose()
   })
 
+  it("drive: only a keys device sizes a pane; release ends it", async () => {
+    settings = JSON.stringify({ remote: { enabled: true } })
+    const drove: unknown[] = []
+    const released: unknown[] = []
+    const rc = setupRemoteControl({
+      dir: "/app/out/main",
+      configDir: () => cfg,
+      readSettings: () => settings,
+      profile: "",
+      window: () => null,
+      drive: (...a) => void drove.push(a),
+      release: (...a) => void released.push(a),
+    })
+    rc.apply()
+    const p = forks[0]!
+    p.emit({ t: "rpc", id: 1, call: { op: "approve", nodeId: "n1", name: "linux" } })
+    await vi.waitFor(async () => expect((await rc.view()).devices).toHaveLength(1))
+    const id = (await rc.view()).devices[0]!.id
+    p.emit({ t: "drive", deviceId: id, name: "linux", pane: "p1", cols: 90, rows: 30 })
+    await new Promise((r) => setTimeout(r, 20))
+    expect(drove).toEqual([]) // "send": no sizing
+    await rc.setPermission(id, "keys")
+    p.emit({ t: "drive", deviceId: id, name: "linux", pane: "p1", cols: 90, rows: 30 })
+    await vi.waitFor(() => expect(drove).toEqual([["p1", 90, 30, "linux", id]]))
+    p.emit({ t: "release", deviceId: id })
+    expect(released).toEqual([[id, undefined]])
+    // Lowered to view, or removed: it sizes nothing any more.
+    await rc.setPermission(id, "view")
+    expect(released.at(-1)).toEqual([id])
+    await rc.revoke(id)
+    expect(released.at(-1)).toEqual([id])
+    // Remote control turned off (the worker goes): its sockets can't release what they drove.
+    settings = JSON.stringify({ remote: { enabled: false } })
+    rc.apply()
+    await vi.waitFor(() => expect(released.at(-1)).toEqual([]))
+    rc.dispose()
+  })
+
   it("the tap: batches, resets and sizes go to the worker; its exit stops every tap", () => {
     settings = JSON.stringify({ remote: { enabled: true } })
     let untapped = 0
