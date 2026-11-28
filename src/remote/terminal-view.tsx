@@ -121,10 +121,12 @@ export function TerminalView({
           {KEYS.map((k) => (
             <button
               key={k.label}
+              className={k.label === "Enter" ? "enter" : ""}
+              aria-label={k.aria}
               disabled={!online}
               onClick={() => send({ t: "keys", pane: pane.id, data: k.data })}
             >
-              {k.label}
+              {k.short ?? k.label}
             </button>
           ))}
         </div>

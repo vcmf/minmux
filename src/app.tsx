@@ -14,6 +14,7 @@ import { PrDialog } from "./components/pr-dialog"
 import { FleetView } from "./components/fleet-view"
 import { FilePreview } from "./components/file-preview"
 import { CloseConfirmDialog } from "./components/close-confirm-dialog"
+import { ApprovalDialog } from "./components/approval-dialog"
 import { RightPanelResizer } from "./components/right-panel-resizer"
 import { useActiveWorkCwd, getActiveWsl } from "./lib/use-active-cwd"
 import {
@@ -808,6 +809,7 @@ function App() {
       {prDialogOpen && <PrDialog />}
       <FilePreview />
       <CloseConfirmDialog />
+      <ApprovalDialog />
     </div>
   )
 }

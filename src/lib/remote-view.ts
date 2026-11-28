@@ -37,3 +37,12 @@ export interface RemoteView {
   pinUnlockOff: boolean
   newerFile: boolean
 }
+
+/** A device asking in, shown in the window's dialog (no secrets: both screens show the code). */
+export interface ApprovalRequest {
+  id: number
+  name: string // the device (or the other machine)
+  code: string
+  machine: boolean // another minmux, not a phone's browser
+  expires: number // ms epoch: the request is denied then
+}

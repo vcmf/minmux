@@ -1,7 +1,7 @@
 import type { FileData, FileStamp } from "./file-tab"
 import type { Permission, RemotePanes } from "./remote-protocol"
 import type { MachineView } from "./remote-machines"
-import type { RemoteView } from "./remote-view"
+import type { ApprovalRequest, RemoteView } from "./remote-view"
 import type { ShellOption, SpawnOpts, SshHost } from "../types"
 import type { WslContext } from "./wsl"
 import type { AgentEvent, AgentKind } from "./agent-graph"
@@ -123,6 +123,11 @@ export interface Ipc {
   onRemoteChanged: (cb: () => void) => () => void
   remoteWanted: () => Promise<boolean> // a remote client is connected: push the pane list
   onRemoteWanted: (cb: (wanted: boolean) => void) => () => void
+  // A device asking in: the open requests, and the window's answer to one.
+  remoteApprovals: () => Promise<ApprovalRequest[]>
+  onRemoteApprovals: (cb: (list: ApprovalRequest[]) => void) => () => void
+  remoteApprovalShown: (id: number) => void
+  remoteApprove: (id: number, decision: Permission | "deny") => void
   remotePanes: (panes: RemotePanes) => void
   onRemoteTyped: (cb: (pane: string, device: string) => void) => () => void // a device typed here
   // Main asks a pane's terminal something (its paste mode, its visible lines); the reply by id.

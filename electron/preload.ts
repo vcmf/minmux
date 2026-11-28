@@ -1,7 +1,7 @@
 import type { MachineView } from "../src/lib/remote-machines"
 import { contextBridge, ipcRenderer } from "electron"
 import type { Permission, RemotePanes } from "../src/lib/remote-protocol"
-import type { RemoteView } from "../src/lib/remote-view"
+import type { ApprovalRequest, RemoteView } from "../src/lib/remote-view"
 import type { AgentEvent, AgentKind } from "../src/lib/agent-graph"
 import type { InstalledAgent } from "../src/lib/agent-kinds"
 import type { SessionMeta } from "../src/lib/session-color"
@@ -183,6 +183,15 @@ const api = {
     return () => ipcRenderer.removeListener("remote:changed", listener)
   },
   remoteWanted: () => ipcRenderer.invoke("remote:wanted") as Promise<boolean>,
+  remoteApprovals: () => ipcRenderer.invoke("remote:approvals") as Promise<ApprovalRequest[]>,
+  onRemoteApprovals: (cb: (list: ApprovalRequest[]) => void) => {
+    const listener = (_e: unknown, list: ApprovalRequest[]) => cb(list)
+    ipcRenderer.on("remote:approvals", listener)
+    return () => ipcRenderer.removeListener("remote:approvals", listener)
+  },
+  remoteApprovalShown: (id: number) => ipcRenderer.send("remote:approval-shown", id),
+  remoteApprove: (id: number, decision: Permission | "deny") =>
+    ipcRenderer.send("remote:approve", id, decision),
   onRemoteWanted: (cb: (wanted: boolean) => void) => {
     const listener = (_e: unknown, wanted: boolean) => cb(wanted)
     ipcRenderer.on("remote:wanted", listener)

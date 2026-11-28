@@ -5,7 +5,7 @@
 import type { AnswerRefusal, RemotePanes, SendRefusal } from "../../src/lib/remote-protocol"
 import type { ChatLead } from "../agents/chat-lead"
 import type { TermSnapshot } from "./term-mirror"
-import type { DeviceTable } from "./devices"
+import type { Decision, DeviceTable } from "./devices"
 import type {
   ClientInfo,
   FromHost,
@@ -24,7 +24,7 @@ export interface HostProc {
   kill(): boolean
 }
 
-export type Decision = "allow" | "view" | "deny"
+export type { Decision }
 
 export interface RemoteHostDeps {
   fork: () => HostProc

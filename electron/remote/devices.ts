@@ -37,6 +37,9 @@ export type AuthResult =
   | { state: "locked"; device: DeviceView; pin: boolean }
   | { state: "none" }
 
+/** The desktop's answer: a permission, "allow" for the usual one, or "deny". */
+export type Decision = Permission | "allow" | "deny"
+
 export type SetPinResult = "ok" | "invalid" | "readonly" | "error"
 
 export type UnlockResult = "ok" | "wrong" | "blocked" | "disabled" | "no-pin" | "unknown"
@@ -48,7 +51,7 @@ interface Pending {
   code: string
   at: number
   machine?: boolean
-  decision?: "allow" | "view" | "deny"
+  decision?: Decision
   token?: string // set on approval, handed out once
   deviceId?: string // the device the approval created
   taken?: boolean
@@ -199,7 +202,7 @@ export class DeviceTable {
   }
 
   /** The desktop's answer to an approval prompt. False when it expired meanwhile. */
-  decide(pendingId: string, decision: "allow" | "view" | "deny"): boolean {
+  decide(pendingId: string, decision: Decision): boolean {
     const now = this.now()
     this.dropOldPending(now)
     const p = this.pending.get(pendingId)
@@ -218,8 +221,8 @@ export class DeviceTable {
       id,
       nodeId: p.nodeId,
       name,
-      // Another minmux opens terminals: Allow lets it type in them.
-      permission: decision === "view" ? "view" : p.machine ? "keys" : "send",
+      // Allow: the usual permission (another minmux opens terminals: it types in them).
+      permission: decision === "allow" ? (p.machine ? "keys" : "send") : decision,
       ...(p.machine ? { machine: true as const } : {}),
       tokenHash: sha256(token),
       addedAt: now,

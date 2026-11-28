@@ -95,16 +95,17 @@ async function connect() {
 describe("RemoteApp", () => {
   it("lists panes by tab, with status, and opens one", async () => {
     await connect()
-    expect(screen.getByText("connected")).toBeInTheDocument()
+    expect(screen.getByText("live")).toBeInTheDocument()
+    expect(screen.getByRole("heading", { name: "mac" })).toBeInTheDocument()
     expect(screen.getByText("agent-fleet")).toBeInTheDocument()
-    expect(screen.getByText("Claude needs your permission")).toBeInTheDocument()
+    // The waiting pane: a card on top, and its row in its tab.
+    expect(screen.getAllByText("Claude needs your permission")).toHaveLength(2)
+    expect(screen.getByText(/Claude is asking$/)).toBeInTheDocument()
     expect(screen.getByText("not started on the desktop")).toBeInTheDocument()
     expect(screen.getByText("map-editor").closest("button")).toBeDisabled()
-    fireEvent.click(screen.getByRole("checkbox"))
-    expect(screen.getByText("Needs input")).toBeInTheDocument()
-    fireEvent.click(screen.getAllByText("agent-fleet")[0]!)
-    expect(screen.getByText(/Claude is asking:/)).toBeInTheDocument()
-    fireEvent.click(screen.getByText("‹ Panes"))
+    fireEvent.click(screen.getByText(/Claude is asking$/))
+    expect(screen.getByRole("region", { name: "Claude is asking" })).toBeInTheDocument()
+    fireEvent.click(screen.getByLabelText("Back to panes"))
     expect(screen.getByText("zsh")).toBeInTheDocument()
   })
 
@@ -112,10 +113,10 @@ describe("RemoteApp", () => {
     const ws = await connect()
     fireEvent.click(screen.getByText("zsh"))
     fireEvent.change(screen.getByLabelText("Message"), { target: { value: "ls" } })
-    fireEvent.click(screen.getByText("Send"))
+    fireEvent.click(screen.getByLabelText("Send"))
     const first = ws.sent.map((d) => JSON.parse(d)).find((m) => m.t === "send")
     expect(first).toMatchObject({ pane: "b", text: "ls" })
-    fireEvent.click(screen.getByText("‹ Panes"))
+    fireEvent.click(screen.getByLabelText("Back to panes"))
     act(() => ws.onclose?.())
     await waitFor(() => expect(FakeWs.all).toHaveLength(2), { timeout: 3000 })
     const ws2 = FakeWs.all[1]!
@@ -159,7 +160,7 @@ describe("RemoteApp", () => {
         ? { body: { state: "pending", code: "K7QM", machine: "mac" } }
         : { body: { state: "approved" } }
     render(<RemoteApp />)
-    expect(await screen.findByText("K7QM")).toBeInTheDocument()
+    expect(await screen.findByRole("img", { name: "K7QM" })).toBeInTheDocument()
     await waitFor(() => expect(FakeWs.all).toHaveLength(1), { timeout: 3000 })
     expect(location.search).toBe("")
   })

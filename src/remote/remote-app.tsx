@@ -91,10 +91,14 @@ function Approval({ id, onDone }: { id: string; onDone: () => void }) {
   if (!s) return <Screen title="Asking for access…" />
   if (s.state === "pending")
     return (
-      <Screen title={`Approve on ${s.machine}`}>
-        <p>{s.machine} is asking whether to let this device in. Check that it shows this code:</p>
-        <div className="code">{s.code}</div>
-        <p className="dim">Waiting for your answer there…</p>
+      <Screen title={`Approve on ${s.machine}`} art={<PairArt />} center>
+        <p className="lead">
+          minmux there is asking whether to let this device in. Check it shows the same code.
+        </p>
+        <Code code={s.code} />
+        <p className="waiting">
+          <span className="dot wait" /> Waiting for your answer there
+        </p>
       </Screen>
     )
   const again = <AskButton label="Ask again" />
@@ -210,16 +214,10 @@ function Connected() {
         </Screen>
       )
   }
-  const reconnecting = link.state === "reconnecting" || link.state === "connecting"
+  const machine = link.state === "open" ? link.machine : ""
   return (
     <div className="app">
-      <header className="bar">
-        <span className="machine">{link.state === "open" ? link.machine : "minmux"}</span>
-        <span className={`conn ${link.state === "open" ? "ok" : "down"}`}>
-          {link.state === "open" ? "connected" : "reconnecting…"}
-        </span>
-      </header>
-      {reconnecting && link.state === "reconnecting" && (
+      {link.state === "reconnecting" && (
         <div className="banner">
           {link.unreachable
             ? "Can't reach the computer. Is it awake, with minmux running and Tailscale on?"
@@ -229,25 +227,23 @@ function Connected() {
       {panes?.stale && (
         <div className="banner">The desktop window is closed: this list may be out of date.</div>
       )}
-      {panes ? (
-        <PaneList
-          panes={panes}
-          open={(pane, back) => (
-            <PaneView
-              pane={pane}
-              permission={permission}
-              online={link.state === "open"}
-              epoch={epoch}
-              send={send}
-              subscribe={subscribe}
-              outbox={outbox}
-              onBack={back}
-            />
-          )}
-        />
-      ) : (
-        <p className="dim pad">Loading panes…</p>
-      )}
+      <PaneList
+        panes={panes}
+        machine={machine}
+        online={link.state === "open"}
+        open={(pane, back) => (
+          <PaneView
+            pane={pane}
+            permission={permission}
+            online={link.state === "open"}
+            epoch={epoch}
+            send={send}
+            subscribe={subscribe}
+            outbox={outbox}
+            onBack={back}
+          />
+        )}
+      />
     </div>
   )
 }
@@ -319,89 +315,191 @@ function Locked({
 }
 
 const DOT: Record<RemotePane["status"], string> = { working: "run", waiting: "wait", idle: "idle" }
-const WORD: Record<RemotePane["status"], string> = {
-  working: "working",
-  waiting: "needs input",
-  idle: "idle",
+const AGENT: Record<string, string> = { claude: "Claude", codex: "Codex", opencode: "OpenCode" }
+
+/** The row's second line: why it waits, what runs there, or where. */
+function subline(p: RemotePane): string {
+  if (!p.started) return "not started on the desktop"
+  const agent = p.agent ? AGENT[p.agent] : ""
+  if (p.status === "waiting")
+    return p.detail ?? (agent ? `${agent} · waiting for you` : "needs input")
+  if (p.status === "working" && agent) return `${agent} · working`
+  return [agent, p.cwd].filter(Boolean).join(" · ")
 }
 
 function PaneList({
   panes,
+  machine,
+  online,
   open: render,
 }: {
-  panes: RemotePanes
+  panes: RemotePanes | null
+  machine: string
+  online: boolean
   open: (pane: RemotePane, back: () => void) => React.ReactNode
 }) {
-  const [waitingFirst, setWaitingFirst] = useState(false)
   const [openId, setOpenId] = useState<string | null>(null)
   // The open pane as the latest list has it (its status moves); gone from the list: back to it.
-  const open = openId ? (panes.panes.find((p) => p.id === openId) ?? null) : null
-  const groups = useMemo(() => {
-    const byTab = panes.tabs.map((t) => ({
-      tab: t,
-      panes: panes.panes.filter((p) => p.tab === t.id),
-    }))
-    if (!waitingFirst) return byTab
-    const waiting = panes.panes.filter((p) => p.status === "waiting")
-    return [{ tab: { id: "waiting", title: "Needs input" }, panes: waiting }, ...byTab]
-  }, [panes, waitingFirst])
-  const waitingCount = panes.panes.filter((p) => p.status === "waiting").length
+  const open = openId && panes ? (panes.panes.find((p) => p.id === openId) ?? null) : null
+  const groups = useMemo(
+    () =>
+      (panes?.tabs ?? [])
+        .map((t) => ({ tab: t, panes: (panes?.panes ?? []).filter((p) => p.tab === t.id) }))
+        .filter((g) => g.panes.length > 0),
+    [panes],
+  )
+  const tabTitle = (id: string) => panes?.tabs.find((t) => t.id === id)?.title ?? ""
 
   if (open) return render(open, () => setOpenId(null))
+  const waiting = (panes?.panes ?? []).filter((p) => p.status === "waiting" && p.started)
+  const count = panes?.panes.length ?? 0
   return (
     <div className="list">
-      <label className="toggle">
-        <input
-          type="checkbox"
-          checked={waitingFirst}
-          onChange={(e) => setWaitingFirst(e.target.checked)}
-        />
-        Needs input first {waitingCount > 0 && <span className="count">{waitingCount}</span>}
-      </label>
-      {groups.map(
-        (g) =>
-          g.panes.length > 0 && (
-            <section key={g.tab.id}>
-              <h3>{g.tab.title}</h3>
-              {g.panes.map((p) => (
-                <button
-                  key={`${g.tab.id}:${p.id}`}
-                  className={`row${p.started ? "" : " unstarted"}`}
-                  disabled={!p.started}
-                  onClick={() => setOpenId(p.id)}
-                >
-                  <span className={`dot ${DOT[p.status]}`} />
-                  <span className="names">
-                    <span className="name">
-                      {p.title}
-                      {p.agent && <span className="badge">{p.agent}</span>}
-                      {p.kind === "ssh" && <span className="badge">ssh</span>}
-                    </span>
-                    <span className="sub">
-                      {!p.started
-                        ? "not started on the desktop"
-                        : p.status === "waiting" && p.detail
-                          ? p.detail
-                          : (p.cwd ?? "")}
-                    </span>
+      <header className="list-head">
+        <div className="list-top">
+          <span className="logo">minmux</span>
+          <span className={`conn ${online ? "ok" : "down"}`}>
+            <span className={`dot ${online ? "run" : "wait"}`} />
+            {online ? "live" : "reconnecting…"}
+          </span>
+        </div>
+        <h1 className="machine">{machine || "minmux"}</h1>
+        {panes && (
+          <p className="counts">
+            {groups.length} {groups.length === 1 ? "tab" : "tabs"} · {count}{" "}
+            {count === 1 ? "pane" : "panes"}
+          </p>
+        )}
+      </header>
+
+      {!panes && <p className="dim pad">Loading panes…</p>}
+
+      {waiting.map((p) => (
+        <button key={`w:${p.id}`} className="needs" onClick={() => setOpenId(p.id)}>
+          <span className="needs-icon" aria-hidden>
+            !
+          </span>
+          <span className="names">
+            <span className="name">
+              {tabTitle(p.tab) || p.title} · {p.agent ? AGENT[p.agent] : "It"} is asking
+            </span>
+            <span className="sub">{p.detail ?? "needs your input"}</span>
+          </span>
+          <span className="chev" aria-hidden>
+            ›
+          </span>
+        </button>
+      ))}
+
+      {groups.map((g) => (
+        <section key={g.tab.id} className="group">
+          <h2>{g.tab.title}</h2>
+          <div className="card">
+            {g.panes.map((p) => (
+              <button
+                key={p.id}
+                className={`row${p.started ? "" : " unstarted"}`}
+                disabled={!p.started}
+                onClick={() => setOpenId(p.id)}
+              >
+                <span className={`dot ${DOT[p.status]}`} />
+                <span className="names">
+                  <span className="name">
+                    {p.title}
+                    {p.kind === "ssh" && <span className="badge">ssh</span>}
                   </span>
-                  <span className={`word ${DOT[p.status]}`}>{WORD[p.status]}</span>
-                </button>
-              ))}
-            </section>
-          ),
-      )}
-      {panes.panes.length === 0 && <p className="dim pad">No terminals open.</p>}
+                  <span className="sub">{subline(p)}</span>
+                </span>
+                <span className={`word ${DOT[p.status]}`}>
+                  {p.status === "waiting" ? "needs you" : p.status}
+                </span>
+              </button>
+            ))}
+          </div>
+        </section>
+      ))}
+      {panes && count === 0 && <p className="dim pad">No terminals open.</p>}
+      <footer className="list-foot">Over your tailnet · encrypted</footer>
     </div>
   )
 }
 
-function Screen({ title, children }: { title: string; children?: React.ReactNode }) {
+/** Phone and computer, joined by dots: the first-visit screens. */
+function PairArt() {
+  return (
+    <div className="pair-art" aria-hidden>
+      <span className="pair-box">
+        <svg
+          width="22"
+          height="22"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.8"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        >
+          <rect x="7" y="2.5" width="10" height="19" rx="2.5" />
+          <path d="M11 18h2" />
+        </svg>
+      </span>
+      <span className="pair-dots">
+        <span />
+        <span />
+        <span />
+      </span>
+      <span className="pair-box">
+        <svg
+          width="22"
+          height="22"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.8"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        >
+          <rect x="2.5" y="4" width="19" height="13" rx="2" />
+          <path d="M8 21h8M12 17v4" />
+        </svg>
+      </span>
+    </div>
+  )
+}
+
+/** The approval code, one box per character (read out whole by screen readers). */
+function Code({ code }: { code: string }) {
+  return (
+    <div className="code" role="img" aria-label={code}>
+      {code.split("").map((ch, i) => (
+        <span key={i} aria-hidden>
+          {ch}
+        </span>
+      ))}
+    </div>
+  )
+}
+
+function Screen({
+  title,
+  art,
+  center,
+  children,
+}: {
+  title: string
+  art?: React.ReactNode
+  center?: boolean
+  children?: React.ReactNode
+}) {
   return (
     <div className="screen">
       <div className="logo">minmux</div>
-      <h1>{title}</h1>
-      {children}
+      <div className={`screen-body${center ? " center" : ""}`}>
+        {art}
+        <h1>{title}</h1>
+        {children}
+      </div>
+      <p className="screen-foot">Only devices on your tailnet can reach this page</p>
     </div>
   )
 }

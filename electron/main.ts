@@ -1747,6 +1747,12 @@ function registerIpc() {
   })
   ipcMain.on("remote:panes", (_e, panes: unknown) => remoteControl?.setPanes(panes))
   ipcMain.handle("remote:wanted", () => remoteControl?.wanted() ?? false)
+  // A device asking in: the window's dialog lists the open requests and answers them.
+  ipcMain.handle("remote:approvals", () => remoteControl?.approvals() ?? [])
+  ipcMain.on("remote:approval-shown", (_e, id: unknown) => remoteControl?.approvalShown(id))
+  ipcMain.on("remote:approve", (_e, id: unknown, decision: unknown) => {
+    remoteControl?.approve(id, decision)
+  })
   ipcMain.handle("remote:revoke", (_e, id: unknown) => remoteControl?.revoke(id) ?? false)
   ipcMain.handle(
     "remote:rename",

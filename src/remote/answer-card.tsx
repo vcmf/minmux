@@ -78,28 +78,40 @@ export function AnswerCard({
   }
 
   return (
-    <div className="asking">
-      <b>{agentName} is asking:</b> {pane.detail ?? "a question"}
-      {dialog?.d && (
+    <section className="asking" aria-label={`${agentName} is asking`}>
+      <span className="ask-label">
+        <span className="dot wait" /> {agentName} is asking
+      </span>
+      {dialog?.d ? (
         <>
+          <div className="answer-question">{dialog.d.question}</div>
           {/* What it asks about (the command, the file): never approve something unseen. */}
           {dialog.d.body.length > 0 && (
             <pre className="answer-body">{dialog.d.body.join("\n")}</pre>
           )}
-          <div className="answer-question">{dialog.d.question}</div>
+          {pane.detail && <div className="answer-detail">{pane.detail}</div>}
         </>
+      ) : (
+        <div className="answer-question">{pane.detail ?? "A question"}</div>
       )}
       {dialog?.d && (
         <div className="answer-options">
           {dialog.d.options.map((o) =>
             dialog.answerable && canAnswer ? (
-              <button key={o.n} disabled={busy !== null} onClick={() => answer(o.n)}>
-                <span className="answer-n">{o.n}</span> {o.label}
-                {busy === o.n && " …"}
+              <button
+                key={o.n}
+                className={o.n === 1 ? "first" : ""}
+                disabled={busy !== null}
+                onClick={() => answer(o.n)}
+              >
+                <span className="answer-n">{o.n}</span>
+                <span className="answer-label">{o.label}</span>
+                {busy === o.n && <span className="answer-busy">…</span>}
               </button>
             ) : (
               <div key={o.n} className="answer-option">
-                <span className="answer-n">{o.n}</span> {o.label}
+                <span className="answer-n">{o.n}</span>
+                <span className="answer-label">{o.label}</span>
               </div>
             ),
           )}
@@ -123,7 +135,7 @@ export function AnswerCard({
       )}
       {note && <div className="answer-note">{note}</div>}
       <button
-        className="link"
+        className="link look"
         onClick={() => {
           setBusy(null)
           send({ t: "dialog", pane: pane.id, waitId })
@@ -131,6 +143,6 @@ export function AnswerCard({
       >
         Look again
       </button>
-    </div>
+    </section>
   )
 }
