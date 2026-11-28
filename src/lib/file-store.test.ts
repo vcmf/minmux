@@ -92,6 +92,103 @@ describe("FileStore", () => {
     expect(s.get("e4")!.data).toBeNull()
   })
 
+  it("never evicts a file being edited, on screen or not", () => {
+    const { read } = reads()
+    const s = new FileStore(read, hl, 1)
+    s.show("a", "/a")
+    s.pin("a", true)
+    s.hide("a")
+    s.show("b", "/b")
+    s.hide("b")
+    s.show("c", "/c") // over the cap: b goes, a (edited) stays
+    expect(s.get("a")).toBeDefined()
+    expect(s.get("b")).toBeUndefined()
+    s.pin("a", false)
+    s.hide("c")
+    s.show("d", "/d")
+    expect(s.get("a")).toBeUndefined() // unpinned: evictable again
+  })
+
+  it("ordered by when they start: an older read landing late is dropped", async () => {
+    const { read, pending } = reads()
+    const s = new FileStore(read, hl)
+    s.show("e", "/e")
+    pending.shift()!.resolve(text("v0"))
+    await tick()
+    s.refresh("e") // a read starts…
+    const save = s.ticket("e") // …then a save…
+    s.saved("e", "v1\n", { size: 3, mtimeMs: 9 }, "h1", save) // …which lands first
+    pending.shift()!.resolve(text("v0", 5)) // the read (older) answers with the old text
+    await tick()
+    expect(s.get("e")!.data).toMatchObject({ text: "v1\n" }) // not taken
+    expect(s.seqOf("e")).toBe(save)
+  })
+
+  it("a reload that started before a newer read landed doesn't put older text back", async () => {
+    const { read, pending } = reads()
+    const s = new FileStore(read, hl)
+    s.show("e", "/e")
+    pending.shift()!.resolve(text("v0"))
+    await tick()
+    const reload = s.ticket("e") // Reload theirs starts reading…
+    s.refresh("e") // …the watcher's read starts after it…
+    pending.shift()!.resolve(text("v2", 7)) // …and lands first with the newest text
+    await tick()
+    s.saved("e", "v1\n", { size: 3, mtimeMs: 6 }, "h1", reload) // the reload lands: older
+    expect(s.get("e")!.data).toMatchObject({ text: "v2" })
+    expect(s.seqOf("e")).toBeGreaterThan(reload)
+  })
+
+  it("the same error again is no news (a deleted file's folder busy)", async () => {
+    const { read, pending } = reads()
+    const s = new FileStore(read, hl)
+    s.show("e", "/e")
+    pending.shift()!.resolve({ kind: "error", message: "This file is gone", gone: true })
+    await tick()
+    const seq = s.seqOf("e")
+    s.refresh("e")
+    pending.shift()!.resolve({ kind: "error", message: "This file is gone", gone: true })
+    await tick()
+    expect(s.seqOf("e")).toBe(seq)
+  })
+
+  it("in Edit, reads aren't highlighted; back to the view, the text there is", async () => {
+    const { read, pending } = reads()
+    const h = vi.fn(async (t: string) => t.split("\n").map((l) => `<i>${l}</i>`))
+    const s = new FileStore(read, h)
+    s.show("e", "/e")
+    s.pin("e", true)
+    pending.shift()!.resolve(text("a\nb"))
+    await tick()
+    expect(h).not.toHaveBeenCalled()
+    s.pin("e", false)
+    await tick()
+    expect(h).toHaveBeenCalledTimes(1)
+    expect(s.get("e")!.lines).toEqual(["<i>a</i>", "<i>b</i>"])
+  })
+
+  it("leaving Edit: the view's line, taken once", () => {
+    const { read } = reads()
+    const s = new FileStore(read, hl)
+    s.show("e", "/e")
+    s.returnTo("e", 11)
+    expect(s.scrollOf("e")).toBe(10 * 18)
+    expect(s.takeReturn("e")).toBe(11)
+    expect(s.takeReturn("e")).toBeNull()
+  })
+
+  it("a save is its latest read: the next re-read asks with its stamp", async () => {
+    const { read, pending } = reads()
+    const s = new FileStore(read, hl)
+    s.show("e", "/e")
+    pending.shift()!.resolve(text("old"))
+    await tick()
+    s.saved("e", "new\n", { size: 4, mtimeMs: 9 }, "h1", s.ticket("e"))
+    expect(s.get("e")!.data).toMatchObject({ text: "new\n", hash: "h1", editable: true })
+    s.refresh("e")
+    expect(pending[0]!.since).toEqual({ size: 4, mtimeMs: 9 })
+  })
+
   it("never evicts a file still on screen", () => {
     const { read } = reads()
     const s = new FileStore(read, hl, 1)

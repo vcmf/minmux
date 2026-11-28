@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect } from "react"
 import { nextGitPollDelay } from "./lib/git-poll"
 import { ipc } from "./lib/ipc"
+import { installUnsavedGuard } from "./lib/unsaved-guard"
 import { TopBar } from "./components/top-bar"
 import { Sidebar } from "./components/sidebar"
 import { StatusBar } from "./components/status-bar"
@@ -725,11 +726,17 @@ function App() {
     }
   }, [])
 
+  // Files with unsaved changes: main hears of them, the page holds its unload, a quit asks
+  // (lib/unsaved-guard).
+  useEffect(() => installUnsavedGuard(), [])
+
   // Global shortcuts: ⌘K/Ctrl-K = command palette; ⌘F (mac) / Ctrl+Shift+F = find;
   // ⌘T (mac) / Ctrl+Shift+T = new terminal in the focused pane. Plain Ctrl+F / Ctrl+T
   // are left for the shell (readline forward-char / transpose-chars).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      // A key the file editor used (its find, its keymap) isn't the app's too.
+      if (e.defaultPrevented && (e.target as HTMLElement | null)?.closest?.(".cm-editor")) return
       const k = e.key.toLowerCase()
       // The close confirm is modal: no palette / find / new terminal behind it.
       if (useStore.getState().closeConfirm) return

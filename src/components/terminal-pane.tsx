@@ -46,6 +46,7 @@ import { FolderView } from "./folder-view"
 import { FileView } from "./file-view"
 import { ContextMenu } from "./context-menu"
 import { focusEntry } from "./refocus-terminal"
+import { UnsavedMark } from "./unsaved-mark"
 import { isTerminalEntry } from "../lib/entries"
 import { folderChoices, type FolderChoice } from "../lib/folder-entries"
 import { agentWorkDirs } from "../lib/agent-dirs"
@@ -486,6 +487,7 @@ export function TerminalPane({ pane, tabId }: { pane: PaneLeaf; tabId: string })
                   })()
                 )}
                 <span className="pane-title">{label}</span>
+                {objAt(i).kind === "file" && <UnsavedMark id={id} />}
                 {/* Hidden surfaces surface their state on the tab (you can't see the pane). */}
                 {/* Static dot (no pulse): don't animate compositing next to a WebGL canvas. */}
                 {!active && s && (ui.dot !== "faint" || s.status !== "idle") && (
