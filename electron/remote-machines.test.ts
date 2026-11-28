@@ -169,8 +169,8 @@ describe("remote machines (main)", () => {
         focused: () => focused,
       })
       rm2.list(true)
-      await vi.advanceTimersByTimeAsync(10)
       const p = ps[0]!
+      for (let i = 0; i < 100 && !p.sent.length; i++) await vi.advanceTimersByTimeAsync(10)
       expect(p.sent[0]).toEqual({ t: "port", own: 7458 })
       p.emit({
         t: "machines",
@@ -184,8 +184,8 @@ describe("remote machines (main)", () => {
       expect(p.killed).toBe(true)
       // A surface's output while the window has focus: "seen", at most once a minute.
       rm2.spawn(new FakeSender(), "s1", { key: "k:1", pane: "p" })
-      await vi.advanceTimersByTimeAsync(10)
       const q = ps[1]!
+      for (let i = 0; i < 100 && !q.sent.length; i++) await vi.advanceTimersByTimeAsync(10)
       focused = true
       q.emit({ t: "out", sid: "s1", data: "a" })
       q.emit({ t: "out", sid: "s1", data: "b" })

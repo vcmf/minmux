@@ -311,6 +311,12 @@ describe("peer client", () => {
     s.onclose?.() // the link drops: a new one asks for the size again
     const s2 = await t.welcome("keys")
     await until(() => s2.sent.some((m) => (m as { t: string }).t === "drive"))
+    // Blurred, then closed (the close click blurs first): what it drove is still released.
+    t.c.handle({ t: "open", sid: "s4", key: KEY, pane: "p2" })
+    t.c.handle({ t: "drive", sid: "s4", cols: 60, rows: 20 })
+    t.c.handle({ t: "undrive", sid: "s4" })
+    t.c.handle({ t: "close", sid: "s4" })
+    expect(s2.sent).toContainEqual({ t: "release", pane: "p2" })
     t.c.handle({ t: "close", sid: "s1" })
     expect(s2.sent).toContainEqual({ t: "release", pane: "p1" })
     // Not in use (blurred): a reconnect doesn't ask for its size again.

@@ -1541,10 +1541,17 @@ describe("TerminalManager — sized by another machine", () => {
     await flush()
     const t = terms[terms.length - 1]!
     driven!({ cols: 50, rows: 20, by: "linux" })
-    t.type("\x1b[12;1R") // a cursor-position reply
+    // A reply while output is parsed, focus, pointer motion: no one typing.
+    let parsed: (() => void) | undefined
+    t.write = (_s: string, cb?: () => void) => void (parsed = cb)
+    const onData = vi.mocked(ipc.onPtyData).mock.calls.find((c) => c[0] === id)![1]
+    onData("\x1b[6n")
+    t.type("\x1b[12;1R")
     t.type("\x1b[I")
+    t.type("\x1b[<35;3;4M")
     expect(ipc.ptyTakeBack).not.toHaveBeenCalled()
-    t.type("l")
+    parsed!()
+    t.type("\x1b[1;2R") // Shift+F3 with nothing parsing: a key
     t.type("s")
     expect(ipc.ptyTakeBack).toHaveBeenCalledTimes(1)
     TerminalManager.dispose(id)

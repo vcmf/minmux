@@ -1,5 +1,5 @@
 import { useDriven } from "../lib/driven-store"
-import { isFocusReport, isTerminalReply } from "../lib/terminal-replies"
+import { isFocusReport, isTerminalReply, mouseReport } from "../lib/terminal-replies"
 import { Terminal, type ILinkHandler } from "@xterm/xterm"
 import { HINT_AFTER_MS, hintDue, launchedAgent } from "../lib/agent-hint"
 import { paneLeads, type AgentKind } from "../lib/agent-graph"
@@ -773,7 +773,7 @@ function spawn(session: Session, entry: Entry) {
   const store = useStore.getState()
 
   entry.offData = ipc.onPtyData(session.id, (bytes) => {
-    if (session.peer) {
+    if (session.peer || entry.drivenHere) {
       // Counted so xterm's replies to this output can be told from typing (see onData).
       entry.parsing = (entry.parsing ?? 0) + 1
       term.write(bytes, () => void (entry.parsing = (entry.parsing ?? 1) - 1))
@@ -819,9 +819,11 @@ function spawn(session: Session, entry: Entry) {
           entry.pinned = undefined
           entry.host.classList.remove("pinned")
           entry.lastGrid = undefined // the PTY has the other size: tell it ours again
-          // Parked (a hidden surface): its pane's grid, never the parking lot's box.
-          if (entry.host.parentElement === parking) TerminalManager.syncHiddenSizes()
-          else syncSize(session.id, entry)
+          // Parked: its pane's grid (a hidden surface), or its own once shown (lastGrid is
+          // cleared, so showing it resizes the PTY), never the parking lot's box. On screen: its
+          // box, and the hidden surfaces behind it, which kept their grid while it was pinned.
+          if (entry.host.parentElement !== parking) syncSize(session.id, entry)
+          TerminalManager.syncHiddenSizes()
         }
       })
     })
@@ -952,7 +954,9 @@ function spawn(session: Session, entry: Entry) {
     if (session.peer && (isFocusReport(data) || (entry.parsing && isTerminalReply(data)))) return
     // Sized by another machine: a real key here takes the size back (xterm's replies to the
     // program's queries aren't typing).
-    if (entry.drivenHere && !isTerminalReply(data) && !isFocusReport(data)) {
+    // (Moving the pointer over a mouse-mode program, or scrolling, isn't working there.)
+    const reply = !!entry.parsing && isTerminalReply(data)
+    if (entry.drivenHere && !reply && !isFocusReport(data) && mouseReport(data) !== "move") {
       entry.drivenHere = false
       ipc.ptyTakeBack(session.id)
     }
@@ -1318,10 +1322,9 @@ function failResume(id: string, entry: Entry, exitCode?: number) {
   if (r) useStore.getState().setResume(id, { phase: "failed", plan: r.plan, exitCode })
 }
 
-/** A remote surface in use: ask the other machine for the grid this box fits (on change, once
- *  resizing settles: each ask resizes a PTY over there). */
-const DRIVE_SETTLE_MS = 120
+const DRIVE_SETTLE_MS = 120 // asked once resizing settles: each ask resizes a PTY over there
 
+/** A remote surface in use asks the other machine for the grid its box fits. */
 function driveRemote(id: string, entry: Entry) {
   clearTimeout(entry.driveTimer)
   entry.driveTimer = setTimeout(() => {
