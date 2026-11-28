@@ -193,3 +193,12 @@ describe("mergeSettings — per-agent switches", () => {
     expect(s.agents).not.toHaveProperty("aider")
   })
 })
+
+describe("editorIndent", () => {
+  it("2 by default; 4 when asked; anything else is 2", () => {
+    expect(mergeSettings({}).editorIndent).toBe(2)
+    expect(mergeSettings({ editorIndent: 4 }).editorIndent).toBe(4)
+    expect(mergeSettings({ editorIndent: 8 }).editorIndent).toBe(2)
+    expect(mergeSettings({ editorIndent: "4" }).editorIndent).toBe(2)
+  })
+})

@@ -12,6 +12,24 @@ const base: QuitState = {
 const step = (o: Partial<QuitState>) => quitStep({ ...base, ...o })
 
 describe("quitStep", () => {
+  it("asks the page what's unsaved first, whatever the confirm setting, before the drain", () => {
+    expect(step({ canAskUnsaved: true, livePtys: 0 })).toBe("checkUnsaved")
+    expect(step({ canAskUnsaved: true, needsConfirm: true })).toBe("checkUnsaved")
+    expect(step({ canAskUnsaved: true, checkingUnsaved: true })).toBe("hold")
+    expect(step({ canAskUnsaved: true, asking: true })).toBe("hold")
+    expect(step({ canAskUnsaved: true, unsavedChecked: true, livePtys: 0 })).toBe("proceed")
+    expect(step({ canAskUnsaved: false, livePtys: 0 })).toBe("proceed") // no page to ask
+  })
+  it("then waits for writes in flight (once)", () => {
+    expect(step({ unsavedChecked: true, savesInFlight: 1 })).toBe("waitSaves")
+    expect(step({ savesInFlight: 1, waitingSaves: true })).toBe("hold")
+  })
+  it("an OS logout is never held for unsaved files or saves", () => {
+    expect(step({ osEnding: true, canAskUnsaved: true, savesInFlight: 1 })).toBe("killNow")
+    expect(step({ osEnding: true, needsConfirm: true })).toBe("killNow") // no confirm either
+    expect(step({ osEnding: true, needsConfirm: true, livePtys: 0 })).toBe("proceed")
+  })
+
   it("live PTYs → drain first; nothing alive → quit right away", () => {
     expect(step({})).toBe("drain")
     expect(step({ livePtys: 0 })).toBe("proceed")

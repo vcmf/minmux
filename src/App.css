@@ -1527,6 +1527,117 @@ body.resizing-col {
   color: var(--dim);
   border-bottom: 1px solid var(--border);
 }
+/* A file in Edit (file-editor.tsx): CodeMirror in the file tab's font, size and colours. Its
+   token colours come from lib/editor-cm (the same variables as highlight.js above). */
+.file-editor {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.file-editor .rootbar-actions .seg-btn {
+  border: 1px solid var(--border2);
+  border-radius: 6px;
+  margin-left: 4px;
+}
+.file-editor .rootbar-actions .seg-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.file-editor-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--amber);
+  margin-right: 6px;
+  vertical-align: 1px;
+}
+.unsaved-mark {
+  flex: 0 0 auto;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--amber);
+  margin-left: 5px;
+}
+.file-editor-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.file-editor-bar.warn {
+  color: var(--amber);
+}
+.file-editor-host {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+}
+.file-editor-host .cm-editor {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 12px;
+}
+.file-editor-host .cm-editor.cm-focused {
+  outline: none;
+}
+.file-editor-host .cm-scroller {
+  font-family: var(--code-font);
+  line-height: 18px;
+}
+.file-editor-host .cm-content {
+  caret-color: var(--text);
+}
+.file-editor-host .cm-cursor {
+  border-left-color: var(--text);
+}
+.file-editor-host .cm-gutters {
+  background: var(--bg);
+  color: var(--faint);
+  border-right: 0;
+}
+.file-editor-host .cm-lineNumbers .cm-gutterElement {
+  padding: 0 12px 0 10px;
+}
+.file-editor-host .cm-activeLine,
+.file-editor-host .cm-activeLineGutter {
+  background: color-mix(in srgb, var(--text) 4%, transparent);
+}
+.file-editor-host .cm-selectionBackground,
+.file-editor-host .cm-editor.cm-focused .cm-selectionBackground {
+  background: color-mix(in srgb, var(--blue) 30%, transparent) !important;
+}
+.file-editor-host .cm-matchingBracket {
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  outline: none;
+}
+.file-editor-host .cm-searchMatch {
+  background: color-mix(in srgb, var(--amber) 28%, transparent);
+}
+.file-editor-host .cm-searchMatch-selected {
+  background: color-mix(in srgb, var(--amber) 55%, transparent);
+}
+.file-editor-host .cm-panels {
+  background: var(--panel);
+  color: var(--text);
+  border-bottom: 1px solid var(--border);
+}
+.file-editor-host .cm-panel.cm-search {
+  font-family: var(--chrome-font);
+  font-size: 11px;
+}
+.file-editor-host .cm-panel input,
+.file-editor-host .cm-panel button {
+  font: inherit;
+  color: var(--text);
+  background: var(--elev);
+  border: 1px solid var(--border2);
+  border-radius: 4px;
+}
 /* A markdown file's Preview (markdown-view.tsx): lib/markdown's HTML, in the theme's colours.
    Prose in the system's UI font (easier to read than the chrome's mono), code in the terminal's. */
 .md-scroll {

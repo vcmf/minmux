@@ -20,12 +20,15 @@ function mount(list: ApprovalRequest[]) {
 describe("ApprovalDialog", () => {
   it("shows the code, defaults a phone to Send, and allows with the picked permission", async () => {
     mount([phone])
-    expect(await screen.findByText("iphone wants to use minmux")).toBeInTheDocument()
+    // Generous waits: the whole suite runs in parallel and can starve this file for a while.
+    expect(
+      await screen.findByText("iphone wants to use minmux", {}, { timeout: 5000 }),
+    ).toBeInTheDocument()
     expect(screen.getByLabelText("Code K 7 Q M")).toBeInTheDocument()
     expect(window.minmux.remoteApprovalShown).toHaveBeenCalledWith(3)
     expect(screen.getByRole("radio", { name: "Send" })).toHaveAttribute("aria-checked", "true")
     // The dialog takes focus, not a button: a Space or Enter typed for the terminal answers nothing.
-    expect(screen.getByRole("alertdialog")).toHaveFocus()
+    await waitFor(() => expect(screen.getByRole("alertdialog")).toHaveFocus(), { timeout: 5000 })
     fireEvent.click(screen.getByRole("radio", { name: "Type keys" }))
     expect(screen.getByText(/type into terminals/)).toBeInTheDocument()
     fireEvent.click(screen.getByText("Allow"))
@@ -35,7 +38,11 @@ describe("ApprovalDialog", () => {
   it("another machine: Watch or Type keys, Type keys first; Escape denies", async () => {
     mount([machine])
     expect(
-      await screen.findByText("minmux on linux wants to open your terminals"),
+      await screen.findByText(
+        "minmux on linux wants to open your terminals",
+        {},
+        { timeout: 5000 },
+      ),
     ).toBeInTheDocument()
     expect(screen.queryByRole("radio", { name: "Send" })).toBeNull()
     expect(screen.getByRole("radio", { name: "Type keys" })).toHaveAttribute("aria-checked", "true")

@@ -176,6 +176,20 @@ export function SettingsPanel() {
           </select>
         </label>
 
+        <h3 className="settings-section">Editor</h3>
+        <label className="settings-row">
+          <span title="Spaces per indent when editing a file that has no indentation of its own. A file indented with tabs, or with another width, keeps its own.">
+            Indent
+          </span>
+          <select
+            value={settings.editorIndent}
+            onChange={(e) => update({ ...settings, editorIndent: e.target.value === "4" ? 4 : 2 })}
+          >
+            <option value="2">2 spaces</option>
+            <option value="4">4 spaces</option>
+          </select>
+        </label>
+
         <h3 className="settings-section">SSH</h3>
         <label className="settings-row">
           <span>Reconnect on launch</span>
