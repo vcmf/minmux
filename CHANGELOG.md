@@ -3,6 +3,12 @@
 What changed in each minmux release, newest first. Generated from the pull request titles by
 [git-cliff](https://git-cliff.org): edit `cliff.toml`, not this file.
 
+## [0.1.73](https://github.com/vcmf/minmux/releases/tag/v0.1.73) - 2026-11-28
+
+### Added
+
+- Control minmux from a phone or another machine over tailscale ([#256](https://github.com/vcmf/minmux/pull/256))
+
 ## [0.1.72](https://github.com/vcmf/minmux/releases/tag/v0.1.72) - 2026-11-27
 
 ### Added
