@@ -10,6 +10,8 @@ export type ToClient =
   | { t: "tokens"; tokens: Record<string, string> } // main's saved tokens, by machine key
   | { t: "list"; on: boolean } // the sidebar lists machines: find them, connect the approved
   | { t: "pair"; key: string }
+  | { t: "connect"; key: string } // reconnect a held machine (it disconnected this one)
+  | { t: "port"; own: number } // this minmux's own port now (never listed)
   | { t: "forget"; key: string }
   | { t: "open"; sid: string; key: string; pane: string } // a surface shows this remote pane
   | { t: "close"; sid: string }

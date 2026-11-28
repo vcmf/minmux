@@ -17,6 +17,7 @@ const minmuxStub = {
   machinesList: vi.fn(),
   machinesPair: vi.fn(),
   machinesForget: vi.fn(),
+  machinesConnect: vi.fn(),
   onMachines: vi.fn(unsub),
   ptyWrite: vi.fn(),
   ptyResize: vi.fn(),

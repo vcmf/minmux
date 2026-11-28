@@ -260,5 +260,10 @@ describe("another minmux asking", () => {
     const q = table.createPending("n2", "box", true) as Pending
     table.decide(q.id, "view")
     expect(table.list()[1]!.permission).toBe("view")
+    // Two minmux on one computer (installed + dev): each its own request, never joined.
+    const a = table.createPending("n3", "mac", true) as Pending
+    const b = table.createPending("n3", "mac", true) as Pending
+    expect(b.id).not.toBe(a.id)
+    expect(b.existing).toBeUndefined()
   })
 })

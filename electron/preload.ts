@@ -78,6 +78,7 @@ const api = {
   machinesList: (on: boolean) => ipcRenderer.send("machines:list", on),
   machinesPair: (key: string) => ipcRenderer.send("machines:pair", key),
   machinesForget: (key: string) => ipcRenderer.send("machines:forget", key),
+  machinesConnect: (key: string) => ipcRenderer.send("machines:connect", key),
   onMachines: (cb: (list: MachineView[]) => void) => {
     const listener = (_e: unknown, list: MachineView[]) => cb(list)
     ipcRenderer.on("machines:changed", listener)

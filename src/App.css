@@ -715,6 +715,19 @@ body {
 .remote-row:focus-within .remote-actions {
   display: inline-flex;
 }
+.machines-toggle {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: 10.5px;
+  color: var(--faint);
+  text-align: left;
+  cursor: pointer;
+}
 .machine-row .machine-ask {
   margin-left: auto;
   flex: 0 0 auto;

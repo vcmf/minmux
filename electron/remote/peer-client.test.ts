@@ -267,6 +267,43 @@ describe("peer client", () => {
     t.c.handle({ t: "refresh", sid: "nope" })
   })
 
+  it("disconnected by that computer: held until Connect (or opening a pane)", async () => {
+    const t = setup()
+    stops.push(t.c.stop)
+    t.c.handle({ t: "tokens", tokens: { [KEY]: "tok" } })
+    t.c.handle({ t: "list", on: true })
+    const s = await t.welcome("view")
+    await until(() => t.machine()?.state === "connected")
+    s.host({ t: "welcome", v: 1, machine: "linux", device: "me", permission: "view" })
+    t.c.handle({ t: "open", sid: "s1", key: KEY, pane: "p1" }) // told it's view only
+    expect(t.notes().filter((n) => /view only/.test(n))).toHaveLength(1)
+    s.host({ t: "bye", reason: "disconnected" })
+    await until(() => t.machine()?.state === "held")
+    expect(s.closed).toBe(true)
+    const n = t.sockets.length
+    await new Promise((r) => setTimeout(r, 60)) // polls: no reconnect by itself
+    expect(t.sockets.length).toBe(n)
+    t.c.handle({ t: "connect", key: KEY })
+    await t.welcome()
+    await until(() => t.machine()?.state === "connected")
+    t.c.handle({ t: "connect", key: KEY }) // not held: nothing
+    // Held again, then a pane opened: that's asking to connect too.
+    t.sockets.at(-1)!.host({ t: "bye", reason: "version" })
+    await until(() => t.machine()?.state === "held")
+    t.c.handle({ t: "open", sid: "s2", key: KEY, pane: "p1" })
+    await t.welcome()
+    await until(() => t.machine()?.state === "connected")
+  })
+
+  it("this minmux's own port, once main says it, is never listed", async () => {
+    const t = setup({ peers: [{ ...LINUX, self: true, label: "me" }] })
+    stops.push(t.c.stop)
+    t.c.handle({ t: "list", on: true })
+    await until(() => t.machine()?.label === "me (this computer)")
+    t.c.handle({ t: "port", own: 7420 })
+    expect(t.c.machines()).toEqual([])
+  })
+
   it("an unapproved machine's restored surface says so", async () => {
     const t = setup()
     stops.push(t.c.stop)

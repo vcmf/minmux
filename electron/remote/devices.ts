@@ -183,7 +183,10 @@ export class DeviceTable {
     this.dropOldPending(now)
     // Already asking for this node (a second tab, a reload): the same prompt and code.
     for (const p of this.pending.values())
-      if (p.nodeId === nodeId && !p.decision) return { id: p.id, code: p.code, existing: true }
+      // (Not another minmux's: two of them can run on one computer, an installed and a dev
+      // build, and each collects its own token. A minmux asks once at a time itself.)
+      if (p.nodeId === nodeId && !p.decision && !machine && !p.machine)
+        return { id: p.id, code: p.code, existing: true }
     this.pendingLog = this.pendingLog.filter((e) => now - e.at < PENDING_WINDOW_MS)
     if (this.pendingLog.filter((e) => e.nodeId === nodeId).length >= PENDING_PER_WINDOW)
       return "limited"

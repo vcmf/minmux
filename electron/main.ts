@@ -405,19 +405,19 @@ let remoteMachines: ReturnType<typeof setupRemoteMachines> | null = null
 function machines(): ReturnType<typeof setupRemoteMachines> {
   return (remoteMachines ??= setupRemoteMachines({
     configDir,
-    fork: () => {
-      let own = autoPort(PROFILE)
+    fork: () =>
+      utilityProcess.fork(path.join(dir, "remote-client.js"), [], {
+        serviceName: "minmux remote client",
+      }),
+    ownPort: () => {
       try {
         const r = (JSON.parse(readSettings() || "{}") as { remote?: unknown }).remote
-        own = mergeRemoteSettings(r).port || own
+        return mergeRemoteSettings(r).port || autoPort(PROFILE)
       } catch {
-        // defaults
+        return autoPort(PROFILE)
       }
-      return utilityProcess.fork(path.join(dir, "remote-client.js"), [], {
-        serviceName: "minmux remote client",
-        env: { ...process.env, MINMUX_REMOTE_OWN_PORT: String(own) },
-      })
     },
+    focused: () => !!mainWindow && !mainWindow.isDestroyed() && mainWindow.isFocused(),
     onMachines: (list) => {
       if (mainWindow && !mainWindow.isDestroyed())
         mainWindow.webContents.send("machines:changed", list)
@@ -1700,6 +1700,9 @@ function registerIpc() {
   ipcMain.on("machines:list", (_e, on: unknown) => machines().list(on === true))
   ipcMain.on("machines:pair", (_e, key: unknown) => {
     if (typeof key === "string") machines().pair(key)
+  })
+  ipcMain.on("machines:connect", (_e, key: unknown) => {
+    if (typeof key === "string") machines().connect(key)
   })
   ipcMain.on("machines:forget", (_e, key: unknown) => {
     if (typeof key === "string") machines().forget(key)

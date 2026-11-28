@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from "vitest"
+import { beforeEach, describe, expect, it, vi } from "vitest"
 import { act, fireEvent, render, screen } from "@testing-library/react"
 import { MachinesList } from "./machines-list"
 import { useMachines } from "../lib/machines-store"
@@ -45,14 +45,28 @@ describe("MachinesList", () => {
   beforeEach(() => {
     resetStore()
     useMachines.getState().set([])
+    localStorage.setItem("minmux.machines.open", "1")
   })
 
-  it("lists machines only while shown, and nothing when none", () => {
-    const { unmount, container } = render(<MachinesList />)
+  it("looks only while opened (closed by default), and says it's looking", () => {
+    localStorage.removeItem("minmux.machines.open")
+    vi.mocked(ipc.machinesList).mockClear()
+    const { unmount } = render(<MachinesList />)
+    expect(ipc.machinesList).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByText("Machines"))
     expect(ipc.machinesList).toHaveBeenLastCalledWith(true)
-    expect(container.textContent).toBe("")
-    unmount()
+    expect(screen.getByText(/Looking for minmux/)).toBeInTheDocument()
+    expect(localStorage.getItem("minmux.machines.open")).toBe("1")
+    fireEvent.click(screen.getByText("Machines"))
     expect(ipc.machinesList).toHaveBeenLastCalledWith(false)
+    unmount()
+  })
+
+  it("a machine that computer disconnected: Connect", () => {
+    render(<MachinesList />)
+    act(() => useMachines.getState().set([{ key: "linux:7420", label: "linux", state: "held" }]))
+    fireEvent.click(screen.getByText("Connect"))
+    expect(ipc.machinesConnect).toHaveBeenCalledWith("linux:7420")
   })
 
   it("asks for access; shows the code while asking", () => {

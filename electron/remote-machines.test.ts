@@ -143,6 +143,53 @@ describe("remote machines (main)", () => {
     p.emit({ t: "token", key: "x:1", token: null })
   })
 
+  it("asking for access keeps the worker; focused output counts as use; its own port", async () => {
+    vi.useFakeTimers()
+    try {
+      let focused = false
+      const dir2 = fs.mkdtempSync(path.join(os.tmpdir(), "machines-"))
+      const ps: FakeProc[] = []
+      const rm2 = setupRemoteMachines({
+        configDir: () => dir2,
+        fork: () => {
+          const p = new FakeProc()
+          ps.push(p)
+          return p
+        },
+        onMachines: () => {},
+        ownPort: () => 7458,
+        focused: () => focused,
+      })
+      rm2.list(true)
+      await vi.advanceTimersByTimeAsync(10)
+      const p = ps[0]!
+      expect(p.sent[0]).toEqual({ t: "port", own: 7458 })
+      p.emit({
+        t: "machines",
+        machines: [{ key: "k:1", label: "k", state: "pairing", code: "AB" }],
+      })
+      rm2.list(false) // hidden while asking: kept
+      await vi.advanceTimersByTimeAsync(40_000)
+      expect(p.killed).toBe(false)
+      p.emit({ t: "machines", machines: [{ key: "k:1", label: "k", state: "connected" }] })
+      await vi.advanceTimersByTimeAsync(31_000)
+      expect(p.killed).toBe(true)
+      // A surface's output while the window has focus: "seen", at most once a minute.
+      rm2.spawn(new FakeSender(), "s1", { key: "k:1", pane: "p" })
+      await vi.advanceTimersByTimeAsync(10)
+      const q = ps[1]!
+      focused = true
+      q.emit({ t: "out", sid: "s1", data: "a" })
+      q.emit({ t: "out", sid: "s1", data: "b" })
+      expect(q.sent.filter((m) => m.t === "seen")).toHaveLength(1)
+      rm2.connect("k:1")
+      expect(q.sent.at(-1)).toEqual({ t: "connect", key: "k:1" })
+      rm2.dispose()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it("a worker that dies while wanted is started again; unwanted, it stops", async () => {
     vi.useFakeTimers()
     try {

@@ -12,6 +12,7 @@ export type MachineState =
   | "locked" // unused for 24 h (or PIN attempts): ask again
   | "denied" // the last ask was denied or expired
   | "offline" // was reachable, isn't now
+  | "held" // that computer disconnected it (or runs another version): reconnect by hand
 
 export interface MachineView {
   key: string // "<host>:<port>"
@@ -48,5 +49,7 @@ export function machineLine(m: MachineView): string {
       return "Not allowed"
     case "offline":
       return "Not reachable"
+    case "held":
+      return "Disconnected by that computer"
   }
 }

@@ -7,7 +7,7 @@ import { cliCandidates, findCli, probePorts, runCli, tailnetReader } from "./rem
 const client = createPeerClient({
   post: (m) => process.parentPort.postMessage(m),
   ports: probePorts(process.env.MINMUX_REMOTE_PORTS),
-  ownPort: Number(process.env.MINMUX_REMOTE_OWN_PORT ?? 0),
+  ownPort: 0, // main says which (and again when Settings change it)
   tailnet: tailnetReader(
     () => findCli(cliCandidates(process.platform, process.env.PATH ?? "", process.env)),
     runCli,

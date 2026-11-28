@@ -16,7 +16,9 @@ export function resolveDefaultShell(shells: ShellOption[], pref: string): ShellO
  *  label; synthesized from the source if not listed. Undefined when there's no source. */
 export function inheritShell(
   shells: ShellOption[],
-  src: { command: string; args: string[]; remote?: RemoteRef; remoteSaved?: unknown } | undefined,
+  src:
+    | { command: string; args: string[]; remote?: RemoteRef; remoteSaved?: unknown; peer?: unknown }
+    | undefined,
 ): ShellOption | undefined {
   if (!src) return undefined
   // An ssh session's splits/surfaces stay on its host.
@@ -32,8 +34,8 @@ export function inheritShell(
       ...(src.remoteSaved !== undefined ? { remoteSaved: src.remoteSaved } : {}),
     }
   }
-  // No command (a remote surface: another machine's pane): nothing here to copy.
-  if (!src.command) return undefined
+  // A remote surface (another machine's pane): nothing here to copy.
+  if (src.peer) return undefined
   const argsKey = (a: string[]) => a.join("\0")
   const match = shells.find(
     (s) => s.command === src.command && argsKey(s.args) === argsKey(src.args),

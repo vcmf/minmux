@@ -5,21 +5,55 @@ import { useMachines } from "../lib/machines-store"
 import { machineLine, panesByTab, type MachineView } from "../lib/remote-machines"
 import { useStore } from "../store"
 
-/** The user's other minmux on the tailnet (remote control): listed while shown, panes to open. */
+const OPEN_KEY = "minmux.machines.open"
+const readOpen = () => {
+  try {
+    return localStorage.getItem(OPEN_KEY) === "1"
+  } catch {
+    return false
+  }
+}
+
+/** The user's other minmux on the tailnet (remote control). Closed by default: opening it is
+ *  what starts looking (a background process probes the tailnet's machines while it's open). */
 export function MachinesList() {
+  const [open, setOpen] = useState(readOpen)
+  const toggle = () => {
+    setOpen(!open)
+    try {
+      localStorage.setItem(OPEN_KEY, open ? "0" : "1")
+    } catch {
+      // per-viewer convenience only
+    }
+  }
+  return (
+    <div className="machines">
+      <button className="remote-group machines-toggle" onClick={toggle} aria-expanded={open}>
+        {open ? <CaretDown size={10} /> : <CaretRight size={10} />} Machines
+      </button>
+      {open && <MachinesFound />}
+    </div>
+  )
+}
+
+function MachinesFound() {
   const list = useMachines((s) => s.list)
   useEffect(() => {
     ipc.machinesList(true)
     return () => ipc.machinesList(false)
   }, [])
-  if (list.length === 0) return null
+  if (list.length === 0)
+    return (
+      <div className="remote-group machine-empty">
+        Looking for minmux on your other Tailscale machines…
+      </div>
+    )
   return (
-    <div className="machines">
-      <div className="remote-group">Machines</div>
+    <>
       {list.map((m) => (
         <MachineRow key={m.key} m={m} />
       ))}
-    </div>
+    </>
   )
 }
 
@@ -56,6 +90,14 @@ function MachineRow({ m }: { m: MachineView }) {
         {ask && (
           <button className="remote-empty-btn machine-ask" onClick={() => ipc.machinesPair(m.key)}>
             {m.state === "new" ? "Ask for access" : "Ask again"}
+          </button>
+        )}
+        {m.state === "held" && (
+          <button
+            className="remote-empty-btn machine-ask"
+            onClick={() => ipc.machinesConnect(m.key)}
+          >
+            Connect
           </button>
         )}
         {live && <span className="dot accent" title="Connected" />}

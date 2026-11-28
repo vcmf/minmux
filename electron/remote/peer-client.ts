@@ -48,6 +48,7 @@ export interface HttpReply {
 }
 
 const DEV_PORT = 7421
+const VIEW_ONLY = "view only: that computer's Settings can let this machine type"
 
 function request(
   method: "GET" | "POST",
@@ -144,6 +145,7 @@ export function createPeerClient(d: PeerClientDeps) {
     })
 
   const machines = new Map<string, Machine>()
+  let ownPort = d.ownPort
   const surfaces = new Map<string, Surface>()
   let tokens: Record<string, string> = {}
   let listing = false
@@ -175,6 +177,7 @@ export function createPeerClient(d: PeerClientDeps) {
     !!m.token && (listing || [...surfaces.values()].some((s) => s.key === m.found.key))
 
   function sync(m: Machine) {
+    if (m.state === "held") return // only by hand (Connect, or opening one of its panes)
     if (wanted(m) && !m.link) connect(m)
     else if (!wanted(m) && m.link) {
       m.link.stop()
@@ -233,15 +236,19 @@ export function createPeerClient(d: PeerClientDeps) {
         forgetToken(m)
         note(m, "access removed on that computer: ask again from the sidebar")
         break
+      // Final for the link: dropped, so Connect (or opening a pane) can start a new one.
       case "version":
-        m.open = false
-        m.state = "offline"
-        note(m, "that minmux runs another version: update both")
-        break
       case "disconnected":
         m.open = false
-        m.state = "offline"
-        note(m, "disconnected from that computer")
+        m.state = "held"
+        m.link = undefined
+        link.stop()
+        note(
+          m,
+          s.state === "version"
+            ? "that minmux runs another version: update both"
+            : "disconnected from that computer: Connect in the sidebar",
+        )
         break
     }
     report()
@@ -261,11 +268,13 @@ export function createPeerClient(d: PeerClientDeps) {
 
   function onHostMessage(m: Machine, msg: HostMessage) {
     switch (msg.t) {
-      case "welcome":
+      case "welcome": {
+        // Said once per change (a reconnect says welcome again), and to each pane opened later.
+        const was = m.permission
         m.permission = msg.permission
-        if (msg.permission !== "keys")
-          note(m, "view only: that computer's Settings can let this machine type")
+        if (msg.permission !== "keys" && was !== msg.permission) note(m, VIEW_ONLY)
         return report()
+      }
       case "panes":
         m.panes = msg.panes
         return report()
@@ -298,7 +307,7 @@ export function createPeerClient(d: PeerClientDeps) {
       return
     }
     if (!tn.self.ok) return
-    const found = candidates(tn.peers, d.ports, d.ownPort)
+    const found = candidates(tn.peers, d.ports, ownPort)
     const answers = await Promise.all(
       found.map(async (f) => {
         try {
@@ -432,6 +441,21 @@ export function createPeerClient(d: PeerClientDeps) {
         return report()
       case "pair":
         return void pair(msg.key)
+      case "connect": {
+        const m = machines.get(msg.key)
+        if (m?.state !== "held") return
+        m.state = m.token ? "connecting" : "new"
+        sync(m)
+        return report()
+      }
+      case "port":
+        ownPort = msg.own
+        for (const [key, m] of machines)
+          if (m.found.label.includes("(this computer)") && m.found.port === ownPort) {
+            m.link?.stop()
+            machines.delete(key)
+          }
+        return report()
       case "forget": {
         const m = machines.get(msg.key)
         if (m) forgetToken(m)
@@ -454,6 +478,9 @@ export function createPeerClient(d: PeerClientDeps) {
           void findSoon() // its real name
         }
         if (!m.token) d.post({ t: "note", sid: msg.sid, text: "this machine isn't approved there" })
+        if (m.open && m.permission && m.permission !== "keys")
+          d.post({ t: "note", sid: msg.sid, text: VIEW_ONLY })
+        if (m.state === "held") m.state = m.token ? "connecting" : "new" // opening one is asking
         if (m.open) m.link?.send({ t: "term", pane: msg.pane, on: true })
         else sync(m)
         return report()

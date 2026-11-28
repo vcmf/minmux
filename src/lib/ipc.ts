@@ -56,6 +56,7 @@ export interface Ipc {
   machinesList: (on: boolean) => void
   machinesPair: (key: string) => void
   machinesForget: (key: string) => void
+  machinesConnect: (key: string) => void // a machine that computer disconnected, again
   onMachines: (cb: (list: MachineView[]) => void) => () => void
   ptyWrite: (id: string, data: string) => void
   ptyResize: (id: string, cols: number, rows: number) => void

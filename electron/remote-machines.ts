@@ -33,6 +33,10 @@ export interface RemoteMachinesDeps {
   /** The machines list changed: to the renderer. */
   onMachines: (list: MachineView[]) => void
   draining?: () => boolean
+  /** This minmux's own remote-control port (its worker never lists it). */
+  ownPort?: () => number
+  /** The window has focus: a remote surface's output on screen counts as use (the 24 h lock). */
+  focused?: () => boolean
 }
 
 interface Surface {
@@ -95,8 +99,18 @@ export function setupRemoteMachines(d: RemoteMachinesDeps) {
   const post = (m: ToClient) => proc?.postMessage(m)
   const postReady = (m: ToClient) => ready && post(m)
 
+  // Asking a machine for access keeps it too: the answer may take a walk to the other computer.
   function wanted() {
-    return listing || surfaces.size > 0
+    return listing || surfaces.size > 0 || machines.some((m) => m.state === "pairing")
+  }
+
+  let lastSeen = 0
+  /** At most once a minute: someone is at a remote surface (typing, or watching it focused). */
+  function seen() {
+    const now = Date.now()
+    if (now - lastSeen < 60_000) return
+    lastSeen = now
+    post({ t: "seen" })
   }
 
   function ensure() {
@@ -137,6 +151,7 @@ export function setupRemoteMachines(d: RemoteMachinesDeps) {
       if (proc !== p) return
       ready = true
       setTimeout(() => proc === p && (crashes = 0), 10_000) // up a while: not crashing
+      if (d.ownPort) post({ t: "port", own: d.ownPort() })
       post({ t: "tokens", tokens: t })
       post({ t: "list", on: listing })
       for (const s of surfaces.values()) post({ t: "open", sid: s.sid, ...s.ref })
@@ -167,6 +182,7 @@ export function setupRemoteMachines(d: RemoteMachinesDeps) {
     switch (m.t) {
       case "machines":
         machines = m.machines
+        ensure() // a pairing ended: the worker may not be wanted now
         return d.onMachines(machines)
       case "token":
         void loadTokens().then((t) => {
@@ -192,6 +208,7 @@ export function setupRemoteMachines(d: RemoteMachinesDeps) {
         if (!s) return
         s.buffer.push(m.data)
         s.since += m.data.length
+        if (d.focused?.()) seen()
         return emit(s, m.data)
       }
       case "size": {
@@ -236,7 +253,8 @@ export function setupRemoteMachines(d: RemoteMachinesDeps) {
     write(sid: string, data: string) {
       if (!surfaces.has(sid)) return
       post({ t: "keys", sid, data })
-      post({ t: "seen" })
+      lastSeen = 0 // typing: now
+      seen()
     },
     kill(sid: string) {
       if (!surfaces.delete(sid)) return
@@ -247,10 +265,12 @@ export function setupRemoteMachines(d: RemoteMachinesDeps) {
     list(on: boolean) {
       listing = on
       ensure()
+      if (on && d.ownPort) postReady({ t: "port", own: d.ownPort() }) // Settings may change it
       postReady({ t: "list", on }) // else sent once the worker has its tokens
       if (on) d.onMachines(machines)
     },
     pair: (key: string) => post({ t: "pair", key }),
+    connect: (key: string) => post({ t: "connect", key }),
     forget(key: string) {
       post({ t: "forget", key })
       void loadTokens().then((t) => {
