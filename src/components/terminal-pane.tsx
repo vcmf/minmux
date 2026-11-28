@@ -1,6 +1,8 @@
+import { useDriven } from "../lib/driven-store"
 import { useEffect, useRef, useState } from "react"
 import { useShallow } from "zustand/react/shallow"
 import {
+  Desktop,
   Globe,
   Plugs,
   Terminal,
@@ -99,6 +101,7 @@ export function TerminalPane({ pane, tabId }: { pane: PaneLeaf; tabId: string })
   }).split(",")
   const home = useStore((s) => s.home)
   const session = surfaces[pane.entryIds.indexOf(activeId)]
+  const drivenBy = useDriven((s) => (session ? s.by[session.id] : undefined))
   const focused = useStore(
     (s) =>
       s.activeTabId === tabId && s.tabs.find((t) => t.id === tabId)?.activeEntryId === activeId,
@@ -516,8 +519,22 @@ export function TerminalPane({ pane, tabId }: { pane: PaneLeaf; tabId: string })
           >
             {remoteWhere(session.remote, sshHosts)}
           </span>
+        ) : session?.peer ? (
+          // Another minmux's pane: the machine it's on.
+          <span className="host-chip peer" title={`On ${session.peer.key}, over your tailnet`}>
+            <Desktop size={11} aria-hidden />
+            {session.peer.machine}
+          </span>
         ) : (
           <span className="pane-badge">{shellType(session?.command ?? "")}</span>
+        )}
+        {isTerm && drivenBy && (
+          <span
+            className="pane-badge driven-chip"
+            title="Another machine sizes this pane while you work there. Typing here takes it back."
+          >
+            driven from {drivenBy}
+          </span>
         )}
         <div className="pane-header-spacer" />
         {remoteIdle === "failed" &&

@@ -1,4 +1,7 @@
 import type { FileData, FileStamp, SaveResult } from "./file-tab"
+import type { Permission, RemotePanes } from "./remote-protocol"
+import type { MachineView } from "./remote-machines"
+import type { ApprovalRequest, RemoteView } from "./remote-view"
 import type { ShellOption, SpawnOpts, SshHost } from "../types"
 import type { WslContext } from "./wsl"
 import type { AgentEvent, AgentKind } from "./agent-graph"
@@ -47,6 +50,23 @@ export interface Ipc {
   // An integrated ssh pane's host took its nonce: its shell's reports carry it from now on
   // (sent before the output that follows, and before a reattach's replay).
   onPtyNonce: (id: string, cb: (nonce: string) => void) => () => void
+  // A remote surface's grid: the remote pane's size (its xterm takes it instead of fitting).
+  onPtyPinned: (id: string, cb: (cols: number, rows: number) => void) => () => void
+  // Another machine sets this pane's size (null: the desktop's own again).
+  onPtyDriven: (
+    id: string,
+    cb: (size: { cols: number; rows: number; by: string } | null) => void,
+  ) => () => void
+  // A remote surface you work in: the grid its box fits (the other machine takes that size).
+  peerDrive: (id: string, cols: number, rows: number) => void
+  peerUndrive: (id: string) => void // no longer in use: not asked again on a reconnect
+  ptyTakeBack: (id: string) => void // typed here: the size another machine set ends
+  // Machines: the user's other minmux on the tailnet (listed while the sidebar shows them).
+  machinesList: (on: boolean) => void
+  machinesPair: (key: string) => void
+  machinesForget: (key: string) => void
+  machinesConnect: (key: string) => void // a machine that computer disconnected, again
+  onMachines: (cb: (list: MachineView[]) => void) => () => void
   ptyWrite: (id: string, data: string) => void
   ptyResize: (id: string, cols: number, rows: number) => void
   ptyKill: (id: string) => void
@@ -99,6 +119,25 @@ export interface Ipc {
   revealPath: (p: string) => void // show the file/folder in Finder/Explorer
   editorInfo: () => Promise<EditorInfo> // can the configured editor open a file?
   notify: (title: string, body: string) => void
+  remoteView: () => Promise<RemoteView | null> // remote control's state, devices and clients (Settings)
+  onRemoteChanged: (cb: () => void) => () => void
+  remoteWanted: () => Promise<boolean> // a remote client is connected: push the pane list
+  onRemoteWanted: (cb: (wanted: boolean) => void) => () => void
+  // A device asking in: the open requests, and the window's answer to one.
+  remoteApprovals: () => Promise<ApprovalRequest[]>
+  onRemoteApprovals: (cb: (list: ApprovalRequest[]) => void) => () => void
+  remoteApprovalShown: (id: number) => void
+  remoteApprove: (id: number, decision: Permission | "deny") => void
+  remotePanes: (panes: RemotePanes) => void
+  onRemoteTyped: (cb: (pane: string, device: string) => void) => () => void // a device typed here
+  // Main asks a pane's terminal something (its paste mode, its visible lines); the reply by id.
+  onRemoteAsk: (cb: (id: number, what: "paste" | "screen", pane: string) => void) => () => void
+  remoteAnswerAsk: (id: number, value: unknown) => void
+  remoteRevoke: (id: string) => Promise<boolean>
+  remoteRename: (id: string, name: string) => Promise<boolean>
+  remotePermission: (id: string, permission: Permission) => Promise<boolean>
+  remoteSetPin: (pin: string) => Promise<"ok" | "invalid" | "readonly" | "error">
+  remoteDisconnectAll: () => Promise<boolean>
   clipboardWrite: (text: string) => void
   clipboardRead: () => Promise<string>
   // Lazy, one directory at a time (files browser). `wsl` translates a WSL pane's Linux

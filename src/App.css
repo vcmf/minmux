@@ -715,6 +715,41 @@ body {
 .remote-row:focus-within .remote-actions {
   display: inline-flex;
 }
+.driven-chip {
+  color: var(--amber);
+  border-color: var(--amber);
+}
+.machines-toggle {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: 10.5px;
+  color: var(--faint);
+  text-align: left;
+  cursor: pointer;
+}
+.machine-row .machine-ask {
+  margin-left: auto;
+  flex: 0 0 auto;
+  font-size: 11px;
+  padding: 1px 6px;
+}
+.machine-pane {
+  width: 100%;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+}
+.machine-pane:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
 .remote-empty {
   display: flex;
   flex-direction: column;
@@ -899,6 +934,18 @@ body {
   border: 1px solid var(--border2);
   border-radius: 4px;
   padding: 1px 6px;
+}
+.tab-peer {
+  flex: none;
+  color: var(--blue);
+}
+.host-chip.peer {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--blue);
+  border-color: color-mix(in srgb, var(--blue) 35%, transparent);
+  background: color-mix(in srgb, var(--blue) 10%, transparent);
 }
 .host-chip.colored {
   color: var(--host);
@@ -1188,6 +1235,15 @@ body {
 .terminal-host .xterm-viewport {
   height: 100%;
   width: 100%;
+}
+/* A remote surface keeps the remote pane's grid: scroll when this pane is smaller. */
+.terminal-host.pinned {
+  overflow: auto;
+}
+.terminal-host.pinned .xterm,
+.terminal-host.pinned .xterm-viewport {
+  width: auto;
+  height: auto;
 }
 /* xterm paints the viewport pure black; the grid is whole cells, so the sub-cell
    remainder below the last row showed a black strip. Match the terminal bg. */
@@ -2638,6 +2694,7 @@ body.resizing-col {
 .settings-row input[type="text"],
 .settings-row input:not([type]),
 .settings-row input[type="number"],
+.settings-row input[type="password"],
 .settings-row select {
   width: 200px;
   background: var(--bg);
@@ -2652,6 +2709,103 @@ body.resizing-col {
 .settings-row input:focus,
 .settings-row select:focus {
   border-color: var(--accent);
+}
+.remote-typed {
+  margin-left: 6px;
+  font-size: 10.5px;
+  color: var(--accent);
+  white-space: nowrap;
+}
+.status-remote {
+  background: none;
+  border: none;
+  font: inherit;
+  color: inherit;
+  cursor: pointer;
+  padding: 0;
+}
+/* ── Settings → Remote control ── */
+.remote-settings {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.remote-note {
+  margin: 6px 0;
+  font-size: 12px;
+  color: var(--dim);
+  line-height: 1.5;
+}
+.remote-note.warn {
+  color: var(--amber);
+}
+.remote-dim {
+  color: var(--faint);
+  font-style: normal;
+  font-size: 11.5px;
+}
+.remote-address {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 0;
+  font-size: 12.5px;
+  border-bottom: 1px solid var(--border);
+}
+.remote-address code {
+  user-select: text;
+  color: var(--text);
+}
+.remote-qr {
+  display: block;
+  flex-basis: 100%;
+  max-width: 164px;
+  background: #fff; /* a QR code needs a light ground in every theme */
+  border-radius: 6px;
+  image-rendering: pixelated;
+}
+.remote-pin {
+  display: flex;
+  gap: 6px;
+}
+.settings-row .remote-pin input {
+  width: 120px;
+}
+.remote-devices {
+  display: flex;
+  flex-direction: column;
+  padding: 9px 0;
+  font-size: 12.5px;
+}
+.remote-devices-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  min-height: 28px;
+}
+.remote-device {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--border);
+}
+.remote-device-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.remote-device select {
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border2);
+  border-radius: 7px;
+  padding: 3px 6px;
+  font: inherit;
+  font-size: 12px;
 }
 .settings-footer {
   margin-top: 16px;
@@ -2724,6 +2878,107 @@ body.resizing-col {
   justify-content: flex-end;
   gap: 8px;
   margin-top: 16px;
+}
+/* A device asking in (remote control) — reuses .settings-overlay and .confirm-actions. */
+.approval-dialog {
+  width: 420px;
+  max-width: 92vw;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  background: var(--elev);
+  color: var(--text);
+  border: 1px solid var(--border2);
+  border-radius: 16px;
+  padding: 24px;
+  box-shadow: 0 30px 70px -20px var(--shadow);
+}
+.approval-dialog:focus {
+  outline: none;
+}
+.approval-dialog .confirm-actions {
+  margin-top: 0;
+}
+.approval-head {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+.approval-icon {
+  flex: none;
+  width: 42px;
+  height: 42px;
+  border-radius: 12px;
+  display: grid;
+  place-items: center;
+  background: var(--panel);
+  border: 1px solid var(--border);
+}
+.approval-names {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+.approval-names h2 {
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.35;
+}
+.approval-sub,
+.approval-label,
+.approval-what {
+  font-size: 11.5px;
+  color: var(--dim);
+  line-height: 1.5;
+}
+.approval-block {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.approval-code {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
+  gap: 8px;
+}
+.approval-code span {
+  height: 52px;
+  display: grid;
+  place-items: center;
+  border-radius: 11px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  font-size: 24px;
+  font-weight: 600;
+}
+.approval-perm {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
+  padding: 3px;
+  border-radius: 10px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+}
+.approval-perm button {
+  height: 30px;
+  border: 0;
+  border-radius: 7px;
+  background: none;
+  color: var(--dim);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.approval-perm button.on {
+  background: var(--elev);
+  color: var(--text);
+  box-shadow: inset 0 0 0 1px var(--border2);
+}
+.approval-perm button:focus-visible {
+  outline: 1px solid var(--accent);
 }
 .settings-path {
   font-size: 11px;

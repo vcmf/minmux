@@ -35,6 +35,8 @@ electron/                 main process (Node) — see electron/CLAUDE.md
     transcript-tokens.ts  · token badge      transcript-meta.ts · /color + /rename
   ssh-config.ts · ssh-service.ts  ~/.ssh/config → host list (watched) · spawn plans (trusted)
   pending-spawns.ts       one spawn per pane while an async (ssh) plan is built
+  remote-control.ts       remote control (phone/peers over Tailscale): devices, remote-host worker
+  remote-machines.ts      …the other way: other minmux's panes as surfaces (remote-client worker)
   profile.ts              which profile this process is (dev build = `dev`): names + env scrub
   legacy-migrate.ts       smterm → minmux: copy the old config / user-data dirs on first launch
 src/

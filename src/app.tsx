@@ -15,6 +15,7 @@ import { PrDialog } from "./components/pr-dialog"
 import { FleetView } from "./components/fleet-view"
 import { FilePreview } from "./components/file-preview"
 import { CloseConfirmDialog } from "./components/close-confirm-dialog"
+import { ApprovalDialog } from "./components/approval-dialog"
 import { RightPanelResizer } from "./components/right-panel-resizer"
 import { useActiveWorkCwd, getActiveWsl } from "./lib/use-active-cwd"
 import {
@@ -40,6 +41,10 @@ import { wslContext } from "./lib/wsl"
 import { isPosixShell, type ResumePlan } from "./lib/resume"
 import { resolveDefaultShell } from "./lib/shells"
 import { isMac } from "./lib/platform"
+import { buildRemotePanes } from "./lib/remote-panes"
+import { startRemotePush } from "./lib/remote-push"
+import { useRemoteTyped } from "./lib/remote-typed"
+import { useMachines } from "./lib/machines-store"
 import type { ShellOption } from "./types"
 import "@xterm/xterm/css/xterm.css"
 import "./App.css"
@@ -73,6 +78,53 @@ function App() {
   const rightPanelWidth = useStore((s) => s.rightPanelWidth)
   const sidebarCollapsed = useStore((s) => s.sidebarCollapsed)
   const activeCwd = useActiveWorkCwd() // Claude's folder while it runs (worktree), else the shell's
+
+  // Remote control: main asks a terminal's bracketed-paste mode (before typing a message) or its
+  // visible lines (before typing an answer).
+  useEffect(
+    () =>
+      ipc.onRemoteAsk((id, what, pane) =>
+        ipc.remoteAnswerAsk(
+          id,
+          what === "paste"
+            ? TerminalManager.bracketedPaste(pane)
+            : (TerminalManager.screenLines(pane) ?? null),
+        ),
+      ),
+    [],
+  )
+
+  // Remote control: show which device typed into a pane (sidebar chip).
+  useEffect(
+    () => ipc.onRemoteTyped((pane, device) => useRemoteTyped.getState().typed(pane, device)),
+    [],
+  )
+
+  // Machines: the user's other minmux on the tailnet, as main's remote-client finds them.
+  useEffect(() => ipc.onMachines((list) => useMachines.getState().set(list)), [])
+
+  // Remote control: the pane list goes to main only while a remote client is connected.
+  useEffect(
+    () =>
+      startRemotePush({
+        build: () => {
+          const s = useStore.getState()
+          return buildRemotePanes({
+            tabs: s.tabs,
+            sessions: s.sessions,
+            agents: s.agents,
+            home: s.home,
+            started: (id) => TerminalManager.isStarted(id),
+            paste: (id) => TerminalManager.bracketedPaste(id),
+          })
+        },
+        send: (p) => ipc.remotePanes(p),
+        subscribe: (fn) => useStore.subscribe(fn),
+        wanted: () => ipc.remoteWanted(),
+        onWanted: (fn) => ipc.onRemoteWanted(fn),
+      }),
+    [],
+  )
 
   // Load shells + settings, then restore the saved workspace (VS Code-style) or open a tab.
   // Settings first: a restored pane spawns with the theme's bg (COLORFGBG light/dark), and
@@ -764,6 +816,7 @@ function App() {
       {prDialogOpen && <PrDialog />}
       <FilePreview />
       <CloseConfirmDialog />
+      <ApprovalDialog />
     </div>
   )
 }

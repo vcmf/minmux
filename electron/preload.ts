@@ -1,4 +1,7 @@
+import type { MachineView } from "../src/lib/remote-machines"
 import { contextBridge, ipcRenderer } from "electron"
+import type { Permission, RemotePanes } from "../src/lib/remote-protocol"
+import type { ApprovalRequest, RemoteView } from "../src/lib/remote-view"
 import type { AgentEvent, AgentKind } from "../src/lib/agent-graph"
 import type { InstalledAgent } from "../src/lib/agent-kinds"
 import type { SessionMeta } from "../src/lib/session-color"
@@ -64,6 +67,36 @@ const api = {
     const listener = (_e: unknown, data: string) => cb(data)
     ipcRenderer.on(channel, listener)
     return () => ipcRenderer.removeListener(channel, listener)
+  },
+
+  onPtyPinned: (id: string, cb: (cols: number, rows: number) => void) => {
+    const channel = `pty:pinned:${id}`
+    const listener = (_e: unknown, cols: number, rows: number) => cb(cols, rows)
+    ipcRenderer.on(channel, listener)
+    return () => ipcRenderer.removeListener(channel, listener)
+  },
+  onPtyDriven: (
+    id: string,
+    cb: (size: { cols: number; rows: number; by: string } | null) => void,
+  ) => {
+    const channel = `pty:driven:${id}`
+    const listener = (_e: unknown, cols: number | null, rows?: number, by?: string) =>
+      cb(cols === null ? null : { cols, rows: rows ?? 24, by: by ?? "" })
+    ipcRenderer.on(channel, listener)
+    return () => ipcRenderer.removeListener(channel, listener)
+  },
+  peerDrive: (id: string, cols: number, rows: number) =>
+    ipcRenderer.send("peer:drive", id, cols, rows),
+  peerUndrive: (id: string) => ipcRenderer.send("peer:undrive", id),
+  ptyTakeBack: (id: string) => ipcRenderer.send("pty:take-back", id),
+  machinesList: (on: boolean) => ipcRenderer.send("machines:list", on),
+  machinesPair: (key: string) => ipcRenderer.send("machines:pair", key),
+  machinesForget: (key: string) => ipcRenderer.send("machines:forget", key),
+  machinesConnect: (key: string) => ipcRenderer.send("machines:connect", key),
+  onMachines: (cb: (list: MachineView[]) => void) => {
+    const listener = (_e: unknown, list: MachineView[]) => cb(list)
+    ipcRenderer.on("machines:changed", listener)
+    return () => ipcRenderer.removeListener("machines:changed", listener)
   },
 
   ptyWrite: (id: string, data: string) => ipcRenderer.send("pty:write", id, data),
@@ -140,6 +173,51 @@ const api = {
   revealPath: (p: string) => ipcRenderer.send("file:reveal", p),
   editorInfo: () => ipcRenderer.invoke("editor:info"),
   notify: (title: string, body: string) => ipcRenderer.send("notify", title, body),
+
+  // Remote control (docs/design/REMOTE_CONTROL.md): Settings, and the pane list while clients
+  // are connected.
+  remoteView: () => ipcRenderer.invoke("remote:view") as Promise<RemoteView | null>,
+  onRemoteChanged: (cb: () => void) => {
+    const listener = () => cb()
+    ipcRenderer.on("remote:changed", listener)
+    return () => ipcRenderer.removeListener("remote:changed", listener)
+  },
+  remoteWanted: () => ipcRenderer.invoke("remote:wanted") as Promise<boolean>,
+  remoteApprovals: () => ipcRenderer.invoke("remote:approvals") as Promise<ApprovalRequest[]>,
+  onRemoteApprovals: (cb: (list: ApprovalRequest[]) => void) => {
+    const listener = (_e: unknown, list: ApprovalRequest[]) => cb(list)
+    ipcRenderer.on("remote:approvals", listener)
+    return () => ipcRenderer.removeListener("remote:approvals", listener)
+  },
+  remoteApprovalShown: (id: number) => ipcRenderer.send("remote:approval-shown", id),
+  remoteApprove: (id: number, decision: Permission | "deny") =>
+    ipcRenderer.send("remote:approve", id, decision),
+  onRemoteWanted: (cb: (wanted: boolean) => void) => {
+    const listener = (_e: unknown, wanted: boolean) => cb(wanted)
+    ipcRenderer.on("remote:wanted", listener)
+    return () => ipcRenderer.removeListener("remote:wanted", listener)
+  },
+  remotePanes: (panes: RemotePanes) => ipcRenderer.send("remote:panes", panes),
+  onRemoteAsk: (cb: (id: number, what: "paste" | "screen", pane: string) => void) => {
+    const listener = (_e: unknown, id: number, what: "paste" | "screen", pane: string) =>
+      cb(id, what, pane)
+    ipcRenderer.on("remote:ask", listener)
+    return () => ipcRenderer.removeListener("remote:ask", listener)
+  },
+  remoteAnswerAsk: (id: number, value: unknown) => ipcRenderer.send("remote:answer-ask", id, value),
+  onRemoteTyped: (cb: (pane: string, device: string) => void) => {
+    const listener = (_e: unknown, pane: string, device: string) => cb(pane, device)
+    ipcRenderer.on("remote:typed", listener)
+    return () => ipcRenderer.removeListener("remote:typed", listener)
+  },
+  remoteRevoke: (id: string) => ipcRenderer.invoke("remote:revoke", id) as Promise<boolean>,
+  remoteRename: (id: string, name: string) =>
+    ipcRenderer.invoke("remote:rename", id, name) as Promise<boolean>,
+  remotePermission: (id: string, permission: Permission) =>
+    ipcRenderer.invoke("remote:permission", id, permission) as Promise<boolean>,
+  remoteSetPin: (pin: string) =>
+    ipcRenderer.invoke("remote:set-pin", pin) as Promise<"ok" | "invalid" | "readonly" | "error">,
+  remoteDisconnectAll: () => ipcRenderer.invoke("remote:disconnect-all") as Promise<boolean>,
 
   clipboardWrite: (text: string) => ipcRenderer.send("clipboard:write", text),
   clipboardRead: () => ipcRenderer.invoke("clipboard:read") as Promise<string>,

@@ -1,0 +1,195 @@
+// The chat view's conversation, kept per watched pane in the remote-host worker: items upserted by
+// id (a tool's result lands on its earlier call), the newest MAX_ITEMS kept. JsonlChat reads an
+// append-only transcript incrementally (Claude, Codex) in bounded slices that yield.
+
+import fs from "node:fs"
+import { StringDecoder } from "node:string_decoder"
+import type { ChatItem } from "../../src/lib/remote-chat"
+
+export const MAX_ITEMS = 2000
+const CHUNK = 1 << 18
+// A first read starts this far from the end: the chat shows the recent conversation, and a
+// multi-GB transcript (Codex rollouts reach 16 GB) never gets read whole.
+export const FIRST_READ_MAX = 16 * 1024 * 1024
+const LINE_MAX = 8 * 1024 * 1024 // a longer line (a huge pasted blob) is skipped, not held
+
+/** A conversation being built: ordered items, upserted by id; reports what changed. */
+export class ChatLog {
+  items: ChatItem[] = []
+  private at = new Map<string, number>() // id → index in items
+  private changed = new Map<string, ChatItem>()
+  /** A tool call's id (tool_use_id, call_id) → the item its result belongs to. */
+  calls = new Map<string, string>()
+
+  private seq = 0
+
+  upsert(item: ChatItem): void {
+    const i = this.at.get(item.id)
+    if (i === undefined) {
+      item = { ...item, seq: ++this.seq }
+      this.at.set(item.id, this.items.length)
+      this.items.push(item)
+    } else {
+      item = { ...item, seq: this.items[i]!.seq }
+      this.items[i] = item
+    }
+    this.changed.set(item.id, item)
+    // Trimmed while reading too (in batches), so a long read never holds more than ~1.5×.
+    if (this.items.length > MAX_ITEMS * 1.5) this.trim()
+  }
+
+  get(id: string): ChatItem | undefined {
+    const i = this.at.get(id)
+    return i === undefined ? undefined : this.items[i]
+  }
+
+  /** What changed since the last call (new or updated), in conversation order. */
+  takeChanged(): ChatItem[] {
+    this.trim()
+    const out = [...this.changed.values()].filter((it) => this.at.has(it.id))
+    this.changed.clear()
+    return out.sort((a, b) => this.at.get(a.id)! - this.at.get(b.id)!)
+  }
+
+  private trim(): void {
+    const over = this.items.length - MAX_ITEMS
+    if (over <= 0) return
+    this.items = this.items.slice(over)
+    this.at = new Map(this.items.map((it, i) => [it.id, i]))
+    for (const [k, v] of this.calls) if (!this.at.has(v)) this.calls.delete(k)
+    for (const k of this.changed.keys()) if (!this.at.has(k)) this.changed.delete(k)
+  }
+}
+
+/** A chat reader: reads what's new, reports changed items. */
+export interface ChatReader {
+  read(): Promise<ChatItem[]>
+  readonly log: ChatLog
+  restarted?: boolean // read() started over: send everything as a fresh start
+  close(): void
+}
+
+/** Folds one parsed transcript line into the log (agent-specific). */
+export type LineHandler = (o: Record<string, unknown>, log: ChatLog, lineNo: number) => void
+
+const pause = () => new Promise<void>((r) => setImmediate(r))
+
+/** An append-only JSONL transcript, read from where it left off. */
+export class JsonlChat implements ChatReader {
+  log = new ChatLog()
+  /** Set when the transcript was rewritten from the start: the feed sends a fresh start. */
+  restarted = false
+  private offset = -1 // -1: not read yet (the first read may start near the end)
+  private rest: string[] = [] // a line still being written, in pieces (never re-joined per chunk)
+  private restLen = 0
+  private skipping = false // inside a line over LINE_MAX: dropped up to its end
+  private decoder = new StringDecoder("utf8") // a character split across two reads stays whole
+  private lineNo = 0
+  private file: string | null = null
+  private reading: Promise<ChatItem[]> | null = null
+
+  constructor(
+    private readonly files: string[], // candidates (a WSL path's host forms): the first that exists
+    private readonly handle: LineHandler,
+  ) {}
+
+  read(): Promise<ChatItem[]> {
+    // One read at a time: two would fold the same bytes twice.
+    this.reading ??= this.readNew().finally(() => (this.reading = null))
+    return this.reading
+  }
+
+  close(): void {}
+
+  private async readNew(): Promise<ChatItem[]> {
+    this.file ??= await firstExisting(this.files)
+    if (!this.file) return []
+    let fh: fs.promises.FileHandle
+    try {
+      fh = await fs.promises.open(this.file, "r")
+    } catch {
+      return []
+    }
+    try {
+      const { size } = await fh.stat()
+      let skipFirst = false
+      if (this.offset < 0) {
+        this.offset = Math.max(0, size - FIRST_READ_MAX)
+        if (this.offset > 0) {
+          // Started mid-line (unless the byte before is a newline): drop that partial line.
+          const one = Buffer.alloc(1)
+          await fh.read(one, 0, 1, this.offset - 1)
+          skipFirst = one[0] !== 0x0a
+        }
+      } else if (size < this.offset) {
+        // Rewritten from the start (rare): read it again, into a fresh conversation (ids that fall
+        // back to line numbers would land on old items otherwise).
+        this.log = new ChatLog()
+        this.restarted = true
+        this.offset = 0
+        this.rest = []
+        this.restLen = 0
+        this.skipping = false
+        this.lineNo = 0
+        this.decoder = new StringDecoder("utf8")
+      }
+      const buf = Buffer.alloc(CHUNK)
+      while (this.offset < size) {
+        const { bytesRead } = await fh.read(
+          buf,
+          0,
+          Math.min(CHUNK, size - this.offset),
+          this.offset,
+        )
+        if (bytesRead === 0) break
+        this.offset += bytesRead
+        const text = this.decoder.write(buf.subarray(0, bytesRead))
+        let from = 0
+        for (let nl = text.indexOf("\n"); nl >= 0; nl = text.indexOf("\n", from)) {
+          const line = this.rest.join("") + text.slice(from, nl)
+          this.rest = []
+          this.restLen = 0
+          from = nl + 1
+          if (skipFirst || this.skipping) skipFirst = this.skipping = false
+          else this.fold(line)
+        }
+        if (from < text.length && !this.skipping) {
+          this.rest.push(text.slice(from))
+          this.restLen += text.length - from
+          if (this.restLen > LINE_MAX) {
+            this.rest = []
+            this.restLen = 0
+            this.skipping = true
+          }
+        }
+        await pause()
+      }
+    } finally {
+      await fh.close()
+    }
+    return this.log.takeChanged()
+  }
+
+  private fold(line: string): void {
+    this.lineNo++
+    if (!line.trim()) return
+    try {
+      const o = JSON.parse(line) as unknown
+      if (o && typeof o === "object")
+        this.handle(o as Record<string, unknown>, this.log, this.lineNo)
+    } catch {
+      // a torn or foreign line: skipped (transcripts are internal formats)
+    }
+  }
+}
+
+async function firstExisting(files: string[]): Promise<string | null> {
+  for (const f of files) {
+    try {
+      if ((await fs.promises.stat(f)).isFile()) return f
+    } catch {
+      // next
+    }
+  }
+  return null
+}

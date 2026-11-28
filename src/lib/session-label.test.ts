@@ -225,3 +225,13 @@ describe("remoteRowTitle", () => {
     )
   })
 })
+
+describe("displaySessionTitle: remote surfaces", () => {
+  const peer = { key: "mac:7420", pane: "p", machine: "mac" }
+  it("always names the machine", () => {
+    expect(displaySessionTitle(mk({ title: "~ · mac", peer }), home)).toBe("~ · mac")
+    expect(displaySessionTitle(mk({ title: "~ · mac", peer, oscTitle: "vim notes" }), home)).toBe(
+      "vim notes · mac",
+    )
+  })
+})

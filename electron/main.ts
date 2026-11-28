@@ -36,6 +36,9 @@ import {
 } from "./shell-integration"
 import { gitStatus, gitDiff } from "./git"
 import { OutputCoalescer } from "./coalescer"
+import { autoPort, setupRemoteControl } from "./remote-control"
+import { mergeRemoteSettings } from "../src/settings/schema"
+import { peerRefOf, setupRemoteMachines } from "./remote-machines"
 import { OutputBuffer } from "./output-buffer"
 import { drainPtys, type Drainable, type DrainOptions } from "./pty-drain"
 import { AgentProcs, noop, posixProcs } from "./agent-procs"
@@ -147,7 +150,8 @@ if ("error" in PROFILE_CHOICE) {
   dialog.showErrorBox("minmux can't start", PROFILE_CHOICE.error)
   process.exit(1)
 }
-const PROFILE_NAMES = profileNames(PROFILE_CHOICE.profile)
+const PROFILE = PROFILE_CHOICE.profile
+const PROFILE_NAMES = profileNames(PROFILE)
 scrubParentInstanceEnv(process.env)
 setIntegrationDirName(PROFILE_NAMES.appName)
 // electron-vite's dev-server URL is for this process only: read once, then gone from the env
@@ -181,6 +185,15 @@ interface PtySession {
   hello?: HelloWatch // an integrated ssh pane, until its bootstrap's hello is answered
   pendingNonce?: string // …the nonce it was offered…
   remoteNonce?: string // …and, once the host confirmed it (ok), what its shell's reports carry
+  // Remote control's terminal view (docs/design/REMOTE_CONTROL.md): every char of output counted
+  // (offsets), an epoch bumped when in-flight output is dropped (reattach), and whether a device
+  // watches it (then each batch sent to the renderer is copied to the remote-host worker).
+  bytesIn: number
+  epoch: number
+  tapped?: boolean
+  // Another minmux showing this pane set its size (remote control): the desktop's own typing, or
+  // that machine going, takes it back. The renderer shows the pane at that size meanwhile.
+  driven?: { deviceId: string; by: string }
 }
 const sessions = new Map<string, PtySession>()
 // Every node-pty that hasn't reported its exit yet — including closed panes still winding
@@ -364,11 +377,35 @@ function hookTrace(ev: AgentEvent): Record<string, string> {
   }
 }
 
+/** Another machine sets this pane's size: its PTY, the tap's mirror, and the renderer's view. */
+function drivePty(rec: PtySession, cols: number, rows: number, by: string, deviceId: string) {
+  rec.coalescer?.flush() // output from before the resize is drawn at the old size
+  try {
+    rec.proc.resize(cols, rows)
+  } catch {
+    return
+  }
+  rec.driven = { deviceId, by }
+  if (rec.tapped) remoteControl?.tapResize(rec.id, cols, rows)
+  if (!rec.sender.isDestroyed()) rec.sender.send(`pty:driven:${rec.id}`, cols, rows, by)
+}
+
+/** The desktop takes its size back: its renderer fits the pane again (and resizes the PTY). */
+function undrivePty(rec: PtySession) {
+  if (!rec.driven) return
+  rec.driven = undefined
+  if (!rec.sender.isDestroyed()) rec.sender.send(`pty:driven:${rec.id}`, null)
+}
+
 // Send PTY output to the session's current renderer (skips a destroyed one).
-function emit(rec: PtySession, data: string): void {
+function emit(rec: PtySession, data: string, tap = true): void {
   // Quitting: the dying shells' last output (a bell, OSC 9) mustn't reach the hidden window.
   if (draining()) return
   if (!rec.sender.isDestroyed()) rec.sender.send(`pty:data:${rec.id}`, data)
+  // A device watches this pane: the same batch, with its place in the output (a flush emits all
+  // that's pending, so it ends at bytesIn). One check per batch otherwise.
+  if (tap && rec.tapped)
+    remoteControl?.tapOutput(rec.id, rec.epoch, rec.bytesIn - data.length, data)
 }
 
 function defaultShell(): string {
@@ -425,6 +462,64 @@ const historyWorker = new SessionsWorkerClient(
     }) as unknown as SessionsProc,
 )
 const TOUCHED_MS = 5000 // the worker may be starting or mid-search
+// Asked of the renderer's terminal for remote control: a pane's bracketed-paste mode (how a
+// message is typed) or its visible lines (an answer's last check). Its own state, not in the
+// store. Undefined when there's no window or it doesn't answer soon.
+let rendererAsks = 0
+const rendererReplies = new Map<number, (v: unknown) => void>()
+function askRenderer(what: "paste" | "screen", pane: string): Promise<unknown> {
+  const w = mainWindow
+  if (!w || w.isDestroyed()) return Promise.resolve(undefined)
+  const id = ++rendererAsks
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      rendererReplies.delete(id)
+      resolve(undefined)
+    }, 300)
+    rendererReplies.set(id, (v) => {
+      clearTimeout(timer)
+      resolve(v)
+    })
+    w.webContents.send("remote:ask", id, what, pane)
+  })
+}
+const askPasteMode = async (pane: string) => {
+  const v = await askRenderer("paste", pane)
+  return typeof v === "boolean" ? v : undefined
+}
+const askScreen = async (pane: string) => {
+  const v = await askRenderer("screen", pane)
+  if (v === null) return null // the window has no terminal for it (not started yet)
+  return Array.isArray(v) && v.every((l) => typeof l === "string") ? (v as string[]) : undefined
+}
+
+// Remote control over Tailscale (docs/design/REMOTE_CONTROL.md): no worker until it's turned on.
+let remoteControl: ReturnType<typeof setupRemoteControl> | null = null
+// minmux on another machine: the remote-client worker and remote surfaces (started on first use).
+let remoteMachines: ReturnType<typeof setupRemoteMachines> | null = null
+function machines(): ReturnType<typeof setupRemoteMachines> {
+  return (remoteMachines ??= setupRemoteMachines({
+    configDir,
+    fork: () =>
+      utilityProcess.fork(path.join(dir, "remote-client.js"), [], {
+        serviceName: "minmux remote client",
+      }),
+    ownPort: () => {
+      try {
+        const r = (JSON.parse(readSettings() || "{}") as { remote?: unknown }).remote
+        return mergeRemoteSettings(r).port || autoPort(PROFILE)
+      } catch {
+        return autoPort(PROFILE)
+      }
+    },
+    focused: () => !!mainWindow && !mainWindow.isDestroyed() && mainWindow.isFocused(),
+    onMachines: (list) => {
+      if (mainWindow && !mainWindow.isDestroyed())
+        mainWindow.webContents.send("machines:changed", list)
+    },
+    draining,
+  }))
+}
 /** The agents' commands: a process running one is an agent (one started outside the wrapper). */
 const agentNames = () => agentsOn(process.platform).map((k) => AGENT_KINDS[k].command)
 /** A pane's shell, for its processes (local panes only). */
@@ -549,6 +644,7 @@ function createWindow() {
   })
   win.on("closed", () => {
     mainWindow = null
+    remoteControl?.windowClosed()
     fsWorker.setWatched([])
     rendererAlive = false
     answerPendingChecks() // with the list it last pushed
@@ -556,7 +652,10 @@ function createWindow() {
   })
   // A reloaded or crashed renderer re-sends its watch set when its folder tabs show again; its
   // unsaved files went with it.
-  win.webContents.on("did-start-loading", () => fsWorker.setWatched([]))
+  win.webContents.on("did-start-loading", () => {
+    fsWorker.setWatched([])
+    remoteControl?.rendererGone() // a request it showed: shown again after the load, or natively
+  })
   // A new page committed: it can answer a quit once it says so (a refused load keeps the old).
   win.webContents.on("did-navigate", () => (rendererAlive = false))
   // Its unsaved files go only once a new page is in: a reload starts loading before the old
@@ -564,6 +663,7 @@ function createWindow() {
   win.webContents.on("did-finish-load", () => (unsavedFiles = []))
   win.webContents.on("render-process-gone", () => {
     fsWorker.setWatched([])
+    remoteControl?.rendererGone()
     rendererAlive = false
     answerPendingChecks()
     unsavedFiles = []
@@ -646,6 +746,7 @@ function startSettingsWatcher() {
     switchesOff = null // re-read the agent switches on the next spawn
     mainWindow?.webContents.send("settings-changed")
     sshService?.settingsChanged() // reloads only if the ssh block itself changed
+    remoteControl?.apply() // starts, restarts or stops remote control
   })
 }
 
@@ -720,6 +821,7 @@ async function startAgentObservability(): Promise<void> {
         "agents:events",
         events.filter((ev) => ev.event !== "SessionTitle"),
       )
+      remoteControl?.agentEvents(events) // remote chat view: leads + read the transcripts now
       // Session-level events locate where each pane's session keeps its name/colour → track
       // it for the pane accent (async + debounced; SessionEnd stops it).
       const plan = planMeta(events, (ev) => {
@@ -915,7 +1017,11 @@ function writeSettings(contents: string): void {
 
 // The renderer's spawn request (src/lib/ipc.ts), with `remote` untrusted until SshService
 // rebuilds it from main's own list.
-type SpawnOpts = Omit<SpawnRequest, "remote" | "reopen"> & { remote?: unknown; reopen?: unknown }
+type SpawnOpts = Omit<SpawnRequest, "remote" | "reopen" | "peer"> & {
+  remote?: unknown
+  reopen?: unknown
+  peer?: unknown
+}
 // remoteNonce: an integrated ssh pane's nonce, so the renderer trusts only its shell's reports.
 type SpawnResult = {
   reattached: boolean
@@ -929,14 +1035,17 @@ function reattach(rec: PtySession, sender: Electron.WebContents, opts: SpawnOpts
   // Point output at the new renderer, drop stale in-flight bytes (they're in the buffer),
   // resize to the new xterm, then replay history.
   rec.sender = sender
+  rec.driven = undefined // the new renderer's own size
   rec.coalescer?.reset()
+  rec.epoch++ // the dropped in-flight bytes never reach the tap: its watchers start again
+  if (rec.tapped) remoteControl?.tapReset(rec.id)
   try {
     rec.proc.resize(opts.cols || 80, opts.rows || 24)
   } catch {
     // transient 0-size during layout — a later resize settles it
   }
   sendNonce(rec) // before the replay: its reports need it
-  emit(rec, rec.buffer.dump())
+  emit(rec, rec.buffer.dump(), false) // the renderer's replay: the tap's watchers start over (treset)
   diag("pty-reattach", { id: opts.id, pid: rec.proc.pid })
   return { reattached: true, integrated: rec.integrated, remoteNonce: rec.remoteNonce }
 }
@@ -998,6 +1107,8 @@ function startPty(sender: Electron.WebContents, opts: SpawnOpts, spec: StartSpec
     id: opts.id,
     proc,
     buffer: new OutputBuffer(PTY_REPLAY_BYTES),
+    bytesIn: 0,
+    epoch: 0,
     sender,
     shell: spec.file,
     wslDistro: spec.wslDistro,
@@ -1010,6 +1121,8 @@ function startPty(sender: Electron.WebContents, opts: SpawnOpts, spec: StartSpec
   if (coalesce) {
     rec.coalescer = new OutputCoalescer(PTY_FLUSH_MS, PTY_MAX_FLUSH_BYTES, (d) => emit(rec, d))
   }
+  // A pane started again under its id (an ssh reconnect): a device watching it starts over.
+  remoteControl?.tapReset(opts.id)
   proc.onData((data) => {
     if (sessions.get(opts.id) !== rec) return // closed (or replaced): nobody shows it
     // An integrated ssh pane's bootstrap says hello once, right after login: answer it with
@@ -1023,6 +1136,7 @@ function startPty(sender: Electron.WebContents, opts: SpawnOpts, spec: StartSpec
         sendNonce(rec)
       }
     }
+    rec.bytesIn += data.length // the tap's offsets (one add per chunk)
     rec.buffer.push(data) // keep for replay on reattach
     if (rec.coalescer) rec.coalescer.push(data)
     else emit(rec, data) // A/B baseline: one IPC message per node-pty chunk
@@ -1043,6 +1157,7 @@ function startPty(sender: Electron.WebContents, opts: SpawnOpts, spec: StartSpec
       })
     ) {
       ssh().markPlain(spec.remote.hostId)
+      rec.bytesIn += INTEGRATION_FAILED_NOTE.length
       rec.buffer.push(INTEGRATION_FAILED_NOTE)
       emit(rec, INTEGRATION_FAILED_NOTE)
     }
@@ -1056,6 +1171,8 @@ function startPty(sender: Electron.WebContents, opts: SpawnOpts, spec: StartSpec
       untrackMeta(opts.id) // shell (and any agent in it) gone — drop the accent
       agentProcs.forget(opts.id)
       sessionLedger().drop(opts.id) // …and nothing to resume there (no-op during a quit)
+      remoteControl?.paneGone(opts.id)
+      remoteControl?.tapReset(opts.id) // a device watching its terminal hears it's gone
     }
     livePtys.delete(live)
     markExited()
@@ -1235,6 +1352,13 @@ function registerIpc() {
     if (joined) return joined as Promise<SpawnResult>
     const existing = sessions.get(opts.id)
     if (existing) return reattach(existing, event.sender, opts)
+    // A remote surface: another minmux's pane, relayed by the remote-client worker.
+    if (opts.peer !== undefined) {
+      const ref = peerRefOf(opts.peer)
+      if (!ref) throw new Error("not a remote pane")
+      const { reattached } = machines().spawn(event.sender, opts.id, ref)
+      return { reattached, integrated: false, started: true }
+    }
     // Reattach only (a restored ssh pane waiting for Enter): nothing live → start nothing.
     if (opts.attachOnly === true) return { reattached: false, integrated: false, started: false }
     if (opts.remote !== undefined) {
@@ -1274,23 +1398,40 @@ function registerIpc() {
   ipcMain.on("pty:write", (_e, id: string, data: string) => {
     // Still preparing: swallowed (see pending-spawns.ts), never replayed into the new ssh.
     if (typeof data !== "string" || pendingSpawns.pending(id)) return
+    if (remoteMachines?.has(id)) return remoteMachines.write(id, data)
     sessions.get(id)?.proc.write(data)
+    remoteControl?.localInput(id, data) // an answer key closes the pane's dialogs (O(1) if none)
+  })
+  // The desktop's own typing in a pane another machine sizes takes the size back (the renderer
+  // says so for real keys: its replies to the program's queries are no one typing).
+  ipcMain.on("pty:take-back", (_e, id: unknown) => {
+    const rec = typeof id === "string" ? sessions.get(id) : undefined
+    if (rec) undrivePty(rec)
   })
   ipcMain.on("pty:resize", (_e, id: string, cols: number, rows: number) => {
     if (pendingSpawns.resize(id, cols, rows)) return // applied when it starts
+    if (sessions.get(id)?.driven) return // another machine's size until it's taken back
     try {
       sessions.get(id)?.proc.resize(cols, rows)
+      const rec = sessions.get(id)
+      if (rec?.tapped) {
+        rec.coalescer?.flush() // output from before the resize reaches the mirror first
+        remoteControl?.tapResize(id, cols, rows)
+      }
     } catch {
       // ignore transient 0-size during layout
     }
   })
   // Explicit kill (pane/tab closed) — really terminate + free the replay buffer.
   // Which sessions have a live PTY here (a renderer reload restores its layout over them).
-  ipcMain.handle("pty:live-ids", async () => [...sessions.keys()])
+  ipcMain.handle("pty:live-ids", async () => [...sessions.keys(), ...(remoteMachines?.ids() ?? [])])
   ipcMain.on("pty:kill", (_e, id: string) => {
     untrackMeta(id, false) // the pane is gone — nothing left to accent
     sessionLedger().drop(id) // closed on purpose — don't resume its Claude session
+    remoteControl?.paneGone(id)
+    if (sessions.get(id)?.tapped) remoteControl?.tapReset(id) // a watching device hears it's gone
     pendingSpawns.kill(id) // still preparing: it must not start at all
+    remoteMachines?.kill(id)
     const rec = sessions.get(id)
     if (!rec) return
     rec.coalescer?.dispose()
@@ -1505,7 +1646,10 @@ function registerIpc() {
   })
   // The pane's shell prompt came back after a command → its foreground program (Claude or
   // not) has exited: nothing to resume there even if Claude died without a SessionEnd.
-  ipcMain.on("agents:shell-idle", (_e, paneId: string) => sessionLedger().shellIdle(paneId))
+  ipcMain.on("agents:shell-idle", (_e, paneId: string) => {
+    sessionLedger().shellIdle(paneId)
+    remoteControl?.shellIdle(paneId) // the agent is gone (even one that died without a word)
+  })
   // One shot per session: attempted (or dismissed) → forget it.
   ipcMain.on("agents:resume-consume", (_e, paneId: string, sessionId: string) =>
     sessionLedger().consume(paneId, sessionId),
@@ -1700,6 +1844,54 @@ function registerIpc() {
     } catch {
       // best-effort
     }
+  })
+
+  // Remote control (electron/remote-control.ts; docs/design/REMOTE_CONTROL.md).
+  ipcMain.handle("remote:view", () => remoteControl?.view() ?? null) // null: not set up yet
+  // Machines: the user's other minmux on the tailnet (the sidebar's list, approvals).
+  ipcMain.on("machines:list", (_e, on: unknown) => machines().list(on === true))
+  ipcMain.on("machines:pair", (_e, key: unknown) => {
+    if (typeof key === "string") machines().pair(key)
+  })
+  ipcMain.on("peer:drive", (_e, id: unknown, cols: unknown, rows: unknown) => {
+    if (typeof id === "string" && typeof cols === "number" && typeof rows === "number")
+      remoteMachines?.drive(id, cols, rows)
+  })
+  ipcMain.on("peer:undrive", (_e, id: unknown) => {
+    if (typeof id === "string") remoteMachines?.undrive(id)
+  })
+  ipcMain.on("machines:connect", (_e, key: unknown) => {
+    if (typeof key === "string") machines().connect(key)
+  })
+  ipcMain.on("machines:forget", (_e, key: unknown) => {
+    if (typeof key === "string") machines().forget(key)
+  })
+  ipcMain.on("remote:panes", (_e, panes: unknown) => remoteControl?.setPanes(panes))
+  ipcMain.handle("remote:wanted", () => remoteControl?.wanted() ?? false)
+  // A device asking in: the window's dialog lists the open requests and answers them.
+  ipcMain.handle("remote:approvals", () => remoteControl?.approvals() ?? [])
+  ipcMain.on("remote:approval-shown", (_e, id: unknown) => remoteControl?.approvalShown(id))
+  ipcMain.on("remote:approve", (_e, id: unknown, decision: unknown) => {
+    remoteControl?.approve(id, decision)
+  })
+  ipcMain.handle("remote:revoke", (_e, id: unknown) => remoteControl?.revoke(id) ?? false)
+  ipcMain.handle(
+    "remote:rename",
+    (_e, id: unknown, name: unknown) => remoteControl?.rename(id, name) ?? false,
+  )
+  ipcMain.handle(
+    "remote:permission",
+    (_e, id: unknown, p: unknown) => remoteControl?.setPermission(id, p) ?? false,
+  )
+  ipcMain.handle("remote:set-pin", (_e, pin: unknown) => remoteControl?.setPin(pin) ?? "error")
+  ipcMain.on("remote:answer-ask", (_e, id: unknown, value: unknown) => {
+    if (typeof id !== "number") return
+    rendererReplies.get(id)?.(value)
+    rendererReplies.delete(id)
+  })
+  ipcMain.handle("remote:disconnect-all", () => {
+    remoteControl?.disconnectAll()
+    return true
   })
 
   // Clipboard (copy/paste) — main owns it; renderer never imports Electron.
@@ -2215,6 +2407,65 @@ app.whenReady().then(async () => {
   }
   createWindow()
   startSettingsWatcher()
+  remoteControl = setupRemoteControl({
+    dir,
+    configDir,
+    readSettings,
+    profile: PROFILE_CHOICE.profile,
+    devUrl: DEV_RENDERER_URL,
+    window: () => mainWindow,
+    leadOf: (pane) => {
+      const e = sessionLedger().get(pane)
+      // The previous run's entry (not resumed yet) isn't running here.
+      return e && !e.carried ? e : null
+    },
+    transcriptTargets,
+    wslPane: (pane) => !!sessions.get(pane)?.wslDistro,
+    pasteMode: askPasteMode,
+    screen: askScreen,
+    // The terminal view: a pane's output so far (coalescer flushed first, so the tap carries on
+    // exactly from here), and the tap turned on or off.
+    terminal: {
+      snapshot: (pane) => {
+        if (pendingSpawns.pending(pane)) return "failed" // still connecting: asked again soon
+        const rec = sessions.get(pane)
+        if (!rec) return null
+        rec.coalescer?.flush()
+        rec.tapped = true
+        return {
+          epoch: rec.epoch,
+          offset: rec.bytesIn,
+          cols: rec.proc.cols,
+          rows: rec.proc.rows,
+          text: rec.buffer.dump(),
+        }
+      },
+      untap: (pane) => {
+        const rec = sessions.get(pane)
+        if (rec) rec.tapped = false
+      },
+      // The worker went away (restarted, turned off): nothing it tapped is watched any more.
+      untapAll: () => {
+        for (const rec of sessions.values()) rec.tapped = false
+      },
+    },
+    drive: (pane, cols, rows, by, deviceId) => {
+      const rec = sessions.get(pane)
+      if (rec && !pendingSpawns.pending(pane)) drivePty(rec, cols, rows, by, deviceId)
+    },
+    release: (deviceId, pane) => {
+      for (const rec of pane ? [sessions.get(pane)] : sessions.values())
+        if (rec?.driven && (!deviceId || rec.driven.deviceId === deviceId)) undrivePty(rec)
+    },
+    // Same rules as the renderer's typing (pty:write): a pending ssh spawn swallows it.
+    writePty: (pane, data) => {
+      const rec = sessions.get(pane)
+      if (!rec || pendingSpawns.pending(pane)) return false
+      rec.proc.write(data)
+      return true
+    },
+  })
+  remoteControl.apply()
   diag("boot", { pid: process.pid, version: app.getVersion() })
   // Power events tell us whether a lid-close SUSPENDS the app (suspend→resume with
   // PTYs intact) or the OS TERMINATES it (suspend, then a fresh boot with no quit).
@@ -2259,6 +2510,8 @@ app.on("will-quit", () => {
   gitRootsWorker.dispose()
   sessionsWorker.dispose()
   historyWorker.dispose() // stops a search (and its rg) too
+  remoteControl?.dispose() // says goodbye to remote clients, ends the worker
+  remoteMachines?.dispose()
 })
 app.on("quit", () => diag("quit"))
 

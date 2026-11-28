@@ -1,3 +1,5 @@
+import { useDriven } from "../lib/driven-store"
+import { isFocusReport, isTerminalReply, mouseReport } from "../lib/terminal-replies"
 import { Terminal, type ILinkHandler } from "@xterm/xterm"
 import { HINT_AFTER_MS, hintDue, launchedAgent } from "../lib/agent-hint"
 import { paneLeads, type AgentKind } from "../lib/agent-graph"
@@ -110,6 +112,13 @@ interface Entry {
   offData?: () => void
   offExit?: () => void
   offNonce?: () => void
+  offPinned?: () => void
+  offDriven?: () => void
+  drove?: Grid // a remote surface: the grid it last asked the other machine for
+  driveTimer?: ReturnType<typeof setTimeout> // …asked once resizing settles (one per drag)
+  drivenHere?: boolean // another machine sizes this pane (pinned to its size until typing)
+  pinned?: Grid // a remote surface: the remote pane's grid, taken instead of fitting
+  parsing?: number // a remote surface: output written, not parsed yet (its replies are dropped)
   remote?: RemotePhase // ssh panes only: where the connection is (rules: lib/remote-connect)
   failure?: SshFailure // with remote = "failed": why, so Enter / Retry only act when they can
   lastKey?: string // ssh panes: the last input sent (a prompt check skips a line being typed)
@@ -510,6 +519,8 @@ function requestPty(id: string, entry: Entry, attachOnly: boolean, given?: Sessi
       cwd: session.cwd, // inherited from the pane this was split/opened from
       // An ssh session: main rebuilds the command from its own host list (never ours).
       ...(session.remote ? { remote: session.remote } : {}),
+      // A remote surface: main follows that pane over remote control (no process here).
+      ...(session.peer ? { peer: session.peer } : {}),
       ...(attachOnly ? { attachOnly: true } : {}),
       ...(reopen ? { reopen } : {}), // used only by an integrated host (the handshake)
       // → COLORFGBG so agents detect light/dark (fallback when the OSC-11 bg query can't
@@ -762,7 +773,11 @@ function spawn(session: Session, entry: Entry) {
   const store = useStore.getState()
 
   entry.offData = ipc.onPtyData(session.id, (bytes) => {
-    term.write(bytes)
+    if (session.peer || entry.drivenHere) {
+      // Counted so xterm's replies to this output can be told from typing (see onData).
+      entry.parsing = (entry.parsing ?? 0) + 1
+      term.write(bytes, () => void (entry.parsing = (entry.parsing ?? 1) - 1))
+    } else term.write(bytes)
     // An ssh pane that was connecting (or at a prompt) and now prints is live. One compare
     // per chunk; the store is only touched on the change.
     if (entry.remote === "starting" || entry.remote === "prompt") {
@@ -782,6 +797,63 @@ function spawn(session: Session, entry: Entry) {
       if (entry.remote === "live") checkAuthPrompt(session.id, entry, raiseAttention)
     }, IDLE_MS)
   })
+
+  if (!session.peer) {
+    // Another machine sizes this pane while someone works there: shown at that size (pinned),
+    // until typing here takes it back (main) and it fits its box again.
+    entry.offDriven = ipc.onPtyDriven(session.id, (size) => {
+      term.write("", () => {
+        if (entries.get(session.id) !== entry) return
+        useDriven.getState().set(session.id, size?.by ?? null)
+        if (size) {
+          entry.drivenHere = true
+          entry.pinned = { cols: size.cols, rows: size.rows }
+          entry.host.classList.add("pinned")
+          try {
+            term.resize(size.cols, size.rows)
+          } catch {
+            // an invalid size: keep the grid
+          }
+        } else if (entry.pinned) {
+          entry.drivenHere = false
+          entry.pinned = undefined
+          entry.host.classList.remove("pinned")
+          entry.lastGrid = undefined // the PTY has the other size: tell it ours again
+          // Parked: its pane's grid (a hidden surface), or its own once shown (lastGrid is
+          // cleared, so showing it resizes the PTY), never the parking lot's box. On screen: its
+          // box, and the hidden surfaces behind it, which kept their grid while it was pinned.
+          if (entry.host.parentElement !== parking) syncSize(session.id, entry)
+          TerminalManager.syncHiddenSizes()
+        }
+      })
+    })
+  }
+
+  if (session.peer) {
+    // Focused, it asks the other machine for the grid its box fits (see syncSize); blurred, it
+    // stops asking (the other machine keeps that size until someone types there).
+    term.textarea?.addEventListener("focus", () => driveRemote(session.id, entry))
+    term.textarea?.addEventListener("blur", () => {
+      clearTimeout(entry.driveTimer)
+      entry.drove = undefined
+      ipc.peerUndrive(session.id)
+    })
+    // A remote surface shows the remote pane at its own size (applied after what's written).
+    entry.offPinned = ipc.onPtyPinned(session.id, (cols, rows) => {
+      term.write("", () => {
+        if (entries.get(session.id) !== entry) return
+        entry.pinned = { cols, rows }
+        entry.host.classList.add("pinned")
+        // Not the size it asked for (the other machine took it back): asked again on focus.
+        if (entry.drove && gridChanged(entry.drove, cols, rows)) entry.drove = undefined
+        try {
+          if (term.cols !== cols || term.rows !== rows) term.resize(cols, rows)
+        } catch {
+          // an invalid size: keep the grid
+        }
+      })
+    })
+  }
 
   if (session.remote) {
     // The host took this connection's nonce (main saw its ok): trust reports carrying it.
@@ -878,6 +950,16 @@ function spawn(session: Session, entry: Entry) {
       if (k === "drop") return
       entry.lastKey = data
     }
+    // A remote surface: the pane's own terminal over there answers its program already.
+    if (session.peer && (isFocusReport(data) || (entry.parsing && isTerminalReply(data)))) return
+    // Sized by another machine: a real key here takes the size back (xterm's replies to the
+    // program's queries aren't typing).
+    // (Moving the pointer over a mouse-mode program, or scrolling, isn't working there.)
+    const reply = !!entry.parsing && isTerminalReply(data)
+    if (entry.drivenHere && !reply && !isFocusReport(data) && mouseReport(data) !== "move") {
+      entry.drivenHere = false
+      ipc.ptyTakeBack(session.id)
+    }
     ipc.ptyWrite(session.id, data)
   })
 
@@ -900,7 +982,8 @@ function spawn(session: Session, entry: Entry) {
   // input, nor a shell we can't follow (no prompt marks: fish, a plain ssh host). The rest of each
   // sequence stays xterm's (returning false hands it on).
   term.parser.registerCsiHandler({ prefix: "?", final: "h" }, (params) => {
-    if (namesThemeMode(params) && commandRunning(entry) && !entry.flow.replaying)
+    // A remote surface's program hears of theme changes from its own terminal, not this one.
+    if (namesThemeMode(params) && commandRunning(entry) && !entry.flow.replaying && !session.peer)
       entry.themeNotify = true
     return false
   })
@@ -910,7 +993,8 @@ function spawn(session: Session, entry: Entry) {
   })
   // Queries are answered only for a running command, and not from a reattach's replayed history
   // (whoever asked may be gone). Otherwise xterm's own answer: the mode isn't known here.
-  const askedByCommand = () => commandRunning(entry) && !entry.flow.replaying
+  // (A remote surface's queries: its own terminal over there answers.)
+  const askedByCommand = () => !session.peer && commandRunning(entry) && !entry.flow.replaying
   term.parser.registerCsiHandler({ prefix: "?", intermediates: "$", final: "p" }, (params) => {
     if (params[0] !== THEME_MODE || !askedByCommand()) return false
     ipc.ptyWrite(session.id, modeReport(!!entry.themeNotify))
@@ -926,6 +1010,8 @@ function spawn(session: Session, entry: Entry) {
 
   // OSC 7 — the shell reports its working directory (file://host/path).
   term.parser.registerOscHandler(7, (data) => {
+    // A remote surface's folder is on the other machine: never this one's cwd (git, splits).
+    if (session.peer) return true
     // An ssh pane's folder is on the host: shown, never read locally, never sent back.
     if (session.remote) {
       if (!untrusted(entry)) return true // our shell, at its prompt, reports its folder itself
@@ -992,7 +1078,8 @@ function spawn(session: Session, entry: Entry) {
   // and all it can do is offer a hint): if the agent says our hooks aren't approved, offer the
   // approval hint (MULTI_AGENT.md F18). Not from a reattach's replayed history: an old launch.
   term.parser.registerOscHandler(6974, (data) => {
-    const kind = session.remote || entry.flow.replaying ? null : launchedAgent(data)
+    // Not from a remote surface either: that agent runs on the other machine.
+    const kind = session.remote || session.peer || entry.flow.replaying ? null : launchedAgent(data)
     if (kind) armAgentHint(session.id, entry, kind)
     return true
   })
@@ -1015,7 +1102,8 @@ function spawn(session: Session, entry: Entry) {
     // The agent (or whatever ran) ended — not just suspended: no hint for it any more.
     const ended = mark?.kind === "D" && !isSuspendCode(mark.code)
     if (ended) endAgentHint(session.id, entry)
-    if (mark) {
+    // A remote surface's marks are the other machine's shell: no ledger, resume or launch here.
+    if (mark && !session.peer) {
       const code = mark.kind === "D" ? mark.code : undefined
       const phase = useStore.getState().resume[session.id]?.phase
       // Exiting before confirming = a failure. While "waiting" (it ran, just unconfirmed —
@@ -1234,7 +1322,27 @@ function failResume(id: string, entry: Entry, exitCode?: number) {
   if (r) useStore.getState().setResume(id, { phase: "failed", plan: r.plan, exitCode })
 }
 
+const DRIVE_SETTLE_MS = 120 // asked once resizing settles: each ask resizes a PTY over there
+
+/** A remote surface in use asks the other machine for the grid its box fits. */
+function driveRemote(id: string, entry: Entry) {
+  clearTimeout(entry.driveTimer)
+  entry.driveTimer = setTimeout(() => {
+    if (!entry.term.textarea || document.activeElement !== entry.term.textarea) return
+    const dims = entry.fit.proposeDimensions()
+    if (!dims || !Number.isFinite(dims.cols) || !Number.isFinite(dims.rows)) return
+    if (!gridChanged(entry.drove, dims.cols, dims.rows)) return
+    entry.drove = { cols: dims.cols, rows: dims.rows }
+    ipc.peerDrive(id, dims.cols, dims.rows)
+  }, DRIVE_SETTLE_MS)
+}
+
 function syncSize(id: string, entry: Entry) {
+  if (entry.pinned) {
+    // A remote surface takes the other pane's size; in use, it asks for its own box's.
+    if (useStore.getState().sessions[id]?.peer) driveRemote(id, entry)
+    return // pinned: never its box's size (and never this PTY resized)
+  }
   try {
     entry.fit.fit()
     const { cols, rows } = entry.term
@@ -1332,7 +1440,8 @@ export const TerminalManager = {
   followSize(id: string, likeId: string) {
     const entry = entries.get(id)
     const like = entries.get(likeId)
-    if (!entry || !like?.opened) return
+    // A remote surface has the other machine's grid, not its pane's: nothing to copy either way.
+    if (!entry || !like?.opened || entry.pinned || like.pinned) return
     const { cols, rows } = like.term
     if (!gridChanged(entry.lastGrid, cols, rows)) return
     try {
@@ -1372,6 +1481,26 @@ export const TerminalManager = {
     // shows stale/garbled pixels until the next draw. Repaint on the next frame,
     // once the moved canvas has laid out. (This is the trigger PR #3's repair missed.)
     requestAnimationFrame(() => repairRenderers())
+  },
+
+  /** Has this terminal been started (mounted or parked)? Remote control lists the others greyed. */
+  isStarted(id: string): boolean {
+    return entries.has(id)
+  },
+
+  /** The terminal's live screen as text, wherever it's scrolled (remote control checks a dialog). */
+  screenLines(id: string): string[] | undefined {
+    const t = entries.get(id)?.term
+    if (!t) return undefined
+    const b = t.buffer.active
+    const out: string[] = []
+    for (let i = 0; i < t.rows; i++) out.push(b.getLine(b.baseY + i)?.translateToString(true) ?? "")
+    return out
+  },
+
+  /** Did the terminal's program turn on bracketed paste? (How a remote message is typed.) */
+  bracketedPaste(id: string): boolean | undefined {
+    return entries.get(id)?.term.modes.bracketedPasteMode
   },
 
   /** Resume banner actions: (re)type the pane's resume command now (offer / retry) — only
@@ -1557,6 +1686,10 @@ export const TerminalManager = {
     entry.offData?.()
     entry.offExit?.()
     entry.offNonce?.()
+    entry.offPinned?.()
+    entry.offDriven?.()
+    clearTimeout(entry.driveTimer)
+    useDriven.getState().set(id, null)
     ipc.ptyKill(id)
     entry.term.dispose()
     entry.host.remove()

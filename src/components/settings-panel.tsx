@@ -6,6 +6,7 @@ import type { Settings } from "../settings/schema"
 import { useEffect, useState } from "react"
 import { ThemePicker } from "./theme-picker"
 import { agentInfo, agentsOn } from "../lib/agent-kinds"
+import { RemoteSettings } from "./remote-settings"
 
 export function SettingsPanel() {
   const settings = useStore((s) => s.settings)
@@ -246,6 +247,8 @@ export function SettingsPanel() {
             onCommit={(n) => update({ ...settings, ssh: { ...settings.ssh, keepAliveSeconds: n } })}
           />
         </label>
+
+        <RemoteSettings />
 
         <div className="settings-footer">
           <button className="btn" onClick={() => void openSettingsFile(settings)}>

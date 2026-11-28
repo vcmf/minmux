@@ -19,6 +19,7 @@ import {
   Moon,
   Globe,
   Plugs,
+  Desktop,
 } from "@phosphor-icons/react"
 import { VIEW_LABEL, viewDot } from "../lib/view-tabs"
 import { activeTheme, focusedTerminal, useStore } from "../store"
@@ -272,6 +273,13 @@ export function TopBar() {
                     const { base, more } = tabTitleParts(tab, sessions, home)
                     return (
                       <>
+                        {sessions[tab.activeSessionId]?.peer && (
+                          <Desktop
+                            size={12}
+                            className="tab-peer"
+                            aria-label={`On ${sessions[tab.activeSessionId]!.peer!.machine}`}
+                          />
+                        )}
                         <span className="tab-title">{base}</span>
                         {more && (
                           <span className="tab-more" title="Panes here run on other places too">

@@ -84,6 +84,7 @@ export interface AgentEvent {
   filePath?: string // extracted from a file tool's input, or a FileChanged path
   worked?: string[] // PostToolUse: absolute folders the call edited files in / `cd`-ed into
   message?: string // Notification message / last_assistant_message
+  notificationType?: string // Claude's Notification kind: permission_prompt, idle_prompt, …
   worktreePath?: string // worktree_path on WorktreeCreate/WorktreeRemove
   baseBranch?: string // base_branch on WorktreeCreate
   transcriptPath?: string // transcript_path — the session's JSONL (token accounting)
