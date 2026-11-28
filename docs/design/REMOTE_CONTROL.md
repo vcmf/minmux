@@ -440,10 +440,15 @@ matrix, apart from the renderer's reducer and its known flaw. Main feeds it ever
   device again. A's main resizes the PTY (coalescer flushed first, the tap's mirror told), and
   A's renderer shows the pane at that size (pinned, scrolling or letterboxed) with a "driven
   from B" chip.
-- Typing on A takes the size back: main drops the drive, and the renderer fits its box again and
-  resizes the PTY, which B's surface then takes. Blur doesn't release (no flicker as focus moves
-  between B's panes). Closing the last surface of that pane releases it, and so does B's socket
-  going. A renderer reload on A drops it too.
+- Typing on A takes the size back: A's renderer says so for real keys (`pty:take-back`; xterm's
+  replies to the program's queries don't count), main drops the drive, and the renderer fits
+  its box again (a parked surface takes its pane's grid) and resizes the PTY, which B's surface
+  then takes.
+- Blur doesn't release (no flicker as focus moves between B's panes), but a blurred surface's
+  size isn't asked for again on a reconnect, and refocusing asks again after A took it back.
+  Asks are sent once resizing settles (120 ms). Released when the last surface of that pane
+  closes, when the socket that drove it goes (not one a reconnect replaced), when the device is
+  lowered below keys or removed, when remote control's worker goes, and on a reload on A.
 
 ## HTTPS and notifications (step 6)
 

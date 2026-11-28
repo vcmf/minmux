@@ -87,6 +87,8 @@ const api = {
   },
   peerDrive: (id: string, cols: number, rows: number) =>
     ipcRenderer.send("peer:drive", id, cols, rows),
+  peerUndrive: (id: string) => ipcRenderer.send("peer:undrive", id),
+  ptyTakeBack: (id: string) => ipcRenderer.send("pty:take-back", id),
   machinesList: (on: boolean) => ipcRenderer.send("machines:list", on),
   machinesPair: (key: string) => ipcRenderer.send("machines:pair", key),
   machinesForget: (key: string) => ipcRenderer.send("machines:forget", key),

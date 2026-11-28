@@ -218,8 +218,6 @@ export function createPeerClient(d: PeerClientDeps) {
           [...surfaces.values()].filter((x) => x.key === m.found.key).map((x) => x.pane),
         ))
           link.send({ t: "term", pane, on: true })
-        for (const s of surfaces.values())
-          if (s.key === m.found.key && s.drive) link.send({ t: "drive", pane: s.pane, ...s.drive })
         break
       case "connecting":
       case "reconnecting":
@@ -276,6 +274,11 @@ export function createPeerClient(d: PeerClientDeps) {
         const was = m.permission
         m.permission = msg.permission
         if (msg.permission !== "keys" && was !== msg.permission) note(m, VIEW_ONLY)
+        // A size asked for before the link (or the permission) was there: asked now.
+        if (msg.permission === "keys")
+          for (const s of surfaces.values())
+            if (s.key === m.found.key && s.drive)
+              m.link?.send({ t: "drive", pane: s.pane, ...s.drive })
         return report()
       }
       case "panes":
@@ -509,9 +512,18 @@ export function createPeerClient(d: PeerClientDeps) {
       case "drive": {
         const s = surfaces.get(msg.sid)
         const m = s && machines.get(s.key)
-        if (!s || m?.permission !== "keys") return
+        if (!s) return
+        // The one in use: no other surface of that pane asks for its size on a reconnect.
+        for (const x of surfaces.values())
+          if (x.key === s.key && x.pane === s.pane) x.drive = undefined
         s.drive = { cols: msg.cols, rows: msg.rows }
-        if (m.open) m.link?.send({ t: "drive", pane: s.pane, ...s.drive })
+        if (m?.open && m.permission === "keys")
+          m.link?.send({ t: "drive", pane: s.pane, ...s.drive })
+        return
+      }
+      case "undrive": {
+        const s = surfaces.get(msg.sid)
+        if (s) s.drive = undefined
         return
       }
       case "keys": {

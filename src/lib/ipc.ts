@@ -59,6 +59,8 @@ export interface Ipc {
   ) => () => void
   // A remote surface you work in: the grid its box fits (the other machine takes that size).
   peerDrive: (id: string, cols: number, rows: number) => void
+  peerUndrive: (id: string) => void // no longer in use: not asked again on a reconnect
+  ptyTakeBack: (id: string) => void // typed here: the size another machine set ends
   // Machines: the user's other minmux on the tailnet (listed while the sidebar shows them).
   machinesList: (on: boolean) => void
   machinesPair: (key: string) => void

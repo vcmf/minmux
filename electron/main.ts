@@ -1278,10 +1278,14 @@ function registerIpc() {
     // Still preparing: swallowed (see pending-spawns.ts), never replayed into the new ssh.
     if (typeof data !== "string" || pendingSpawns.pending(id)) return
     if (remoteMachines?.has(id)) return remoteMachines.write(id, data)
-    const rec = sessions.get(id)
-    if (rec?.driven) undrivePty(rec) // typing here takes the size back
-    rec?.proc.write(data)
+    sessions.get(id)?.proc.write(data)
     remoteControl?.localInput(id, data) // an answer key closes the pane's dialogs (O(1) if none)
+  })
+  // The desktop's own typing in a pane another machine sizes takes the size back (the renderer
+  // says so for real keys: its replies to the program's queries are no one typing).
+  ipcMain.on("pty:take-back", (_e, id: unknown) => {
+    const rec = typeof id === "string" ? sessions.get(id) : undefined
+    if (rec) undrivePty(rec)
   })
   ipcMain.on("pty:resize", (_e, id: string, cols: number, rows: number) => {
     if (pendingSpawns.resize(id, cols, rows)) return // applied when it starts
@@ -1731,6 +1735,9 @@ function registerIpc() {
   ipcMain.on("peer:drive", (_e, id: unknown, cols: unknown, rows: unknown) => {
     if (typeof id === "string" && typeof cols === "number" && typeof rows === "number")
       remoteMachines?.drive(id, cols, rows)
+  })
+  ipcMain.on("peer:undrive", (_e, id: unknown) => {
+    if (typeof id === "string") remoteMachines?.undrive(id)
   })
   ipcMain.on("machines:connect", (_e, key: unknown) => {
     if (typeof key === "string") machines().connect(key)
@@ -2257,7 +2264,7 @@ app.whenReady().then(async () => {
     },
     release: (deviceId, pane) => {
       for (const rec of pane ? [sessions.get(pane)] : sessions.values())
-        if (rec?.driven?.deviceId === deviceId) undrivePty(rec)
+        if (rec?.driven && (!deviceId || rec.driven.deviceId === deviceId)) undrivePty(rec)
     },
     // Same rules as the renderer's typing (pty:write): a pending ssh spawn swallows it.
     writePty: (pane, data) => {

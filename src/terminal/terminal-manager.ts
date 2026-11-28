@@ -115,6 +115,8 @@ interface Entry {
   offPinned?: () => void
   offDriven?: () => void
   drove?: Grid // a remote surface: the grid it last asked the other machine for
+  driveTimer?: ReturnType<typeof setTimeout> // …asked once resizing settles (one per drag)
+  drivenHere?: boolean // another machine sizes this pane (pinned to its size until typing)
   pinned?: Grid // a remote surface: the remote pane's grid, taken instead of fitting
   parsing?: number // a remote surface: output written, not parsed yet (its replies are dropped)
   remote?: RemotePhase // ssh panes only: where the connection is (rules: lib/remote-connect)
@@ -804,6 +806,7 @@ function spawn(session: Session, entry: Entry) {
         if (entries.get(session.id) !== entry) return
         useDriven.getState().set(session.id, size?.by ?? null)
         if (size) {
+          entry.drivenHere = true
           entry.pinned = { cols: size.cols, rows: size.rows }
           entry.host.classList.add("pinned")
           try {
@@ -812,24 +815,35 @@ function spawn(session: Session, entry: Entry) {
             // an invalid size: keep the grid
           }
         } else if (entry.pinned) {
+          entry.drivenHere = false
           entry.pinned = undefined
           entry.host.classList.remove("pinned")
           entry.lastGrid = undefined // the PTY has the other size: tell it ours again
-          syncSize(session.id, entry)
+          // Parked (a hidden surface): its pane's grid, never the parking lot's box.
+          if (entry.host.parentElement === parking) TerminalManager.syncHiddenSizes()
+          else syncSize(session.id, entry)
         }
       })
     })
   }
 
   if (session.peer) {
-    // Focused, it asks the other machine for the grid its box fits (see syncSize).
+    // Focused, it asks the other machine for the grid its box fits (see syncSize); blurred, it
+    // stops asking (the other machine keeps that size until someone types there).
     term.textarea?.addEventListener("focus", () => driveRemote(session.id, entry))
+    term.textarea?.addEventListener("blur", () => {
+      clearTimeout(entry.driveTimer)
+      entry.drove = undefined
+      ipc.peerUndrive(session.id)
+    })
     // A remote surface shows the remote pane at its own size (applied after what's written).
     entry.offPinned = ipc.onPtyPinned(session.id, (cols, rows) => {
       term.write("", () => {
         if (entries.get(session.id) !== entry) return
         entry.pinned = { cols, rows }
         entry.host.classList.add("pinned")
+        // Not the size it asked for (the other machine took it back): asked again on focus.
+        if (entry.drove && gridChanged(entry.drove, cols, rows)) entry.drove = undefined
         try {
           if (term.cols !== cols || term.rows !== rows) term.resize(cols, rows)
         } catch {
@@ -936,6 +950,12 @@ function spawn(session: Session, entry: Entry) {
     }
     // A remote surface: the pane's own terminal over there answers its program already.
     if (session.peer && (isFocusReport(data) || (entry.parsing && isTerminalReply(data)))) return
+    // Sized by another machine: a real key here takes the size back (xterm's replies to the
+    // program's queries aren't typing).
+    if (entry.drivenHere && !isTerminalReply(data) && !isFocusReport(data)) {
+      entry.drivenHere = false
+      ipc.ptyTakeBack(session.id)
+    }
     ipc.ptyWrite(session.id, data)
   })
 
@@ -1298,14 +1318,20 @@ function failResume(id: string, entry: Entry, exitCode?: number) {
   if (r) useStore.getState().setResume(id, { phase: "failed", plan: r.plan, exitCode })
 }
 
-/** A remote surface in use: ask the other machine for the grid this box fits (on change). */
+/** A remote surface in use: ask the other machine for the grid this box fits (on change, once
+ *  resizing settles: each ask resizes a PTY over there). */
+const DRIVE_SETTLE_MS = 120
+
 function driveRemote(id: string, entry: Entry) {
-  if (!entry.term.textarea || document.activeElement !== entry.term.textarea) return
-  const dims = entry.fit.proposeDimensions()
-  if (!dims || !Number.isFinite(dims.cols) || !Number.isFinite(dims.rows)) return
-  if (!gridChanged(entry.drove, dims.cols, dims.rows)) return
-  entry.drove = { cols: dims.cols, rows: dims.rows }
-  ipc.peerDrive(id, dims.cols, dims.rows)
+  clearTimeout(entry.driveTimer)
+  entry.driveTimer = setTimeout(() => {
+    if (!entry.term.textarea || document.activeElement !== entry.term.textarea) return
+    const dims = entry.fit.proposeDimensions()
+    if (!dims || !Number.isFinite(dims.cols) || !Number.isFinite(dims.rows)) return
+    if (!gridChanged(entry.drove, dims.cols, dims.rows)) return
+    entry.drove = { cols: dims.cols, rows: dims.rows }
+    ipc.peerDrive(id, dims.cols, dims.rows)
+  }, DRIVE_SETTLE_MS)
 }
 
 function syncSize(id: string, entry: Entry) {
@@ -1659,6 +1685,7 @@ export const TerminalManager = {
     entry.offNonce?.()
     entry.offPinned?.()
     entry.offDriven?.()
+    clearTimeout(entry.driveTimer)
     useDriven.getState().set(id, null)
     ipc.ptyKill(id)
     entry.term.dispose()

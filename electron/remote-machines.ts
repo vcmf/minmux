@@ -262,6 +262,10 @@ export function setupRemoteMachines(d: RemoteMachinesDeps) {
       if (![cols, rows].every(Number.isInteger) || cols < 20 || rows < 5) return
       post({ t: "drive", sid, cols: Math.min(cols, 500), rows: Math.min(rows, 200) })
     },
+    /** Not in use any more (blur): its size isn't asked for again on a reconnect. */
+    undrive(sid: string) {
+      if (surfaces.has(sid)) post({ t: "undrive", sid })
+    },
     kill(sid: string) {
       if (!surfaces.delete(sid)) return
       post({ t: "close", sid })

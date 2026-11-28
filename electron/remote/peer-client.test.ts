@@ -300,8 +300,11 @@ describe("peer client", () => {
     stops.push(t.c.stop)
     t.c.handle({ t: "tokens", tokens: { [KEY]: "tok" } })
     t.c.handle({ t: "open", sid: "s1", key: KEY, pane: "p1" })
+    // Asked before the link is up: sent once welcome says keys.
+    t.c.handle({ t: "drive", sid: "s1", cols: 80, rows: 24 })
     const s = await t.welcome("keys")
     await until(() => t.machine()?.state === "connected")
+    expect(s.sent).toContainEqual({ t: "drive", pane: "p1", cols: 80, rows: 24 })
     t.c.handle({ t: "drive", sid: "s1", cols: 90, rows: 30 })
     expect(s.sent).toContainEqual({ t: "drive", pane: "p1", cols: 90, rows: 30 })
     t.c.handle({ t: "drive", sid: "nope", cols: 90, rows: 30 })
@@ -310,6 +313,15 @@ describe("peer client", () => {
     await until(() => s2.sent.some((m) => (m as { t: string }).t === "drive"))
     t.c.handle({ t: "close", sid: "s1" })
     expect(s2.sent).toContainEqual({ t: "release", pane: "p1" })
+    // Not in use (blurred): a reconnect doesn't ask for its size again.
+    t.c.handle({ t: "open", sid: "s3", key: KEY, pane: "p1" })
+    t.c.handle({ t: "drive", sid: "s3", cols: 70, rows: 20 })
+    t.c.handle({ t: "undrive", sid: "s3" })
+    t.c.handle({ t: "undrive", sid: "nope" })
+    s2.onclose?.()
+    const s3 = await t.welcome("keys")
+    await new Promise((r) => setTimeout(r, 20))
+    expect(s3.sent.some((m) => (m as { t: string }).t === "drive")).toBe(false)
   })
 
   it("this minmux's own port, once main says it, is never listed", async () => {

@@ -46,7 +46,7 @@ export interface RemoteControlDeps {
   writePty?: (pane: string, data: string) => boolean
   /** Another minmux sets a pane's size (its PTY and the desktop's view of it), or stops. */
   drive?: (pane: string, cols: number, rows: number, by: string, deviceId: string) => void
-  release?: (deviceId: string, pane?: string) => void
+  release?: (deviceId?: string, pane?: string) => void // no device: every pane any drove
 }
 
 const KEYS_MAX = 1024 // one keys message (a key, a short sequence)
@@ -135,7 +135,11 @@ export function setupRemoteControl(deps: RemoteControlDeps) {
         if (t.permissionOf(deviceId) === "keys") deps.drive?.(pane, cols, rows, name, deviceId)
       }),
     release: (deviceId, pane) => deps.release?.(deviceId, pane),
-    workerGone: () => deps.terminal?.untapAll(),
+    // Its sockets went with it: nothing it drove can be released by them any more.
+    workerGone: () => {
+      deps.terminal?.untapAll()
+      deps.release?.()
+    },
     // The dialog in front: is it one a device may answer by number (its agent and kind)?
     answerable: (pane) => {
       const w = waits.waits(pane)[0]
@@ -369,6 +373,7 @@ export function setupRemoteControl(deps: RemoteControlDeps) {
   const revoke = async (id: unknown) => {
     if (typeof id !== "string" || !(await devices()).revoke(id)) return false
     host.drop(id, "revoked")
+    deps.release?.(id)
     send("remote:changed")
     return true
   }
@@ -383,6 +388,7 @@ export function setupRemoteControl(deps: RemoteControlDeps) {
     // A new permission takes effect on the next connection: its pages reconnect at once.
     if (ok) {
       host.drop(id as string, "off")
+      if (p !== "keys") deps.release?.(id as string) // it may not size panes any more
       send("remote:changed")
     }
     return ok

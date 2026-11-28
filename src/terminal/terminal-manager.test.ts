@@ -1513,11 +1513,40 @@ describe("TerminalManager — sized by another machine", () => {
     pinned!(120, 40)
     document.body.appendChild(t.textarea)
     t.textarea.focus()
+    const settle = () => new Promise((r) => setTimeout(r, 150))
     TerminalManager.sizeHidden(id, 600, 400)
-    expect(ipc.peerDrive).toHaveBeenCalled()
-    const n = vi.mocked(ipc.peerDrive).mock.calls.length
+    TerminalManager.sizeHidden(id, 610, 400) // a drag: asked once it settles
+    await settle()
+    expect(ipc.peerDrive).toHaveBeenCalledTimes(1)
     TerminalManager.sizeHidden(id, 600, 400) // same grid: not asked again
-    expect(vi.mocked(ipc.peerDrive).mock.calls.length).toBe(n)
+    await settle()
+    expect(ipc.peerDrive).toHaveBeenCalledTimes(1)
+    // The other machine took its size back: a refocus asks again.
+    pinned!(160, 45)
+    t.textarea.blur()
+    expect(ipc.peerUndrive).toHaveBeenCalledWith(id)
+    t.textarea.focus()
+    await settle()
+    expect(ipc.peerDrive).toHaveBeenCalledTimes(2)
+    t.textarea.remove()
+    TerminalManager.dispose(id)
+  })
+
+  it("sized by another machine: a real key takes it back, xterm's replies don't", async () => {
+    st().newTab(testShell)
+    const id = st().tabs[0]!.activeSessionId
+    let driven: ((s: { cols: number; rows: number; by: string } | null) => void) | undefined
+    vi.mocked(ipc.onPtyDriven).mockImplementation((_id, cb) => ((driven = cb), () => {}))
+    TerminalManager.ensureRunning(st().sessions[id] as Session)
+    await flush()
+    const t = terms[terms.length - 1]!
+    driven!({ cols: 50, rows: 20, by: "linux" })
+    t.type("\x1b[12;1R") // a cursor-position reply
+    t.type("\x1b[I")
+    expect(ipc.ptyTakeBack).not.toHaveBeenCalled()
+    t.type("l")
+    t.type("s")
+    expect(ipc.ptyTakeBack).toHaveBeenCalledTimes(1)
     TerminalManager.dispose(id)
   })
 })

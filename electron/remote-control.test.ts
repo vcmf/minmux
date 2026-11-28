@@ -344,6 +344,15 @@ describe("setupRemoteControl", () => {
     await vi.waitFor(() => expect(drove).toEqual([["p1", 90, 30, "linux", id]]))
     p.emit({ t: "release", deviceId: id })
     expect(released).toEqual([[id, undefined]])
+    // Lowered to view, or removed: it sizes nothing any more.
+    await rc.setPermission(id, "view")
+    expect(released.at(-1)).toEqual([id])
+    await rc.revoke(id)
+    expect(released.at(-1)).toEqual([id])
+    // Remote control turned off (the worker goes): its sockets can't release what they drove.
+    settings = JSON.stringify({ remote: { enabled: false } })
+    rc.apply()
+    await vi.waitFor(() => expect(released.at(-1)).toEqual([]))
     rc.dispose()
   })
 
