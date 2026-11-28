@@ -42,6 +42,7 @@ import { isPosixShell, type ResumePlan } from "./lib/resume"
 import { resolveDefaultShell } from "./lib/shells"
 import { isMac } from "./lib/platform"
 import { buildRemotePanes } from "./lib/remote-panes"
+import { sessionColor } from "./lib/session-color"
 import { startRemotePush } from "./lib/remote-push"
 import { useRemoteTyped } from "./lib/remote-typed"
 import { useMachines } from "./lib/machines-store"
@@ -116,6 +117,8 @@ function App() {
             home: s.home,
             started: (id) => TerminalManager.isStarted(id),
             paste: (id) => TerminalManager.bracketedPaste(id),
+            color: (id) => sessionColor(s.agentMeta[id], "dark"), // the phone's page is dark
+            git: (id) => s.paneGit[id],
           })
         },
         send: (p) => ipc.remotePanes(p),

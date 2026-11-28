@@ -462,6 +462,16 @@ matrix, apart from the renderer's reducer and its known flaw. Main feeds it ever
   button per option. The keys bar is one row of eight.
 - The desktop: a remote tab and its chip carry a blue machine icon; the sidebar lists the devices
   connected now under "Using this computer".
+- Each agent pane on the phone shows its agent's mark in its session's colour, as the desktop's
+  sidebar does (`RemotePane.color`: the dark-theme swatch of its `/color`, or its name's). An
+  agent's replies render as markdown (`lib/chat-markdown`): raw HTML escaped, no images, only
+  http(s) and mailto links, opened outside the page; a wide table or code block scrolls in its
+  own box.
+- The phone's pane list is the desktop sidebar's tree: each tab's name, shell and
+  "branch • ~/folder" with its pane count, then its panes, each with its title and shell, why
+  it waits (or the start of its agent's last reply), its "branch • ~/folder", its PR and its
+  status. The desktop computes those lines (`RemotePane.where`, `snippet`, `pr`;
+  `RemoteTab.sub`), so they read exactly as in its sidebar.
 
 ## HTTPS and notifications (step 6)
 

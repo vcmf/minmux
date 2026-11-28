@@ -24,6 +24,12 @@ export interface RemotePane {
   title: string
   kind: "agent" | "shell" | "ssh"
   agent?: "claude" | "codex" | "opencode"
+  color?: string // its agent session's accent (/color, or from its name), as the sidebar shows it
+  shell?: string // zsh, bash, pwsh… (not for ssh)
+  branch?: string // its folder's git branch
+  where?: string // "branch • ~/folder", as the sidebar's row shows it
+  pr?: { number: number; state: "open" | "draft" | "merged" | "closed" } // that branch's PR
+  snippet?: string // the start of its agent's last reply (not while it waits)
   status: RemoteStatus
   detail?: string // why it needs input, when known
   cwd?: string
@@ -37,6 +43,8 @@ export interface RemotePane {
 export interface RemoteTab {
   id: string
   title: string
+  sub?: string // its focused terminal's "branch • ~/folder", as the sidebar shows it
+  shell?: string
 }
 
 /** The full pane list. `stale`: the desktop window is closed, the list may be out of date. */

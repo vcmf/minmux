@@ -53,8 +53,15 @@ describe("buildRemotePanes", () => {
       agents,
       home: "/Users/me",
       started: (id) => id !== "c",
+      color: () => "#f0913d", // asked for agent panes only
+      git: (id) =>
+        id === "a" ? { branch: "main", pr: { number: 7, state: "open", url: "u" } } : undefined,
     })
-    expect(r.tabs.map((t) => t.id)).toEqual(["t1", "t2"])
+    // Each tab: its focused terminal's branch • folder and shell, as the sidebar heads it.
+    expect(r.tabs).toEqual([
+      { id: "t1", title: expect.any(String), sub: "main • ~/a", shell: "zsh" },
+      { id: "t2", title: expect.any(String), sub: "~/c", shell: "zsh" },
+    ])
     expect(r.panes).toEqual([
       {
         id: "a",
@@ -62,9 +69,14 @@ describe("buildRemotePanes", () => {
         title: "a",
         kind: "agent",
         agent: "claude",
+        color: "#f0913d",
         status: "waiting",
         detail: "Claude needs your permission",
         cwd: "/Users/me/a",
+        shell: "zsh",
+        branch: "main",
+        where: "main • ~/a",
+        pr: { number: 7, state: "open" },
         started: true,
       },
       {
@@ -74,6 +86,8 @@ describe("buildRemotePanes", () => {
         kind: "shell",
         status: "working",
         cwd: "/Users/me/b",
+        shell: "zsh",
+        where: "~/b",
         started: true,
       },
       {
@@ -84,10 +98,28 @@ describe("buildRemotePanes", () => {
         status: "waiting",
         detail: "bell",
         cwd: "/Users/me/c",
+        shell: "zsh",
+        where: "~/c",
         started: false,
       },
     ])
     expect(r.stale).toBe(false)
+  })
+
+  it("a working agent's pane carries the start of its last reply", () => {
+    const agents = graph([
+      { event: "SessionStart", sessionId: "s1", paneId: "a", cwd: "/Users/me/a" },
+      { event: "Stop", sessionId: "s1", paneId: "a", message: "## Done\n\nAll `412` tests pass." },
+      { event: "UserPromptSubmit", sessionId: "s1", paneId: "a" },
+    ])
+    const r = buildRemotePanes({
+      tabs: [tab("t1", makeLeaf("p1", "a"), "a")],
+      sessions: { a: session("a") },
+      agents,
+      home: "/Users/me",
+      started: () => true,
+    })
+    expect(r.panes[0]!.snippet).toBe("Done All 412 tests pass.")
   })
 
   it("marks ssh panes and skips ids without a session", () => {
