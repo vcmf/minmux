@@ -14,6 +14,8 @@ const minmuxStub = {
   onPtyData: vi.fn(unsub),
   onPtyNonce: vi.fn(unsub),
   onPtyPinned: vi.fn(unsub),
+  onPtyDriven: vi.fn(unsub),
+  peerDrive: vi.fn(),
   machinesList: vi.fn(),
   machinesPair: vi.fn(),
   machinesForget: vi.fn(),

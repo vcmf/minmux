@@ -715,6 +715,10 @@ body {
 .remote-row:focus-within .remote-actions {
   display: inline-flex;
 }
+.driven-chip {
+  color: var(--amber);
+  border-color: var(--amber);
+}
 .machines-toggle {
   display: flex;
   align-items: center;

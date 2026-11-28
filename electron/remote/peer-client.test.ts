@@ -295,6 +295,23 @@ describe("peer client", () => {
     await until(() => t.machine()?.state === "connected")
   })
 
+  it("drive: sent while linked (keys only), asked again on a new link, released on close", async () => {
+    const t = setup()
+    stops.push(t.c.stop)
+    t.c.handle({ t: "tokens", tokens: { [KEY]: "tok" } })
+    t.c.handle({ t: "open", sid: "s1", key: KEY, pane: "p1" })
+    const s = await t.welcome("keys")
+    await until(() => t.machine()?.state === "connected")
+    t.c.handle({ t: "drive", sid: "s1", cols: 90, rows: 30 })
+    expect(s.sent).toContainEqual({ t: "drive", pane: "p1", cols: 90, rows: 30 })
+    t.c.handle({ t: "drive", sid: "nope", cols: 90, rows: 30 })
+    s.onclose?.() // the link drops: a new one asks for the size again
+    const s2 = await t.welcome("keys")
+    await until(() => s2.sent.some((m) => (m as { t: string }).t === "drive"))
+    t.c.handle({ t: "close", sid: "s1" })
+    expect(s2.sent).toContainEqual({ t: "release", pane: "p1" })
+  })
+
   it("this minmux's own port, once main says it, is never listed", async () => {
     const t = setup({ peers: [{ ...LINUX, self: true, label: "me" }] })
     stops.push(t.c.stop)

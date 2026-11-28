@@ -44,6 +44,9 @@ export interface RemoteControlDeps {
   }
   /** Writes to a pane's PTY as typing would; false when there's no live one. */
   writePty?: (pane: string, data: string) => boolean
+  /** Another minmux sets a pane's size (its PTY and the desktop's view of it), or stops. */
+  drive?: (pane: string, cols: number, rows: number, by: string, deviceId: string) => void
+  release?: (deviceId: string, pane?: string) => void
 }
 
 const KEYS_MAX = 1024 // one keys message (a key, a short sequence)
@@ -126,6 +129,12 @@ export function setupRemoteControl(deps: RemoteControlDeps) {
     },
     snapshot: (pane) => deps.terminal?.snapshot(pane) ?? null,
     untap: (pane) => deps.terminal?.untap(pane),
+    // Main checks the device again (the worker's word is never authority).
+    drive: (deviceId, name, pane, cols, rows) =>
+      void devices().then((t) => {
+        if (t.permissionOf(deviceId) === "keys") deps.drive?.(pane, cols, rows, name, deviceId)
+      }),
+    release: (deviceId, pane) => deps.release?.(deviceId, pane),
     workerGone: () => deps.terminal?.untapAll(),
     // The dialog in front: is it one a device may answer by number (its agent and kind)?
     answerable: (pane) => {

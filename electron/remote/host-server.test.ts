@@ -735,8 +735,16 @@ describe("remote host server", () => {
       await until(() => keys.length === 1)
       expect(keys[0]).toBe('p1:"x"')
       c.handle({ t: "keys", sid: "nope", data: "y" }) // no such surface: nothing
+      c.handle({ t: "drive", sid: "s1", cols: 90, rows: 30 })
+      await until(() => statuses.some((m) => m.t === "drive"))
+      expect(statuses.find((m) => m.t === "drive")).toMatchObject({
+        pane: "p1",
+        cols: 90,
+        rows: 30,
+      })
       c.handle({ t: "close", sid: "s1" })
       await until(() => untapped.includes("p1"))
+      await until(() => statuses.some((m) => m.t === "release")) // it drove: closing releases
 
       // Removed on that computer: the client forgets its token and says so.
       c.handle({ t: "open", sid: "s2", key, pane: "p1" })

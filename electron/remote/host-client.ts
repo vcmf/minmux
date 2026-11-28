@@ -37,6 +37,9 @@ export interface RemoteHostDeps {
   snapshot?: (pane: string) => TermSnapshot | null | "failed"
   keys?: (deviceId: string, pane: string, data: string) => Promise<boolean>
   untap?: (pane: string) => void
+  /** Another minmux sets a pane's size while you work there; release ends it (all its panes). */
+  drive?: (deviceId: string, name: string, pane: string, cols: number, rows: number) => void
+  release?: (deviceId: string, pane?: string) => void
   answerable?: (pane: string) => boolean
   answer?: (
     call: Extract<RpcCall, { op: "answer" }>,
@@ -194,6 +197,12 @@ export class RemoteHost {
         break
       case "untap":
         this.deps.untap?.(m.pane)
+        break
+      case "drive":
+        this.deps.drive?.(m.deviceId, m.name, m.pane, m.cols, m.rows)
+        break
+      case "release":
+        this.deps.release?.(m.deviceId, m.pane)
         break
       case "rpc":
         // Only to the worker that asked: a replacement numbers its requests from 1 again.

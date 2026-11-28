@@ -17,6 +17,7 @@ export type ToClient =
   | { t: "close"; sid: string }
   | { t: "refresh"; sid: string } // a clean screen again (a reloaded window lost its base)
   | { t: "keys"; sid: string; data: string }
+  | { t: "drive"; sid: string; cols: number; rows: number } // the grid its box fits, while in use
   | { t: "seen" } // the user is at a remote surface: counts as use (the 24 h lock)
 
 export type FromClient =

@@ -432,7 +432,18 @@ matrix, apart from the renderer's reducer and its known flaw. Main feeds it ever
 - Not in the phone's pane list (another machine's pane isn't this one's to offer).
 - Perf: B's own pane while a visible remote surface floods: keystroke p50 47 / p95 56 ms vs
   39 / 53 ms quiet.
-- **Next PR: size driving** (`drive` / `release`, A letterboxed with a chip).
+
+**As built, size driving (2026-11-28):**
+
+- A remote surface with keyboard focus asks for the grid its box fits (`drive`, on focus and on
+  each resize that changes it; asked again on a new link). Only "keys" devices; main checks the
+  device again. A's main resizes the PTY (coalescer flushed first, the tap's mirror told), and
+  A's renderer shows the pane at that size (pinned, scrolling or letterboxed) with a "driven
+  from B" chip.
+- Typing on A takes the size back: main drops the drive, and the renderer fits its box again and
+  resizes the PTY, which B's surface then takes. Blur doesn't release (no flicker as focus moves
+  between B's panes). Closing the last surface of that pane releases it, and so does B's socket
+  going. A renderer reload on A drops it too.
 
 ## HTTPS and notifications (step 6)
 

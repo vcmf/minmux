@@ -126,6 +126,7 @@ interface Machine {
 interface Surface {
   key: string
   pane: string
+  drive?: { cols: number; rows: number } // the size it last asked for (asked again on a new link)
 }
 
 export function createPeerClient(d: PeerClientDeps) {
@@ -217,6 +218,8 @@ export function createPeerClient(d: PeerClientDeps) {
           [...surfaces.values()].filter((x) => x.key === m.found.key).map((x) => x.pane),
         ))
           link.send({ t: "term", pane, on: true })
+        for (const s of surfaces.values())
+          if (s.key === m.found.key && s.drive) link.send({ t: "drive", pane: s.pane, ...s.drive })
         break
       case "connecting":
       case "reconnecting":
@@ -493,6 +496,7 @@ export function createPeerClient(d: PeerClientDeps) {
         if (!m) return
         const still = [...surfaces.values()].some((x) => x.key === s.key && x.pane === s.pane)
         if (!still && m.open) m.link?.send({ t: "term", pane: s.pane, on: false })
+        if (!still && m.open && s.drive) m.link?.send({ t: "release", pane: s.pane })
         sync(m)
         return report()
       }
@@ -500,6 +504,14 @@ export function createPeerClient(d: PeerClientDeps) {
         const s = surfaces.get(msg.sid)
         const m = s && machines.get(s.key)
         if (s && m?.open) m.link?.send({ t: "term", pane: s.pane, on: true })
+        return
+      }
+      case "drive": {
+        const s = surfaces.get(msg.sid)
+        const m = s && machines.get(s.key)
+        if (!s || m?.permission !== "keys") return
+        s.drive = { cols: msg.cols, rows: msg.rows }
+        if (m.open) m.link?.send({ t: "drive", pane: s.pane, ...s.drive })
         return
       }
       case "keys": {

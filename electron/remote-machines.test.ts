@@ -112,6 +112,14 @@ describe("remote machines (main)", () => {
     rm.write("s1", "ls\r")
     expect(p.sent.slice(-2)).toEqual([{ t: "keys", sid: "s1", data: "ls\r" }, { t: "seen" }])
     rm.write("nope", "x") // not a surface: nothing
+    rm.drive("s1", 90, 30)
+    expect(p.sent.at(-1)).toEqual({ t: "drive", sid: "s1", cols: 90, rows: 30 })
+    rm.drive("s1", 900, 300) // capped
+    expect(p.sent.at(-1)).toEqual({ t: "drive", sid: "s1", cols: 500, rows: 200 })
+    const n = p.sent.length
+    rm.drive("s1", 3, 30) // too small: nothing
+    rm.drive("nope", 90, 30)
+    expect(p.sent.length).toBe(n)
     rm.kill("s1")
     expect(p.sent.at(-1)).toEqual({ t: "close", sid: "s1" })
     rm.kill("s1") // twice: nothing

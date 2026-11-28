@@ -52,6 +52,13 @@ export interface Ipc {
   onPtyNonce: (id: string, cb: (nonce: string) => void) => () => void
   // A remote surface's grid: the remote pane's size (its xterm takes it instead of fitting).
   onPtyPinned: (id: string, cb: (cols: number, rows: number) => void) => () => void
+  // Another machine sets this pane's size (null: the desktop's own again).
+  onPtyDriven: (
+    id: string,
+    cb: (size: { cols: number; rows: number; by: string } | null) => void,
+  ) => () => void
+  // A remote surface you work in: the grid its box fits (the other machine takes that size).
+  peerDrive: (id: string, cols: number, rows: number) => void
   // Machines: the user's other minmux on the tailnet (listed while the sidebar shows them).
   machinesList: (on: boolean) => void
   machinesPair: (key: string) => void

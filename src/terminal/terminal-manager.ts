@@ -1,3 +1,4 @@
+import { useDriven } from "../lib/driven-store"
 import { isFocusReport, isTerminalReply } from "../lib/terminal-replies"
 import { Terminal, type ILinkHandler } from "@xterm/xterm"
 import { HINT_AFTER_MS, hintDue, launchedAgent } from "../lib/agent-hint"
@@ -112,6 +113,8 @@ interface Entry {
   offExit?: () => void
   offNonce?: () => void
   offPinned?: () => void
+  offDriven?: () => void
+  drove?: Grid // a remote surface: the grid it last asked the other machine for
   pinned?: Grid // a remote surface: the remote pane's grid, taken instead of fitting
   parsing?: number // a remote surface: output written, not parsed yet (its replies are dropped)
   remote?: RemotePhase // ssh panes only: where the connection is (rules: lib/remote-connect)
@@ -793,7 +796,34 @@ function spawn(session: Session, entry: Entry) {
     }, IDLE_MS)
   })
 
+  if (!session.peer) {
+    // Another machine sizes this pane while someone works there: shown at that size (pinned),
+    // until typing here takes it back (main) and it fits its box again.
+    entry.offDriven = ipc.onPtyDriven(session.id, (size) => {
+      term.write("", () => {
+        if (entries.get(session.id) !== entry) return
+        useDriven.getState().set(session.id, size?.by ?? null)
+        if (size) {
+          entry.pinned = { cols: size.cols, rows: size.rows }
+          entry.host.classList.add("pinned")
+          try {
+            term.resize(size.cols, size.rows)
+          } catch {
+            // an invalid size: keep the grid
+          }
+        } else if (entry.pinned) {
+          entry.pinned = undefined
+          entry.host.classList.remove("pinned")
+          entry.lastGrid = undefined // the PTY has the other size: tell it ours again
+          syncSize(session.id, entry)
+        }
+      })
+    })
+  }
+
   if (session.peer) {
+    // Focused, it asks the other machine for the grid its box fits (see syncSize).
+    term.textarea?.addEventListener("focus", () => driveRemote(session.id, entry))
     // A remote surface shows the remote pane at its own size (applied after what's written).
     entry.offPinned = ipc.onPtyPinned(session.id, (cols, rows) => {
       term.write("", () => {
@@ -1268,8 +1298,22 @@ function failResume(id: string, entry: Entry, exitCode?: number) {
   if (r) useStore.getState().setResume(id, { phase: "failed", plan: r.plan, exitCode })
 }
 
+/** A remote surface in use: ask the other machine for the grid this box fits (on change). */
+function driveRemote(id: string, entry: Entry) {
+  if (!entry.term.textarea || document.activeElement !== entry.term.textarea) return
+  const dims = entry.fit.proposeDimensions()
+  if (!dims || !Number.isFinite(dims.cols) || !Number.isFinite(dims.rows)) return
+  if (!gridChanged(entry.drove, dims.cols, dims.rows)) return
+  entry.drove = { cols: dims.cols, rows: dims.rows }
+  ipc.peerDrive(id, dims.cols, dims.rows)
+}
+
 function syncSize(id: string, entry: Entry) {
-  if (entry.pinned) return // a remote surface: the remote pane's size, never its box's
+  if (entry.pinned) {
+    // A remote surface takes the other pane's size; in use, it asks for its own box's.
+    if (useStore.getState().sessions[id]?.peer) driveRemote(id, entry)
+    return // pinned: never its box's size (and never this PTY resized)
+  }
   try {
     entry.fit.fit()
     const { cols, rows } = entry.term
@@ -1614,6 +1658,8 @@ export const TerminalManager = {
     entry.offExit?.()
     entry.offNonce?.()
     entry.offPinned?.()
+    entry.offDriven?.()
+    useDriven.getState().set(id, null)
     ipc.ptyKill(id)
     entry.term.dispose()
     entry.host.remove()

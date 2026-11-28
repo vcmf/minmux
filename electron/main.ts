@@ -189,6 +189,9 @@ interface PtySession {
   bytesIn: number
   epoch: number
   tapped?: boolean
+  // Another minmux showing this pane set its size (remote control): the desktop's own typing, or
+  // that machine going, takes it back. The renderer shows the pane at that size meanwhile.
+  driven?: { deviceId: string; by: string }
 }
 const sessions = new Map<string, PtySession>()
 // Every node-pty that hasn't reported its exit yet — including closed panes still winding
@@ -313,6 +316,26 @@ function hookTrace(ev: AgentEvent): Record<string, string> {
     src: ev.source ?? ev.reason ?? "",
     cwd: ev.cwd ?? "",
   }
+}
+
+/** Another machine sets this pane's size: its PTY, the tap's mirror, and the renderer's view. */
+function drivePty(rec: PtySession, cols: number, rows: number, by: string, deviceId: string) {
+  rec.coalescer?.flush() // output from before the resize is drawn at the old size
+  try {
+    rec.proc.resize(cols, rows)
+  } catch {
+    return
+  }
+  rec.driven = { deviceId, by }
+  if (rec.tapped) remoteControl?.tapResize(rec.id, cols, rows)
+  if (!rec.sender.isDestroyed()) rec.sender.send(`pty:driven:${rec.id}`, cols, rows, by)
+}
+
+/** The desktop takes its size back: its renderer fits the pane again (and resizes the PTY). */
+function undrivePty(rec: PtySession) {
+  if (!rec.driven) return
+  rec.driven = undefined
+  if (!rec.sender.isDestroyed()) rec.sender.send(`pty:driven:${rec.id}`, null)
 }
 
 // Send PTY output to the session's current renderer (skips a destroyed one).
@@ -891,6 +914,7 @@ function reattach(rec: PtySession, sender: Electron.WebContents, opts: SpawnOpts
   // Point output at the new renderer, drop stale in-flight bytes (they're in the buffer),
   // resize to the new xterm, then replay history.
   rec.sender = sender
+  rec.driven = undefined // the new renderer's own size
   rec.coalescer?.reset()
   rec.epoch++ // the dropped in-flight bytes never reach the tap: its watchers start again
   if (rec.tapped) remoteControl?.tapReset(rec.id)
@@ -1254,11 +1278,14 @@ function registerIpc() {
     // Still preparing: swallowed (see pending-spawns.ts), never replayed into the new ssh.
     if (typeof data !== "string" || pendingSpawns.pending(id)) return
     if (remoteMachines?.has(id)) return remoteMachines.write(id, data)
-    sessions.get(id)?.proc.write(data)
+    const rec = sessions.get(id)
+    if (rec?.driven) undrivePty(rec) // typing here takes the size back
+    rec?.proc.write(data)
     remoteControl?.localInput(id, data) // an answer key closes the pane's dialogs (O(1) if none)
   })
   ipcMain.on("pty:resize", (_e, id: string, cols: number, rows: number) => {
     if (pendingSpawns.resize(id, cols, rows)) return // applied when it starts
+    if (sessions.get(id)?.driven) return // another machine's size until it's taken back
     try {
       sessions.get(id)?.proc.resize(cols, rows)
       const rec = sessions.get(id)
@@ -1700,6 +1727,10 @@ function registerIpc() {
   ipcMain.on("machines:list", (_e, on: unknown) => machines().list(on === true))
   ipcMain.on("machines:pair", (_e, key: unknown) => {
     if (typeof key === "string") machines().pair(key)
+  })
+  ipcMain.on("peer:drive", (_e, id: unknown, cols: unknown, rows: unknown) => {
+    if (typeof id === "string" && typeof cols === "number" && typeof rows === "number")
+      remoteMachines?.drive(id, cols, rows)
   })
   ipcMain.on("machines:connect", (_e, key: unknown) => {
     if (typeof key === "string") machines().connect(key)
@@ -2219,6 +2250,14 @@ app.whenReady().then(async () => {
       untapAll: () => {
         for (const rec of sessions.values()) rec.tapped = false
       },
+    },
+    drive: (pane, cols, rows, by, deviceId) => {
+      const rec = sessions.get(pane)
+      if (rec && !pendingSpawns.pending(pane)) drivePty(rec, cols, rows, by, deviceId)
+    },
+    release: (deviceId, pane) => {
+      for (const rec of pane ? [sessions.get(pane)] : sessions.values())
+        if (rec?.driven?.deviceId === deviceId) undrivePty(rec)
     },
     // Same rules as the renderer's typing (pty:write): a pending ssh spawn swallows it.
     writePty: (pane, data) => {

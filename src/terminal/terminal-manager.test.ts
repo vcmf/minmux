@@ -6,6 +6,7 @@ import { hostShellOption } from "../lib/ssh-hosts-ui"
 import { SSH_ERRORS } from "../lib/ssh-errors"
 import type { Session } from "../types"
 import { reduceAgentEvents } from "../lib/agent-graph"
+import { useDriven } from "../lib/driven-store"
 
 // A stand-in xterm: records writes and exposes the onData handler (jsdom has no canvas).
 const terms: FakeTerminal[] = []
@@ -85,6 +86,9 @@ vi.mock("@xterm/xterm", () => ({ Terminal: FakeTerminal }))
 vi.mock("@xterm/addon-fit", () => ({
   FitAddon: class {
     fit() {}
+    proposeDimensions() {
+      return { cols: 80, rows: 24 }
+    }
   },
 }))
 vi.mock("@xterm/addon-web-links", () => ({ WebLinksAddon: class {} }))
@@ -1472,6 +1476,49 @@ describe("TerminalManager — a remote surface (another minmux's pane)", () => {
     const resize = vi.spyOn(localTerm, "resize")
     TerminalManager.syncHiddenSizes()
     expect(resize).not.toHaveBeenCalled()
+  })
+})
+
+describe("TerminalManager — sized by another machine", () => {
+  it("shows the pane at that size with a chip; back to its box when released", async () => {
+    st().newTab(testShell)
+    const id = st().tabs[0]!.activeSessionId
+    let driven: ((s: { cols: number; rows: number; by: string } | null) => void) | undefined
+    vi.mocked(ipc.onPtyDriven).mockImplementation((_id, cb) => ((driven = cb), () => {}))
+    TerminalManager.ensureRunning(st().sessions[id] as Session)
+    await flush()
+    const t = terms[terms.length - 1]!
+    const resize = vi.spyOn(t, "resize")
+    driven!({ cols: 50, rows: 20, by: "linux" })
+    expect(resize).toHaveBeenCalledWith(50, 20)
+    expect(useDriven.getState().by[id]).toBe("linux")
+    vi.mocked(ipc.ptyResize).mockClear()
+    TerminalManager.sizeHidden(id, 900, 600) // its box: not while driven
+    expect(ipc.ptyResize).not.toHaveBeenCalled()
+    driven!(null)
+    expect(useDriven.getState().by[id]).toBeUndefined()
+    driven!(null) // twice: nothing more
+    TerminalManager.dispose(id)
+  })
+
+  it("a remote surface in use asks for the grid its box fits", async () => {
+    st().newTab(testShell)
+    st().openPeer({ key: "linux:7420", pane: "p9", machine: "linux" }, "zsh")
+    const id = st().tabs[0]!.activeEntryId
+    let pinned: ((c: number, r: number) => void) | undefined
+    vi.mocked(ipc.onPtyPinned).mockImplementation((_id, cb) => ((pinned = cb), () => {}))
+    TerminalManager.ensureRunning(st().sessions[id] as Session)
+    await flush()
+    const t = terms[terms.length - 1]!
+    pinned!(120, 40)
+    document.body.appendChild(t.textarea)
+    t.textarea.focus()
+    TerminalManager.sizeHidden(id, 600, 400)
+    expect(ipc.peerDrive).toHaveBeenCalled()
+    const n = vi.mocked(ipc.peerDrive).mock.calls.length
+    TerminalManager.sizeHidden(id, 600, 400) // same grid: not asked again
+    expect(vi.mocked(ipc.peerDrive).mock.calls.length).toBe(n)
+    TerminalManager.dispose(id)
   })
 })
 

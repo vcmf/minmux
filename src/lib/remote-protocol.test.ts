@@ -1,6 +1,22 @@
 import { describe, expect, it } from "vitest"
 import { isPermission, parseClientMessage, parseHostMessage } from "./remote-protocol"
 
+describe("parseClientMessage: drive / release", () => {
+  it("a sane grid only", () => {
+    expect(parseClientMessage('{"t":"drive","pane":"p","cols":100,"rows":30}')).toEqual({
+      t: "drive",
+      pane: "p",
+      cols: 100,
+      rows: 30,
+    })
+    expect(parseClientMessage('{"t":"drive","pane":"p","cols":5,"rows":30}')).toBeNull()
+    expect(parseClientMessage('{"t":"drive","pane":"p","cols":100.5,"rows":30}')).toBeNull()
+    expect(parseClientMessage('{"t":"drive","pane":"p","cols":100,"rows":900}')).toBeNull()
+    expect(parseClientMessage('{"t":"release","pane":"p"}')).toEqual({ t: "release", pane: "p" })
+    expect(parseClientMessage('{"t":"release"}')).toBeNull()
+  })
+})
+
 describe("parseClientMessage", () => {
   it("accepts hello and seen, nothing else", () => {
     expect(parseClientMessage('{"t":"hello","v":1,"client":"web"}')).toEqual({
