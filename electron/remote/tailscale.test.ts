@@ -1,5 +1,17 @@
 import { describe, expect, it } from "vitest"
-import { cliCandidates, findCli, openUrl, parseStatus, parseWhois, peerAllowed } from "./tailscale"
+import {
+  cliCandidates,
+  findCli,
+  openUrl,
+  parseStatus,
+  parseWhois,
+  peerAllowed,
+  peersOf,
+  probePorts,
+  tailnetReader,
+  type SelfNode,
+} from "./tailscale"
+import { candidates, tokenFrom } from "./peer-client"
 
 const status = (over: Record<string, unknown> = {}, self: Record<string, unknown> = {}) =>
   JSON.stringify({
@@ -98,5 +110,93 @@ describe("CLI lookup", () => {
     expect(findCli(c, () => false)).toBeNull()
     const w = cliCandidates("win32", "", { ProgramFiles: "D:\\PF" })
     expect(w.some((p) => p.includes("Tailscale") && p.endsWith("tailscale.exe"))).toBe(true)
+  })
+})
+
+describe("peersOf / candidates: where another minmux may answer", () => {
+  const self: SelfNode = {
+    userId: "u1",
+    nodeId: "n0",
+    dnsName: "mac.tail.ts.net",
+    shortName: "mac",
+    label: "mac",
+    ips: ["100.64.0.1"],
+    tagged: false,
+    certDomains: [],
+  }
+  const status = JSON.stringify({
+    Peer: {
+      a: { Online: true, UserID: "u1", DNSName: "linux.tail.ts.net.", OS: "linux" },
+      b: { Online: false, UserID: "u1", DNSName: "off.tail.ts.net.", OS: "linux" },
+      c: { Online: true, UserID: "u2", DNSName: "theirs.tail.ts.net.", OS: "linux" },
+      d: { Online: true, UserID: "u1", DNSName: "srv.tail.ts.net.", Tags: ["tag:ci"] },
+      e: { Online: true, UserID: "u1", DNSName: "iphone.tail.ts.net.", OS: "iOS" },
+      f: { Online: true, UserID: "u1", DNSName: "", HostName: "box", TailscaleIPs: ["100.64.0.9"] },
+      g: { Online: true, UserID: "u1" }, // no address
+      h: null,
+    },
+  })
+
+  it("online, same user, untagged, not a phone; this machine first", () => {
+    expect(peersOf(status, self)).toEqual([
+      { dnsName: "mac.tail.ts.net", label: "mac", host: "mac.tail.ts.net", self: true },
+      { dnsName: "linux.tail.ts.net", label: "linux", host: "linux.tail.ts.net", self: false },
+      { dnsName: "", label: "box", host: "100.64.0.9", self: false },
+    ])
+    expect(peersOf("not json", self)).toEqual([])
+    expect(peersOf(status, { ...self, tagged: true })).toEqual([])
+  })
+
+  it("each machine on each port, never this minmux's own", () => {
+    const peers = peersOf(status, self).slice(0, 2)
+    expect(candidates(peers, [7420, 7421], 7420).map((c) => [c.key, c.label])).toEqual([
+      ["mac.tail.ts.net:7421", "mac (this computer) · dev"],
+      ["linux.tail.ts.net:7420", "linux"],
+      ["linux.tail.ts.net:7421", "linux · dev"],
+    ])
+  })
+
+  it("reads the token from its port's cookie only", () => {
+    expect(tokenFrom(["minmux_remote_7420=abc=; HttpOnly"], 7420)).toBe("abc=")
+    expect(tokenFrom(["minmux_remote_7421=abc; HttpOnly"], 7420)).toBeNull()
+    expect(tokenFrom([], 7420)).toBeNull()
+  })
+})
+
+describe("probePorts / tailnetReader", () => {
+  it("ports from the env, else release and dev", () => {
+    expect(probePorts(undefined)).toEqual([7420, 7421])
+    expect(probePorts("7458, 99999,x,7420")).toEqual([7458, 7420])
+  })
+
+  it("reads status once the CLI is found; no CLI: missing", async () => {
+    expect(
+      await tailnetReader(
+        () => null,
+        async () => "",
+      )(),
+    ).toEqual({
+      self: { ok: false, reason: "missing" },
+      peers: [],
+    })
+    const status = JSON.stringify({
+      BackendState: "Running",
+      Self: { ID: "n", UserID: "u", DNSName: "me.ts.net.", TailscaleIPs: ["100.64.0.1"] },
+    })
+    let finds = 0
+    const read = tailnetReader(
+      () => (finds++, "tailscale"),
+      async () => status,
+    )
+    const r = await read()
+    await read()
+    expect(finds).toBe(1)
+    expect(r.self.ok).toBe(true)
+    expect(r.peers.map((p) => p.label)).toEqual(["me"])
+    const stopped = tailnetReader(
+      () => "tailscale",
+      async () => JSON.stringify({ BackendState: "Stopped" }),
+    )
+    expect((await stopped()).peers).toEqual([])
   })
 })

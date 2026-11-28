@@ -30,7 +30,7 @@ export function buildRemotePanes(i: RemotePanesInput): RemotePanes {
   const tabs = i.tabs.map((tab) => {
     for (const id of allSessionIds(tab.root)) {
       const s = i.sessions[id]
-      if (!s) continue
+      if (!s || s.peer) continue // another minmux's pane: not this machine's to offer
       const lead = leads[id]
       const status: RemoteStatus = lead
         ? AGENT_STATUS[lead.status]

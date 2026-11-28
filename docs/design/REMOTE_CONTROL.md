@@ -403,6 +403,37 @@ matrix, apart from the renderer's reducer and its known flaw. Main feeds it ever
 - B is a device of A, approved once (the approval page opens in B's browser from the Machines
   list).
 
+**As built, first part (2026-11-28):**
+
+- **Machines** sit at the bottom of the sidebar's Remote section, closed by default: opening
+  them starts looking, and they're listed while open. The `remote-client` worker (`electron/remote/peer-client.ts`) reads `tailscale status`: this machine
+  and online, untagged peers of the same user, phones left out. It probes `/hello` on 7420 and
+  7421 (never this minmux's own port), so a dev build and the installed app see each other.
+- **Approval is asked by the worker itself**, not B's browser: it POSTs `/api/approve` with
+  `{machine: true}` and shows the code in the sidebar. A's dialog says "minmux on B wants to open
+  your terminals". Allow gives **keys** (it types in terminals), and View only gives view. The
+  `machine` flag is the asker's word: the dialog says what Allow grants, and only the user's own
+  untagged devices reach the endpoint. Two minmux on one computer never share a request. The
+  token comes from the Set-Cookie. Main keeps it in `remote-machines.json` (0600). That's the
+  same protection as ssh keys and gh's tokens: Electron's `safeStorage` blocked main and can
+  bring up a keychain prompt on macOS.
+- One link per approved machine (the phone's `Link`, saying hello as `minmux`). It's up while
+  the list shows, a surface shows one of its panes, or an ask waits for its answer. The worker
+  stops 30 s after none. "Disconnect all" on that computer holds the machine until **Connect**
+  (or opening one of its panes). A focused window showing a remote surface's output counts as
+  use (the 24 h lock), as typing does.
+- **A remote surface** is a `Session` with `peer: {key, pane, machine}`. To the renderer it's a
+  PTY: `pty:spawn` with `peer` makes main follow the pane, `pty:data` carries a clean screen
+  (`ESC c` + the serialized screen) and then output, `pty:write` becomes `keys`, and a renderer
+  reload replays since the last clean screen. Its xterm **takes the remote pane's grid**
+  (`pty:pinned`, applied after what's already written) instead of fitting, and scrolls when the
+  pane is smaller. It's saved in the workspace; older builds open a local shell there. A
+  remote surface's folder reports (OSC 7) are ignored, and its title always names the machine.
+- Not in the phone's pane list (another machine's pane isn't this one's to offer).
+- Perf: B's own pane while a visible remote surface floods: keystroke p50 47 / p95 56 ms vs
+  39 / 53 ms quiet.
+- **Next PR: size driving** (`drive` / `release`, A letterboxed with a chip).
+
 ## HTTPS and notifications (step 6)
 
 - **Use HTTPS**: `tailscale serve --bg` forwarding to a **unix socket** with 0600 permissions (or,

@@ -25,6 +25,7 @@ import {
 } from "@phosphor-icons/react"
 import { activeTheme, canOpenTerminalIn, useStore } from "../store"
 import { useRemoteTyped } from "../lib/remote-typed"
+import { MachinesList } from "./machines-list"
 import { sessionColor } from "../lib/session-color"
 import { agentPanes, paneAgents, type AgentKind } from "../lib/agent-graph"
 import { agentWorkDirs, agentWorkFlat, gitKey, inLabel, inLine, samePath } from "../lib/agent-dirs"
@@ -1014,6 +1015,7 @@ function RemoteHosts() {
               All hosts ({visibleCount})…
             </button>
           )}
+          <MachinesList />
         </div>
       )}
       {menu && (

@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest"
 import {
   serializeWorkspace,
   deserializeWorkspace,
+  restorePeer,
   migratePaneNode,
   parseWorkspace,
   readWorkspaceFile,
@@ -28,6 +29,31 @@ const tab: Tab = {
   activeSessionId: "s1",
 }
 const state: WorkspaceState = { sessions: { s1: session }, tabs: [tab], activeTabId: "t1" }
+
+describe("workspace: remote surfaces", () => {
+  it("keep their machine and pane (older builds open a local shell there)", () => {
+    const peer = { key: "mac.tail.ts.net:7420", pane: "p9", machine: "mac" }
+    const w = serializeWorkspace({
+      ...state,
+      sessions: { s1: { ...session, command: "", args: [], cwd: undefined, peer } },
+    })
+    expect(w.sessions[0]).toMatchObject({ command: "", peer })
+    const back = parseWorkspace(JSON.stringify(w))!
+    expect(back.sessions.s1!.peer).toEqual(peer)
+    expect(back.sessions.s1!.cwd).toBeUndefined()
+  })
+
+  it("restorePeer checks what it reads", () => {
+    expect(restorePeer({ key: "mac:7420", pane: "p" })).toEqual({
+      key: "mac:7420",
+      pane: "p",
+      machine: "mac:7420",
+    })
+    expect(restorePeer(null)).toBeUndefined()
+    expect(restorePeer({ key: "mac", pane: "p" })).toBeUndefined()
+    expect(restorePeer({ key: "mac:7420", pane: "" })).toBeUndefined()
+  })
+})
 
 describe("workspace serialize/deserialize", () => {
   it("serialize drops runtime status/unread but keeps layout + spawn info", () => {

@@ -715,6 +715,37 @@ body {
 .remote-row:focus-within .remote-actions {
   display: inline-flex;
 }
+.machines-toggle {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+  border: 0;
+  background: none;
+  font: inherit;
+  font-size: 10.5px;
+  color: var(--faint);
+  text-align: left;
+  cursor: pointer;
+}
+.machine-row .machine-ask {
+  margin-left: auto;
+  flex: 0 0 auto;
+  font-size: 11px;
+  padding: 1px 6px;
+}
+.machine-pane {
+  width: 100%;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+}
+.machine-pane:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
 .remote-empty {
   display: flex;
   flex-direction: column;
@@ -1188,6 +1219,15 @@ body {
 .terminal-host .xterm-viewport {
   height: 100%;
   width: 100%;
+}
+/* A remote surface keeps the remote pane's grid: scroll when this pane is smaller. */
+.terminal-host.pinned {
+  overflow: auto;
+}
+.terminal-host.pinned .xterm,
+.terminal-host.pinned .xterm-viewport {
+  width: auto;
+  height: auto;
 }
 /* xterm paints the viewport pure black; the grid is whole cells, so the sub-cell
    remainder below the last row showed a black strip. Match the terminal bg. */

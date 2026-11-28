@@ -18,6 +18,13 @@ export interface RemoteRef {
   env: SshEnv
 }
 
+/** Another minmux's pane, shown here as a terminal surface (remote control over Tailscale). */
+export interface PeerRef {
+  key: string // the machine: "<host>:<port>"
+  pane: string // the pane's session id there
+  machine: string // the machine's name, for display
+}
+
 /** A ~/.ssh/config host as the sidebar lists it. */
 export interface SshHost extends RemoteRef {
   detail?: string // "user@hostname:port" subline
@@ -39,6 +46,7 @@ export interface Session {
   detail?: string // why it needs attention (OSC-9 message / "needs input")
   remote?: RemoteRef // runs on an ssh host: no local cwd, files or git (splits stay on it)
   remoteSaved?: unknown // a saved host this build couldn't read: written back as-is on save
+  peer?: PeerRef // a remote surface: another minmux's pane, not a process here
   remoteCwd?: string // runtime only: where its remote shell reports it is (display, never read locally)
   remoteCwdVerified?: boolean // runtime only: remoteCwd came from our integrated shell (nonce-checked)
   remoteCwdHost?: string // runtime only: …and the host that reported it (one alias, several machines)
@@ -92,4 +100,5 @@ export interface SpawnOpts {
   remote?: RemoteRef // an ssh session: main rebuilds the command from its own host list
   attachOnly?: boolean // reattach a live PTY, but start nothing (a restored on-focus ssh pane)
   reopen?: { dir: string; host: string } // an ssh session: the verified folder to open in
+  peer?: PeerRef // a remote surface: another minmux's pane (bytes from remote control)
 }

@@ -36,7 +36,9 @@ import {
 } from "./shell-integration"
 import { gitStatus, gitDiff } from "./git"
 import { OutputCoalescer } from "./coalescer"
-import { setupRemoteControl } from "./remote-control"
+import { autoPort, setupRemoteControl } from "./remote-control"
+import { mergeRemoteSettings } from "../src/settings/schema"
+import { peerRefOf, setupRemoteMachines } from "./remote-machines"
 import { OutputBuffer } from "./output-buffer"
 import { drainPtys, type Drainable, type DrainOptions } from "./pty-drain"
 import { AgentProcs, noop, posixProcs } from "./agent-procs"
@@ -146,7 +148,8 @@ if ("error" in PROFILE_CHOICE) {
   dialog.showErrorBox("minmux can't start", PROFILE_CHOICE.error)
   process.exit(1)
 }
-const PROFILE_NAMES = profileNames(PROFILE_CHOICE.profile)
+const PROFILE = PROFILE_CHOICE.profile
+const PROFILE_NAMES = profileNames(PROFILE)
 scrubParentInstanceEnv(process.env)
 setIntegrationDirName(PROFILE_NAMES.appName)
 // electron-vite's dev-server URL is for this process only: read once, then gone from the env
@@ -397,6 +400,31 @@ const askScreen = async (pane: string) => {
 
 // Remote control over Tailscale (docs/design/REMOTE_CONTROL.md): no worker until it's turned on.
 let remoteControl: ReturnType<typeof setupRemoteControl> | null = null
+// minmux on another machine: the remote-client worker and remote surfaces (started on first use).
+let remoteMachines: ReturnType<typeof setupRemoteMachines> | null = null
+function machines(): ReturnType<typeof setupRemoteMachines> {
+  return (remoteMachines ??= setupRemoteMachines({
+    configDir,
+    fork: () =>
+      utilityProcess.fork(path.join(dir, "remote-client.js"), [], {
+        serviceName: "minmux remote client",
+      }),
+    ownPort: () => {
+      try {
+        const r = (JSON.parse(readSettings() || "{}") as { remote?: unknown }).remote
+        return mergeRemoteSettings(r).port || autoPort(PROFILE)
+      } catch {
+        return autoPort(PROFILE)
+      }
+    },
+    focused: () => !!mainWindow && !mainWindow.isDestroyed() && mainWindow.isFocused(),
+    onMachines: (list) => {
+      if (mainWindow && !mainWindow.isDestroyed())
+        mainWindow.webContents.send("machines:changed", list)
+    },
+    draining,
+  }))
+}
 /** The agents' commands: a process running one is an agent (one started outside the wrapper). */
 const agentNames = () => agentsOn(process.platform).map((k) => AGENT_KINDS[k].command)
 /** A pane's shell, for its processes (local panes only). */
@@ -845,7 +873,11 @@ function writeSettings(contents: string): void {
 
 // The renderer's spawn request (src/lib/ipc.ts), with `remote` untrusted until SshService
 // rebuilds it from main's own list.
-type SpawnOpts = Omit<SpawnRequest, "remote" | "reopen"> & { remote?: unknown; reopen?: unknown }
+type SpawnOpts = Omit<SpawnRequest, "remote" | "reopen" | "peer"> & {
+  remote?: unknown
+  reopen?: unknown
+  peer?: unknown
+}
 // remoteNonce: an integrated ssh pane's nonce, so the renderer trusts only its shell's reports.
 type SpawnResult = {
   reattached: boolean
@@ -1175,6 +1207,13 @@ function registerIpc() {
     if (joined) return joined as Promise<SpawnResult>
     const existing = sessions.get(opts.id)
     if (existing) return reattach(existing, event.sender, opts)
+    // A remote surface: another minmux's pane, relayed by the remote-client worker.
+    if (opts.peer !== undefined) {
+      const ref = peerRefOf(opts.peer)
+      if (!ref) throw new Error("not a remote pane")
+      const { reattached } = machines().spawn(event.sender, opts.id, ref)
+      return { reattached, integrated: false, started: true }
+    }
     // Reattach only (a restored ssh pane waiting for Enter): nothing live → start nothing.
     if (opts.attachOnly === true) return { reattached: false, integrated: false, started: false }
     if (opts.remote !== undefined) {
@@ -1214,6 +1253,7 @@ function registerIpc() {
   ipcMain.on("pty:write", (_e, id: string, data: string) => {
     // Still preparing: swallowed (see pending-spawns.ts), never replayed into the new ssh.
     if (typeof data !== "string" || pendingSpawns.pending(id)) return
+    if (remoteMachines?.has(id)) return remoteMachines.write(id, data)
     sessions.get(id)?.proc.write(data)
     remoteControl?.localInput(id, data) // an answer key closes the pane's dialogs (O(1) if none)
   })
@@ -1232,13 +1272,14 @@ function registerIpc() {
   })
   // Explicit kill (pane/tab closed) — really terminate + free the replay buffer.
   // Which sessions have a live PTY here (a renderer reload restores its layout over them).
-  ipcMain.handle("pty:live-ids", async () => [...sessions.keys()])
+  ipcMain.handle("pty:live-ids", async () => [...sessions.keys(), ...(remoteMachines?.ids() ?? [])])
   ipcMain.on("pty:kill", (_e, id: string) => {
     untrackMeta(id, false) // the pane is gone — nothing left to accent
     sessionLedger().drop(id) // closed on purpose — don't resume its Claude session
     remoteControl?.paneGone(id)
     if (sessions.get(id)?.tapped) remoteControl?.tapReset(id) // a watching device hears it's gone
     pendingSpawns.kill(id) // still preparing: it must not start at all
+    remoteMachines?.kill(id)
     const rec = sessions.get(id)
     if (!rec) return
     rec.coalescer?.dispose()
@@ -1655,6 +1696,17 @@ function registerIpc() {
 
   // Remote control (electron/remote-control.ts; docs/design/REMOTE_CONTROL.md).
   ipcMain.handle("remote:view", () => remoteControl?.view() ?? null) // null: not set up yet
+  // Machines: the user's other minmux on the tailnet (the sidebar's list, approvals).
+  ipcMain.on("machines:list", (_e, on: unknown) => machines().list(on === true))
+  ipcMain.on("machines:pair", (_e, key: unknown) => {
+    if (typeof key === "string") machines().pair(key)
+  })
+  ipcMain.on("machines:connect", (_e, key: unknown) => {
+    if (typeof key === "string") machines().connect(key)
+  })
+  ipcMain.on("machines:forget", (_e, key: unknown) => {
+    if (typeof key === "string") machines().forget(key)
+  })
   ipcMain.on("remote:panes", (_e, panes: unknown) => remoteControl?.setPanes(panes))
   ipcMain.handle("remote:wanted", () => remoteControl?.wanted() ?? false)
   ipcMain.handle("remote:revoke", (_e, id: unknown) => remoteControl?.revoke(id) ?? false)
@@ -2221,6 +2273,7 @@ app.on("will-quit", () => {
   sessionsWorker.dispose()
   historyWorker.dispose() // stops a search (and its rg) too
   remoteControl?.dispose() // says goodbye to remote clients, ends the worker
+  remoteMachines?.dispose()
 })
 app.on("quit", () => diag("quit"))
 

@@ -24,7 +24,7 @@ export type PendingAnswer =
 /** Requests the worker makes of main (answered with the matching `RpcResult`). */
 export type RpcCall =
   | { op: "auth"; token: string | null; nodeId: string }
-  | { op: "approve"; nodeId: string; name: string }
+  | { op: "approve"; nodeId: string; name: string; machine?: boolean } // machine: another minmux
   | { op: "pending"; id: string; nodeId: string }
   | { op: "unlock"; token: string | null; nodeId: string; pin: string }
   | { op: "send"; deviceId: string; pane: string; text: string; id: string }

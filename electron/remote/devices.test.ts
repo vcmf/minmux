@@ -250,3 +250,20 @@ describe("device file", () => {
     expect(parseDeviceFile("{oops").file.devices).toEqual([])
   })
 })
+
+describe("another minmux asking", () => {
+  it("Allow lets it type (keys); View only stays view", () => {
+    const { table } = setup()
+    const p = table.createPending("n1", "linux", true) as Pending
+    table.decide(p.id, "allow")
+    expect(table.list()[0]!.permission).toBe("keys")
+    const q = table.createPending("n2", "box", true) as Pending
+    table.decide(q.id, "view")
+    expect(table.list()[1]!.permission).toBe("view")
+    // Two minmux on one computer (installed + dev): each its own request, never joined.
+    const a = table.createPending("n3", "mac", true) as Pending
+    const b = table.createPending("n3", "mac", true) as Pending
+    expect(b.id).not.toBe(a.id)
+    expect(b.existing).toBeUndefined()
+  })
+})

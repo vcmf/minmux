@@ -35,6 +35,11 @@ export function isCustomOscTitle(title: string | undefined): boolean {
 /** A pane's display title: custom program title > ssh host > cwd basename > shell name. */
 export function displaySessionTitle(session: Session | undefined, home: string): string {
   if (!session) return "shell"
+  // A remote surface: its program's title (or the pane's) and always the machine it's on.
+  if (session.peer)
+    return isCustomOscTitle(session.oscTitle)
+      ? `${session.oscTitle!.trim()} · ${session.peer.machine}`
+      : session.title
   if (isCustomOscTitle(session.oscTitle)) return session.oscTitle!.trim()
   if (session.remote) return session.remote.label
   return cwdBasename(session.cwd, home) || shellType(session.command) || session.title || "shell"

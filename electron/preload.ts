@@ -1,3 +1,4 @@
+import type { MachineView } from "../src/lib/remote-machines"
 import { contextBridge, ipcRenderer } from "electron"
 import type { Permission, RemotePanes } from "../src/lib/remote-protocol"
 import type { RemoteView } from "../src/lib/remote-view"
@@ -66,6 +67,22 @@ const api = {
     const listener = (_e: unknown, data: string) => cb(data)
     ipcRenderer.on(channel, listener)
     return () => ipcRenderer.removeListener(channel, listener)
+  },
+
+  onPtyPinned: (id: string, cb: (cols: number, rows: number) => void) => {
+    const channel = `pty:pinned:${id}`
+    const listener = (_e: unknown, cols: number, rows: number) => cb(cols, rows)
+    ipcRenderer.on(channel, listener)
+    return () => ipcRenderer.removeListener(channel, listener)
+  },
+  machinesList: (on: boolean) => ipcRenderer.send("machines:list", on),
+  machinesPair: (key: string) => ipcRenderer.send("machines:pair", key),
+  machinesForget: (key: string) => ipcRenderer.send("machines:forget", key),
+  machinesConnect: (key: string) => ipcRenderer.send("machines:connect", key),
+  onMachines: (cb: (list: MachineView[]) => void) => {
+    const listener = (_e: unknown, list: MachineView[]) => cb(list)
+    ipcRenderer.on("machines:changed", listener)
+    return () => ipcRenderer.removeListener("machines:changed", listener)
   },
 
   ptyWrite: (id: string, data: string) => ipcRenderer.send("pty:write", id, data),

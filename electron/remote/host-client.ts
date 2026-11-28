@@ -30,7 +30,7 @@ export interface RemoteHostDeps {
   fork: () => HostProc
   devices: () => Promise<DeviceTable>
   /** Shows the approval prompt (a native dialog); resolves the user's choice. */
-  ask: (name: string, code: string) => Promise<Decision>
+  ask: (name: string, code: string, machine: boolean) => Promise<Decision>
   /** Status or clients changed (for the renderer). */
   onChange: () => void
   /** The terminal view: a pane's output so far (the tap starts), raw keys, the tap stopped. */
@@ -210,12 +210,12 @@ export class RemoteHost {
       case "auth":
         return { op: "auth", result: devices.auth(call.token, call.nodeId) }
       case "approve": {
-        const p = devices.createPending(call.nodeId, call.name)
+        const p = devices.createPending(call.nodeId, call.name, call.machine === true)
         if (typeof p === "string") return { op: "approve", result: { error: p } }
         if (!p.existing) {
           // Not awaited: the page polls while the dialog is up.
           void this.deps
-            .ask(call.name, p.code)
+            .ask(call.name, p.code, call.machine === true)
             .then((d) => devices.decide(p.id, d))
             .catch(() => devices.decide(p.id, "deny"))
             .finally(() => this.deps.onChange())

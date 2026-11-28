@@ -1408,6 +1408,73 @@ describe("TerminalManager — a parked terminal behind a folder tab", () => {
   })
 })
 
+describe("TerminalManager — a remote surface (another minmux's pane)", () => {
+  it("asks main for that pane, takes its grid instead of fitting, never resizes it", async () => {
+    st().newTab(testShell)
+    const tab = st().tabs[0]!
+    st().openPeer({ key: "linux:7420", pane: "p9", machine: "linux" }, "zsh")
+    const id = st().tabs.find((t) => t.id === tab.id)!.activeEntryId
+    let pinned: ((c: number, r: number) => void) | undefined
+    vi.mocked(ipc.onPtyPinned).mockImplementation((_id, cb) => ((pinned = cb), () => {}))
+    TerminalManager.ensureRunning(st().sessions[id] as Session)
+    await flush()
+    expect(spawnCalls()[spawnCalls().length - 1]).toMatchObject({
+      id,
+      peer: { key: "linux:7420", pane: "p9" },
+    })
+    const t = terms[terms.length - 1]!
+    const resize = vi.spyOn(t, "resize")
+    pinned!(120, 40)
+    expect(resize).toHaveBeenCalledWith(120, 40)
+    vi.mocked(ipc.ptyResize).mockClear()
+    TerminalManager.sizeHidden(id, 300, 200) // its box changes: still the remote grid
+    expect(ipc.ptyResize).not.toHaveBeenCalled()
+    TerminalManager.dispose(id)
+  })
+
+  it("forwards typing, never xterm's replies or focus; ignores the other machine's marks", async () => {
+    st().newTab(testShell)
+    const local = st().tabs[0]!.activeSessionId
+    TerminalManager.ensureRunning(st().sessions[local] as Session)
+    const localTerm = terms[terms.length - 1]!
+    st().openPeer({ key: "linux:7420", pane: "p9", machine: "linux" }, "zsh")
+    const id = st().tabs[0]!.activeEntryId
+    let data: ((d: string) => void) | undefined
+    vi.mocked(ipc.onPtyData).mockImplementation((sid, cb) =>
+      sid === id ? ((data = cb), () => {}) : () => {},
+    )
+    let pinned: ((c: number, r: number) => void) | undefined
+    vi.mocked(ipc.onPtyPinned).mockImplementation((_id, cb) => ((pinned = cb), () => {}))
+    TerminalManager.ensureRunning(st().sessions[id] as Session)
+    await flush()
+    const t = terms[terms.length - 1]!
+    // While output is parsed, a reply-shaped write is xterm answering: dropped.
+    let parsed: (() => void) | undefined
+    t.write = (_s: string, cb?: () => void) => void (parsed = cb)
+    data!("\x1b[6n")
+    vi.mocked(ipc.ptyWrite).mockClear()
+    t.type("\x1b[12;1R")
+    t.type("\x1b[I") // focus: the remote pane's own window's business
+    expect(ipc.ptyWrite).not.toHaveBeenCalled()
+    parsed!()
+    t.type("ls\r")
+    t.type("\x1b[1;2R") // Shift+F3 with nothing being parsed: typing
+    expect(vi.mocked(ipc.ptyWrite).mock.calls).toEqual([
+      [id, "ls\r"],
+      [id, "\x1b[1;2R"],
+    ])
+    // A shell mark from over there: no ledger or resume work here.
+    t.osc[133]!("D;0")
+    expect(ipc.shellIdle).not.toHaveBeenCalled()
+    // The local terminal hidden behind it keeps its own pane's grid, not the remote one.
+    pinned!(200, 60)
+    parsed!() // applied after what was written before it
+    const resize = vi.spyOn(localTerm, "resize")
+    TerminalManager.syncHiddenSizes()
+    expect(resize).not.toHaveBeenCalled()
+  })
+})
+
 describe("TerminalManager — screenLines (remote answers)", () => {
   beforeEach(() => {
     resetStore()

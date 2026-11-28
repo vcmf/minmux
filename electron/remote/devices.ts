@@ -27,6 +27,7 @@ export interface Device {
   addedAt: number
   lastSeen: number
   pinFails: number
+  machine?: true // another minmux (it types in terminals: "keys" when allowed)
 }
 
 export type { DeviceView }
@@ -46,6 +47,7 @@ interface Pending {
   name: string
   code: string
   at: number
+  machine?: boolean
   decision?: "allow" | "view" | "deny"
   token?: string // set on approval, handed out once
   deviceId?: string // the device the approval created
@@ -174,13 +176,17 @@ export class DeviceTable {
   createPending(
     nodeId: string,
     name: string,
+    machine = false,
   ): { id: string; code: string; existing?: boolean } | "limited" | "readonly" {
     if (this.readOnly) return "readonly"
     const now = this.now()
     this.dropOldPending(now)
     // Already asking for this node (a second tab, a reload): the same prompt and code.
     for (const p of this.pending.values())
-      if (p.nodeId === nodeId && !p.decision) return { id: p.id, code: p.code, existing: true }
+      // (Not another minmux's: two of them can run on one computer, an installed and a dev
+      // build, and each collects its own token. A minmux asks once at a time itself.)
+      if (p.nodeId === nodeId && !p.decision && !machine && !p.machine)
+        return { id: p.id, code: p.code, existing: true }
     this.pendingLog = this.pendingLog.filter((e) => now - e.at < PENDING_WINDOW_MS)
     if (this.pendingLog.filter((e) => e.nodeId === nodeId).length >= PENDING_PER_WINDOW)
       return "limited"
@@ -188,7 +194,7 @@ export class DeviceTable {
     const id = this.random(16).toString("hex")
     const bytes = this.random(4)
     const code = [...bytes].map((b) => CODE_ALPHABET[b % CODE_ALPHABET.length]).join("")
-    this.pending.set(id, { id, nodeId, name, code, at: now })
+    this.pending.set(id, { id, nodeId, name, code, at: now, ...(machine ? { machine } : {}) })
     return { id, code }
   }
 
@@ -212,7 +218,9 @@ export class DeviceTable {
       id,
       nodeId: p.nodeId,
       name,
-      permission: decision === "view" ? "view" : "send",
+      // Another minmux opens terminals: Allow lets it type in them.
+      permission: decision === "view" ? "view" : p.machine ? "keys" : "send",
+      ...(p.machine ? { machine: true as const } : {}),
       tokenHash: sha256(token),
       addedAt: now,
       lastSeen: now,

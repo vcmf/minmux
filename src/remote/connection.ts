@@ -37,6 +37,7 @@ export interface LinkDeps {
   onMessage: (m: HostMessage) => void
   /** Is the page in front of its user? While it is, the link says so (counts as use). */
   visible?: () => boolean
+  client?: "web" | "minmux" // who says hello (another minmux uses this link too)
   now?: () => number
   setTimer?: (fn: () => void, ms: number) => unknown
   clearTimer?: (t: unknown) => void
@@ -118,7 +119,8 @@ export class Link {
     this.drop()
     const ws = this.d.socket()
     this.ws = ws
-    ws.onopen = () => ws.send(JSON.stringify({ t: "hello", v: PROTOCOL_VERSION, client: "web" }))
+    ws.onopen = () =>
+      ws.send(JSON.stringify({ t: "hello", v: PROTOCOL_VERSION, client: this.d.client ?? "web" }))
     ws.onmessage = (e) => {
       if (this.ws !== ws) return
       const m = parseHostMessage(e.data)
