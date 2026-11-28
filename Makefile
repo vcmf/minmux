@@ -30,6 +30,14 @@ build: ## Build the app (electron-vite)
 dist: ## Package installable artifacts for this OS (ad-hoc signed; .dmg/.zip on mac)
 	npm run dist
 
+.PHONY: site
+site: ## Run the website (site/, minmux.dev) in dev at http://localhost:3000
+	cd site && npm install --no-audit --no-fund && npm run dev
+
+.PHONY: site-build
+site-build: ## Build the website as Vercel does (static export in site/out)
+	cd site && npm install --no-audit --no-fund && npm run build
+
 .PHONY: changelog
 changelog: ## Regenerate CHANGELOG.md from the PR titles on main (git-cliff; `npm version` does it on release)
 	npm run changelog

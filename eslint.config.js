@@ -12,6 +12,7 @@ export default tseslint.config(
       "coverage/**",
       "node_modules/**",
       "src-tauri/**", // Rust — linted by clippy, not eslint
+      "site/**", // the website: its own Next.js lint (`npm run lint` in site/)
     ],
   },
   js.configs.recommended,

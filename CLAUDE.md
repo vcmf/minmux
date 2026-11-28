@@ -51,6 +51,8 @@ src/
                           folder-view (a folder entry in a pane: lib/folder-entries,
                           listing-store, fs-reads), pane-layout, theme-picker, palettes/panels, …
 .claude/skills/run-minmux drive the BUILT app with Playwright (real-app verification)
+site/                     minmux.dev (Next.js static export, own package.json; Vercel root dir):
+                          landing page + /changelog (reads ../CHANGELOG.md) — see site/README.md
 ```
 
 ## Commands

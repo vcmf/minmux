@@ -162,16 +162,3 @@ jobs:
           generate_release_notes: true
           files: dist/**
           fail_on_unmatched_files: false
-      # minmux.dev/changelog reads CHANGELOG.md from main when the site builds, so ask Vercel
-      # for a fresh build. Skipped while the LANDING_DEPLOY_HOOK secret isn't set; a failure
-      # only warns (the release is already out).
-      - name: Rebuild the landing page
-        continue-on-error: true
-        env:
-          LANDING_DEPLOY_HOOK: ${{ secrets.LANDING_DEPLOY_HOOK }}
-        run: |
-          if [ -n "$LANDING_DEPLOY_HOOK" ]; then
-            curl -fsS --max-time 30 -X POST "$LANDING_DEPLOY_HOOK" > /dev/null && echo "Landing page rebuild requested."
-          else
-            echo "LANDING_DEPLOY_HOOK not set; skipping."
-          fi

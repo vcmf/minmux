@@ -1,0 +1,162 @@
+import {
+  ArrowClockwise,
+  ArrowSquareOut,
+  Bell,
+  CaretDown,
+  CaretRight,
+  Check,
+  CheckCircle,
+  CircleNotch,
+  Copy,
+  File,
+  Folder,
+  FolderOpen,
+  GitBranch,
+  GitDiff,
+  GitMerge,
+  GitPullRequest,
+  GithubLogo,
+  Globe,
+  MagnifyingGlass,
+  Moon,
+  PencilSimple,
+  Plus,
+  SidebarSimple,
+  Square,
+  Star,
+  Sun,
+  TerminalWindow,
+  X,
+  type Icon,
+} from "@phosphor-icons/react"
+
+/** The Phosphor icons the page uses (same package as the app; only these are bundled). */
+const ICONS = {
+  "arrow-clockwise": ArrowClockwise,
+  "arrow-square-out": ArrowSquareOut,
+  bell: Bell,
+  "caret-down": CaretDown,
+  "caret-right": CaretRight,
+  check: Check,
+  "check-circle": CheckCircle,
+  "circle-notch": CircleNotch,
+  copy: Copy,
+  file: File,
+  folder: Folder,
+  "folder-open": FolderOpen,
+  "git-branch": GitBranch,
+  "git-diff": GitDiff,
+  "git-merge": GitMerge,
+  "git-pull-request": GitPullRequest,
+  "github-logo": GithubLogo,
+  globe: Globe,
+  "magnifying-glass": MagnifyingGlass,
+  moon: Moon,
+  "pencil-simple": PencilSimple,
+  plus: Plus,
+  "sidebar-simple": SidebarSimple,
+  square: Square,
+  star: Star,
+  sun: Sun,
+  "terminal-window": TerminalWindow,
+  x: X,
+} satisfies Record<string, Icon>
+
+export type IconName = keyof typeof ICONS
+
+/** A Phosphor icon (`regular` or `fill`), coloured by currentColor. */
+export function Ph({
+  name,
+  fill = false,
+  size = 15,
+  className = "",
+}: {
+  name: IconName
+  fill?: boolean
+  size?: number
+  className?: string
+}) {
+  const Glyph = ICONS[name]
+  return (
+    <Glyph
+      size={size}
+      weight={fill ? "fill" : "regular"}
+      className={`mm-ph ${className}`}
+      aria-hidden="true"
+    />
+  )
+}
+
+export type AgentKind = "claude" | "codex" | "opencode"
+
+// The agents' marks: single-path, currentColor SVGs in a 24×24 box, the same paths the app
+// uses (src/components/claude-icon.tsx, src/components/agent-marks.tsx).
+const MARKS: Record<AgentKind, string> = {
+  claude:
+    "M20.998 10.949H24v3.102h-3v3.028h-1.487V20H18v-2.921h-1.487V20H15v-2.921H9V20H7.488v-2.921H6V20H4.487v-2.921H3V14.05H0V10.95h3V5h17.998v5.949zM6 10.949h1.488V8.102H6v2.847zm10.51 0H18V8.102h-1.49v2.847z",
+  codex:
+    "M8.086.457a6.105 6.105 0 013.046-.415c1.333.153 2.521.72 3.564 1.7a.117.117 0 00.107.029c1.408-.346 2.762-.224 4.061.366l.063.03.154.076c1.357.703 2.33 1.77 2.918 3.198.278.679.418 1.388.421 2.126a5.655 5.655 0 01-.18 1.631.167.167 0 00.04.155 5.982 5.982 0 011.578 2.891c.385 1.901-.01 3.615-1.183 5.14l-.182.22a6.063 6.063 0 01-2.934 1.851.162.162 0 00-.108.102c-.255.736-.511 1.364-.987 1.992-1.199 1.582-2.962 2.462-4.948 2.451-1.583-.008-2.986-.587-4.21-1.736a.145.145 0 00-.14-.032c-.518.167-1.04.191-1.604.185a5.924 5.924 0 01-2.595-.622 6.058 6.058 0 01-2.146-1.781c-.203-.269-.404-.522-.551-.821a7.74 7.74 0 01-.495-1.283 6.11 6.11 0 01-.017-3.064.166.166 0 00.008-.074.115.115 0 00-.037-.064 5.958 5.958 0 01-1.38-2.202 5.196 5.196 0 01-.333-1.589 6.915 6.915 0 01.188-2.132c.45-1.484 1.309-2.648 2.577-3.493.282-.188.55-.334.802-.438.286-.12.573-.22.861-.304a.129.129 0 00.087-.087A6.016 6.016 0 015.635 2.31C6.315 1.464 7.132.846 8.086.457zm-.804 7.85a.848.848 0 00-1.473.842l1.694 2.965-1.688 2.848a.849.849 0 001.46.864l1.94-3.272a.849.849 0 00.007-.854l-1.94-3.393zm5.446 6.24a.849.849 0 000 1.695h4.848a.849.849 0 000-1.696h-4.848z",
+  opencode: "M16 6H8v12h8V6zm4 16H4V2h16v20z",
+}
+
+/** An agent's mark, in currentColor unless a colour is given. */
+export function AgentMark({
+  kind,
+  size = 14,
+  color,
+  className,
+}: {
+  kind: AgentKind
+  size?: number
+  color?: string
+  className?: string
+}) {
+  return (
+    <svg
+      data-agent={kind}
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="currentColor"
+      fillRule="evenodd"
+      className={className}
+      style={{ color, flex: "none" }}
+      aria-hidden="true"
+    >
+      <path clipRule="evenodd" d={MARKS[kind]} />
+    </svg>
+  )
+}
+
+// minmux's own mark for agents of every kind (the app's AgentsIcon in agent-marks.tsx): a
+// terminal window with a face, the prompt's > winking, a spark for the other eye, _ the mouth.
+// Drawn on Phosphor's grid (256 box, 16 stroke, round ends) so it sits with the icons beside it.
+const AGENTS_D = [
+  "M64 44h128a40 40 0 0 1 40 40v88a40 40 0 0 1-40 40H64a40 40 0 0 1-40-40V84a40 40 0 0 1 40-40Z",
+  "M67 93l22 19-22 19",
+  "M178 78Q178 112 212 112Q178 112 178 146Q178 112 144 112Q178 112 178 78Z",
+  "M112 168h32",
+]
+
+/** The Agents panel's icon, as in the app's top bar. */
+export function AgentsIcon({ size = 16, className }: { size?: number; className?: string }) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 256 256"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={16}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+      style={{ flex: "none" }}
+      aria-hidden="true"
+    >
+      {AGENTS_D.map((d) => (
+        <path key={d} d={d} />
+      ))}
+    </svg>
+  )
+}
