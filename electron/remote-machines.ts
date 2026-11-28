@@ -40,6 +40,7 @@ interface Surface {
   ref: PeerRef
   sender: Sender
   buffer: OutputBuffer // since the last clean screen: replayed after a renderer reload
+  since: number // chars pushed since that clean screen (past the buffer's size, it's gone)
   size?: { cols: number; rows: number }
 }
 
@@ -63,6 +64,9 @@ export function setupRemoteMachines(d: RemoteMachinesDeps) {
   let ready = false // the worker has its tokens: surfaces may be opened
   let listing = false
   let stopTimer: ReturnType<typeof setTimeout> | null = null
+  let restartTimer: ReturnType<typeof setTimeout> | null = null
+  let crashes = 0 // in a row, each before the worker got its tokens: the restart backs off
+  let disposed = false
   let machines: MachineView[] = []
   const surfaces = new Map<string, Surface>()
 
@@ -106,7 +110,7 @@ export function setupRemoteMachines(d: RemoteMachinesDeps) {
         }, IDLE_STOP_MS)
       return
     }
-    if (proc) return
+    if (proc || restartTimer || disposed || d.draining?.()) return
     const p = d.fork()
     proc = p
     ready = false
@@ -117,12 +121,22 @@ export function setupRemoteMachines(d: RemoteMachinesDeps) {
       ready = false
       machines = []
       d.onMachines(machines)
-      // Died while wanted: start again (surfaces get a clean screen when it reconnects).
-      if (wanted()) setTimeout(() => ensure(), 1000)
+      // Died while wanted: start again, later each time it dies at once (surfaces get a clean
+      // screen when it reconnects).
+      crashes++
+      if (wanted() && !disposed)
+        restartTimer = setTimeout(
+          () => {
+            restartTimer = null
+            ensure()
+          },
+          Math.min(60_000, 1000 * 2 ** Math.min(crashes - 1, 6)),
+        )
     })
     void loadTokens().then((t) => {
       if (proc !== p) return
       ready = true
+      setTimeout(() => proc === p && (crashes = 0), 10_000) // up a while: not crashing
       post({ t: "tokens", tokens: t })
       post({ t: "list", on: listing })
       for (const s of surfaces.values()) post({ t: "open", sid: s.sid, ...s.ref })
@@ -169,6 +183,7 @@ export function setupRemoteMachines(d: RemoteMachinesDeps) {
         const data = "\x1bc" + m.data
         s.buffer.clear()
         s.buffer.push(data)
+        s.since = data.length
         pin(s)
         return emit(s, data)
       }
@@ -176,6 +191,7 @@ export function setupRemoteMachines(d: RemoteMachinesDeps) {
         const s = surfaces.get(m.sid)
         if (!s) return
         s.buffer.push(m.data)
+        s.since += m.data.length
         return emit(s, m.data)
       }
       case "size": {
@@ -189,6 +205,7 @@ export function setupRemoteMachines(d: RemoteMachinesDeps) {
         if (!s) return
         const text = `\r\n\x1b[2m[${m.text}]\x1b[0m\r\n`
         s.buffer.push(text)
+        s.since += text.length
         return emit(s, text)
       }
     }
@@ -201,11 +218,14 @@ export function setupRemoteMachines(d: RemoteMachinesDeps) {
       if (had && had.ref.key === ref.key && had.ref.pane === ref.pane) {
         had.sender = sender
         pin(had)
-        emit(had, had.buffer.dump())
+        // Its clean screen still in the buffer: replayed. Either way a fresh one follows (cheap,
+        // and the buffer's tail alone would draw cursor moves on an empty screen).
+        if (had.since <= REPLAY_BYTES) emit(had, had.buffer.dump())
+        postReady({ t: "refresh", sid })
         return { reattached: true }
       }
       if (had) postReady({ t: "close", sid })
-      const s: Surface = { sid, ref, sender, buffer: new OutputBuffer(REPLAY_BYTES) }
+      const s: Surface = { sid, ref, sender, buffer: new OutputBuffer(REPLAY_BYTES), since: 0 }
       surfaces.set(sid, s)
       ensure()
       postReady({ t: "open", sid, ...ref }) // else opened once the worker has its tokens
@@ -227,7 +247,7 @@ export function setupRemoteMachines(d: RemoteMachinesDeps) {
     list(on: boolean) {
       listing = on
       ensure()
-      post({ t: "list", on })
+      postReady({ t: "list", on }) // else sent once the worker has its tokens
       if (on) d.onMachines(machines)
     },
     pair: (key: string) => post({ t: "pair", key }),
@@ -240,7 +260,9 @@ export function setupRemoteMachines(d: RemoteMachinesDeps) {
     },
     machines: () => machines,
     dispose() {
+      disposed = true
       if (stopTimer) clearTimeout(stopTimer)
+      if (restartTimer) clearTimeout(restartTimer)
       stop()
       file.close()
     },

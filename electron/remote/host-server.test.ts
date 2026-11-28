@@ -741,6 +741,8 @@ describe("remote host server", () => {
       // Removed on that computer: the client forgets its token and says so.
       c.handle({ t: "open", sid: "s2", key, pane: "p1" })
       await until(() => got.filter((m) => m.t === "snap").length >= 2)
+      c.handle({ t: "refresh", sid: "s2" }) // a reloaded window: a clean screen again
+      await until(() => got.filter((m) => m.t === "snap").length >= 3)
       const id = table.list()[0]!.id
       table.revoke(id)
       host.drop(id, "revoked")

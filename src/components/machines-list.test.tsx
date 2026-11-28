@@ -96,6 +96,11 @@ describe("MachinesList", () => {
     fireEvent.click(screen.getByText("claude"))
     expect(sessions()).toHaveLength(1)
     expect(useStore.getState().tabs[0]!.activeEntryId).toBe(sessions()[0]!.id)
+    // A new terminal beside it is a local shell (the default), not a copy of "no command".
+    useStore.getState().splitActive("row")
+    const split = useStore.getState().sessions[useStore.getState().tabs[0]!.activeSessionId]!
+    expect(split.peer).toBeUndefined()
+    expect(split.command).toBe(testShell.command)
     // Collapsing the machine hides its panes.
     fireEvent.click(screen.getByText("linux"))
     expect(screen.queryByText("claude")).toBeNull()

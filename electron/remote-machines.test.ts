@@ -102,6 +102,13 @@ describe("remote machines (main)", () => {
     expect(s2.got[0]).toEqual(["pty:pinned:s1", 90, 20])
     expect(String(s2.got[1]![1])).toContain("\x1bcscreen more")
 
+    expect(p.sent.at(-1)).toEqual({ t: "refresh", sid: "s1" }) // and a clean screen follows
+    // More output since its clean screen than the buffer holds: no replay (its base is gone).
+    p.emit({ t: "out", sid: "s1", data: "x".repeat(300 * 1024) })
+    const s3 = new FakeSender()
+    rm.spawn(s3, "s1", { key: "mac:7420", pane: "p1" })
+    expect(s3.got.map((x) => x[0])).toEqual(["pty:pinned:s1"])
+
     rm.write("s1", "ls\r")
     expect(p.sent.slice(-2)).toEqual([{ t: "keys", sid: "s1", data: "ls\r" }, { t: "seen" }])
     rm.write("nope", "x") // not a surface: nothing
@@ -113,6 +120,7 @@ describe("remote machines (main)", () => {
   it("the list: starts the worker, relays machines, saves and forgets tokens", async () => {
     rm.list(true)
     const p = procs[0]!
+    expect(p.sent).toEqual([]) // not before its tokens (it would list approved machines as new)
     await tick()
     p.emit({ t: "machines", machines: [{ key: "mac:7420", label: "mac", state: "new" }] })
     expect(lists.at(-1)).toEqual([{ key: "mac:7420", label: "mac", state: "new" }])
@@ -143,6 +151,12 @@ describe("remote machines (main)", () => {
       expect(lists.at(-1)).toEqual([])
       await vi.advanceTimersByTimeAsync(1100)
       expect(procs).toHaveLength(2)
+      procs[1]!.exit() // dies at once again: waits longer
+      await vi.advanceTimersByTimeAsync(1100)
+      expect(procs).toHaveLength(2)
+      await vi.advanceTimersByTimeAsync(1000)
+      expect(procs).toHaveLength(3)
+      procs.splice(1, 1)
       procs[0]!.emit({ t: "machines", machines: [] }) // the old one: ignored
       rm.list(false)
       await vi.advanceTimersByTimeAsync(31_000)
@@ -182,5 +196,47 @@ describe("peerRefOf", () => {
     expect(peerRefOf({ key: "mac:1; rm", pane: "p" })).toBeNull()
     expect(peerRefOf({ key: "mac:7420", pane: "" })).toBeNull()
     expect(peerRefOf({ key: "mac:7420", pane: 3 })).toBeNull()
+  })
+})
+
+describe("remote machines: quitting", () => {
+  it("no worker is started while draining or after dispose, nor restarted after it", async () => {
+    vi.useFakeTimers()
+    try {
+      const procs: FakeProc[] = []
+      let draining = false
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), "machines-"))
+      const rm = setupRemoteMachines({
+        configDir: () => dir,
+        fork: () => {
+          const p = new FakeProc()
+          procs.push(p)
+          return p
+        },
+        onMachines: () => {},
+        draining: () => draining,
+      })
+      rm.list(true)
+      procs[0]!.exit()
+      rm.dispose()
+      await vi.advanceTimersByTimeAsync(5000)
+      expect(procs).toHaveLength(1)
+      const rm2 = setupRemoteMachines({
+        configDir: () => dir,
+        fork: () => {
+          const p = new FakeProc()
+          procs.push(p)
+          return p
+        },
+        onMachines: () => {},
+        draining: () => draining,
+      })
+      draining = true
+      rm2.list(true)
+      expect(procs).toHaveLength(1)
+      rm2.dispose()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

@@ -32,6 +32,8 @@ export function inheritShell(
       ...(src.remoteSaved !== undefined ? { remoteSaved: src.remoteSaved } : {}),
     }
   }
+  // No command (a remote surface: another machine's pane): nothing here to copy.
+  if (!src.command) return undefined
   const argsKey = (a: string[]) => a.join("\0")
   const match = shells.find(
     (s) => s.command === src.command && argsKey(s.args) === argsKey(src.args),

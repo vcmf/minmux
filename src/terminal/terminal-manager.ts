@@ -1,3 +1,4 @@
+import { isFocusReport, isTerminalReply } from "../lib/terminal-replies"
 import { Terminal, type ILinkHandler } from "@xterm/xterm"
 import { HINT_AFTER_MS, hintDue, launchedAgent } from "../lib/agent-hint"
 import { paneLeads, type AgentKind } from "../lib/agent-graph"
@@ -112,6 +113,7 @@ interface Entry {
   offNonce?: () => void
   offPinned?: () => void
   pinned?: Grid // a remote surface: the remote pane's grid, taken instead of fitting
+  parsing?: number // a remote surface: output written, not parsed yet (its replies are dropped)
   remote?: RemotePhase // ssh panes only: where the connection is (rules: lib/remote-connect)
   failure?: SshFailure // with remote = "failed": why, so Enter / Retry only act when they can
   lastKey?: string // ssh panes: the last input sent (a prompt check skips a line being typed)
@@ -766,7 +768,11 @@ function spawn(session: Session, entry: Entry) {
   const store = useStore.getState()
 
   entry.offData = ipc.onPtyData(session.id, (bytes) => {
-    term.write(bytes)
+    if (session.peer) {
+      // Counted so xterm's replies to this output can be told from typing (see onData).
+      entry.parsing = (entry.parsing ?? 0) + 1
+      term.write(bytes, () => void (entry.parsing = (entry.parsing ?? 1) - 1))
+    } else term.write(bytes)
     // An ssh pane that was connecting (or at a prompt) and now prints is live. One compare
     // per chunk; the store is only touched on the change.
     if (entry.remote === "starting" || entry.remote === "prompt") {
@@ -898,6 +904,8 @@ function spawn(session: Session, entry: Entry) {
       if (k === "drop") return
       entry.lastKey = data
     }
+    // A remote surface: the pane's own terminal over there answers its program already.
+    if (session.peer && (isFocusReport(data) || (entry.parsing && isTerminalReply(data)))) return
     ipc.ptyWrite(session.id, data)
   })
 
@@ -920,7 +928,8 @@ function spawn(session: Session, entry: Entry) {
   // input, nor a shell we can't follow (no prompt marks: fish, a plain ssh host). The rest of each
   // sequence stays xterm's (returning false hands it on).
   term.parser.registerCsiHandler({ prefix: "?", final: "h" }, (params) => {
-    if (namesThemeMode(params) && commandRunning(entry) && !entry.flow.replaying)
+    // A remote surface's program hears of theme changes from its own terminal, not this one.
+    if (namesThemeMode(params) && commandRunning(entry) && !entry.flow.replaying && !session.peer)
       entry.themeNotify = true
     return false
   })
@@ -930,7 +939,8 @@ function spawn(session: Session, entry: Entry) {
   })
   // Queries are answered only for a running command, and not from a reattach's replayed history
   // (whoever asked may be gone). Otherwise xterm's own answer: the mode isn't known here.
-  const askedByCommand = () => commandRunning(entry) && !entry.flow.replaying
+  // (A remote surface's queries: its own terminal over there answers.)
+  const askedByCommand = () => !session.peer && commandRunning(entry) && !entry.flow.replaying
   term.parser.registerCsiHandler({ prefix: "?", intermediates: "$", final: "p" }, (params) => {
     if (params[0] !== THEME_MODE || !askedByCommand()) return false
     ipc.ptyWrite(session.id, modeReport(!!entry.themeNotify))
@@ -1014,7 +1024,8 @@ function spawn(session: Session, entry: Entry) {
   // and all it can do is offer a hint): if the agent says our hooks aren't approved, offer the
   // approval hint (MULTI_AGENT.md F18). Not from a reattach's replayed history: an old launch.
   term.parser.registerOscHandler(6974, (data) => {
-    const kind = session.remote || entry.flow.replaying ? null : launchedAgent(data)
+    // Not from a remote surface either: that agent runs on the other machine.
+    const kind = session.remote || session.peer || entry.flow.replaying ? null : launchedAgent(data)
     if (kind) armAgentHint(session.id, entry, kind)
     return true
   })
@@ -1037,7 +1048,8 @@ function spawn(session: Session, entry: Entry) {
     // The agent (or whatever ran) ended — not just suspended: no hint for it any more.
     const ended = mark?.kind === "D" && !isSuspendCode(mark.code)
     if (ended) endAgentHint(session.id, entry)
-    if (mark) {
+    // A remote surface's marks are the other machine's shell: no ledger, resume or launch here.
+    if (mark && !session.peer) {
       const code = mark.kind === "D" ? mark.code : undefined
       const phase = useStore.getState().resume[session.id]?.phase
       // Exiting before confirming = a failure. While "waiting" (it ran, just unconfirmed —
@@ -1355,7 +1367,8 @@ export const TerminalManager = {
   followSize(id: string, likeId: string) {
     const entry = entries.get(id)
     const like = entries.get(likeId)
-    if (!entry || !like?.opened || entry.pinned) return
+    // A remote surface has the other machine's grid, not its pane's: nothing to copy either way.
+    if (!entry || !like?.opened || entry.pinned || like.pinned) return
     const { cols, rows } = like.term
     if (!gridChanged(entry.lastGrid, cols, rows)) return
     try {

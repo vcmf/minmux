@@ -13,6 +13,7 @@ export type ToClient =
   | { t: "forget"; key: string }
   | { t: "open"; sid: string; key: string; pane: string } // a surface shows this remote pane
   | { t: "close"; sid: string }
+  | { t: "refresh"; sid: string } // a clean screen again (a reloaded window lost its base)
   | { t: "keys"; sid: string; data: string }
   | { t: "seen" } // the user is at a remote surface: counts as use (the 24 h lock)
 

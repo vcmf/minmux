@@ -191,7 +191,11 @@ function newTerminalSource(
     // one isn't copied: the folder is on this machine), so ⌘T / ⌘D / + still do something.
     if (src?.remote) return fallback ? { shell: fallback, cwd: undefined, src } : undefined
   }
-  const shell = inheritShell(state.shells, src) ?? fallback
+  // A remote surface has no shell here: a new terminal beside it takes the default one.
+  const shell =
+    inheritShell(state.shells, src) ??
+    fallback ??
+    (src?.peer ? resolveDefaultShell(state.shells, state.settings.defaultShell) : undefined)
   return shell ? { shell, cwd: src?.cwd, src } : undefined
 }
 
@@ -1240,7 +1244,8 @@ export const useStore = create<AppState>()(
         return { ...next, ...hintFor(state, shell, next) }
       }),
 
-    openPeer: (peer, title) =>
+    openPeer: (peer, title) => {
+      const before = get().activeTabId
       set((state) => {
         // Already open: show that one (a pane shows in one surface here).
         for (const t of state.tabs) {
@@ -1270,7 +1275,11 @@ export const useStore = create<AppState>()(
           sessions: { ...state.sessions, [session.id]: session },
           tabs: replaceTab(state.tabs, tab.id, (t) => withFocus(t, session.id, root)),
         }
-      }),
+      })
+      // Switched to the tab already showing it: what's now on screen counts as seen.
+      const now = get().activeTabId
+      if (now && now !== before) get().revealTab(now)
+    },
 
     closeSurface: (tabId, sessionId) =>
       set(

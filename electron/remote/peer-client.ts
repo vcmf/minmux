@@ -323,7 +323,10 @@ export function createPeerClient(d: PeerClientDeps) {
             token,
             open: false,
           })
-        } else if (m.state === "offline" && !m.link) m.state = m.token ? "connecting" : "new"
+        } else {
+          m.found = f // its real name, once found (a restored surface's placeholder had a host)
+          if (m.state === "offline" && !m.link) m.state = m.token ? "connecting" : "new"
+        }
       }
     })
     for (const [key, m] of machines)
@@ -465,6 +468,12 @@ export function createPeerClient(d: PeerClientDeps) {
         if (!still && m.open) m.link?.send({ t: "term", pane: s.pane, on: false })
         sync(m)
         return report()
+      }
+      case "refresh": {
+        const s = surfaces.get(msg.sid)
+        const m = s && machines.get(s.key)
+        if (s && m?.open) m.link?.send({ t: "term", pane: s.pane, on: true })
+        return
       }
       case "keys": {
         const s = surfaces.get(msg.sid)
