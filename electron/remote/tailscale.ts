@@ -209,3 +209,26 @@ export function peersOf(raw: string, self: SelfNode): TailnetPeer[] {
   }
   return out
 }
+
+/** Where another minmux may listen: MINMUX_REMOTE_PORTS (comma-separated), else release + dev. */
+export function probePorts(raw: string | undefined): number[] {
+  return (raw || "7420,7421")
+    .split(",")
+    .map(Number)
+    .filter((n) => Number.isInteger(n) && n > 0 && n < 65536)
+}
+
+/** This machine and its peers, from the CLI (found once, on first use). */
+export function tailnetReader(
+  find: () => string | null,
+  run: (cli: string, args: string[]) => Promise<string>,
+): () => Promise<{ self: SelfResult; peers: TailnetPeer[] }> {
+  let cli: string | null = null
+  return async () => {
+    cli ??= find()
+    if (!cli) return { self: { ok: false, reason: "missing" }, peers: [] }
+    const raw = await run(cli, ["status", "--json"])
+    const self = parseStatus(raw)
+    return { self, peers: self.ok ? peersOf(raw, self.self) : [] }
+  }
+}

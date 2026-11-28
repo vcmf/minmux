@@ -7,6 +7,8 @@ import {
   parseWhois,
   peerAllowed,
   peersOf,
+  probePorts,
+  tailnetReader,
   type SelfNode,
 } from "./tailscale"
 import { candidates, tokenFrom } from "./peer-client"
@@ -158,5 +160,43 @@ describe("peersOf / candidates: where another minmux may answer", () => {
     expect(tokenFrom(["minmux_remote_7420=abc=; HttpOnly"], 7420)).toBe("abc=")
     expect(tokenFrom(["minmux_remote_7421=abc; HttpOnly"], 7420)).toBeNull()
     expect(tokenFrom([], 7420)).toBeNull()
+  })
+})
+
+describe("probePorts / tailnetReader", () => {
+  it("ports from the env, else release and dev", () => {
+    expect(probePorts(undefined)).toEqual([7420, 7421])
+    expect(probePorts("7458, 99999,x,7420")).toEqual([7458, 7420])
+  })
+
+  it("reads status once the CLI is found; no CLI: missing", async () => {
+    expect(
+      await tailnetReader(
+        () => null,
+        async () => "",
+      )(),
+    ).toEqual({
+      self: { ok: false, reason: "missing" },
+      peers: [],
+    })
+    const status = JSON.stringify({
+      BackendState: "Running",
+      Self: { ID: "n", UserID: "u", DNSName: "me.ts.net.", TailscaleIPs: ["100.64.0.1"] },
+    })
+    let finds = 0
+    const read = tailnetReader(
+      () => (finds++, "tailscale"),
+      async () => status,
+    )
+    const r = await read()
+    await read()
+    expect(finds).toBe(1)
+    expect(r.self.ok).toBe(true)
+    expect(r.peers.map((p) => p.label)).toEqual(["me"])
+    const stopped = tailnetReader(
+      () => "tailscale",
+      async () => JSON.stringify({ BackendState: "Stopped" }),
+    )
+    expect((await stopped()).peers).toEqual([])
   })
 })
